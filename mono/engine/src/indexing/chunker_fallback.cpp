@@ -62,7 +62,6 @@ private:
         std::vector<std::pair<size_t, size_t>> paragraphs;
         size_t start = 0;
         size_t line_num = 1;
-        size_t para_start_line = 1;
         bool in_blank = false;
         
         for (size_t i = 0; i < content.size(); ++i) {
@@ -82,7 +81,6 @@ private:
                 } else if (!next_blank && in_blank) {
                     // Start of new paragraph
                     start = i + 1;
-                    para_start_line = line_num;
                     in_blank = false;
                 }
             }
