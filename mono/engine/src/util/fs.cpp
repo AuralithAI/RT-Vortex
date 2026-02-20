@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <cstring>
 #include <algorithm>
+#include <functional>
 
 #ifdef _WIN32
 #include <windows.h>

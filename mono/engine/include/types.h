@@ -69,6 +69,7 @@ struct FileInfo {
     size_t line_count = 0;
     bool is_binary = false;
     bool is_generated = false;
+    ChangeType change_type = ChangeType::Modified;  // For diff contexts
 };
 
 /**
