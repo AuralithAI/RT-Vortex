@@ -137,6 +137,7 @@ public final class Environment {
      * Reloads all configuration files.
      */
     public static void reload() {
+        rtHomeRef.set(null);
         serverConfig.set(null);
         platformsConfig.set(null);
         log.info("Configuration reloaded");

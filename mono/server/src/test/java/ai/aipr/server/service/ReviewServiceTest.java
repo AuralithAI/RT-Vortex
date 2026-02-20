@@ -66,17 +66,14 @@ class ReviewServiceTest {
     @Test
     @DisplayName("getReview should return review when found")
     void getReviewShouldReturnReviewWhenFound() {
-        ReviewResponse expectedReview = new ReviewResponse(
-                TEST_REVIEW_ID,
-                TEST_REPO_ID,
-                TEST_PR_NUMBER,
-                "completed",
-                java.util.Collections.emptyList(),
-                null,
-                java.time.Instant.now(),
-                java.time.Instant.now(),
-                100L
-        );
+        ReviewResponse expectedReview = ReviewResponse.builder()
+                .reviewId(TEST_REVIEW_ID)
+                .repoId(TEST_REPO_ID)
+                .prNumber(TEST_PR_NUMBER)
+                .status("completed")
+                .summary("Test review summary")
+                .comments(java.util.Collections.emptyList())
+                .build();
         when(reviewRepository.findById(TEST_REVIEW_ID)).thenReturn(Optional.of(expectedReview));
 
         Optional<ReviewResponse> result = reviewService.getReview(TEST_REVIEW_ID);

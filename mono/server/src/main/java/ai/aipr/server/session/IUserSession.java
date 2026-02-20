@@ -1,5 +1,7 @@
 package ai.aipr.server.session;
 
+import ai.aipr.server.dto.ReviewRequest;
+import ai.aipr.server.dto.ReviewResponse;
 import ai.aipr.server.model.IndexJobInfo;
 import ai.aipr.server.model.IndexStatusInfo;
 import ai.aipr.server.model.LLMProviderConfig;

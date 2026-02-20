@@ -71,7 +71,7 @@ public class UserSessionFactory {
         
         // Create session in database
         SessionManager.ValidatedSession validatedSession = sessionManager.createSession(
-            user.getId(), platform, clientType, clientVersion
+            user.id(), platform, clientType, clientVersion
         );
         
         // Create gRPC delegator for this session

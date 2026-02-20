@@ -25,6 +25,7 @@ okhttp = "4.12.0"
 # gRPC (for engine communication)
 grpc = "1.60.1"
 protobuf = "3.25.1"
+grpc-spring-boot = "2.15.0.RELEASE"
 
 # Database (optional)
 hikaricp = "5.1.0"
@@ -92,7 +93,9 @@ grpc-protobuf = { module = "io.grpc:grpc-protobuf", version.ref = "grpc" }
 grpc-stub = { module = "io.grpc:grpc-stub", version.ref = "grpc" }
 grpc-netty = { module = "io.grpc:grpc-netty-shaded", version.ref = "grpc" }
 grpc-netty-shaded = { module = "io.grpc:grpc-netty-shaded", version.ref = "grpc" }
+grpc-services = { module = "io.grpc:grpc-services", version.ref = "grpc" }
 protobuf-java = { module = "com.google.protobuf:protobuf-java", version.ref = "protobuf" }
+grpc-spring-boot-starter = { module = "net.devh:grpc-server-spring-boot-starter", version.ref = "grpc-spring-boot" }
 
 # Database
 hikaricp = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }

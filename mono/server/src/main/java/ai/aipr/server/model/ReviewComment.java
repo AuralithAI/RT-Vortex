@@ -3,39 +3,47 @@ package ai.aipr.server.model;
 /**
  * Review comment from analysis.
  */
-public class ReviewComment {
-    
-    private final String id;
-    private final String filePath;
-    private final int line;
-    private final int endLine;
-    private final String severity;
-    private final String category;
-    private final String message;
-    private final String suggestion;
-    private final float confidence;
-    
-    public ReviewComment(String id, String filePath, int line, int endLine,
-                         String severity, String category, String message,
-                         String suggestion, float confidence) {
-        this.id = id;
-        this.filePath = filePath;
-        this.line = line;
-        this.endLine = endLine;
-        this.severity = severity;
-        this.category = category;
-        this.message = message;
-        this.suggestion = suggestion;
-        this.confidence = confidence;
+public record ReviewComment(
+        String id,
+        String filePath,
+        int line,
+        int endLine,
+        String severity,
+        String category,
+        String message,
+        String suggestion,
+        String source,
+        float confidence
+) {
+    public static Builder builder() {
+        return new Builder();
     }
     
-    public String getId() { return id; }
-    public String getFilePath() { return filePath; }
-    public int getLine() { return line; }
-    public int getEndLine() { return endLine; }
-    public String getSeverity() { return severity; }
-    public String getCategory() { return category; }
-    public String getMessage() { return message; }
-    public String getSuggestion() { return suggestion; }
-    public float getConfidence() { return confidence; }
+    public static class Builder {
+        private String id;
+        private String filePath;
+        private int line;
+        private int endLine;
+        private String severity;
+        private String category;
+        private String message;
+        private String suggestion;
+        private String source;
+        private float confidence;
+        
+        public Builder id(String id) { this.id = id; return this; }
+        public Builder filePath(String filePath) { this.filePath = filePath; return this; }
+        public Builder line(int line) { this.line = line; return this; }
+        public Builder endLine(int endLine) { this.endLine = endLine; return this; }
+        public Builder severity(String severity) { this.severity = severity; return this; }
+        public Builder category(String category) { this.category = category; return this; }
+        public Builder message(String message) { this.message = message; return this; }
+        public Builder suggestion(String suggestion) { this.suggestion = suggestion; return this; }
+        public Builder source(String source) { this.source = source; return this; }
+        public Builder confidence(float confidence) { this.confidence = confidence; return this; }
+        
+        public ReviewComment build() {
+            return new ReviewComment(id, filePath, line, endLine, severity, category, message, suggestion, source, confidence);
+        }
+    }
 }

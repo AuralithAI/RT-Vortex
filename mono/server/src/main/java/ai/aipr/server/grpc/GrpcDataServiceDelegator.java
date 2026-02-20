@@ -1,5 +1,6 @@
 package ai.aipr.server.grpc;
 
+import ai.aipr.server.config.Environment;
 import io.grpc.ConnectivityState;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -83,6 +84,25 @@ public class GrpcDataServiceDelegator {
             List.of(new ServerInstance(host, port, 1))
         );
     }
+    
+    /**
+     * Create a delegator from XML configuration (rtserverprops.xml).
+     * Reads engine.host and engine.port from the server configuration.
+     *
+     * @return GrpcDataServiceDelegator configured from XML
+     */
+    public static GrpcDataServiceDelegator fromConfig() {
+        try {
+            Environment.ConfigReader config = Environment.server();
+            String host = config.get("engine.host", "localhost");
+            int port = config.getInt("engine.port", 50051);
+            log.info("Creating gRPC delegator from config: {}:{}", host, port);
+            return forSingleServer(host, port);
+        } catch (Exception e) {
+            log.warn("Failed to read gRPC config from XML, using defaults: {}", e.getMessage());
+            return forSingleServer("localhost", 50051);
+        }
+    }
 
     /**
      * Get the primary gRPC channel.
@@ -163,6 +183,18 @@ public class GrpcDataServiceDelegator {
             
             log.info("Reconnected to gRPC server");
         }
+    }
+    
+    /**
+     * Get the primary server address.
+     *
+     * @return Server address in "host:port" format
+     */
+    public String getServerAddress() {
+        if (!serverInstances.isEmpty()) {
+            return serverInstances.get(0).getAddress();
+        }
+        return "localhost:50051"; // default fallback matching rtserverprops.xml
     }
 
     /**

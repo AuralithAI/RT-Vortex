@@ -1,7 +1,12 @@
 package ai.aipr.server.service;
 
+import ai.aipr.server.dto.HeuristicFinding;
+import ai.aipr.server.dto.LLMResponse;
+import ai.aipr.server.dto.ReviewComment;
+import ai.aipr.server.dto.ReviewMetadata;
 import ai.aipr.server.dto.ReviewRequest;
 import ai.aipr.server.dto.ReviewResponse;
+import ai.aipr.server.dto.ReviewResult;
 import ai.aipr.server.engine.EngineClient;
 import ai.aipr.server.llm.LLMClient;
 import ai.aipr.server.repository.ReviewRepository;
@@ -81,7 +86,7 @@ public class ReviewService {
             );
             
             // 5. Call LLM for review
-            var llmResponse = llmClient.complete(prompt);
+            var llmResponse = llmClient.complete(prompt.userPrompt(), prompt.systemPrompt());
             
             // 6. Parse and validate LLM response
             var reviewResult = parseReviewResult(llmResponse);

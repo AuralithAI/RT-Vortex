@@ -35,6 +35,11 @@ dependencies {
     implementation libs.grpc.netty
     implementation libs.grpc.protobuf
     implementation libs.grpc.stub
+    implementation libs.grpc.services
+    implementation libs.grpc.spring.boot.starter
+    
+    // Proto-generated classes
+    implementation project(':proto-java')
     
     // Observability
     implementation 'io.micrometer:micrometer-registry-prometheus'

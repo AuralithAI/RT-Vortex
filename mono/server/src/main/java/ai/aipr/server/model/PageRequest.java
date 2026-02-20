@@ -3,26 +3,26 @@ package ai.aipr.server.model;
 /**
  * Page request for pagination.
  */
-public class PageRequest {
-    
-    public static final PageRequest DEFAULT = new PageRequest(20, null);
-    
-    private final int size;
-    private final String token;
+public record PageRequest(
+        int page,
+        int size,
+        String token
+) {
+    public static final PageRequest DEFAULT = new PageRequest(0, 20, null);
     
     public PageRequest(int size, String token) {
-        this.size = size;
-        this.token = token;
+        this(0, size, token);
     }
     
-    public int getSize() { return size; }
-    public String getToken() { return token; }
-    
     public static PageRequest of(int size) {
-        return new PageRequest(size, null);
+        return new PageRequest(0, size, null);
+    }
+    
+    public static PageRequest of(int page, int size) {
+        return new PageRequest(page, size, null);
     }
     
     public static PageRequest of(int size, String token) {
-        return new PageRequest(size, token);
+        return new PageRequest(0, size, token);
     }
 }

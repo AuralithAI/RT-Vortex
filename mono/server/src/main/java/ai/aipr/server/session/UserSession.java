@@ -1,5 +1,7 @@
 package ai.aipr.server.session;
 
+import ai.aipr.server.dto.ReviewRequest;
+import ai.aipr.server.dto.ReviewResponse;
 import ai.aipr.server.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,7 +54,7 @@ public class UserSession implements IUserSession {
         this.user = Objects.requireNonNull(user, "user required");
         this.expiresAt = expiresAt;
         this.remote = Objects.requireNonNull(remote, "remote required");
-        this.context = new SessionContext(sessionId, sessionToken, user.getId());
+        this.context = new SessionContext(sessionId, sessionToken, user.id());
     }
 
     // =========================================================================
@@ -104,7 +106,7 @@ public class UserSession implements IUserSession {
     public ReviewResponse submitReview(ReviewRequest request) {
         ensureValid();
         log.info("Submitting review for repo={}, pr={}", 
-                request.getRepositoryId(), request.getPrNumber());
+                request.repoId(), request.prNumber());
         return remote.submitReview(context, request);
     }
 
@@ -112,7 +114,7 @@ public class UserSession implements IUserSession {
     public CompletableFuture<ReviewResponse> submitReviewAsync(ReviewRequest request) {
         ensureValid();
         log.info("Submitting async review for repo={}, pr={}", 
-                request.getRepositoryId(), request.getPrNumber());
+                request.repoId(), request.prNumber());
         return remote.submitReviewAsync(context, request);
     }
 
@@ -189,7 +191,7 @@ public class UserSession implements IUserSession {
     @Override
     public LLMProviderInfo configureLLMProvider(LLMProviderConfig config) {
         ensureValid();
-        log.info("Configuring LLM provider: {}", config.getName());
+        log.info("Configuring LLM provider: {}", config.name());
         return remote.configureLLMProvider(context, config);
     }
 

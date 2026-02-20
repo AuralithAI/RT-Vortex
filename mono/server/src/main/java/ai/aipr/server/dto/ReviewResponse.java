@@ -10,6 +10,7 @@ public record ReviewResponse(
         String reviewId,
         String repoId,
         Integer prNumber,
+        String status,
         String summary,
         String overallAssessment,
         List<ReviewComment> comments,
@@ -24,6 +25,7 @@ public record ReviewResponse(
         private String reviewId;
         private String repoId;
         private Integer prNumber;
+        private String status;
         private String summary;
         private String overallAssessment;
         private List<ReviewComment> comments = List.of();
@@ -33,6 +35,7 @@ public record ReviewResponse(
         public Builder reviewId(String reviewId) { this.reviewId = reviewId; return this; }
         public Builder repoId(String repoId) { this.repoId = repoId; return this; }
         public Builder prNumber(Integer prNumber) { this.prNumber = prNumber; return this; }
+        public Builder status(String status) { this.status = status; return this; }
         public Builder summary(String summary) { this.summary = summary; return this; }
         public Builder overallAssessment(String overallAssessment) { this.overallAssessment = overallAssessment; return this; }
         public Builder comments(List<ReviewComment> comments) { this.comments = comments; return this; }
@@ -40,7 +43,7 @@ public record ReviewResponse(
         public Builder metadata(ReviewMetadata metadata) { this.metadata = metadata; return this; }
 
         public ReviewResponse build() {
-            return new ReviewResponse(reviewId, repoId, prNumber, summary, 
+            return new ReviewResponse(reviewId, repoId, prNumber, status, summary, 
                     overallAssessment, comments, metrics, metadata);
         }
     }
