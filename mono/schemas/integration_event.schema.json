@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://auralithai.com/schemas/integration_event.schema.json",
+  "title": "IntegrationEvent",
+  "description": "Event from integration platforms (GitHub, GitLab, etc.)",
+  "type": "object",
+  "required": ["event_type", "platform", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "description": "Unique event identifier",
+      "format": "uuid"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "pull_request.opened",
+        "pull_request.synchronize",
+        "pull_request.reopened",
+        "pull_request.closed",
+        "pull_request.edited",
+        "pull_request_review.submitted",
+        "push",
+        "issue_comment.created",
+        "check_run.rerequested"
+      ],
+      "description": "Type of event"
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["github", "gitlab", "bitbucket", "azure-devops"],
+      "description": "Source platform"
+    },
+    "repo_id": {
+      "type": "string",
+      "description": "Repository identifier"
+    },
+    "payload": {
+      "type": "object",
+      "description": "Platform-specific event payload"
+    },
+    "action": {
+      "type": "string",
+      "description": "Action to take based on this event",
+      "enum": ["review", "re-review", "index", "ignore"]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "signature": {
+      "type": "string",
+      "description": "Webhook signature for verification"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "delivery_id": {
+          "type": "string",
+          "description": "Platform delivery ID"
+        },
+        "retry_count": {
+          "type": "integer",
+          "default": 0
+        },
+        "received_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    }
+  }
+}

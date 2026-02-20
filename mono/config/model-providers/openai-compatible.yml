@@ -1,0 +1,55 @@
+# OpenAI-Compatible Model Provider Configuration
+# Works with OpenAI API or any compatible endpoint
+
+provider: "openai-compatible"
+type: "http"
+
+# Connection settings
+connection:
+  # Base URL - override for Azure OpenAI, vLLM, etc.
+  base_url: "https://api.openai.com/v1"
+  # API key from environment variable
+  api_key_env: "OPENAI_API_KEY"
+  # Optional: Organization ID
+  organization_env: "OPENAI_ORG_ID"
+  # Request timeout
+  timeout_seconds: 120
+  # Max retries
+  max_retries: 3
+  retry_delay_ms: 1000
+
+# Embeddings model
+embeddings:
+  model: "text-embedding-3-small"
+  dimensions: 1536
+  # Max tokens per request
+  max_tokens: 8191
+  # Batch size for embedding requests
+  batch_size: 100
+
+# LLM model
+llm:
+  model: "gpt-4o"
+  max_tokens: 4096
+  temperature: 0.1
+  top_p: 1.0
+  frequency_penalty: 0.0
+  presence_penalty: 0.0
+  # Stop sequences
+  stop: []
+  # Response format
+  response_format:
+    type: "json_object"
+
+# Rate limiting (client-side)
+rate_limit:
+  enabled: true
+  requests_per_minute: 500
+  tokens_per_minute: 90000
+
+# Proxy settings (optional)
+proxy:
+  enabled: false
+  http_proxy: ""
+  https_proxy: ""
+  no_proxy: ""

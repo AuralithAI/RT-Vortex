@@ -1,0 +1,282 @@
+# Default values for AI-PR-Reviewer
+# This is a YAML-formatted file.
+
+# Global settings
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# Replica count for the server
+replicaCount: 2
+
+# Image configuration
+image:
+  repository: auralith/aipr
+  pullPolicy: IfNotPresent
+  tag: ""  # Defaults to appVersion if not set
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Service account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+# Pod annotations and labels
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/actuator/prometheus"
+
+podLabels: {}
+
+# Security contexts
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  annotations: {}
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+  hosts:
+    - host: aipr.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: aipr-tls
+  #    hosts:
+  #      - aipr.local
+
+# Resource limits and requests
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+# Autoscaling configuration
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Node selection
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /actuator/health/liveness
+    port: http
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 6
+
+readinessProbe:
+  httpGet:
+    path: /actuator/health/readiness
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Startup probe for slow-starting containers
+startupProbe:
+  httpGet:
+    path: /actuator/health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  failureThreshold: 30
+
+# Environment variables
+env: []
+#  - name: JAVA_OPTS
+#    value: "-Xmx2g -Xms1g"
+
+# ConfigMap for application configuration
+config:
+  # Profile to activate
+  profile: "default"
+  
+  # Server configuration
+  server:
+    port: 8080
+    maxThreads: 200
+    connectionTimeout: 30000
+  
+  # Engine configuration
+  engine:
+    host: "localhost"
+    port: 50051
+    timeoutSeconds: 300
+    maxRetries: 3
+  
+  # LLM configuration
+  llm:
+    provider: "openai"
+    model: "gpt-4"
+    maxTokens: 4096
+    temperature: 0.1
+    timeoutSeconds: 120
+  
+  # GitHub integration
+  github:
+    appId: ""
+    webhookSecret: ""
+  
+  # GitLab integration
+  gitlab:
+    webhookSecret: ""
+  
+  # Review configuration
+  review:
+    maxFilesPerReview: 50
+    maxLinesPerFile: 10000
+    contextWindowLines: 100
+    chunkSize: 500
+    enableSecurity: true
+    enablePerformance: true
+    enableTesting: true
+    enableArchitecture: true
+
+# Secrets configuration
+secrets:
+  # Create secrets from values
+  create: true
+  
+  # GitHub App private key (base64 encoded)
+  githubPrivateKey: ""
+  
+  # LLM API key
+  llmApiKey: ""
+  
+  # Database password
+  databasePassword: ""
+  
+  # Existing secrets to use
+  existingSecrets:
+    github: ""
+    llm: ""
+    database: ""
+
+# PostgreSQL configuration (subchart)
+postgresql:
+  enabled: true
+  auth:
+    username: aipr
+    database: aipr
+    existingSecret: ""
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+
+# Redis configuration (subchart)
+redis:
+  enabled: true
+  architecture: standalone
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+
+# Persistence for index storage
+persistence:
+  enabled: true
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 50Gi
+  annotations: {}
+  existingClaim: ""
+
+# Metrics and monitoring
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    namespace: ""
+    additionalLabels: {}
+  prometheusRule:
+    enabled: false
+    namespace: ""
+    additionalLabels: {}
+    rules: []
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+  # maxUnavailable: 1
+
+# Network policies
+networkPolicy:
+  enabled: false
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+
+# Extra volumes and volume mounts
+extraVolumes: []
+extraVolumeMounts: []
+
+# Init containers
+initContainers: []
+
+# Sidecar containers
+sidecars: []

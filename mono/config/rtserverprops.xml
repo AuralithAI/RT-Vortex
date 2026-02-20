@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AI PR Reviewer - Server Configuration
+  
+  This file contains all server-related configuration.
+  Edit this file before starting the server.
+-->
+<configuration>
+    
+    <!-- =================================================================== -->
+    <!-- Server Settings                                                     -->
+    <!-- =================================================================== -->
+    <server>
+        <port>8080</port>
+        <shutdown>graceful</shutdown>
+        <context-path>/</context-path>
+    </server>
+    
+    <!-- =================================================================== -->
+    <!-- Database Configuration                                              -->
+    <!-- =================================================================== -->
+    <database>
+        <type>postgresql</type>
+        <host>localhost</host>
+        <port>5432</port>
+        <name>aipr</name>
+        <username>aipr</username>
+        <password>aipr_secret</password>
+        
+        <!-- Connection Pool -->
+        <pool>
+            <max-size>20</max-size>
+            <min-idle>5</min-idle>
+            <connection-timeout-ms>30000</connection-timeout-ms>
+            <idle-timeout-ms>600000</idle-timeout-ms>
+        </pool>
+    </database>
+    
+    <!-- =================================================================== -->
+    <!-- Redis Cache Configuration                                           -->
+    <!-- =================================================================== -->
+    <redis>
+        <enabled>true</enabled>
+        <host>localhost</host>
+        <port>6379</port>
+        <password></password>
+        <database>0</database>
+        
+        <pool>
+            <max-active>16</max-active>
+            <max-idle>8</max-idle>
+            <min-idle>2</min-idle>
+        </pool>
+    </redis>
+    
+    <!-- =================================================================== -->
+    <!-- gRPC Engine Configuration                                           -->
+    <!-- =================================================================== -->
+    <engine>
+        <host>localhost</host>
+        <port>50051</port>
+        <timeout-ms>30000</timeout-ms>
+        
+        <!-- TLS Settings -->
+        <!-- For development: use included self-signed certificates -->
+        <!-- For production: generate proper certificates (see certificates/README.md) -->
+        <tls>
+            <enabled>false</enabled>
+            <cert-path>certificates/server.crt</cert-path>
+            <key-path>certificates/server.key</key-path>
+            <ca-path>certificates/ca.crt</ca-path>
+            <!-- Enable mutual TLS (client certificate required) -->
+            <mtls-enabled>false</mtls-enabled>
+            <client-cert-path>certificates/client.crt</client-cert-path>
+            <client-key-path>certificates/client.key</client-key-path>
+        </tls>
+        
+        <!-- Connection Pool -->
+        <pool>
+            <max-channels>10</max-channels>
+            <idle-timeout-seconds>300</idle-timeout-seconds>
+        </pool>
+        
+        <!-- Retry Settings -->
+        <retry>
+            <max-attempts>3</max-attempts>
+            <initial-backoff-ms>100</initial-backoff-ms>
+            <max-backoff-ms>5000</max-backoff-ms>
+        </retry>
+    </engine>
+    
+    <!-- =================================================================== -->
+    <!-- LLM Provider Configuration                                          -->
+    <!-- =================================================================== -->
+    <llm>
+        <provider>openai-compatible</provider>
+        <base-url>https://api.openai.com/v1</base-url>
+        <api-key></api-key>
+        <model>gpt-4-turbo-preview</model>
+        <max-tokens>4096</max-tokens>
+        <temperature>0.1</temperature>
+        <timeout-ms>120000</timeout-ms>
+    </llm>
+    
+    <!-- =================================================================== -->
+    <!-- Review Settings                                                     -->
+    <!-- =================================================================== -->
+    <review>
+        <max-diff-size>500000</max-diff-size>
+        <max-files-per-pr>100</max-files-per-pr>
+        <max-comments-per-review>50</max-comments-per-review>
+        <enable-heuristics>true</enable-heuristics>
+        <enable-context-retrieval>true</enable-context-retrieval>
+    </review>
+    
+    <!-- =================================================================== -->
+    <!-- Security Settings                                                   -->
+    <!-- =================================================================== -->
+    <security>
+        <jwt-secret></jwt-secret>
+        <jwt-expiration-ms>3600000</jwt-expiration-ms>
+        <session-timeout>24h</session-timeout>
+        <encryption-key></encryption-key>
+        <allowed-origins>http://localhost:3000</allowed-origins>
+    </security>
+    
+    <!-- =================================================================== -->
+    <!-- Storage Settings                                                    -->
+    <!-- =================================================================== -->
+    <storage>
+        <type>local</type>
+        <local>
+            <base-path>${RT_HOME}/data</base-path>
+        </local>
+        <s3>
+            <bucket></bucket>
+            <region>us-east-1</region>
+        </s3>
+    </storage>
+    
+    <!-- =================================================================== -->
+    <!-- Logging Settings                                                    -->
+    <!-- =================================================================== -->
+    <logging>
+        <level>
+            <root>INFO</root>
+            <aipr>DEBUG</aipr>
+        </level>
+        <file>
+            <enabled>true</enabled>
+            <path>${RT_HOME}/data/logs</path>
+            <max-size>100MB</max-size>
+            <max-history>30</max-history>
+        </file>
+    </logging>
+    
+</configuration>

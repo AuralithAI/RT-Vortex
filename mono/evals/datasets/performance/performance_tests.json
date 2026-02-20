@@ -1,0 +1,78 @@
+[
+  {
+    "pr_id": "perf-001",
+    "repository": "example/performance-tests",
+    "context": {
+      "pr_title": "Add user search functionality",
+      "pr_description": "Implement search for users by name"
+    },
+    "files": [
+      {
+        "path": "src/services/user_service.py",
+        "status": "added",
+        "patch": "@@ -0,0 +1,35 @@\n+from typing import List\n+from models import User, db\n+\n+class UserService:\n+    def search_users(self, query: str) -> List[User]:\n+        \"\"\"Search users by name.\"\"\"\n+        all_users = User.query.all()\n+        results = []\n+        \n+        for user in all_users:\n+            if query.lower() in user.name.lower():\n+                results.append(user)\n+        \n+        return results\n+    \n+    def get_user_with_orders(self, user_id: int) -> dict:\n+        \"\"\"Get user with all their orders.\"\"\"\n+        user = User.query.get(user_id)\n+        orders = []\n+        \n+        for order_id in user.order_ids:\n+            order = Order.query.get(order_id)\n+            order_items = []\n+            for item_id in order.item_ids:\n+                item = Item.query.get(item_id)\n+                order_items.append(item)\n+            order.items = order_items\n+            orders.append(order)\n+        \n+        return {\n+            'user': user,\n+            'orders': orders\n+        }\n",
+        "expected_comments": [
+          {
+            "line": 7,
+            "severity": "error",
+            "category": "performance",
+            "pattern": "full_table_scan",
+            "description": "Loading all users into memory instead of using database filtering"
+          },
+          {
+            "line": 21,
+            "severity": "error",
+            "category": "performance",
+            "pattern": "n_plus_one",
+            "description": "N+1 query problem - querying orders in a loop"
+          },
+          {
+            "line": 24,
+            "severity": "error",
+            "category": "performance",
+            "pattern": "n_plus_one",
+            "description": "Nested N+1 query - querying items for each order"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr_id": "perf-002",
+    "repository": "example/performance-tests",
+    "context": {
+      "pr_title": "Add caching for product catalog",
+      "pr_description": "Implement product caching"
+    },
+    "files": [
+      {
+        "path": "src/api/products.py",
+        "status": "modified",
+        "patch": "@@ -10,8 +10,20 @@\n \n @app.route('/products')\n def get_products():\n+    # Get all products with categories\n+    products = Product.query.all()\n+    result = []\n+    \n+    for product in products:\n+        category = Category.query.get(product.category_id)\n+        product_dict = product.to_dict()\n+        product_dict['category'] = category.to_dict()\n+        product_dict['image_base64'] = base64.b64encode(\n+            open(product.image_path, 'rb').read()\n+        ).decode('utf-8')\n+        result.append(product_dict)\n+    \n+    return jsonify(result)\n",
+        "expected_comments": [
+          {
+            "line": 17,
+            "severity": "error",
+            "category": "performance",
+            "pattern": "n_plus_one",
+            "description": "N+1 query for categories - use eager loading"
+          },
+          {
+            "line": 20,
+            "severity": "error",
+            "category": "performance",
+            "pattern": "synchronous_io",
+            "description": "Synchronous file I/O in request handler"
+          },
+          {
+            "line": 20,
+            "severity": "warning",
+            "category": "performance",
+            "pattern": "large_payload",
+            "description": "Embedding base64 images in API response - use URLs instead"
+          }
+        ]
+      }
+    ]
+  }
+]

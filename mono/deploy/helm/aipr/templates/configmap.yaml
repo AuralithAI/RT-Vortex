@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aipr.configMapName" . }}
+  labels:
+    {{- include "aipr.labels" . | nindent 4 }}
+data:
+  # Server configuration
+  SERVER_PORT: {{ .Values.config.server.port | quote }}
+  SERVER_TOMCAT_MAX_THREADS: {{ .Values.config.server.maxThreads | quote }}
+  SERVER_TOMCAT_CONNECTION_TIMEOUT: {{ .Values.config.server.connectionTimeout | quote }}
+  
+  # Engine configuration
+  AIPR_ENGINE_HOST: {{ .Values.config.engine.host | quote }}
+  AIPR_ENGINE_PORT: {{ .Values.config.engine.port | quote }}
+  AIPR_ENGINE_TIMEOUT_SECONDS: {{ .Values.config.engine.timeoutSeconds | quote }}
+  AIPR_ENGINE_MAX_RETRIES: {{ .Values.config.engine.maxRetries | quote }}
+  
+  # LLM configuration
+  AIPR_LLM_PROVIDER: {{ .Values.config.llm.provider | quote }}
+  AIPR_LLM_MODEL: {{ .Values.config.llm.model | quote }}
+  AIPR_LLM_MAX_TOKENS: {{ .Values.config.llm.maxTokens | quote }}
+  AIPR_LLM_TEMPERATURE: {{ .Values.config.llm.temperature | quote }}
+  AIPR_LLM_TIMEOUT_SECONDS: {{ .Values.config.llm.timeoutSeconds | quote }}
+  
+  # Review configuration
+  AIPR_REVIEW_MAX_FILES: {{ .Values.config.review.maxFilesPerReview | quote }}
+  AIPR_REVIEW_MAX_LINES_PER_FILE: {{ .Values.config.review.maxLinesPerFile | quote }}
+  AIPR_REVIEW_CONTEXT_WINDOW: {{ .Values.config.review.contextWindowLines | quote }}
+  AIPR_REVIEW_CHUNK_SIZE: {{ .Values.config.review.chunkSize | quote }}
+  AIPR_REVIEW_ENABLE_SECURITY: {{ .Values.config.review.enableSecurity | quote }}
+  AIPR_REVIEW_ENABLE_PERFORMANCE: {{ .Values.config.review.enablePerformance | quote }}
+  AIPR_REVIEW_ENABLE_TESTING: {{ .Values.config.review.enableTesting | quote }}
+  AIPR_REVIEW_ENABLE_ARCHITECTURE: {{ .Values.config.review.enableArchitecture | quote }}
+  
+  # GitHub integration
+  {{- if .Values.config.github.appId }}
+  AIPR_GITHUB_APP_ID: {{ .Values.config.github.appId | quote }}
+  {{- end }}
+  
+  # Actuator endpoints
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,prometheus,metrics"
+  MANAGEMENT_ENDPOINT_HEALTH_SHOW_DETAILS: "when_authorized"
+  MANAGEMENT_HEALTH_LIVENESSSTATE_ENABLED: "true"
+  MANAGEMENT_HEALTH_READINESSSTATE_ENABLED: "true"

@@ -1,0 +1,61 @@
+# Local LLaMA Model Provider Configuration
+# For air-gapped or offline environments
+
+provider: "local-llama"
+type: "local"
+
+# Path to llama.cpp binary or library
+runtime:
+  binary: "${AIPR_HOME}/bin/llama-server"
+  # Or use library directly
+  # library: "${AIPR_HOME}/lib/libllama.so"
+
+# Server mode configuration
+server:
+  host: "127.0.0.1"
+  port: 8081
+  # Auto-start server if not running
+  auto_start: true
+  # Timeout for server startup
+  startup_timeout_seconds: 60
+
+# Model configuration
+embeddings:
+  model_path: "${AIPR_HOME}/models/embeddings/all-minilm-l6-v2-q4_k_m.gguf"
+  dimensions: 384
+  context_length: 512
+  batch_size: 32
+  # GPU layers (0 = CPU only)
+  gpu_layers: 0
+  # Number of threads
+  threads: 4
+
+llm:
+  model_path: "${AIPR_HOME}/models/llm/codellama-13b-instruct-q4_k_m.gguf"
+  context_length: 4096
+  max_tokens: 2048
+  temperature: 0.1
+  top_p: 0.95
+  # GPU layers (0 = CPU only)
+  gpu_layers: 0
+  # Number of threads
+  threads: 8
+  # Batch size for prompt processing
+  batch_size: 512
+
+# Performance tuning
+performance:
+  # Enable memory mapping for models
+  mmap: true
+  # Lock model in memory
+  mlock: false
+  # Use flash attention if available
+  flash_attention: true
+
+# Fallback behavior
+fallback:
+  # If local model fails, fail the request (no network)
+  allow_network_fallback: false
+  # Retry count for local model
+  retry_count: 2
+  retry_delay_ms: 1000

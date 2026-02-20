@@ -1,0 +1,209 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://auralithai.com/schemas/review_request.schema.json",
+  "title": "ReviewRequest",
+  "description": "Request to review a pull request or code changes",
+  "type": "object",
+  "required": ["repo_id", "pr_number", "diff"],
+  "properties": {
+    "repo_id": {
+      "type": "string",
+      "description": "Unique identifier for the repository",
+      "pattern": "^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$"
+    },
+    "pr_number": {
+      "type": "integer",
+      "description": "Pull request number",
+      "minimum": 1
+    },
+    "pr_title": {
+      "type": "string",
+      "description": "Title of the pull request",
+      "maxLength": 500
+    },
+    "pr_description": {
+      "type": "string",
+      "description": "Description/body of the pull request",
+      "maxLength": 65536
+    },
+    "base_ref": {
+      "type": "string",
+      "description": "Base branch reference (e.g., main, develop)",
+      "pattern": "^[a-zA-Z0-9/_.-]+$"
+    },
+    "head_ref": {
+      "type": "string",
+      "description": "Head branch reference (the branch being merged)",
+      "pattern": "^[a-zA-Z0-9/_.-]+$"
+    },
+    "base_sha": {
+      "type": "string",
+      "description": "Git SHA of the base commit",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "head_sha": {
+      "type": "string",
+      "description": "Git SHA of the head commit",
+      "pattern": "^[a-f0-9]{40}$"
+    },
+    "diff": {
+      "type": "string",
+      "description": "Unified diff of the changes",
+      "minLength": 1
+    },
+    "changed_files": {
+      "type": "array",
+      "description": "List of changed files with metadata",
+      "items": {
+        "$ref": "#/definitions/ChangedFile"
+      }
+    },
+    "author": {
+      "type": "string",
+      "description": "Username of the PR author"
+    },
+    "labels": {
+      "type": "array",
+      "description": "Labels attached to the PR",
+      "items": {
+        "type": "string"
+      }
+    },
+    "review_config": {
+      "$ref": "#/definitions/ReviewConfig"
+    },
+    "context": {
+      "$ref": "#/definitions/ReviewContext"
+    },
+    "request_id": {
+      "type": "string",
+      "description": "Unique identifier for this review request (for idempotency)",
+      "format": "uuid"
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "ISO 8601 timestamp of the request",
+      "format": "date-time"
+    }
+  },
+  "definitions": {
+    "ChangedFile": {
+      "type": "object",
+      "required": ["path", "change_type"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "description": "File path relative to repository root"
+        },
+        "change_type": {
+          "type": "string",
+          "enum": ["added", "modified", "deleted", "renamed", "copied"],
+          "description": "Type of change"
+        },
+        "old_path": {
+          "type": "string",
+          "description": "Original path (for renamed/copied files)"
+        },
+        "additions": {
+          "type": "integer",
+          "description": "Number of lines added",
+          "minimum": 0
+        },
+        "deletions": {
+          "type": "integer",
+          "description": "Number of lines deleted",
+          "minimum": 0
+        },
+        "language": {
+          "type": "string",
+          "description": "Detected programming language"
+        },
+        "is_binary": {
+          "type": "boolean",
+          "description": "Whether the file is binary"
+        }
+      }
+    },
+    "ReviewConfig": {
+      "type": "object",
+      "description": "Review-specific configuration overrides",
+      "properties": {
+        "max_comments": {
+          "type": "integer",
+          "description": "Maximum number of comments to generate",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 20
+        },
+        "severity_threshold": {
+          "type": "string",
+          "enum": ["info", "warning", "error", "critical"],
+          "description": "Minimum severity to report",
+          "default": "warning"
+        },
+        "confidence_threshold": {
+          "type": "number",
+          "description": "Minimum confidence score (0-1) to report",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.7
+        },
+        "enabled_checks": {
+          "type": "array",
+          "description": "List of check categories to enable",
+          "items": {
+            "type": "string",
+            "enum": ["security", "performance", "reliability", "style", "architecture", "testing"]
+          }
+        },
+        "disabled_checks": {
+          "type": "array",
+          "description": "List of check categories to disable",
+          "items": {
+            "type": "string"
+          }
+        },
+        "focus_areas": {
+          "type": "array",
+          "description": "File patterns to focus review on",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skip_areas": {
+          "type": "array",
+          "description": "File patterns to skip in review",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ReviewContext": {
+      "type": "object",
+      "description": "Additional context for the review",
+      "properties": {
+        "repo_standards_id": {
+          "type": "string",
+          "description": "ID of indexed coding standards for this repo"
+        },
+        "related_issues": {
+          "type": "array",
+          "description": "Related issue numbers",
+          "items": {
+            "type": "integer"
+          }
+        },
+        "previous_review_id": {
+          "type": "string",
+          "description": "ID of a previous review (for incremental review)"
+        },
+        "custom_instructions": {
+          "type": "string",
+          "description": "Custom instructions for this review",
+          "maxLength": 4096
+        }
+      }
+    }
+  }
+}

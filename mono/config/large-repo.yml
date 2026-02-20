@@ -1,0 +1,212 @@
+# AI PR Reviewer - Large Repository Profile
+# Optimized for repos >10GB with tiered indexing
+
+version: "1"
+
+# Inherits from default.yml, only overrides specified
+
+indexing:
+  profile: "large-repo"
+  exclude:
+    # Minimal excludes - index almost everything for large repos
+    - "**/.git/**"
+    - "**/node_modules/**"
+    - "**/vendor/**"
+    - "**/__pycache__/**"
+    - "**/*.min.js"
+    - "**/*.min.css"
+    - "**/package-lock.json"
+    - "**/yarn.lock"
+    - "**/*.lock"
+    # Binary files (can't be indexed meaningfully)
+    - "**/*.png"
+    - "**/*.jpg"
+    - "**/*.jpeg"
+    - "**/*.gif"
+    - "**/*.ico"
+    - "**/*.woff"
+    - "**/*.woff2"
+    - "**/*.ttf"
+    - "**/*.eot"
+    - "**/*.pdf"
+    - "**/*.zip"
+    - "**/*.tar"
+    - "**/*.gz"
+    - "**/*.jar"
+    - "**/*.war"
+    - "**/*.class"
+    - "**/*.o"
+    - "**/*.so"
+    - "**/*.dll"
+    - "**/*.exe"
+  # Include ALL text-based files
+  include:
+    # Source code
+    - "**/*.java"
+    - "**/*.kt"
+    - "**/*.scala"
+    - "**/*.py"
+    - "**/*.pyi"
+    - "**/*.js"
+    - "**/*.jsx"
+    - "**/*.ts"
+    - "**/*.tsx"
+    - "**/*.mjs"
+    - "**/*.cjs"
+    - "**/*.vue"
+    - "**/*.svelte"
+    - "**/*.cpp"
+    - "**/*.cc"
+    - "**/*.cxx"
+    - "**/*.c"
+    - "**/*.h"
+    - "**/*.hpp"
+    - "**/*.hxx"
+    - "**/*.cs"
+    - "**/*.go"
+    - "**/*.rs"
+    - "**/*.rb"
+    - "**/*.php"
+    - "**/*.swift"
+    - "**/*.m"
+    - "**/*.mm"
+    - "**/*.r"
+    - "**/*.R"
+    - "**/*.pl"
+    - "**/*.pm"
+    - "**/*.lua"
+    - "**/*.ex"
+    - "**/*.exs"
+    - "**/*.erl"
+    - "**/*.hrl"
+    - "**/*.clj"
+    - "**/*.cljs"
+    - "**/*.hs"
+    - "**/*.fs"
+    - "**/*.fsx"
+    - "**/*.ml"
+    - "**/*.mli"
+    - "**/*.dart"
+    - "**/*.groovy"
+    - "**/*.gradle"
+    - "**/*.kts"
+    # Config & Build
+    - "**/*.xml"
+    - "**/*.json"
+    - "**/*.yaml"
+    - "**/*.yml"
+    - "**/*.toml"
+    - "**/*.ini"
+    - "**/*.cfg"
+    - "**/*.conf"
+    - "**/*.properties"
+    - "**/*.env"
+    - "**/*.env.*"
+    - "**/Makefile"
+    - "**/CMakeLists.txt"
+    - "**/Dockerfile"
+    - "**/docker-compose*.yml"
+    - "**/*.cmake"
+    - "**/BUILD"
+    - "**/WORKSPACE"
+    - "**/*.bazel"
+    - "**/*.bzl"
+    # Documentation
+    - "**/*.md"
+    - "**/*.mdx"
+    - "**/*.rst"
+    - "**/*.txt"
+    - "**/*.adoc"
+    - "**/*.org"
+    # Proto & IDL
+    - "**/*.proto"
+    - "**/*.thrift"
+    - "**/*.avsc"
+    - "**/*.graphql"
+    - "**/*.gql"
+    # SQL & Database
+    - "**/*.sql"
+    - "**/*.ddl"
+    - "**/*.dml"
+    # Scripts
+    - "**/*.sh"
+    - "**/*.bash"
+    - "**/*.zsh"
+    - "**/*.fish"
+    - "**/*.ps1"
+    - "**/*.psm1"
+    - "**/*.bat"
+    - "**/*.cmd"
+    # Web
+    - "**/*.html"
+    - "**/*.htm"
+    - "**/*.css"
+    - "**/*.scss"
+    - "**/*.sass"
+    - "**/*.less"
+    # Templates
+    - "**/*.ejs"
+    - "**/*.erb"
+    - "**/*.hbs"
+    - "**/*.pug"
+    - "**/*.jinja"
+    - "**/*.jinja2"
+    - "**/*.twig"
+    - "**/*.ftl"
+    - "**/*.mustache"
+    # Tests & Generated (but important for review)
+    - "**/*.spec.*"
+    - "**/*.test.*"
+    - "**/*_test.*"
+    - "**/test_*.*"
+    - "**/*.pb.go"
+    - "**/*.pb.cc"
+    - "**/*.pb.h"
+    - "**/*_pb2.py"
+  max_file_size_kb: 2048  # Allow larger files for comprehensive indexing
+  tiers:
+    enabled: true
+    hot_paths:
+      - "src/main/**"
+      - "lib/**"
+      - "pkg/**"
+      - "internal/**"
+      - "app/**"
+      - "core/**"
+    cold_paths:
+      - "test/**"
+      - "tests/**"
+      - "spec/**"
+      - "examples/**"
+      - "docs/**"
+      - "scripts/**"
+    max_hot_size_mb: 2000
+      - "scripts/**"
+    max_hot_size_mb: 1000
+
+retrieval:
+  top_k: 30  # More context for large repos
+  lexical_weight: 0.4  # Slightly more lexical for large codebases
+  vector_weight: 0.6
+  graph_expand_depth: 1  # Reduce graph expansion to control scope
+  reranking_enabled: true
+
+review:
+  max_comments: 15  # Cap comments to avoid noise
+  severity_threshold: "warning"
+  confidence_threshold: 0.75  # Higher confidence threshold
+
+storage:
+  backend: "local"  # Override to s3/gcs for production
+  path: ".aipr/index"
+
+model:
+  embeddings:
+    provider: "openai"
+    model: "text-embedding-3-small"
+  llm:
+    provider: "openai"
+    model: "gpt-4o"
+    max_tokens: 4096
+    temperature: 0.1
+  timeout_seconds: 180  # Longer timeout for large contexts

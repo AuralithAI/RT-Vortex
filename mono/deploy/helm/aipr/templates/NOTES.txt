@@ -1,0 +1,75 @@
+🎉 AI-PR-Reviewer has been deployed!
+
+{{- if .Values.ingress.enabled }}
+1. Access the application at:
+{{- range $host := .Values.ingress.hosts }}
+  {{- range .paths }}
+   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
+  {{- end }}
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+1. Get the application URL by running:
+   export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "aipr.fullname" . }})
+   export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+   echo http://$NODE_IP:$NODE_PORT
+{{- else if contains "LoadBalancer" .Values.service.type }}
+1. Get the application URL by running:
+   NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+   
+   export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "aipr.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+   echo http://$SERVICE_IP:{{ .Values.service.port }}
+{{- else if contains "ClusterIP" .Values.service.type }}
+1. Access the application by running:
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "aipr.fullname" . }} 8080:{{ .Values.service.port }}
+   
+   Then open http://localhost:8080 in your browser.
+{{- end }}
+
+2. Check pod status:
+   kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "aipr.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+3. View logs:
+   kubectl logs --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "aipr.name" . }}" -f
+
+4. Health check:
+   curl http://localhost:8080/actuator/health
+
+{{- if .Values.metrics.enabled }}
+
+📊 Metrics:
+   Prometheus metrics are available at /actuator/prometheus
+{{- if .Values.metrics.serviceMonitor.enabled }}
+   ServiceMonitor has been created for Prometheus Operator
+{{- end }}
+{{- end }}
+
+📚 Documentation:
+   - API Docs: http://localhost:8080/swagger-ui.html
+   - Health: http://localhost:8080/actuator/health
+
+⚙️  Configuration:
+   - Active profile: {{ .Values.config.profile }}
+   - LLM provider: {{ .Values.config.llm.provider }}
+   - LLM model: {{ .Values.config.llm.model }}
+
+{{- if .Values.postgresql.enabled }}
+
+🐘 PostgreSQL:
+   Host: {{ include "aipr.postgresql.host" . }}
+   Port: {{ include "aipr.postgresql.port" . }}
+   Database: {{ include "aipr.postgresql.database" . }}
+{{- end }}
+
+{{- if .Values.redis.enabled }}
+
+🔴 Redis:
+   Host: {{ include "aipr.redis.host" . }}
+   Port: {{ include "aipr.redis.port" . }}
+{{- end }}
+
+🔒 Security Notes:
+   - Ensure you have configured the LLM API key
+   - Configure GitHub/GitLab webhook secrets
+   - Use TLS in production (enable ingress.tls)
+
+For more information, visit: https://github.com/auralith/ai-pr-reviewer

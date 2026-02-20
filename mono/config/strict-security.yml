@@ -1,0 +1,81 @@
+# AI PR Reviewer - Strict Security Profile
+# Maximum security checks for sensitive codebases
+
+version: "1"
+
+indexing:
+  profile: "strict-security"
+  exclude:
+    - "**/node_modules/**"
+    - "**/vendor/**"
+    - "**/build/**"
+    - "**/dist/**"
+    - "**/target/**"
+    - "**/.git/**"
+    - "**/__pycache__/**"
+    - "**/*.min.js"
+    - "**/*.min.css"
+  # Include config files that might contain secrets
+  include:
+    - "**/*.env.example"
+    - "**/docker-compose*.yml"
+    - "**/Dockerfile*"
+    - "**/*.conf"
+    - "**/*.config.*"
+
+retrieval:
+  top_k: 25
+  lexical_weight: 0.3
+  vector_weight: 0.7
+  graph_expand_depth: 3  # Deeper graph for tracking data flow
+
+review:
+  max_comments: 30  # Allow more security findings
+  severity_threshold: "info"  # Report even info-level security hints
+  confidence_threshold: 0.6  # Lower threshold - prefer over-reporting
+  enabled_checks:
+    - security
+    - performance
+    - reliability
+    - architecture
+  # Security-specific settings
+  require_reasoning: true
+
+security:
+  redaction:
+    enabled: true
+    patterns:
+      # Standard patterns
+      - "(?i)(api[_-]?key|apikey)\\s*[:=]\\s*['\"]?[a-zA-Z0-9_-]{20,}['\"]?"
+      - "(?i)(secret|password|passwd|pwd)\\s*[:=]\\s*['\"]?[^\\s'\"]{8,}['\"]?"
+      - "(?i)(bearer|authorization)\\s*[:=]\\s*['\"]?[a-zA-Z0-9_.-]{20,}['\"]?"
+      - "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+      # Platform-specific tokens
+      - "ghp_[a-zA-Z0-9]{36}"
+      - "gho_[a-zA-Z0-9]{36}"
+      - "github_pat_[a-zA-Z0-9_]{22,}"
+      - "sk-[a-zA-Z0-9]{48}"
+      - "sk-proj-[a-zA-Z0-9]{48,}"
+      - "AKIA[0-9A-Z]{16}"
+      - "AIza[0-9A-Za-z_-]{35}"
+      - "xox[baprs]-[0-9a-zA-Z-]{10,}"
+      # Database connection strings
+      - "(?i)(mongodb|postgres|mysql|redis)://[^\\s]+"
+      - "(?i)jdbc:[a-z]+://[^\\s]+"
+  secrets_detection: true
+  audit_logging: true
+  encryption_at_rest: true
+
+# Security-focused prompt additions
+prompts:
+  security_focus:
+    - "Pay special attention to authentication and authorization flows"
+    - "Check for SQL injection, XSS, and command injection vulnerabilities"
+    - "Verify input validation on all external inputs"
+    - "Check for hardcoded credentials or secrets"
+    - "Verify proper error handling that doesn't leak sensitive info"
+    - "Check for insecure deserialization"
+    - "Verify cryptographic operations use secure algorithms"
+    - "Check for path traversal vulnerabilities"
+    - "Verify CORS and CSP configurations"
+    - "Check for SSRF vulnerabilities"

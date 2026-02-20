@@ -1,0 +1,11 @@
+// Build logic convention plugins
+// Provides reusable build configurations
+
+plugins {
+    id 'groovy-gradle-plugin'
+}
+
+repositories {
+    gradlePluginPortal()
+    mavenCentral()
+}

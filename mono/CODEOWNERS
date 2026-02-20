@@ -1,0 +1,38 @@
+# Default owners for everything in the repo
+* @AuralithAI/core-team
+
+# Core engine (C++)
+/core/engine-cpp/ @AuralithAI/engine-team
+
+# Java server
+/server/ @AuralithAI/server-team
+
+# CLI
+/cli/ @AuralithAI/cli-team
+
+# Integrations
+/integrations/github/ @AuralithAI/integrations-team
+/integrations/gitlab/ @AuralithAI/integrations-team
+/integrations/jenkins/ @AuralithAI/integrations-team
+/integrations/bitbucket/ @AuralithAI/integrations-team
+
+# SDKs
+/sdk/java/ @AuralithAI/sdk-team
+/sdk/python/ @AuralithAI/sdk-team
+/sdk/node/ @AuralithAI/sdk-team
+
+# Documentation
+/docs/ @AuralithAI/docs-team
+
+# CI/CD and deployment
+/.github/ @AuralithAI/devops-team
+/ci/ @AuralithAI/devops-team
+/deploy/ @AuralithAI/devops-team
+
+# Security-sensitive files
+/SECURITY.md @AuralithAI/security-team
+/server/src/main/java/**/auth/ @AuralithAI/security-team
+/config/strict-security.yml @AuralithAI/security-team
+
+# Schemas (contracts - require careful review)
+/schemas/ @AuralithAI/core-team @AuralithAI/api-team

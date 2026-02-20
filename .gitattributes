@@ -1,0 +1,75 @@
+# Auto detect text files and perform LF normalization
+* text=auto eol=lf
+
+# Explicitly declare text files
+*.md text
+*.txt text
+*.json text
+*.xml text
+*.yml text
+*.yaml text
+*.properties text
+*.gradle text
+*.java text
+*.py text
+*.js text
+*.ts text
+*.c text
+*.cpp text
+*.cc text
+*.cxx text
+*.h text
+*.hpp text
+*.sh text eol=lf
+*.bash text eol=lf
+*.zsh text eol=lf
+
+# Windows-specific files
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.jar binary
+*.class binary
+*.so binary
+*.dll binary
+*.dylib binary
+*.exe binary
+*.o binary
+*.a binary
+
+# Gradle wrapper
+gradle-wrapper.jar binary
+
+# Git
+.gitattributes text
+.gitignore text
+
+# Docker
+Dockerfile text
+
+# Diff settings
+*.md diff=markdown
+*.java diff=java
+*.py diff=python
+*.c diff=cpp
+*.cpp diff=cpp
+*.h diff=cpp
+
+# Merge settings
+*.json merge=union
+*.yml merge=union
+
+# LFS (uncomment if using Git LFS for large files)
+# *.zip filter=lfs diff=lfs merge=lfs -text
+# *.tar.gz filter=lfs diff=lfs merge=lfs -text

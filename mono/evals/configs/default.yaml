@@ -1,0 +1,106 @@
+# Evaluation Framework Configuration
+
+# API configuration
+api:
+  base_url: "http://localhost:8080"
+  api_key: "${AIPR_API_KEY}"
+  timeout: 300
+
+# Model configuration for evaluation
+model:
+  provider: "openai"
+  model: "gpt-4"
+  temperature: 0.1
+
+# Evaluation settings
+evaluation:
+  # Number of parallel workers
+  workers: 4
+  
+  # Retry configuration
+  max_retries: 3
+  retry_delay: 5
+  
+  # Sampling
+  sample_size: null  # null = all, or specify number
+  random_seed: 42
+  
+  # Categories to evaluate
+  categories:
+    - security
+    - performance
+    - testing
+    - architecture
+    - code_style
+
+# Metrics configuration
+metrics:
+  # Comment matching settings
+  matching:
+    # How to match expected vs actual comments
+    strategy: "fuzzy"  # exact, fuzzy, semantic
+    
+    # Line number tolerance
+    line_tolerance: 3
+    
+    # Minimum similarity for fuzzy/semantic matching
+    similarity_threshold: 0.7
+  
+  # Which metrics to compute
+  compute:
+    - precision
+    - recall
+    - f1
+    - location_accuracy
+    - severity_accuracy
+    - category_accuracy
+    - latency_percentiles
+    - token_efficiency
+
+# Reporting configuration
+reporting:
+  # Output formats
+  formats:
+    - json
+    - html
+    - markdown
+  
+  # Include detailed analysis
+  include_examples: true
+  
+  # Number of examples per category
+  examples_per_category: 5
+  
+  # Charts and visualizations
+  charts:
+    - precision_recall_curve
+    - latency_histogram
+    - category_breakdown
+    - severity_confusion_matrix
+
+# Baselines for comparison
+baselines:
+  # Compare against previous runs
+  compare_previous: true
+  
+  # Minimum improvement required
+  min_improvement:
+    f1: 0.01
+    precision: 0.01
+    recall: 0.01
+  
+  # Regression thresholds
+  regression_threshold:
+    f1: -0.02
+    latency_p95: 0.2  # 20% increase
+
+# Output configuration
+output:
+  # Results directory
+  results_dir: "./results"
+  
+  # Archive old results
+  archive_previous: true
+  
+  # Keep N most recent results
+  keep_results: 10

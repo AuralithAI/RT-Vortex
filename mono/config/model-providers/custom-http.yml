@@ -1,0 +1,88 @@
+# Custom HTTP Model Provider Configuration
+# Template for organization-specific endpoints
+
+provider: "custom-http"
+type: "http"
+
+# Connection settings
+connection:
+  # Your organization's model endpoint
+  base_url: "${MODEL_ENDPOINT_URL}"
+  # Authentication
+  auth:
+    type: "bearer"  # Options: bearer, api_key, basic, custom_header
+    token_env: "MODEL_API_TOKEN"
+    # For custom_header:
+    # header_name: "X-API-Key"
+    # header_value_env: "MODEL_API_KEY"
+  # TLS settings
+  tls:
+    enabled: true
+    verify_ssl: true
+    # Optional: Custom CA certificate
+    ca_cert_path: ""
+  # Timeouts
+  connect_timeout_seconds: 10
+  read_timeout_seconds: 120
+  # Retries
+  max_retries: 3
+  retry_delay_ms: 1000
+  retry_backoff_multiplier: 2.0
+
+# Embeddings endpoint
+embeddings:
+  # Path relative to base_url
+  path: "/embeddings"
+  # HTTP method
+  method: "POST"
+  # Model identifier (sent in request)
+  model: "your-embedding-model"
+  dimensions: 768
+  # Request format
+  request_format:
+    input_field: "input"
+    model_field: "model"
+  # Response format
+  response_format:
+    embeddings_path: "data[*].embedding"
+    # Or for flat response:
+    # embeddings_path: "embeddings"
+
+# LLM endpoint
+llm:
+  # Path relative to base_url
+  path: "/chat/completions"
+  # HTTP method
+  method: "POST"
+  # Model identifier
+  model: "your-llm-model"
+  max_tokens: 4096
+  temperature: 0.1
+  # Request format (OpenAI-compatible by default)
+  request_format:
+    messages_field: "messages"
+    model_field: "model"
+    max_tokens_field: "max_tokens"
+    temperature_field: "temperature"
+  # Response format
+  response_format:
+    content_path: "choices[0].message.content"
+    # For streaming:
+    stream_path: "choices[0].delta.content"
+
+# Custom headers (added to all requests)
+headers:
+  X-Client-Name: "ai-pr-reviewer"
+  X-Client-Version: "${AIPR_VERSION}"
+
+# Rate limiting
+rate_limit:
+  enabled: true
+  requests_per_minute: 100
+  tokens_per_minute: 50000
+
+# Health check
+health_check:
+  enabled: true
+  path: "/health"
+  interval_seconds: 30

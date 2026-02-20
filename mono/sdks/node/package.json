@@ -1,0 +1,67 @@
+{
+  "name": "@auralith/aipr-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript/JavaScript SDK for AI-PR-Reviewer API",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "test:coverage": "vitest --coverage",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write src",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "ai",
+    "code-review",
+    "pull-request",
+    "devops",
+    "ci-cd",
+    "llm",
+    "github",
+    "gitlab"
+  ],
+  "author": "Auralith AI <team@auralith.ai>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/auralith/ai-pr-reviewer.git",
+    "directory": "sdks/node"
+  },
+  "homepage": "https://github.com/auralith/ai-pr-reviewer#readme",
+  "bugs": {
+    "url": "https://github.com/auralith/ai-pr-reviewer/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "undici": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "eslint": "^8.55.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "prettier": "^3.1.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0",
+    "@vitest/coverage-v8": "^1.0.0"
+  }
+}

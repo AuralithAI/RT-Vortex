@@ -1,0 +1,95 @@
+# AI PR Reviewer - Default Configuration
+# This is the base configuration profile
+
+version: "1"
+
+repo:
+  # Override per repository
+  id: ""
+  default_branch: "main"
+
+indexing:
+  profile: "default"
+  exclude:
+    - "**/node_modules/**"
+    - "**/vendor/**"
+    - "**/build/**"
+    - "**/dist/**"
+    - "**/target/**"
+    - "**/.git/**"
+    - "**/__pycache__/**"
+    - "**/*.min.js"
+    - "**/*.min.css"
+    - "**/package-lock.json"
+    - "**/yarn.lock"
+    - "**/*.lock"
+    - "**/generated/**"
+  include: []
+  max_file_size_kb: 1024
+  languages: []  # Empty = auto-detect all
+  tiers:
+    enabled: false
+
+retrieval:
+  top_k: 20
+  lexical_weight: 0.3
+  vector_weight: 0.7
+  graph_expand_depth: 2
+  reranking_enabled: true
+
+review:
+  max_comments: 20
+  severity_threshold: "warning"
+  confidence_threshold: 0.7
+  enabled_checks:
+    - security
+    - performance
+    - reliability
+    - style
+  require_reasoning: true
+
+storage:
+  backend: "local"
+  path: ".aipr/index"
+
+model:
+  embeddings:
+    provider: "openai"
+    model: "text-embedding-3-small"
+    dimensions: 1536
+  llm:
+    provider: "openai"
+    model: "gpt-4o"
+    max_tokens: 4096
+    temperature: 0.1
+  allow_network: true
+  timeout_seconds: 120
+
+security:
+  redaction:
+    enabled: true
+    patterns:
+      - "(?i)(api[_-]?key|apikey)\\s*[:=]\\s*['\"]?[a-zA-Z0-9_-]{20,}['\"]?"
+      - "(?i)(secret|password|passwd|pwd)\\s*[:=]\\s*['\"]?[^\\s'\"]{8,}['\"]?"
+      - "(?i)(bearer|authorization)\\s*[:=]\\s*['\"]?[a-zA-Z0-9_.-]{20,}['\"]?"
+      - "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
+      - "ghp_[a-zA-Z0-9]{36}"
+      - "gho_[a-zA-Z0-9]{36}"
+      - "sk-[a-zA-Z0-9]{48}"
+  secrets_detection: true
+  audit_logging: true
+  encryption_at_rest: false
+
+integrations:
+  github:
+    enabled: true
+    token_env: "GITHUB_TOKEN"
+  gitlab:
+    enabled: false
+    token_env: "GITLAB_TOKEN"
+  slack:
+    enabled: false
+
+logging:
+  level: "info"
+  format: "text"

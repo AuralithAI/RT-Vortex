@@ -1,0 +1,358 @@
+name: Release
+
+# Runs on:
+# - Merge to main: Auto-bump version, create tag, build release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
+  JAVA_VERSION: "21"
+  CMAKE_VERSION: "3.28.1"
+  MONO_DIR: "mono"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ===========================================================================
+  # Version Bump & Tag
+  # ===========================================================================
+  version:
+    name: Bump Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+      
+      - name: Bump Version
+        id: version
+        run: |
+          # Read current version
+          VERSION_FILE="${{ env.MONO_DIR }}/VERSION"
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo "1.0.0" > "$VERSION_FILE"
+          fi
+          
+          CURRENT_VERSION=$(cat "$VERSION_FILE" | tr -d '[:space:]')
+          echo "Current version: $CURRENT_VERSION"
+          
+          # Parse version components
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          
+          # Increment patch version
+          PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          
+          echo "New version: $NEW_VERSION"
+          echo "$NEW_VERSION" > "$VERSION_FILE"
+          
+          # Commit and tag
+          git add "$VERSION_FILE"
+          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+          git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
+          
+          # Push changes
+          git push origin main --follow-tags
+          
+          # Set outputs
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$NEW_VERSION" >> $GITHUB_OUTPUT
+
+  # ===========================================================================
+  # Build Engine for All Platforms
+  # ===========================================================================
+  build-engine:
+    name: Build Engine (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-latest
+          - target: linux-arm64
+            os: ubuntu-latest
+          - target: darwin-x64
+            os: macos-latest
+          - target: darwin-arm64
+            os: macos-14
+          - target: windows-x64
+            os: windows-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+      
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: ${{ env.CMAKE_VERSION }}
+      
+      - name: Configure
+        run: |
+          cmake -B build -S ${{ env.MONO_DIR }}/engine \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAIPR_BUILD_TESTS=OFF
+      
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+      
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build/lib* dist/ 2>/dev/null || true
+          cp build/*.dll dist/ 2>/dev/null || true
+          cp build/*.dylib dist/ 2>/dev/null || true
+          cp build/*.so dist/ 2>/dev/null || true
+          cp build/Release/*.dll dist/ 2>/dev/null || true
+          tar -czvf aipr-engine-${{ matrix.target }}.tar.gz -C dist .
+      
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.target }}
+          path: aipr-engine-${{ matrix.target }}.tar.gz
+
+  # ===========================================================================
+  # Build Distribution Package
+  # ===========================================================================
+  build-distribution:
+    name: Build Distribution
+    runs-on: ubuntu-latest
+    needs: [version, build-engine]
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+      
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+      
+      - name: Download All Engine Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: engine-*
+          path: engine-artifacts/
+      
+      - name: Prepare Engine Libraries
+        run: |
+          mkdir -p ${{ env.MONO_DIR }}/engine/build
+          for artifact in engine-artifacts/engine-*/aipr-engine-*.tar.gz; do
+            tar -xzf "$artifact" -C ${{ env.MONO_DIR }}/engine/build/
+          done
+      
+      - name: Build Distribution
+        working-directory: ${{ env.MONO_DIR }}
+        run: ./gradlew distZip distTar
+      
+      - name: Upload Distribution
+        uses: actions/upload-artifact@v4
+        with:
+          name: aipr-${{ needs.version.outputs.version }}
+          path: |
+            ${{ env.MONO_DIR }}/build/distributions/*.zip
+            ${{ env.MONO_DIR }}/build/distributions/*.tar.gz
+
+  # ===========================================================================
+  # Build Docker Image
+  # ===========================================================================
+  build-docker:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: [version, build-distribution]
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+      
+      - name: Download Distribution
+        uses: actions/download-artifact@v4
+        with:
+          name: aipr-${{ needs.version.outputs.version }}
+          path: dist/
+      
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.version.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
+            type=raw,value=latest
+      
+      - name: Build and Push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ env.MONO_DIR }}/deploy/docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ===========================================================================
+  # Create GitHub Release
+  # ===========================================================================
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: [version, build-distribution, build-docker]
+    
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.version.outputs.version }}
+      
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release-assets
+          
+          # Copy distribution packages
+          cp artifacts/aipr-${{ needs.version.outputs.version }}/*.zip release-assets/ || true
+          cp artifacts/aipr-${{ needs.version.outputs.version }}/*.tar.gz release-assets/ || true
+          
+          # Copy engine artifacts
+          for dir in artifacts/engine-*; do
+            cp "$dir"/*.tar.gz release-assets/ 2>/dev/null || true
+          done
+      
+      - name: Generate Release Notes
+        run: |
+          cat > release-notes.md << 'EOF'
+          ## AI PR Reviewer v${{ needs.version.outputs.version }}
+          
+          ### Downloads
+          
+          | Package | Description |
+          |---------|-------------|
+          | `aipr-${{ needs.version.outputs.version }}.zip` | Full distribution (all platforms) |
+          | `aipr-${{ needs.version.outputs.version }}.tar.gz` | Full distribution (all platforms) |
+          
+          ### Docker
+          
+          ```bash
+          docker pull ghcr.io/${{ github.repository }}:${{ needs.version.outputs.version }}
+          docker pull ghcr.io/${{ github.repository }}:latest
+          ```
+          
+          ### Quick Start
+          
+          ```bash
+          # Extract
+          unzip aipr-${{ needs.version.outputs.version }}.zip
+          cd aipr-${{ needs.version.outputs.version }}
+          
+          # Configure
+          vi config/application.yml
+          
+          # Run
+          ./bin/aipr-server
+          ```
+          
+          See [Setup Guide](docs/setup.md) for full documentation.
+          EOF
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: Release v${{ needs.version.outputs.version }}
+          body_path: release-notes.md
+          files: release-assets/*
+          draft: false
+          prerelease: false
+
+  # ===========================================================================
+  # Cleanup Old Artifacts
+  # ===========================================================================
+  cleanup:
+    name: Cleanup Old Artifacts
+    runs-on: ubuntu-latest
+    needs: [version, release]
+    
+    steps:
+      - name: Delete Old Release Artifacts
+        uses: actions/github-script@v7
+        env:
+          CURRENT_VERSION: ${{ needs.version.outputs.version }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const currentVersion = process.env.CURRENT_VERSION;
+            
+            // Get all artifacts
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner,
+              repo,
+              per_page: 100
+            });
+            
+            for (const artifact of artifacts.data.artifacts) {
+              // Skip current version artifacts
+              if (artifact.name.includes(currentVersion)) {
+                console.log(`Keeping: ${artifact.name}`);
+                continue;
+              }
+              
+              // Delete old artifacts (older than 30 days)
+              const createdAt = new Date(artifact.created_at);
+              const thirtyDaysAgo = new Date();
+              thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+              
+              if (createdAt < thirtyDaysAgo) {
+                console.log(`Deleting old artifact: ${artifact.name}`);
+                await github.rest.actions.deleteArtifact({
+                  owner,
+                  repo,
+                  artifact_id: artifact.id
+                });
+              }
+            }

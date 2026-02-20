@@ -1,0 +1,310 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://auralithai.com/schemas/config.schema.json",
+  "title": "AIPRConfig",
+  "description": "AI PR Reviewer configuration schema",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Configuration schema version",
+      "default": "1"
+    },
+    "repo": {
+      "$ref": "#/definitions/RepoConfig"
+    },
+    "indexing": {
+      "$ref": "#/definitions/IndexingConfig"
+    },
+    "retrieval": {
+      "$ref": "#/definitions/RetrievalConfig"
+    },
+    "review": {
+      "$ref": "#/definitions/ReviewConfig"
+    },
+    "storage": {
+      "$ref": "#/definitions/StorageConfig"
+    },
+    "model": {
+      "$ref": "#/definitions/ModelConfig"
+    },
+    "security": {
+      "$ref": "#/definitions/SecurityConfig"
+    },
+    "integrations": {
+      "$ref": "#/definitions/IntegrationsConfig"
+    },
+    "logging": {
+      "$ref": "#/definitions/LoggingConfig"
+    }
+  },
+  "definitions": {
+    "RepoConfig": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique repository identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable repository name"
+        },
+        "default_branch": {
+          "type": "string",
+          "default": "main"
+        }
+      }
+    },
+    "IndexingConfig": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": ["default", "large-repo", "strict-security", "perf-focused"],
+          "default": "default"
+        },
+        "exclude": {
+          "type": "array",
+          "description": "Patterns to exclude from indexing",
+          "items": { "type": "string" },
+          "default": ["**/node_modules/**", "**/vendor/**", "**/build/**", "**/dist/**", "**/.git/**", "**/__pycache__/**", "**/*.min.js", "**/*.min.css"]
+        },
+        "include": {
+          "type": "array",
+          "description": "Patterns to explicitly include",
+          "items": { "type": "string" }
+        },
+        "max_file_size_kb": {
+          "type": "integer",
+          "default": 1024
+        },
+        "languages": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "tiers": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "hot_paths": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "cold_paths": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "RetrievalConfig": {
+      "type": "object",
+      "properties": {
+        "top_k": {
+          "type": "integer",
+          "description": "Number of chunks to retrieve",
+          "default": 20
+        },
+        "lexical_weight": {
+          "type": "number",
+          "description": "Weight for lexical search (0-1)",
+          "default": 0.3
+        },
+        "vector_weight": {
+          "type": "number",
+          "description": "Weight for vector search (0-1)",
+          "default": 0.7
+        },
+        "graph_expand_depth": {
+          "type": "integer",
+          "description": "How many hops to expand in symbol graph",
+          "default": 2
+        },
+        "reranking_enabled": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "ReviewConfig": {
+      "type": "object",
+      "properties": {
+        "max_comments": {
+          "type": "integer",
+          "default": 20
+        },
+        "severity_threshold": {
+          "type": "string",
+          "enum": ["info", "warning", "error", "critical"],
+          "default": "warning"
+        },
+        "confidence_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "default": 0.7
+        },
+        "enabled_checks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["security", "performance", "reliability", "style", "architecture", "testing"]
+          },
+          "default": ["security", "performance", "reliability", "style"]
+        },
+        "auto_approve_threshold": {
+          "type": "number",
+          "description": "Auto-approve if no issues above this severity",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "require_reasoning": {
+          "type": "boolean",
+          "description": "Include reasoning for each comment",
+          "default": true
+        }
+      }
+    },
+    "StorageConfig": {
+      "type": "object",
+      "properties": {
+        "backend": {
+          "type": "string",
+          "enum": ["local", "s3", "gcs", "azure-blob", "nfs"],
+          "default": "local"
+        },
+        "path": {
+          "type": "string",
+          "description": "Base path for local storage",
+          "default": ".aipr/index"
+        },
+        "s3": {
+          "type": "object",
+          "properties": {
+            "bucket": { "type": "string" },
+            "prefix": { "type": "string" },
+            "region": { "type": "string" }
+          }
+        }
+      }
+    },
+    "ModelConfig": {
+      "type": "object",
+      "properties": {
+        "embeddings": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["openai", "local", "custom"],
+              "default": "openai"
+            },
+            "model": { "type": "string" },
+            "endpoint": { "type": "string" },
+            "dimensions": { "type": "integer" }
+          }
+        },
+        "llm": {
+          "type": "object",
+          "properties": {
+            "provider": {
+              "type": "string",
+              "enum": ["openai", "anthropic", "local", "custom"],
+              "default": "openai"
+            },
+            "model": { "type": "string" },
+            "endpoint": { "type": "string" },
+            "max_tokens": { "type": "integer", "default": 4096 },
+            "temperature": { "type": "number", "default": 0.1 }
+          }
+        },
+        "allow_network": {
+          "type": "boolean",
+          "description": "Allow network calls to model providers",
+          "default": true
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "default": 120
+        }
+      }
+    },
+    "SecurityConfig": {
+      "type": "object",
+      "properties": {
+        "redaction": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "patterns": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "secrets_detection": {
+          "type": "boolean",
+          "default": true
+        },
+        "audit_logging": {
+          "type": "boolean",
+          "default": true
+        },
+        "encryption_at_rest": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "IntegrationsConfig": {
+      "type": "object",
+      "properties": {
+        "github": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": true },
+            "token_env": { "type": "string", "default": "GITHUB_TOKEN" },
+            "app_id": { "type": "string" },
+            "installation_id": { "type": "string" }
+          }
+        },
+        "gitlab": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "token_env": { "type": "string", "default": "GITLAB_TOKEN" },
+            "url": { "type": "string" }
+          }
+        },
+        "slack": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "webhook_url_env": { "type": "string" }
+          }
+        }
+      }
+    },
+    "LoggingConfig": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error"],
+          "default": "info"
+        },
+        "format": {
+          "type": "string",
+          "enum": ["text", "json"],
+          "default": "text"
+        },
+        "file": {
+          "type": "string",
+          "description": "Log file path (optional)"
+        }
+      }
+    }
+  }
+}

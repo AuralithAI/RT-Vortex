@@ -1,0 +1,36 @@
+apiVersion: v2
+name: aipr
+description: AI-Powered Pull Request Reviewer - Helm Chart for Kubernetes deployment
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+keywords:
+  - ai
+  - code-review
+  - pull-request
+  - devops
+  - ci-cd
+  - llm
+
+home: https://github.com/auralith/ai-pr-reviewer
+sources:
+  - https://github.com/auralith/ai-pr-reviewer
+
+maintainers:
+  - name: Auralith AI
+    email: team@auralith.ai
+
+dependencies:
+  - name: postgresql
+    version: "12.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: "17.x.x"
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/containsSecurityUpdates: "false"

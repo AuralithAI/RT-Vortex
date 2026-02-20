@@ -1,0 +1,53 @@
+# AI PR Reviewer - Performance Focused Profile
+# Optimized for performance-critical codebases
+
+version: "1"
+
+indexing:
+  profile: "perf-focused"
+  exclude:
+    - "**/node_modules/**"
+    - "**/vendor/**"
+    - "**/build/**"
+    - "**/dist/**"
+    - "**/target/**"
+    - "**/.git/**"
+    - "**/__pycache__/**"
+    - "**/*.min.js"
+    - "**/*.min.css"
+    - "**/docs/**"
+  include:
+    - "**/benchmark/**"
+    - "**/perf/**"
+
+retrieval:
+  top_k: 25
+  lexical_weight: 0.3
+  vector_weight: 0.7
+  graph_expand_depth: 3  # Deeper for understanding call chains
+
+review:
+  max_comments: 25
+  severity_threshold: "info"  # Report performance hints at info level
+  confidence_threshold: 0.65
+  enabled_checks:
+    - performance
+    - reliability
+    - architecture
+  require_reasoning: true
+
+# Performance-focused prompt additions
+prompts:
+  performance_focus:
+    - "Check for O(n²) or worse algorithmic complexity in hot paths"
+    - "Identify unnecessary memory allocations in loops"
+    - "Look for missing caching opportunities"
+    - "Check for N+1 query patterns in database operations"
+    - "Verify proper use of connection pooling"
+    - "Check for synchronous I/O in async contexts"
+    - "Identify unnecessary data copying"
+    - "Check for lock contention patterns"
+    - "Verify proper use of lazy loading"
+    - "Check for inefficient regex patterns"
+    - "Identify opportunities for batching operations"
+    - "Check for proper use of indexes in queries"

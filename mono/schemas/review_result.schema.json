@@ -1,0 +1,239 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://auralithai.com/schemas/review_result.schema.json",
+  "title": "ReviewResult",
+  "description": "Result of a pull request review",
+  "type": "object",
+  "required": ["review_id", "repo_id", "pr_number", "status", "comments"],
+  "properties": {
+    "review_id": {
+      "type": "string",
+      "description": "Unique identifier for this review",
+      "format": "uuid"
+    },
+    "request_id": {
+      "type": "string",
+      "description": "Original request ID (for correlation)",
+      "format": "uuid"
+    },
+    "repo_id": {
+      "type": "string",
+      "description": "Repository identifier"
+    },
+    "pr_number": {
+      "type": "integer",
+      "description": "Pull request number",
+      "minimum": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "partial", "failed", "skipped"],
+      "description": "Review completion status"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["approve", "request_changes", "comment"],
+      "description": "Overall review verdict"
+    },
+    "summary": {
+      "type": "string",
+      "description": "High-level summary of the review",
+      "maxLength": 4096
+    },
+    "comments": {
+      "type": "array",
+      "description": "List of review comments",
+      "items": {
+        "$ref": "#/definitions/ReviewComment"
+      }
+    },
+    "metrics": {
+      "$ref": "#/definitions/ReviewMetrics"
+    },
+    "metadata": {
+      "$ref": "#/definitions/ReviewMetadata"
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "ISO 8601 timestamp of the review completion",
+      "format": "date-time"
+    }
+  },
+  "definitions": {
+    "ReviewComment": {
+      "type": "object",
+      "required": ["id", "type", "severity", "message"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique comment identifier"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["inline", "file", "general"],
+          "description": "Comment type"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["security", "performance", "reliability", "style", "architecture", "testing", "documentation", "other"],
+          "description": "Category of the issue"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "error", "critical"],
+          "description": "Severity level"
+        },
+        "confidence": {
+          "type": "number",
+          "description": "Confidence score (0-1)",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "file_path": {
+          "type": "string",
+          "description": "File path (for inline/file comments)"
+        },
+        "line_start": {
+          "type": "integer",
+          "description": "Starting line number (1-based)",
+          "minimum": 1
+        },
+        "line_end": {
+          "type": "integer",
+          "description": "Ending line number (1-based)",
+          "minimum": 1
+        },
+        "side": {
+          "type": "string",
+          "enum": ["LEFT", "RIGHT"],
+          "description": "Side of the diff (LEFT=old, RIGHT=new)"
+        },
+        "message": {
+          "type": "string",
+          "description": "The review comment message"
+        },
+        "suggestion": {
+          "type": "string",
+          "description": "Suggested code fix (if applicable)"
+        },
+        "reasoning": {
+          "type": "string",
+          "description": "Explanation of why this issue was flagged"
+        },
+        "references": {
+          "type": "array",
+          "description": "References to coding standards or documentation",
+          "items": {
+            "$ref": "#/definitions/Reference"
+          }
+        },
+        "related_symbols": {
+          "type": "array",
+          "description": "Related code symbols (functions, classes, etc.)",
+          "items": {
+            "type": "string"
+          }
+        },
+        "is_blocking": {
+          "type": "boolean",
+          "description": "Whether this issue should block merge",
+          "default": false
+        }
+      }
+    },
+    "Reference": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["standard", "documentation", "code", "external"],
+          "description": "Type of reference"
+        },
+        "title": {
+          "type": "string",
+          "description": "Reference title"
+        },
+        "url": {
+          "type": "string",
+          "description": "URL to the reference",
+          "format": "uri"
+        },
+        "excerpt": {
+          "type": "string",
+          "description": "Relevant excerpt from the reference"
+        }
+      }
+    },
+    "ReviewMetrics": {
+      "type": "object",
+      "description": "Metrics about the review",
+      "properties": {
+        "total_comments": {
+          "type": "integer",
+          "description": "Total number of comments generated"
+        },
+        "comments_by_severity": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "comments_by_category": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer"
+          }
+        },
+        "files_reviewed": {
+          "type": "integer",
+          "description": "Number of files reviewed"
+        },
+        "lines_analyzed": {
+          "type": "integer",
+          "description": "Total lines of diff analyzed"
+        },
+        "context_chunks_used": {
+          "type": "integer",
+          "description": "Number of context chunks retrieved"
+        },
+        "processing_time_ms": {
+          "type": "integer",
+          "description": "Total processing time in milliseconds"
+        }
+      }
+    },
+    "ReviewMetadata": {
+      "type": "object",
+      "description": "Metadata about the review process",
+      "properties": {
+        "engine_version": {
+          "type": "string",
+          "description": "Version of the review engine"
+        },
+        "model_provider": {
+          "type": "string",
+          "description": "LLM provider used"
+        },
+        "model_id": {
+          "type": "string",
+          "description": "Specific model used"
+        },
+        "index_version": {
+          "type": "string",
+          "description": "Version of the repo index used"
+        },
+        "config_profile": {
+          "type": "string",
+          "description": "Configuration profile used"
+        },
+        "warnings": {
+          "type": "array",
+          "description": "Non-fatal warnings during review",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

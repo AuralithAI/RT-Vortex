@@ -1,0 +1,63 @@
+// Convention plugin for Java library modules
+// Apply this to any module that produces a library
+
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    withJavadocJar()
+    withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-Xlint:unchecked' << '-Xlint:deprecation'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    testLogging {
+        events "passed", "skipped", "failed"
+        exceptionFormat "full"
+    }
+}
+
+publishing {
+    publications {
+        maven(MavenPublication) {
+            from components.java
+            
+            pom {
+                name = project.name
+                description = project.description ?: 'AI PR Reviewer component'
+                url = 'https://github.com/AuralithAI/RT-AI-PR-Reviewer'
+                
+                licenses {
+                    license {
+                        name = 'MIT License'
+                        url = 'https://opensource.org/licenses/MIT'
+                    }
+                }
+                
+                developers {
+                    developer {
+                        id = 'auralithai'
+                        name = 'AuralithAI Team'
+                        email = 'dev@auralithai.com'
+                    }
+                }
+                
+                scm {
+                    connection = 'scm:git:git://github.com/AuralithAI/RT-AI-PR-Reviewer.git'
+                    developerConnection = 'scm:git:ssh://github.com/AuralithAI/RT-AI-PR-Reviewer.git'
+                    url = 'https://github.com/AuralithAI/RT-AI-PR-Reviewer'
+                }
+            }
+        }
+    }
+}

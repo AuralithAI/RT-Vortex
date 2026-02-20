@@ -1,0 +1,130 @@
+[
+  {
+    "pr_id": "security-001",
+    "repository": "example/security-tests",
+    "context": {
+      "pr_title": "Add user authentication endpoint",
+      "pr_description": "Implements user login with username and password"
+    },
+    "files": [
+      {
+        "path": "src/auth/login.py",
+        "status": "added",
+        "patch": "@@ -0,0 +1,30 @@\n+import sqlite3\n+from flask import Flask, request, jsonify\n+\n+app = Flask(__name__)\n+\n+@app.route('/login', methods=['POST'])\n+def login():\n+    username = request.form.get('username')\n+    password = request.form.get('password')\n+    \n+    # Connect to database\n+    conn = sqlite3.connect('users.db')\n+    cursor = conn.cursor()\n+    \n+    # Check credentials\n+    query = f\"SELECT * FROM users WHERE username='{username}' AND password='{password}'\"\n+    cursor.execute(query)\n+    user = cursor.fetchone()\n+    \n+    if user:\n+        return jsonify({'status': 'success', 'user_id': user[0]})\n+    else:\n+        return jsonify({'status': 'error', 'message': 'Invalid credentials'})\n+\n+def hash_password(password):\n+    # TODO: implement hashing\n+    return password\n+\n+if __name__ == '__main__':\n+    app.run(debug=True)\n",
+        "expected_comments": [
+          {
+            "line": 16,
+            "severity": "critical",
+            "category": "security",
+            "pattern": "sql_injection",
+            "description": "SQL injection vulnerability - user input directly concatenated into query"
+          },
+          {
+            "line": 26,
+            "severity": "critical",
+            "category": "security",
+            "pattern": "plaintext_password",
+            "description": "Passwords stored in plaintext without hashing"
+          },
+          {
+            "line": 30,
+            "severity": "warning",
+            "category": "security",
+            "pattern": "debug_mode",
+            "description": "Debug mode enabled in production"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr_id": "security-002",
+    "repository": "example/security-tests",
+    "context": {
+      "pr_title": "Add file upload endpoint",
+      "pr_description": "Allow users to upload profile pictures"
+    },
+    "files": [
+      {
+        "path": "src/api/upload.py",
+        "status": "added",
+        "patch": "@@ -0,0 +1,25 @@\n+import os\n+from flask import Flask, request\n+\n+app = Flask(__name__)\n+UPLOAD_FOLDER = '/var/www/uploads'\n+\n+@app.route('/upload', methods=['POST'])\n+def upload_file():\n+    if 'file' not in request.files:\n+        return 'No file provided', 400\n+    \n+    file = request.files['file']\n+    filename = file.filename\n+    \n+    # Save the file\n+    file_path = os.path.join(UPLOAD_FOLDER, filename)\n+    file.save(file_path)\n+    \n+    return f'File {filename} uploaded successfully'\n+\n+@app.route('/download/<path:filename>')\n+def download_file(filename):\n+    file_path = os.path.join(UPLOAD_FOLDER, filename)\n+    return open(file_path, 'rb').read()\n",
+        "expected_comments": [
+          {
+            "line": 13,
+            "severity": "critical",
+            "category": "security",
+            "pattern": "path_traversal",
+            "description": "Path traversal vulnerability - filename not sanitized"
+          },
+          {
+            "line": 16,
+            "severity": "warning",
+            "category": "security",
+            "pattern": "no_file_validation",
+            "description": "No validation of file type or content"
+          },
+          {
+            "line": 22,
+            "severity": "critical",
+            "category": "security",
+            "pattern": "path_traversal",
+            "description": "Path traversal in download endpoint"
+          },
+          {
+            "line": 24,
+            "severity": "warning",
+            "category": "performance",
+            "pattern": "file_not_closed",
+            "description": "File handle not properly closed"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "pr_id": "security-003",
+    "repository": "example/security-tests",
+    "context": {
+      "pr_title": "Add API key management",
+      "pr_description": "Store and manage API keys for integrations"
+    },
+    "files": [
+      {
+        "path": "src/config.py",
+        "status": "modified",
+        "patch": "@@ -5,6 +5,10 @@\n class Config:\n     DEBUG = True\n     SECRET_KEY = 'super_secret_key_123'\n+    \n+    # API Keys\n+    STRIPE_API_KEY = 'sk_live_abc123xyz'\n+    AWS_SECRET_KEY = 'AKIAIOSFODNN7EXAMPLE/wJalrXUtnFEMI/K7MDENG/bPxRfiCY'\n+    DATABASE_URL = 'postgresql://admin:password123@prod-db.example.com:5432/app'\n",
+        "expected_comments": [
+          {
+            "line": 7,
+            "severity": "critical",
+            "category": "security",
+            "pattern": "hardcoded_secret",
+            "description": "Hardcoded secret key"
+          },
+          {
+            "line": 11,
+            "severity": "critical",
+            "category": "security",
+            "pattern": "hardcoded_api_key",
+            "description": "Hardcoded Stripe live API key"
+          },
+          {
+            "line": 12,
+            "severity": "critical",
+            "category": "security",
+            "pattern": "hardcoded_credentials",
+            "description": "Hardcoded AWS credentials"
+          },
+          {
+            "line": 13,
+            "severity": "critical",
+            "category": "security",
+            "pattern": "hardcoded_credentials",
+            "description": "Database credentials in source code"
+          }
+        ]
+      }
+    ]
+  }
+]

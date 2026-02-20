@@ -1,0 +1,165 @@
+# Build outputs
+build/
+out/
+target/
+dist/
+*.class
+*.war
+*.ear
+*.o
+*.obj
+*.a
+
+# JAR files (ignore most, but keep gradle wrapper)
+*.jar
+!**/gradle/wrapper/gradle-wrapper.jar
+
+# Native libraries (build outputs)
+*.so
+*.dll
+*.dylib
+*.exe
+
+# C++ build
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+*.cmake
+!CMakeLists.txt
+
+# Gradle
+.gradle/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+*.code-workspace
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+.eggs/
+*.egg-info/
+.installed.cfg
+*.egg
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn/
+package-lock.json
+yarn.lock
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage
+coverage/
+*.lcov
+.nyc_output/
+htmlcov/
+.coverage
+.coverage.*
+
+# Test output
+test-results/
+test-output/
+surefire-reports/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Local configuration (never commit secrets)
+.env
+.env.local
+.env.*.local
+*.local.yml
+*.local.yaml
+secrets.yml
+secrets.yaml
+
+# TLS Certificates - ignore by default, but allow dev certs
+*.pem
+*.key
+*.crt
+# Allow dev certificates in mono/config/certificates (shipped with distribution)
+!mono/config/certificates/*.crt
+!mono/config/certificates/*.key
+
+# Index data (runtime)
+.aipr/
+.index/
+*.faiss
+*.idx
+
+# Infrastructure binaries (downloaded at runtime)
+infrastructure_src/jre/
+infrastructure_src/gradle/
+!infrastructure_src/jre/.gitkeep
+!infrastructure_src/gradle/.gitkeep
+
+# Third party (if not using submodules)
+third_party/faiss/
+third_party/tree-sitter/
+!third_party/faiss/.gitkeep
+!third_party/tree-sitter/.gitkeep
+
+# Evaluation artifacts
+evals/results/
+evals/*.json
+
+# Docker
+*.tar
+docker-compose.override.yml

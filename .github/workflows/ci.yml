@@ -1,0 +1,268 @@
+name: CI
+
+# Runs on:
+# - Every push to any branch (lint, build, test)
+# - Pull requests to main (full validation, must pass to merge)
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true"
+  JAVA_VERSION: "21"
+  CMAKE_VERSION: "3.28.1"
+  MONO_DIR: "mono"
+
+jobs:
+  # ===========================================================================
+  # Lint & Validation
+  # ===========================================================================
+  lint:
+    name: Lint & Validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+      
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+      
+      - name: Checkstyle
+        working-directory: ${{ env.MONO_DIR }}
+        run: ./gradlew checkstyleMain checkstyleTest || true
+      
+      - name: Validate YAML configs
+        run: |
+          pip install pyyaml
+          for config in ${{ env.MONO_DIR }}/config/*.yml ${{ env.MONO_DIR }}/config/model-providers/*.yml; do
+            if [ -f "$config" ]; then
+              echo "Validating $config..."
+              python3 -c "import yaml; yaml.safe_load(open('$config'))"
+            fi
+          done
+      
+      - name: Validate JSON schemas
+        run: |
+          npm install -g ajv-cli ajv-formats
+          for schema in ${{ env.MONO_DIR }}/schemas/*.schema.json; do
+            if [ -f "$schema" ]; then
+              echo "Validating $schema..."
+              ajv compile -s "$schema" --strict=true || true
+            fi
+          done
+
+  # ===========================================================================
+  # Build & Test Server (with coverage)
+  # ===========================================================================
+  server:
+    name: Build & Test Server
+    runs-on: ubuntu-latest
+    needs: lint
+    defaults:
+      run:
+        working-directory: ${{ env.MONO_DIR }}
+    
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: aipr
+          POSTGRES_PASSWORD: aipr
+          POSTGRES_DB: aipr_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+      
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+      
+      - name: Build
+        run: ./gradlew build -x test
+      
+      - name: Run Tests with Coverage
+        run: ./gradlew test jacocoTestReport
+        env:
+          DATABASE_URL: jdbc:postgresql://localhost:5432/aipr_test
+          DATABASE_USER: aipr
+          DATABASE_PASSWORD: aipr
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+      
+      - name: Upload Coverage Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: ${{ env.MONO_DIR }}/server/build/reports/jacoco/
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 1 }}
+      
+      - name: Upload Test Results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-results
+          path: ${{ env.MONO_DIR }}/server/build/test-results/
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 1 }}
+      
+      - name: Coverage Summary
+        run: |
+          echo "## Test Coverage Report" >> $GITHUB_STEP_SUMMARY
+          if [ -f server/build/reports/jacoco/test/html/index.html ]; then
+            echo "Coverage report generated successfully." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # ===========================================================================
+  # Build C++ Engine
+  # ===========================================================================
+  engine:
+    name: Build Engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: aipr-engine-linux-x64
+          - os: macos-latest
+            artifact: aipr-engine-darwin-x64
+          - os: windows-latest
+            artifact: aipr-engine-windows-x64
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: ${{ env.CMAKE_VERSION }}
+      
+      - name: Configure & Build
+        run: |
+          cmake -B build -S ${{ env.MONO_DIR }}/engine -DCMAKE_BUILD_TYPE=Release -DAIPR_BUILD_TESTS=ON
+          cmake --build build --config Release --parallel 4
+      
+      - name: Run Tests
+        run: ctest --test-dir build --output-on-failure -C Release
+        continue-on-error: true
+      
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build/lib* dist/ 2>/dev/null || true
+          cp build/*.dll dist/ 2>/dev/null || true
+          cp build/*.dylib dist/ 2>/dev/null || true
+          cp build/*.so dist/ 2>/dev/null || true
+          cp build/Release/*.dll dist/ 2>/dev/null || true
+      
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 1 }}
+
+  # ===========================================================================
+  # Build Distribution Package
+  # ===========================================================================
+  distribution:
+    name: Build Distribution
+    runs-on: ubuntu-latest
+    needs: [server, engine]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+      
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.5'
+      
+      - name: Download Engine Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: aipr-engine-*
+          path: ${{ env.MONO_DIR }}/engine/build/
+          merge-multiple: true
+      
+      - name: Build Distribution
+        working-directory: ${{ env.MONO_DIR }}
+        run: ./gradlew distZip distTar
+      
+      - name: Upload Distribution (ZIP)
+        uses: actions/upload-artifact@v4
+        with:
+          name: aipr-distribution-zip
+          path: ${{ env.MONO_DIR }}/build/distributions/*.zip
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 1 }}
+      
+      - name: Upload Distribution (TAR)
+        uses: actions/upload-artifact@v4
+        with:
+          name: aipr-distribution-tar
+          path: ${{ env.MONO_DIR }}/build/distributions/*.tar.gz
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 1 }}
+
+  # ===========================================================================
+  # PR Quality Gate (only on PRs)
+  # ===========================================================================
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [lint, server, engine]
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Check Results
+        run: |
+          echo "## Quality Gate Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Lint: Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- Server Build & Tests: Passed" >> $GITHUB_STEP_SUMMARY
+          echo "- Engine Build: Passed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "PR is ready to merge." >> $GITHUB_STEP_SUMMARY

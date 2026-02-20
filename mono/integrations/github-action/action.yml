@@ -1,0 +1,292 @@
+name: 'AI PR Reviewer'
+description: 'Automated code review powered by AI with RAG-based context retrieval'
+author: 'AI PR Reviewer Team'
+
+branding:
+  icon: 'eye'
+  color: 'purple'
+
+inputs:
+  github-token:
+    description: 'GitHub token for API access'
+    required: true
+    default: ${{ github.token }}
+  
+  aipr-endpoint:
+    description: 'AI PR Reviewer server endpoint'
+    required: false
+    default: ''
+  
+  aipr-api-key:
+    description: 'API key for AI PR Reviewer server'
+    required: false
+    default: ''
+  
+  llm-provider:
+    description: 'LLM provider (openai-compatible, local-llama)'
+    required: false
+    default: 'openai-compatible'
+  
+  llm-api-key:
+    description: 'API key for LLM provider'
+    required: false
+    default: ''
+  
+  llm-model:
+    description: 'Model to use for reviews'
+    required: false
+    default: 'gpt-4-turbo-preview'
+  
+  llm-base-url:
+    description: 'Base URL for LLM API'
+    required: false
+    default: 'https://api.openai.com/v1'
+  
+  review-level:
+    description: 'Review thoroughness (quick, standard, deep)'
+    required: false
+    default: 'standard'
+  
+  max-comments:
+    description: 'Maximum number of comments to post'
+    required: false
+    default: '25'
+  
+  ignore-patterns:
+    description: 'Glob patterns for files to ignore (one per line)'
+    required: false
+    default: ''
+  
+  focus-areas:
+    description: 'Areas to focus on (security, performance, testing, architecture)'
+    required: false
+    default: 'security,reliability,performance,testing'
+  
+  auto-approve:
+    description: 'Automatically approve PRs with no issues'
+    required: false
+    default: 'false'
+  
+  fail-on-critical:
+    description: 'Fail the action if critical issues found'
+    required: false
+    default: 'true'
+  
+  post-summary:
+    description: 'Post review summary as PR comment'
+    required: false
+    default: 'true'
+  
+  inline-comments:
+    description: 'Post inline comments on specific lines'
+    required: false
+    default: 'true'
+  
+  config-path:
+    description: 'Path to configuration file'
+    required: false
+    default: '.aipr/config.yml'
+
+outputs:
+  review-id:
+    description: 'Unique identifier for the review'
+  
+  assessment:
+    description: 'Overall assessment (approve, request_changes, comment)'
+  
+  critical-count:
+    description: 'Number of critical issues found'
+  
+  error-count:
+    description: 'Number of error issues found'
+  
+  warning-count:
+    description: 'Number of warning issues found'
+  
+  total-comments:
+    description: 'Total number of comments generated'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup AI PR Reviewer
+      shell: bash
+      run: |
+        echo "Setting up AI PR Reviewer..."
+        
+        # Check if we're in a PR context
+        if [ -z "${{ github.event.pull_request.number }}" ]; then
+          echo "::warning::Not in a pull request context, skipping review"
+          exit 0
+        fi
+        
+        echo "PR #${{ github.event.pull_request.number }}"
+        echo "Repository: ${{ github.repository }}"
+
+    - name: Get PR diff
+      id: diff
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        echo "Fetching PR diff..."
+        
+        curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "Accept: application/vnd.github.v3.diff" \
+          "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}" \
+          > /tmp/pr.diff
+        
+        DIFF_SIZE=$(wc -c < /tmp/pr.diff)
+        echo "Diff size: $DIFF_SIZE bytes"
+        
+        if [ "$DIFF_SIZE" -gt 500000 ]; then
+          echo "::warning::Diff is very large, review may be limited"
+        fi
+
+    - name: Run AI Review
+      id: review
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        AIPR_ENDPOINT: ${{ inputs.aipr-endpoint }}
+        AIPR_API_KEY: ${{ inputs.aipr-api-key }}
+        LLM_PROVIDER: ${{ inputs.llm-provider }}
+        LLM_API_KEY: ${{ inputs.llm-api-key }}
+        LLM_MODEL: ${{ inputs.llm-model }}
+        LLM_BASE_URL: ${{ inputs.llm-base-url }}
+        REVIEW_LEVEL: ${{ inputs.review-level }}
+        MAX_COMMENTS: ${{ inputs.max-comments }}
+        FOCUS_AREAS: ${{ inputs.focus-areas }}
+      run: |
+        echo "Running AI review..."
+        
+        # Build review request
+        PR_TITLE="${{ github.event.pull_request.title }}"
+        PR_BODY="${{ github.event.pull_request.body }}"
+        
+        # Call AI PR Reviewer API or run locally
+        if [ -n "$AIPR_ENDPOINT" ]; then
+          echo "Using AI PR Reviewer server at $AIPR_ENDPOINT"
+          
+          RESPONSE=$(curl -s -X POST "$AIPR_ENDPOINT/api/v1/reviews" \
+            -H "Authorization: Bearer $AIPR_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d @- << EOF
+        {
+          "repoId": "${{ github.repository }}",
+          "prNumber": ${{ github.event.pull_request.number }},
+          "diff": $(cat /tmp/pr.diff | jq -Rs .),
+          "prTitle": $(echo "$PR_TITLE" | jq -Rs .),
+          "prDescription": $(echo "$PR_BODY" | jq -Rs .),
+          "config": {
+            "maxComments": $MAX_COMMENTS,
+            "focusAreas": "$(echo $FOCUS_AREAS | tr ',' '\n' | jq -R . | jq -s .)"
+          }
+        }
+        EOF
+          )
+          
+          echo "$RESPONSE" > /tmp/review.json
+          
+        else
+          echo "Running review locally..."
+          
+          # For local mode, we'd need the CLI or embedded engine
+          # This is a placeholder for the API-less mode
+          echo '{"reviewId":"local-1","overallAssessment":"comment","summary":"Local review not yet implemented","comments":[]}' > /tmp/review.json
+        fi
+        
+        # Parse response
+        REVIEW_ID=$(jq -r '.reviewId' /tmp/review.json)
+        ASSESSMENT=$(jq -r '.overallAssessment' /tmp/review.json)
+        CRITICAL_COUNT=$(jq '[.comments[] | select(.severity == "critical")] | length' /tmp/review.json)
+        ERROR_COUNT=$(jq '[.comments[] | select(.severity == "error")] | length' /tmp/review.json)
+        WARNING_COUNT=$(jq '[.comments[] | select(.severity == "warning")] | length' /tmp/review.json)
+        TOTAL_COMMENTS=$(jq '.comments | length' /tmp/review.json)
+        
+        echo "review-id=$REVIEW_ID" >> $GITHUB_OUTPUT
+        echo "assessment=$ASSESSMENT" >> $GITHUB_OUTPUT
+        echo "critical-count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+        echo "error-count=$ERROR_COUNT" >> $GITHUB_OUTPUT
+        echo "warning-count=$WARNING_COUNT" >> $GITHUB_OUTPUT
+        echo "total-comments=$TOTAL_COMMENTS" >> $GITHUB_OUTPUT
+        
+        echo "Review completed: $ASSESSMENT ($CRITICAL_COUNT critical, $ERROR_COUNT errors, $WARNING_COUNT warnings)"
+
+    - name: Post Review Summary
+      if: ${{ inputs.post-summary == 'true' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        echo "Posting review summary..."
+        
+        SUMMARY=$(jq -r '.summary' /tmp/review.json)
+        ASSESSMENT=$(jq -r '.overallAssessment' /tmp/review.json)
+        
+        BODY="## 🤖 AI PR Review\n\n"
+        BODY+="**Assessment:** $ASSESSMENT\n\n"
+        BODY+="$SUMMARY\n\n"
+        BODY+="---\n"
+        BODY+="<details><summary>📊 Metrics</summary>\n\n"
+        BODY+="| Category | Issues |\n"
+        BODY+="|----------|--------|\n"
+        BODY+="| 🔴 Critical | ${{ steps.review.outputs.critical-count }} |\n"
+        BODY+="| 🟠 Error | ${{ steps.review.outputs.error-count }} |\n"
+        BODY+="| 🟡 Warning | ${{ steps.review.outputs.warning-count }} |\n"
+        BODY+="</details>"
+        
+        curl -s -X POST \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "Content-Type: application/json" \
+          "https://api.github.com/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+          -d "{\"body\": \"$BODY\"}"
+
+    - name: Post Inline Comments
+      if: ${{ inputs.inline-comments == 'true' }}
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        echo "Posting inline comments..."
+        
+        HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+        
+        # Build review with inline comments
+        COMMENTS=$(jq '.comments' /tmp/review.json)
+        REVIEW_BODY=$(jq -r '.summary' /tmp/review.json)
+        
+        # Map assessment to GitHub review event
+        ASSESSMENT=$(jq -r '.overallAssessment' /tmp/review.json)
+        case "$ASSESSMENT" in
+          approve) EVENT="APPROVE" ;;
+          request_changes) EVENT="REQUEST_CHANGES" ;;
+          *) EVENT="COMMENT" ;;
+        esac
+        
+        # Create review with comments
+        REVIEW_PAYLOAD=$(jq -n \
+          --arg body "🤖 AI PR Review\n\n$REVIEW_BODY" \
+          --arg event "$EVENT" \
+          --arg commit "$HEAD_SHA" \
+          --argjson comments "$(jq '[.comments[] | {path: .filePath, line: .line, body: ("**" + (.severity | ascii_upcase) + "**: " + .message + (if .suggestion then ("\n\n💡 **Suggestion:** " + .suggestion) else "" end))}]' /tmp/review.json)" \
+          '{commit_id: $commit, body: $body, event: $event, comments: $comments}')
+        
+        curl -s -X POST \
+          -H "Authorization: Bearer $GITHUB_TOKEN" \
+          -H "Content-Type: application/json" \
+          "https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews" \
+          -d "$REVIEW_PAYLOAD"
+
+    - name: Check for Critical Issues
+      if: ${{ inputs.fail-on-critical == 'true' }}
+      shell: bash
+      run: |
+        CRITICAL_COUNT=${{ steps.review.outputs.critical-count }}
+        
+        if [ "$CRITICAL_COUNT" -gt 0 ]; then
+          echo "::error::Found $CRITICAL_COUNT critical issues!"
+          exit 1
+        fi
+        
+        echo "No critical issues found"

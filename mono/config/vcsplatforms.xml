@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AI PR Reviewer - Version Control Platforms Configuration
+  
+  Configure which platforms to enable and their authentication settings.
+  Enable at least one platform for the server to work.
+-->
+<platforms>
+    
+    <!-- =================================================================== -->
+    <!-- GitHub Configuration                                                -->
+    <!-- =================================================================== -->
+    <github>
+        <enabled>true</enabled>
+        
+        <!-- Base URLs (change for GitHub Enterprise) -->
+        <base-url>https://github.com</base-url>
+        <api-url>https://api.github.com</api-url>
+        
+        <!-- OAuth App Credentials -->
+        <!-- Create at: GitHub Settings > Developer settings > OAuth Apps -->
+        <oauth>
+            <client-id></client-id>
+            <client-secret></client-secret>
+            <callback-path>/api/v1/auth/github/callback</callback-path>
+            <scopes>repo,read:org,user:email</scopes>
+        </oauth>
+        
+        <!-- GitHub App (optional, for organization-level access) -->
+        <app>
+            <enabled>false</enabled>
+            <app-id></app-id>
+            <private-key-path></private-key-path>
+        </app>
+        
+        <!-- Webhook Configuration -->
+        <webhook>
+            <enabled>true</enabled>
+            <secret></secret>
+            <path>/api/v1/webhooks/github</path>
+        </webhook>
+    </github>
+    
+    <!-- =================================================================== -->
+    <!-- GitLab Configuration                                                -->
+    <!-- =================================================================== -->
+    <gitlab>
+        <enabled>false</enabled>
+        
+        <!-- Base URL (change for self-hosted GitLab) -->
+        <base-url>https://gitlab.com</base-url>
+        
+        <!-- OAuth Application Credentials -->
+        <!-- Create at: GitLab Settings > Applications -->
+        <oauth>
+            <application-id></application-id>
+            <application-secret></application-secret>
+            <callback-path>/api/v1/auth/gitlab/callback</callback-path>
+            <scopes>api,read_user,read_repository</scopes>
+        </oauth>
+        
+        <!-- Personal Access Token (alternative to OAuth) -->
+        <token>
+            <enabled>false</enabled>
+            <value></value>
+        </token>
+        
+        <!-- Webhook Configuration -->
+        <webhook>
+            <enabled>true</enabled>
+            <secret></secret>
+            <path>/api/v1/webhooks/gitlab</path>
+        </webhook>
+    </gitlab>
+    
+    <!-- =================================================================== -->
+    <!-- Bitbucket Configuration                                             -->
+    <!-- =================================================================== -->
+    <bitbucket>
+        <enabled>false</enabled>
+        
+        <!-- Base URLs (change for Bitbucket Server/Data Center) -->
+        <base-url>https://bitbucket.org</base-url>
+        <api-url>https://api.bitbucket.org/2.0</api-url>
+        
+        <!-- OAuth Consumer Credentials -->
+        <!-- Create at: Workspace Settings > OAuth consumers -->
+        <oauth>
+            <client-id></client-id>
+            <client-secret></client-secret>
+            <callback-path>/api/v1/auth/bitbucket/callback</callback-path>
+        </oauth>
+        
+        <!-- Webhook Configuration -->
+        <webhook>
+            <enabled>true</enabled>
+            <secret></secret>
+            <path>/api/v1/webhooks/bitbucket</path>
+        </webhook>
+    </bitbucket>
+    
+</platforms>
