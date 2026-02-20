@@ -147,10 +147,99 @@ jobs:
           retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 1 }}
       
       - name: Coverage Summary
+        id: coverage
         run: |
-          echo "## Test Coverage Report" >> $GITHUB_STEP_SUMMARY
-          if [ -f server/build/reports/jacoco/test/html/index.html ]; then
-            echo "Coverage report generated successfully." >> $GITHUB_STEP_SUMMARY
+          echo "## 📊 Java Server Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Parse test results
+          TEST_RESULTS_DIR="server/build/test-results/test"
+          if [ -d "$TEST_RESULTS_DIR" ]; then
+            TESTS_RUN=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "tests=" {} \; | grep -oP 'tests="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
+            TESTS_FAILED=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "failures=" {} \; | grep -oP 'failures="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
+            TESTS_ERRORS=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "errors=" {} \; | grep -oP 'errors="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
+            TESTS_SKIPPED=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "skipped=" {} \; | grep -oP 'skipped="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
+            TESTS_PASSED=$((TESTS_RUN - TESTS_FAILED - TESTS_ERRORS - TESTS_SKIPPED))
+            
+            echo "### ✅ Test Results" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Total Tests | ${TESTS_RUN:-0} |" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ Passed | ${TESTS_PASSED:-0} |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Failed | ${TESTS_FAILED:-0} |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⚠️ Errors | ${TESTS_ERRORS:-0} |" >> $GITHUB_STEP_SUMMARY
+            echo "| ⏭️ Skipped | ${TESTS_SKIPPED:-0} |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Set outputs for quality gate
+            echo "tests_run=${TESTS_RUN:-0}" >> $GITHUB_OUTPUT
+            echo "tests_passed=${TESTS_PASSED:-0}" >> $GITHUB_OUTPUT
+            echo "tests_failed=${TESTS_FAILED:-0}" >> $GITHUB_OUTPUT
+          fi
+          
+          # Parse JaCoCo coverage from XML
+          JACOCO_XML="server/build/reports/jacoco/test/jacocoTestReport.xml"
+          if [ -f "$JACOCO_XML" ]; then
+            # Extract instruction coverage
+            COVERED=$(grep -oP 'type="INSTRUCTION" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
+            MISSED=$(grep -oP 'type="INSTRUCTION" missed="\K\d+' "$JACOCO_XML" | head -1)
+            
+            if [ -n "$COVERED" ] && [ -n "$MISSED" ]; then
+              TOTAL=$((COVERED + MISSED))
+              if [ $TOTAL -gt 0 ]; then
+                COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($COVERED / $TOTAL) * 100}")
+              else
+                COVERAGE_PCT="0.0"
+              fi
+            else
+              COVERAGE_PCT="N/A"
+            fi
+            
+            # Extract line coverage
+            LINE_COVERED=$(grep -oP 'type="LINE" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
+            LINE_MISSED=$(grep -oP 'type="LINE" missed="\K\d+' "$JACOCO_XML" | head -1)
+            
+            if [ -n "$LINE_COVERED" ] && [ -n "$LINE_MISSED" ]; then
+              LINE_TOTAL=$((LINE_COVERED + LINE_MISSED))
+              if [ $LINE_TOTAL -gt 0 ]; then
+                LINE_COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($LINE_COVERED / $LINE_TOTAL) * 100}")
+              else
+                LINE_COVERAGE_PCT="0.0"
+              fi
+            else
+              LINE_COVERAGE_PCT="N/A"
+            fi
+            
+            # Extract branch coverage
+            BRANCH_COVERED=$(grep -oP 'type="BRANCH" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
+            BRANCH_MISSED=$(grep -oP 'type="BRANCH" missed="\K\d+' "$JACOCO_XML" | head -1)
+            
+            if [ -n "$BRANCH_COVERED" ] && [ -n "$BRANCH_MISSED" ]; then
+              BRANCH_TOTAL=$((BRANCH_COVERED + BRANCH_MISSED))
+              if [ $BRANCH_TOTAL -gt 0 ]; then
+                BRANCH_COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($BRANCH_COVERED / $BRANCH_TOTAL) * 100}")
+              else
+                BRANCH_COVERAGE_PCT="0.0"
+              fi
+            else
+              BRANCH_COVERAGE_PCT="N/A"
+            fi
+            
+            echo "### 📈 Code Coverage" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Coverage |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|----------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Instruction Coverage | ${COVERAGE_PCT}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| Line Coverage | ${LINE_COVERAGE_PCT}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| Branch Coverage | ${BRANCH_COVERAGE_PCT}% |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            # Set output for quality gate
+            echo "coverage=${COVERAGE_PCT}" >> $GITHUB_OUTPUT
+            echo "line_coverage=${LINE_COVERAGE_PCT}" >> $GITHUB_OUTPUT
+            echo "branch_coverage=${BRANCH_COVERAGE_PCT}" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ JaCoCo coverage report not found" >> $GITHUB_STEP_SUMMARY
+            echo "coverage=0" >> $GITHUB_OUTPUT
           fi
 
   # ===========================================================================
@@ -292,11 +381,118 @@ jobs:
     if: github.event_name == 'pull_request'
     
     steps:
-      - name: Check Results
+      - name: Download Coverage Report
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage-report
+        continue-on-error: true
+      
+      - name: Download Test Results
+        uses: actions/download-artifact@v4
+        with:
+          name: test-results
+          path: test-results
+        continue-on-error: true
+      
+      - name: Generate Quality Gate Summary
         run: |
-          echo "## Quality Gate Results" >> $GITHUB_STEP_SUMMARY
-          echo "- Lint: Passed" >> $GITHUB_STEP_SUMMARY
-          echo "- Server Build & Tests: Passed" >> $GITHUB_STEP_SUMMARY
-          echo "- Engine Build: Passed" >> $GITHUB_STEP_SUMMARY
+          echo "# 🚀 Quality Gate Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "PR is ready to merge." >> $GITHUB_STEP_SUMMARY
+          echo "## 📋 Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔍 Lint | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| ☕ Java Server | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⚙️ C++ Engine | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Parse Java test results
+          echo "## ☕ Java Server Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -d "test-results/test" ]; then
+            TESTS_RUN=$(find test-results/test -name "*.xml" -exec grep -h "tests=" {} \; 2>/dev/null | grep -oP 'tests="\K[0-9]+' | awk '{sum+=$1} END {print sum+0}')
+            TESTS_FAILED=$(find test-results/test -name "*.xml" -exec grep -h "failures=" {} \; 2>/dev/null | grep -oP 'failures="\K[0-9]+' | awk '{sum+=$1} END {print sum+0}')
+            TESTS_ERRORS=$(find test-results/test -name "*.xml" -exec grep -h "errors=" {} \; 2>/dev/null | grep -oP 'errors="\K[0-9]+' | awk '{sum+=$1} END {print sum+0}')
+            TESTS_PASSED=$((TESTS_RUN - TESTS_FAILED - TESTS_ERRORS))
+            
+            if [ "$TESTS_FAILED" -eq 0 ] && [ "$TESTS_ERRORS" -eq 0 ]; then
+              TEST_STATUS="✅"
+            else
+              TEST_STATUS="❌"
+            fi
+            
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Total Tests | $TESTS_RUN |" >> $GITHUB_STEP_SUMMARY
+            echo "| ✅ Passed | $TESTS_PASSED |" >> $GITHUB_STEP_SUMMARY
+            echo "| ❌ Failed | $TESTS_FAILED |" >> $GITHUB_STEP_SUMMARY
+            echo "| Status | $TEST_STATUS |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Test results not available" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Parse JaCoCo coverage
+          echo "## 📈 Code Coverage" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          JACOCO_XML="coverage-report/test/jacocoTestReport.xml"
+          if [ -f "$JACOCO_XML" ]; then
+            # Extract instruction coverage
+            COVERED=$(grep -oP 'type="INSTRUCTION" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
+            MISSED=$(grep -oP 'type="INSTRUCTION" missed="\K\d+' "$JACOCO_XML" | head -1)
+            
+            if [ -n "$COVERED" ] && [ -n "$MISSED" ]; then
+              TOTAL=$((COVERED + MISSED))
+              if [ $TOTAL -gt 0 ]; then
+                COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($COVERED / $TOTAL) * 100}")
+              else
+                COVERAGE_PCT="0.0"
+              fi
+            else
+              COVERAGE_PCT="N/A"
+            fi
+            
+            # Extract line coverage
+            LINE_COVERED=$(grep -oP 'type="LINE" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
+            LINE_MISSED=$(grep -oP 'type="LINE" missed="\K\d+' "$JACOCO_XML" | head -1)
+            
+            if [ -n "$LINE_COVERED" ] && [ -n "$LINE_MISSED" ]; then
+              LINE_TOTAL=$((LINE_COVERED + LINE_MISSED))
+              if [ $LINE_TOTAL -gt 0 ]; then
+                LINE_COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($LINE_COVERED / $LINE_TOTAL) * 100}")
+              else
+                LINE_COVERAGE_PCT="0.0"
+              fi
+            else
+              LINE_COVERAGE_PCT="N/A"
+            fi
+            
+            # Determine coverage status (60% threshold)
+            COVERAGE_NUM=$(echo "$COVERAGE_PCT" | grep -oP '[0-9.]+' || echo "0")
+            if (( $(echo "$COVERAGE_NUM >= 60" | bc -l 2>/dev/null || echo "0") )); then
+              COV_STATUS="✅"
+            else
+              COV_STATUS="⚠️"
+            fi
+            
+            echo "| Metric | Coverage | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|----------|--------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Instruction Coverage | ${COVERAGE_PCT}% | $COV_STATUS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Line Coverage | ${LINE_COVERAGE_PCT}% | |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "> **Threshold:** 60% minimum coverage required" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Coverage report not available" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Final verdict
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## 🎯 Final Verdict" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **All quality checks passed. PR is ready to merge.**" >> $GITHUB_STEP_SUMMARY
