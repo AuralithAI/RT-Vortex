@@ -1,0 +1,357 @@
+// AI-PR-Reviewer External API Service Definition
+// This defines the public API for clients (SDKs, CLI, Webhooks)
+
+syntax = "proto3";
+
+package aipr.api.v1;
+
+option java_package = "ai.aipr.api.grpc";
+option java_outer_classname = "ApiProto";
+option java_multiple_files = true;
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// =============================================================================
+// Review Service - Main PR Review Operations
+// =============================================================================
+
+service ReviewService {
+    // Submit a new review request
+    rpc SubmitReview(SubmitReviewRequest) returns (SubmitReviewResponse);
+    
+    // Get review status and results
+    rpc GetReview(GetReviewRequest) returns (Review);
+    
+    // List reviews with filtering
+    rpc ListReviews(ListReviewsRequest) returns (ListReviewsResponse);
+    
+    // Cancel a pending or running review
+    rpc CancelReview(CancelReviewRequest) returns (CancelReviewResponse);
+    
+    // Stream review progress updates
+    rpc StreamReviewProgress(StreamReviewRequest) returns (stream ReviewProgress);
+}
+
+// =============================================================================
+// Repository Service - Repository and Index Management
+// =============================================================================
+
+service RepositoryService {
+    // Register a new repository
+    rpc RegisterRepository(RegisterRepositoryRequest) returns (Repository);
+    
+    // Get repository details
+    rpc GetRepository(GetRepositoryRequest) returns (Repository);
+    
+    // List repositories
+    rpc ListRepositories(ListRepositoriesRequest) returns (ListRepositoriesResponse);
+    
+    // Update repository configuration
+    rpc UpdateRepository(UpdateRepositoryRequest) returns (Repository);
+    
+    // Delete repository and its index
+    rpc DeleteRepository(DeleteRepositoryRequest) returns (DeleteRepositoryResponse);
+    
+    // Trigger repository indexing
+    rpc IndexRepository(IndexRepositoryRequest) returns (IndexJob);
+    
+    // Get index status
+    rpc GetIndexStatus(GetIndexStatusRequest) returns (IndexStatus);
+}
+
+// =============================================================================
+// Webhook Service - Platform Webhook Handling
+// =============================================================================
+
+service WebhookService {
+    // Handle incoming webhook events
+    rpc HandleWebhook(WebhookRequest) returns (WebhookResponse);
+}
+
+// =============================================================================
+// Health Service
+// =============================================================================
+
+service HealthService {
+    rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+    rpc Watch(HealthCheckRequest) returns (stream HealthCheckResponse);
+}
+
+// =============================================================================
+// Common Types
+// =============================================================================
+
+enum ReviewStatus {
+    REVIEW_STATUS_UNSPECIFIED = 0;
+    REVIEW_STATUS_PENDING = 1;
+    REVIEW_STATUS_RUNNING = 2;
+    REVIEW_STATUS_COMPLETED = 3;
+    REVIEW_STATUS_FAILED = 4;
+    REVIEW_STATUS_CANCELLED = 5;
+}
+
+enum Severity {
+    SEVERITY_UNSPECIFIED = 0;
+    SEVERITY_INFO = 1;
+    SEVERITY_WARNING = 2;
+    SEVERITY_ERROR = 3;
+    SEVERITY_CRITICAL = 4;
+}
+
+enum CommentCategory {
+    CATEGORY_UNSPECIFIED = 0;
+    CATEGORY_SECURITY = 1;
+    CATEGORY_PERFORMANCE = 2;
+    CATEGORY_RELIABILITY = 3;
+    CATEGORY_STYLE = 4;
+    CATEGORY_ARCHITECTURE = 5;
+    CATEGORY_TESTING = 6;
+    CATEGORY_DOCUMENTATION = 7;
+}
+
+enum Platform {
+    PLATFORM_UNSPECIFIED = 0;
+    PLATFORM_GITHUB = 1;
+    PLATFORM_GITLAB = 2;
+    PLATFORM_BITBUCKET = 3;
+    PLATFORM_AZURE_DEVOPS = 4;
+}
+
+// =============================================================================
+// Review Messages
+// =============================================================================
+
+message SubmitReviewRequest {
+    string repository_id = 1;
+    int32 pr_number = 2;
+    string head_commit = 3;
+    string base_commit = 4;
+    ReviewOptions options = 5;
+}
+
+message ReviewOptions {
+    repeated CommentCategory categories = 1;
+    Severity min_severity = 2;
+    int32 max_comments = 3;
+    bool include_suggestions = 4;
+    bool post_comments = 5;
+    string custom_instructions = 6;
+    map<string, string> metadata = 7;
+}
+
+message SubmitReviewResponse {
+    string review_id = 1;
+    ReviewStatus status = 2;
+    string message = 3;
+}
+
+message GetReviewRequest {
+    string review_id = 1;
+}
+
+message Review {
+    string id = 1;
+    string repository_id = 2;
+    int32 pr_number = 3;
+    ReviewStatus status = 4;
+    string summary = 5;
+    repeated Comment comments = 6;
+    ReviewMetrics metrics = 7;
+    google.protobuf.Timestamp created_at = 8;
+    google.protobuf.Timestamp completed_at = 9;
+}
+
+message Comment {
+    string id = 1;
+    string file_path = 2;
+    int32 line = 3;
+    int32 end_line = 4;
+    Severity severity = 5;
+    CommentCategory category = 6;
+    string message = 7;
+    string suggestion = 8;
+    string rule_id = 9;
+    float confidence = 10;
+    bool posted = 11;
+}
+
+message ReviewMetrics {
+    int32 files_analyzed = 1;
+    int32 lines_added = 2;
+    int32 lines_removed = 3;
+    int32 total_findings = 4;
+    int32 heuristic_findings = 5;
+    int32 llm_findings = 6;
+    int32 tokens_used = 7;
+    int32 latency_ms = 8;
+}
+
+message ListReviewsRequest {
+    string repository_id = 1;
+    ReviewStatus status = 2;
+    int32 page_size = 3;
+    string page_token = 4;
+}
+
+message ListReviewsResponse {
+    repeated Review reviews = 1;
+    string next_page_token = 2;
+    int32 total_count = 3;
+}
+
+message CancelReviewRequest {
+    string review_id = 1;
+}
+
+message CancelReviewResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message StreamReviewRequest {
+    string review_id = 1;
+}
+
+message ReviewProgress {
+    string review_id = 1;
+    ReviewStatus status = 2;
+    float progress = 3;
+    string current_step = 4;
+    repeated Comment new_comments = 5;
+    string error_message = 6;
+}
+
+// =============================================================================
+// Repository Messages
+// =============================================================================
+
+message RegisterRepositoryRequest {
+    Platform platform = 1;
+    string owner = 2;
+    string name = 3;
+    string clone_url = 4;
+    RepositoryConfig config = 5;
+}
+
+message RepositoryConfig {
+    string default_branch = 1;
+    repeated string exclude_patterns = 2;
+    ReviewOptions default_review_options = 3;
+    bool auto_index = 4;
+    bool auto_review = 5;
+}
+
+message Repository {
+    string id = 1;
+    Platform platform = 2;
+    string owner = 3;
+    string name = 4;
+    string default_branch = 5;
+    RepositoryConfig config = 6;
+    IndexStatus index_status = 7;
+    google.protobuf.Timestamp created_at = 8;
+    google.protobuf.Timestamp updated_at = 9;
+}
+
+message GetRepositoryRequest {
+    string repository_id = 1;
+}
+
+message ListRepositoriesRequest {
+    Platform platform = 1;
+    int32 page_size = 2;
+    string page_token = 3;
+}
+
+message ListRepositoriesResponse {
+    repeated Repository repositories = 1;
+    string next_page_token = 2;
+    int32 total_count = 3;
+}
+
+message UpdateRepositoryRequest {
+    string repository_id = 1;
+    RepositoryConfig config = 2;
+}
+
+message DeleteRepositoryRequest {
+    string repository_id = 1;
+}
+
+message DeleteRepositoryResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+message IndexRepositoryRequest {
+    string repository_id = 1;
+    bool full_reindex = 2;
+}
+
+message IndexJob {
+    string id = 1;
+    string repository_id = 2;
+    string status = 3;
+    float progress = 4;
+    google.protobuf.Timestamp created_at = 5;
+}
+
+message GetIndexStatusRequest {
+    string repository_id = 1;
+}
+
+message IndexStatus {
+    string repository_id = 1;
+    bool indexed = 2;
+    int32 total_files = 3;
+    int32 indexed_files = 4;
+    int32 total_chunks = 5;
+    string last_commit = 6;
+    google.protobuf.Timestamp last_indexed_at = 7;
+}
+
+// =============================================================================
+// Webhook Messages
+// =============================================================================
+
+message WebhookRequest {
+    Platform platform = 1;
+    string event_type = 2;
+    string delivery_id = 3;
+    string signature = 4;
+    bytes payload = 5;
+    map<string, string> headers = 6;
+}
+
+message WebhookResponse {
+    bool success = 1;
+    string message = 2;
+    string review_id = 3;
+}
+
+// =============================================================================
+// Health Messages
+// =============================================================================
+
+message HealthCheckRequest {
+    string service = 1;
+}
+
+message HealthCheckResponse {
+    enum ServingStatus {
+        UNKNOWN = 0;
+        SERVING = 1;
+        NOT_SERVING = 2;
+        SERVICE_UNKNOWN = 3;
+    }
+    ServingStatus status = 1;
+    map<string, ComponentHealth> components = 2;
+}
+
+message ComponentHealth {
+    string name = 1;
+    bool healthy = 2;
+    string message = 3;
+    int64 latency_ms = 4;
+}

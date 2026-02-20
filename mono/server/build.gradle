@@ -118,8 +118,3 @@ jar {
         )
     }
 }
-
-// Generate build info for actuator
-springBoot {
-    buildInfo()
-}
