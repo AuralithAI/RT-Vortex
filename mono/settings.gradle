@@ -27,6 +27,3 @@ include 'proto-java'
 
 // Include build-logic for convention plugins
 includeBuild 'build-logic'
-
-// Toolchain management - use local or downloaded JDK
-// For CI/CD, the setup.sh script handles JRE provisioning
