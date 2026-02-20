@@ -43,7 +43,9 @@ jobs:
       
       - name: Checkstyle
         working-directory: ${{ env.MONO_DIR }}
-        run: ./gradlew checkstyleMain checkstyleTest || true
+        run: |
+          chmod +x gradlew
+          ./gradlew checkstyleMain checkstyleTest || true
       
       - name: Validate YAML configs
         run: |
@@ -115,6 +117,9 @@ jobs:
         with:
           gradle-version: '8.5'
       
+      - name: Make Gradle Wrapper Executable
+        run: chmod +x gradlew
+      
       - name: Build
         run: ./gradlew build -x test
       
@@ -170,6 +175,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Install Dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libomp-dev libopenblas-dev liblapack-dev
+      
+      - name: Install Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install libomp openblas
+          echo "OpenBLAS_HOME=$(brew --prefix openblas)" >> $GITHUB_ENV
+      
+      - name: Install Dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install openblas -y
+        shell: pwsh
+      
       - name: Setup CMake
         uses: lukka/get-cmake@latest
         with:
@@ -177,7 +200,7 @@ jobs:
       
       - name: Configure & Build
         run: |
-          cmake -B build -S ${{ env.MONO_DIR }}/engine -DCMAKE_BUILD_TYPE=Release -DAIPR_BUILD_TESTS=ON
+          cmake -B build -S ${{ env.MONO_DIR }}/engine -DCMAKE_BUILD_TYPE=Release -DAIPR_BUILD_TESTS=ON -DAIPR_USE_FAISS=ON
           cmake --build build --config Release --parallel 4
       
       - name: Run Tests
@@ -222,6 +245,10 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.5'
+      
+      - name: Make Gradle Wrapper Executable
+        run: chmod +x gradlew
+        working-directory: ${{ env.MONO_DIR }}
       
       - name: Download Engine Artifacts
         uses: actions/download-artifact@v4
