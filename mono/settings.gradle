@@ -1,18 +1,7 @@
 // Root settings for Gradle monorepo
 // Uses Groovy DSL (not Kotlin DSL)
 
-rootProject.name = 'ai-pr-reviewer'
-
-// Include server module
-include 'server'
-
-// Include proto-java module for gRPC code generation
-include 'proto-java'
-
-// Include build-logic for convention plugins
-includeBuild 'build-logic'
-
-// Plugin management
+// Plugin management - MUST be first
 pluginManagement {
     repositories {
         gradlePluginPortal()
@@ -34,6 +23,17 @@ dependencyResolutionManagement {
         }
     }
 }
+
+rootProject.name = 'ai-pr-reviewer'
+
+// Include server module
+include 'server'
+
+// Include proto-java module for gRPC code generation
+include 'proto-java'
+
+// Include build-logic for convention plugins
+includeBuild 'build-logic'
 
 // Toolchain management - use local or downloaded JDK
 // For CI/CD, the setup.sh script handles JRE provisioning
