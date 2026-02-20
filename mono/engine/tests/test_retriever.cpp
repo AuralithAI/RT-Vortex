@@ -3,6 +3,7 @@
  */
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <cmath>
 #include "types.h"
 #include "retriever.h"

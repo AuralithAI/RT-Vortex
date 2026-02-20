@@ -7,6 +7,7 @@
 #include <string>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <sstream>
 #include <iomanip>
 
