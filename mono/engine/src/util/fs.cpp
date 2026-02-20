@@ -9,6 +9,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <cstdint>
 #include <cstring>
 #include <algorithm>
 #include <functional>
