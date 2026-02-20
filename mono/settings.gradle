@@ -15,13 +15,6 @@ dependencyResolutionManagement {
     repositories {
         mavenCentral()
     }
-    
-    // Version catalog
-    versionCatalogs {
-        libs {
-            from(files("gradle/libs.versions.toml"))
-        }
-    }
 }
 
 rootProject.name = 'ai-pr-reviewer'
