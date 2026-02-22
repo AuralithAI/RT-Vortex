@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  =============================================================================
+  AIPR Server - macOS launchd Daemon
+  =============================================================================
+  
+  Install:
+    sudo cp ai.auralith.aipr-server.plist /Library/LaunchDaemons/
+    sudo launchctl load /Library/LaunchDaemons/ai.auralith.aipr-server.plist
+  
+  Uninstall:
+    sudo launchctl unload /Library/LaunchDaemons/ai.auralith.aipr-server.plist
+    sudo rm /Library/LaunchDaemons/ai.auralith.aipr-server.plist
+  
+  View logs:
+    tail -f /usr/local/var/log/aipr/server.log
+  
+  Note: Requires aipr-engine to be running first.
+  
+  =============================================================================
+-->
+<plist version="1.0">
+<dict>
+    <!-- Service identifier -->
+    <key>Label</key>
+    <string>ai.auralith.aipr-server</string>
+    
+    <!-- Program and arguments -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/opt/aipr/bin/aipr-server</string>
+    </array>
+    
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/usr/local/opt/aipr</string>
+    
+    <!-- Run as user -->
+    <key>UserName</key>
+    <string>_aipr</string>
+    <key>GroupName</key>
+    <string>_aipr</string>
+    
+    <!-- Start at boot -->
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <!-- Keep alive (restart on failure) -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    
+    <!-- Throttle restarts -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RT_HOME</key>
+        <string>/usr/local/opt/aipr</string>
+        <key>JAVA_HOME</key>
+        <string>/usr/local/opt/openjdk@21</string>
+        <key>JAVA_OPTS</key>
+        <string>-Xms512m -Xmx2g -XX:+UseG1GC</string>
+        <key>ENGINE_HOST</key>
+        <string>localhost</string>
+        <key>ENGINE_PORT</key>
+        <string>50051</string>
+        <key>ENGINE_NEGOTIATION</key>
+        <string>PLAINTEXT</string>
+        <key>DATABASE_URL</key>
+        <string>jdbc:postgresql://localhost:5432/aipr</string>
+        <key>DATABASE_USER</key>
+        <string>aipr</string>
+        <key>REDIS_HOST</key>
+        <string>localhost</string>
+        <key>REDIS_PORT</key>
+        <string>6379</string>
+    </dict>
+    
+    <!-- Logging -->
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/aipr/server.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/aipr/server-error.log</string>
+    
+    <!-- Process limits -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+    
+    <!-- Nice level -->
+    <key>Nice</key>
+    <integer>0</integer>
+</dict>
+</plist>

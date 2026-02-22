@@ -777,6 +777,219 @@ tasks.register('distAll') {
 }
 
 // =============================================================================
+// Platform-Specific Distributions (Phase 1: OS-Native Services)
+// =============================================================================
+
+// WinSW version and download URL
+def winswVersion = '2.12.0'
+def winswUrl = "https://github.com/winsw/winsw/releases/download/v${winswVersion}/WinSW-x64.exe"
+def winswCacheDir = file("${buildDir}/cache/winsw")
+def winswCachedExe = file("${winswCacheDir}/WinSW-x64-${winswVersion}.exe")
+
+// Task to download WinSW (cached)
+tasks.register('downloadWinSW') {
+    group = 'Distribution'
+    description = 'Downloads WinSW executable for Windows service wrapper'
+    
+    outputs.file(winswCachedExe)
+    
+    doLast {
+        if (!winswCachedExe.exists()) {
+            println "[INFO] Downloading WinSW v${winswVersion}..."
+            winswCacheDir.mkdirs()
+            
+            ant.get(
+                src: winswUrl,
+                dest: winswCachedExe,
+                verbose: true
+            )
+            
+            println "[OK] WinSW downloaded to: ${winswCachedExe}"
+        } else {
+            println "[INFO] Using cached WinSW: ${winswCachedExe}"
+        }
+    }
+}
+
+// Windows distribution with WinSW service wrapper and NSIS installer
+tasks.register('distWindows', Copy) {
+    group = 'Distribution'
+    description = 'Creates Windows distribution with service wrappers'
+    dependsOn 'installDist', 'downloadWinSW'
+
+    def windowsDistDir = file("${buildDir}/distributions/windows")
+
+    into windowsDistDir
+
+    // Copy base distribution
+    from(distDir) {
+        into 'aipr'
+    }
+
+    // Copy WinSW executable renamed as aipr-server.exe (Java server service wrapper)
+    from(winswCachedExe) {
+        into 'aipr/bin'
+        rename { 'aipr-server.exe' }
+    }
+
+    // Copy WinSW configuration for Java server
+    from('deploy/windows/aipr-server-service.xml') {
+        into 'aipr/bin'
+    }
+
+    // Copy NSIS installer script
+    from('deploy/windows/installer.nsi') {
+        into 'installer'
+    }
+
+    doLast {
+        println """
++----------------------------------------------------------------+
+|          Windows Distribution Created                          |
++----------------------------------------------------------------+
+| Location: ${windowsDistDir}                                    |
+|                                                                |
+| Contents:                                                      |
+|   - aipr/bin/aipr-engine.exe    (C++ engine with SCM support)  |
+|   - aipr/bin/aipr-server.exe    (WinSW wrapper for Java)       |
+|   - aipr/bin/aipr-server-service.xml (WinSW config)            |
+|   - installer/installer.nsi     (NSIS installer script)        |
+|                                                                |
+| To create installer:                                           |
+|   makensis installer/installer.nsi                             |
++----------------------------------------------------------------+
+"""
+    }
+}
+
+// Linux distribution with systemd service files
+tasks.register('distLinux', Copy) {
+    group = 'Distribution'
+    description = 'Creates Linux distribution with systemd service files'
+    dependsOn 'installDist'
+
+    def linuxDistDir = file("${buildDir}/distributions/linux")
+
+    into linuxDistDir
+
+    // Copy base distribution
+    from(distDir) {
+        into 'aipr'
+    }
+
+    // Copy systemd service files
+    from('deploy/systemd') {
+        into 'aipr/service'
+        include '*.service'
+    }
+
+    // Copy install script
+    from('deploy/install.sh') {
+        into 'aipr'
+        fileMode 0755
+    }
+
+    doLast {
+        // Create the tarball
+        ant.tar(
+            destfile: "${buildDir}/distributions/aipr-${distVersion}-linux.tar.gz",
+            compression: 'gzip'
+        ) {
+            tarfileset(dir: linuxDistDir, prefix: "aipr-${distVersion}") {
+                include(name: '**/*')
+                exclude(name: 'aipr/bin/*')
+                exclude(name: 'aipr/install.sh')
+            }
+            tarfileset(dir: linuxDistDir, prefix: "aipr-${distVersion}", filemode: '755') {
+                include(name: 'aipr/bin/*')
+                include(name: 'aipr/install.sh')
+            }
+        }
+
+        println """
++----------------------------------------------------------------+
+|          Linux Distribution Created                            |
++----------------------------------------------------------------+
+| Directory: ${linuxDistDir}                                     |
+| Tarball:   ${buildDir}/distributions/aipr-${distVersion}-linux.tar.gz
+|                                                                |
+| Installation:                                                  |
+|   tar -xzf aipr-${distVersion}-linux.tar.gz                    |
+|   cd aipr-${distVersion}                                       |
+|   sudo ./aipr/install.sh                                       |
++----------------------------------------------------------------+
+"""
+    }
+}
+
+// macOS distribution with launchd plist files
+tasks.register('distMacos', Copy) {
+    group = 'Distribution'
+    description = 'Creates macOS distribution with launchd plist files'
+    dependsOn 'installDist'
+
+    def macosDistDir = file("${buildDir}/distributions/macos")
+
+    into macosDistDir
+
+    // Copy base distribution
+    from(distDir) {
+        into 'aipr'
+    }
+
+    // Copy launchd plist files
+    from('deploy/launchd') {
+        into 'aipr/service'
+        include '*.plist'
+    }
+
+    // Copy install script
+    from('deploy/install.sh') {
+        into 'aipr'
+        fileMode 0755
+    }
+
+    doLast {
+        // Create the tarball
+        ant.tar(
+            destfile: "${buildDir}/distributions/aipr-${distVersion}-macos.tar.gz",
+            compression: 'gzip'
+        ) {
+            tarfileset(dir: macosDistDir, prefix: "aipr-${distVersion}") {
+                include(name: '**/*')
+                exclude(name: 'aipr/bin/*')
+                exclude(name: 'aipr/install.sh')
+            }
+            tarfileset(dir: macosDistDir, prefix: "aipr-${distVersion}", filemode: '755') {
+                include(name: 'aipr/bin/*')
+                include(name: 'aipr/install.sh')
+            }
+        }
+
+        println """
++----------------------------------------------------------------+
+|          macOS Distribution Created                            |
++----------------------------------------------------------------+
+| Directory: ${macosDistDir}                                     |
+| Tarball:   ${buildDir}/distributions/aipr-${distVersion}-macos.tar.gz
+|                                                                |
+| Installation:                                                  |
+|   tar -xzf aipr-${distVersion}-macos.tar.gz                    |
+|   cd aipr-${distVersion}                                       |
+|   sudo ./aipr/install.sh                                       |
++----------------------------------------------------------------+
+"""
+    }
+}
+
+// Build all platform-specific distributions
+tasks.register('distPlatforms') {
+    group = 'Distribution'
+    description = 'Creates platform-specific distribution packages with service files'
+    dependsOn 'distWindows', 'distLinux', 'distMacos'
+}
+
+// =============================================================================
 // IntelliJ IDEA Configuration
 // =============================================================================
 
@@ -932,6 +1145,15 @@ tasks.register('showTasks') {
 | RUN                                                            |
 |   ./gradlew runServer       - Run server locally               |
 |   ./gradlew :server:bootRun - Run with hot reload              |
+|                                                                |
+| DISTRIBUTION                                                   |
+|   ./gradlew installDist     - Assemble distribution            |
+|   ./gradlew distZip         - Create ZIP package               |
+|   ./gradlew distTar         - Create TAR.GZ package            |
+|   ./gradlew distWindows     - Create Windows package + WinSW   |
+|   ./gradlew distLinux       - Create Linux package + systemd   |
+|   ./gradlew distMacos       - Create macOS package + launchd   |
+|   ./gradlew distPlatforms   - Create all platform packages     |
 |                                                                |
 | RELEASE                                                        |
 |   ./gradlew bootJar         - Create executable JAR            |

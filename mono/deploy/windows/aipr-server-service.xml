@@ -1,0 +1,84 @@
+<!--
+  =============================================================================
+  AIPR Server - WinSW Service Configuration
+  =============================================================================
+  
+  WinSW (Windows Service Wrapper) allows Java applications to run as Windows
+  services. The aipr-server.exe wrapper (renamed WinSW.exe) reads this XML
+  config file.
+  
+  Installation:
+    1. Download WinSW from: https://github.com/winsw/winsw/releases
+    2. Rename winsw.exe to aipr-server.exe
+    3. Place aipr-server.exe and this XML file in bin/
+    4. Run: aipr-server.exe install
+  
+  Commands:
+    aipr-server.exe install   - Install Windows service
+    aipr-server.exe uninstall - Remove Windows service
+    aipr-server.exe start     - Start the service
+    aipr-server.exe stop      - Stop the service
+    aipr-server.exe restart   - Restart the service
+    aipr-server.exe status    - Show service status
+  
+  =============================================================================
+-->
+<service>
+    <!-- Service identity -->
+    <id>AIPRServer</id>
+    <name>AIPR Review Server</name>
+    <description>AI PR Reviewer REST/gRPC API Server. Provides code review orchestration, webhook handling, and LLM integration.</description>
+    
+    <!-- Java executable -->
+    <executable>java</executable>
+    
+    <!-- JVM arguments and main class -->
+    <arguments>-Xms512m -Xmx2g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -Drt.home="%BASE%\.." -Dfile.encoding=UTF-8 -cp "%BASE%\..\lib\*" ai.aipr.server.AiprServerApplication</arguments>
+    
+    <!-- Working directory -->
+    <workingdirectory>%BASE%\..</workingdirectory>
+    
+    <!-- Environment variables -->
+    <env name="RT_HOME" value="%BASE%\.."/>
+    <env name="ENGINE_HOST" value="localhost"/>
+    <env name="ENGINE_PORT" value="50051"/>
+    <env name="ENGINE_NEGOTIATION" value="PLAINTEXT"/>
+    
+    <!-- Logging configuration -->
+    <logpath>%BASE%\..\data\logs</logpath>
+    <log mode="roll-by-size">
+        <sizeThreshold>10240</sizeThreshold>
+        <keepFiles>8</keepFiles>
+    </log>
+    
+    <!-- Service startup mode -->
+    <startmode>Automatic</startmode>
+    
+    <!-- Delayed start (wait for dependencies) -->
+    <delayedAutoStart>true</delayedAutoStart>
+    
+    <!-- Dependencies -->
+    <depend>AIPREngine</depend>
+    
+    <!-- Failure actions -->
+    <onfailure action="restart" delay="10 sec"/>
+    <onfailure action="restart" delay="30 sec"/>
+    <onfailure action="restart" delay="60 sec"/>
+    <resetfailure>1 day</resetfailure>
+    
+    <!-- Stop timeout -->
+    <stoptimeout>60 sec</stoptimeout>
+    
+    <!-- Priority -->
+    <priority>Normal</priority>
+    
+    <!-- Security settings -->
+    <!-- Uncomment to run as specific user -->
+    <!--
+    <serviceaccount>
+        <username>.\aipr</username>
+        <password>your-password</password>
+        <allowservicelogon>true</allowservicelogon>
+    </serviceaccount>
+    -->
+</service>

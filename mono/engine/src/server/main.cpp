@@ -7,7 +7,14 @@
  *   - YAML config loading
  *   - TLS credential loading
  *   - Graceful shutdown on SIGTERM/SIGINT
- *   - Windows service mode (--service)
+ *   - Windows service control (install/uninstall/start/stop/run)
+ *
+ * Windows Service Commands:
+ *   aipr-engine.exe install   - Install as Windows service
+ *   aipr-engine.exe uninstall - Remove Windows service
+ *   aipr-engine.exe start     - Start the service
+ *   aipr-engine.exe stop      - Stop the service
+ *   aipr-engine.exe run       - Run in foreground (default)
  */
 
 #include "engine_service_impl.h"
@@ -29,8 +36,17 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <winsvc.h>
+#include <tchar.h>
 #else
 #include <unistd.h>
+#endif
+
+// Service constants
+#ifdef _WIN32
+#define SERVICE_NAME        TEXT("AIPREngine")
+#define SERVICE_DISPLAY     TEXT("AIPR Indexing & Retrieval Engine")
+#define SERVICE_DESCRIPTION TEXT("High-performance code indexing and retrieval engine for AI PR Reviewer")
 #endif
 
 namespace {
@@ -58,8 +74,16 @@ struct ServerConfig {
     std::string tls_root_certs;  // For client auth (mTLS)
     bool tls_require_client_auth = false;
     
-    // Windows service mode
-    bool service_mode = false;
+    // Run mode
+    enum class Mode {
+        Run,           // Foreground console mode (default)
+        Service,       // Windows service mode
+        Install,       // Install Windows service
+        Uninstall,     // Uninstall Windows service  
+        Start,         // Start Windows service
+        Stop           // Stop Windows service
+    };
+    Mode mode = Mode::Run;
     
     // Debug/verbose mode
     bool verbose = false;
@@ -68,8 +92,17 @@ struct ServerConfig {
 void printUsage(const char* program_name) {
     std::cout << "AI PR Reviewer - Engine gRPC Server\n"
               << "\n"
-              << "Usage: " << program_name << " [OPTIONS]\n"
+              << "Usage: " << program_name << " [COMMAND] [OPTIONS]\n"
               << "\n"
+#ifdef _WIN32
+              << "Commands (Windows):\n"
+              << "  install             Install as Windows service\n"
+              << "  uninstall           Remove Windows service\n"
+              << "  start               Start the Windows service\n"
+              << "  stop                Stop the Windows service\n"
+              << "  run                 Run in foreground (default)\n"
+              << "\n"
+#endif
               << "Options:\n"
               << "  --host <address>    Bind address (default: 0.0.0.0)\n"
               << "  --port <port>       Bind port (default: 50051)\n"
@@ -77,9 +110,6 @@ void printUsage(const char* program_name) {
               << "  --verbose           Enable verbose logging\n"
               << "  --version           Print version and exit\n"
               << "  --help              Print this help and exit\n"
-#ifdef _WIN32
-              << "  --service           Run as Windows service\n"
-#endif
               << "\n"
               << "Environment variables:\n"
               << "  ENGINE_HOST         Override --host\n"
@@ -89,7 +119,15 @@ void printUsage(const char* program_name) {
               << "  ENGINE_TLS_CERT     Path to server certificate\n"
               << "  ENGINE_TLS_KEY      Path to server private key\n"
               << "  ENGINE_TLS_CA       Path to CA certificate (for mTLS)\n"
-              << "\n";
+              << "\n"
+#ifdef _WIN32
+              << "Examples:\n"
+              << "  " << program_name << " install         Install service\n"
+              << "  " << program_name << " start           Start service\n"
+              << "  " << program_name << " run --port 50052  Run on custom port\n"
+              << "\n"
+#endif
+              ;
 }
 
 ServerConfig parseArgs(int argc, char* argv[]) {
@@ -133,9 +171,27 @@ ServerConfig parseArgs(int argc, char* argv[]) {
         else if (arg == "--verbose") {
             config.verbose = true;
         }
-        else if (arg == "--service") {
-            config.service_mode = true;
+#ifdef _WIN32
+        // Windows service commands
+        else if (arg == "install") {
+            config.mode = ServerConfig::Mode::Install;
         }
+        else if (arg == "uninstall") {
+            config.mode = ServerConfig::Mode::Uninstall;
+        }
+        else if (arg == "start") {
+            config.mode = ServerConfig::Mode::Start;
+        }
+        else if (arg == "stop") {
+            config.mode = ServerConfig::Mode::Stop;
+        }
+        else if (arg == "run") {
+            config.mode = ServerConfig::Mode::Run;
+        }
+        else if (arg == "--service") {
+            config.mode = ServerConfig::Mode::Service;
+        }
+#endif
         else if (arg == "--host" && i + 1 < argc) {
             config.host = argv[++i];
         }
@@ -268,6 +324,254 @@ void setupSignalHandlers() {
 SERVICE_STATUS g_service_status;
 SERVICE_STATUS_HANDLE g_service_status_handle;
 
+// Forward declarations
+void runServer(const ServerConfig& config);
+std::string getExecutablePath();
+
+//-----------------------------------------------------------------------------
+// Get path to current executable
+//-----------------------------------------------------------------------------
+std::string getExecutablePath() {
+    char path[MAX_PATH];
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    return std::string(path);
+}
+
+//-----------------------------------------------------------------------------
+// Install Windows Service
+//-----------------------------------------------------------------------------
+bool installService() {
+    SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
+    if (!scm) {
+        std::cerr << "[ERROR] Cannot open Service Control Manager. Run as Administrator.\n";
+        return false;
+    }
+    
+    std::string exePath = getExecutablePath();
+    std::string cmdLine = "\"" + exePath + "\" --service";
+    
+    SC_HANDLE service = CreateServiceA(
+        scm,
+        "AIPREngine",                      // Service name
+        "AIPR Indexing & Retrieval Engine", // Display name
+        SERVICE_ALL_ACCESS,
+        SERVICE_WIN32_OWN_PROCESS,
+        SERVICE_AUTO_START,                // Start automatically
+        SERVICE_ERROR_NORMAL,
+        cmdLine.c_str(),
+        NULL,                              // No load ordering group
+        NULL,                              // No tag identifier
+        NULL,                              // No dependencies
+        NULL,                              // LocalSystem account
+        NULL                               // No password
+    );
+    
+    if (!service) {
+        DWORD error = GetLastError();
+        if (error == ERROR_SERVICE_EXISTS) {
+            std::cout << "[INFO] Service already exists.\n";
+        } else {
+            std::cerr << "[ERROR] CreateService failed: " << error << "\n";
+        }
+        CloseServiceHandle(scm);
+        return error == ERROR_SERVICE_EXISTS;
+    }
+    
+    // Set service description
+    SERVICE_DESCRIPTIONA desc;
+    desc.lpDescription = const_cast<LPSTR>(
+        "High-performance code indexing and retrieval engine for AI PR Reviewer. "
+        "Provides gRPC API on port 50051 for the Java server."
+    );
+    ChangeServiceConfig2A(service, SERVICE_CONFIG_DESCRIPTION, &desc);
+    
+    // Configure failure actions (restart on failure)
+    SC_ACTION actions[3] = {
+        { SC_ACTION_RESTART, 5000 },   // Restart after 5 seconds
+        { SC_ACTION_RESTART, 10000 },  // Restart after 10 seconds
+        { SC_ACTION_RESTART, 30000 }   // Restart after 30 seconds
+    };
+    SERVICE_FAILURE_ACTIONSA sfa;
+    sfa.dwResetPeriod = 86400;  // Reset failure count after 1 day
+    sfa.lpRebootMsg = NULL;
+    sfa.lpCommand = NULL;
+    sfa.cActions = 3;
+    sfa.lpsaActions = actions;
+    ChangeServiceConfig2A(service, SERVICE_CONFIG_FAILURE_ACTIONS, &sfa);
+    
+    std::cout << "[OK] Service 'AIPREngine' installed successfully.\n";
+    std::cout << "     Start with: aipr-engine start\n";
+    std::cout << "     Or: sc start AIPREngine\n";
+    
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+// Uninstall Windows Service
+//-----------------------------------------------------------------------------
+bool uninstallService() {
+    SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+    if (!scm) {
+        std::cerr << "[ERROR] Cannot open Service Control Manager. Run as Administrator.\n";
+        return false;
+    }
+    
+    SC_HANDLE service = OpenServiceA(scm, "AIPREngine", SERVICE_STOP | DELETE | SERVICE_QUERY_STATUS);
+    if (!service) {
+        DWORD error = GetLastError();
+        if (error == ERROR_SERVICE_DOES_NOT_EXIST) {
+            std::cout << "[INFO] Service does not exist.\n";
+        } else {
+            std::cerr << "[ERROR] OpenService failed: " << error << "\n";
+        }
+        CloseServiceHandle(scm);
+        return error == ERROR_SERVICE_DOES_NOT_EXIST;
+    }
+    
+    // Stop service if running
+    SERVICE_STATUS status;
+    if (QueryServiceStatus(service, &status) && status.dwCurrentState != SERVICE_STOPPED) {
+        std::cout << "[INFO] Stopping service...\n";
+        ControlService(service, SERVICE_CONTROL_STOP, &status);
+        
+        // Wait for stop
+        int tries = 0;
+        while (status.dwCurrentState != SERVICE_STOPPED && tries++ < 30) {
+            Sleep(1000);
+            QueryServiceStatus(service, &status);
+        }
+    }
+    
+    if (!DeleteService(service)) {
+        std::cerr << "[ERROR] DeleteService failed: " << GetLastError() << "\n";
+        CloseServiceHandle(service);
+        CloseServiceHandle(scm);
+        return false;
+    }
+    
+    std::cout << "[OK] Service 'AIPREngine' uninstalled successfully.\n";
+    
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+// Start Windows Service
+//-----------------------------------------------------------------------------
+bool startService() {
+    SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+    if (!scm) {
+        std::cerr << "[ERROR] Cannot open Service Control Manager.\n";
+        return false;
+    }
+    
+    SC_HANDLE service = OpenServiceA(scm, "AIPREngine", SERVICE_START | SERVICE_QUERY_STATUS);
+    if (!service) {
+        DWORD error = GetLastError();
+        if (error == ERROR_SERVICE_DOES_NOT_EXIST) {
+            std::cerr << "[ERROR] Service not installed. Run: aipr-engine install\n";
+        } else {
+            std::cerr << "[ERROR] OpenService failed: " << error << "\n";
+        }
+        CloseServiceHandle(scm);
+        return false;
+    }
+    
+    SERVICE_STATUS status;
+    QueryServiceStatus(service, &status);
+    
+    if (status.dwCurrentState == SERVICE_RUNNING) {
+        std::cout << "[INFO] Service is already running.\n";
+        CloseServiceHandle(service);
+        CloseServiceHandle(scm);
+        return true;
+    }
+    
+    if (!StartServiceA(service, 0, NULL)) {
+        DWORD error = GetLastError();
+        if (error == ERROR_SERVICE_ALREADY_RUNNING) {
+            std::cout << "[INFO] Service is already running.\n";
+        } else {
+            std::cerr << "[ERROR] StartService failed: " << error << "\n";
+            CloseServiceHandle(service);
+            CloseServiceHandle(scm);
+            return false;
+        }
+    }
+    
+    std::cout << "[OK] Service 'AIPREngine' started.\n";
+    
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+// Stop Windows Service
+//-----------------------------------------------------------------------------
+bool stopService() {
+    SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
+    if (!scm) {
+        std::cerr << "[ERROR] Cannot open Service Control Manager.\n";
+        return false;
+    }
+    
+    SC_HANDLE service = OpenServiceA(scm, "AIPREngine", SERVICE_STOP | SERVICE_QUERY_STATUS);
+    if (!service) {
+        DWORD error = GetLastError();
+        if (error == ERROR_SERVICE_DOES_NOT_EXIST) {
+            std::cerr << "[ERROR] Service not installed.\n";
+        } else {
+            std::cerr << "[ERROR] OpenService failed: " << error << "\n";
+        }
+        CloseServiceHandle(scm);
+        return false;
+    }
+    
+    SERVICE_STATUS status;
+    QueryServiceStatus(service, &status);
+    
+    if (status.dwCurrentState == SERVICE_STOPPED) {
+        std::cout << "[INFO] Service is already stopped.\n";
+        CloseServiceHandle(service);
+        CloseServiceHandle(scm);
+        return true;
+    }
+    
+    if (!ControlService(service, SERVICE_CONTROL_STOP, &status)) {
+        std::cerr << "[ERROR] ControlService(STOP) failed: " << GetLastError() << "\n";
+        CloseServiceHandle(service);
+        CloseServiceHandle(scm);
+        return false;
+    }
+    
+    // Wait for stop
+    std::cout << "[INFO] Stopping service...\n";
+    int tries = 0;
+    while (status.dwCurrentState != SERVICE_STOPPED && tries++ < 30) {
+        Sleep(1000);
+        QueryServiceStatus(service, &status);
+        std::cout << "." << std::flush;
+    }
+    std::cout << "\n";
+    
+    if (status.dwCurrentState == SERVICE_STOPPED) {
+        std::cout << "[OK] Service 'AIPREngine' stopped.\n";
+    } else {
+        std::cerr << "[WARN] Service may not have stopped cleanly.\n";
+    }
+    
+    CloseServiceHandle(service);
+    CloseServiceHandle(scm);
+    return true;
+}
+
+//-----------------------------------------------------------------------------
+// Service Control Handler
+//-----------------------------------------------------------------------------
 void WINAPI ServiceCtrlHandler(DWORD ctrl_code) {
     switch (ctrl_code) {
         case SERVICE_CONTROL_STOP:
@@ -292,8 +596,9 @@ void WINAPI ServiceCtrlHandler(DWORD ctrl_code) {
     }
 }
 
-void runServer(const ServerConfig& config);
-
+//-----------------------------------------------------------------------------
+// Service Main Entry (called by SCM)
+//-----------------------------------------------------------------------------
 void WINAPI ServiceMain(DWORD argc, LPSTR* argv) {
     (void)argc;
     (void)argv;
@@ -442,28 +747,47 @@ int main(int argc, char* argv[]) {
         ServerConfig config = parseArgs(argc, argv);
         
 #ifdef _WIN32
-        // Windows service mode
-        if (config.service_mode) {
-            if (!runAsService()) {
-                // If StartServiceCtrlDispatcher fails, we might be running
-                // from console for testing - just run normally
-                DWORD error = GetLastError();
-                if (error == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) {
-                    std::cout << "[INFO] Not running as service, starting normally...\n";
+        // Handle Windows service commands
+        switch (config.mode) {
+            case ServerConfig::Mode::Install:
+                return installService() ? 0 : 1;
+                
+            case ServerConfig::Mode::Uninstall:
+                return uninstallService() ? 0 : 1;
+                
+            case ServerConfig::Mode::Start:
+                return startService() ? 0 : 1;
+                
+            case ServerConfig::Mode::Stop:
+                return stopService() ? 0 : 1;
+                
+            case ServerConfig::Mode::Service:
+                // Running as Windows service (called by SCM)
+                if (!runAsService()) {
+                    DWORD error = GetLastError();
+                    if (error == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) {
+                        // Not running from SCM, run as console app
+                        std::cout << "[INFO] Not started by SCM, running in console mode...\n";
+                    } else {
+                        std::cerr << "[ERROR] Failed to start as service: " << error << "\n";
+                        return 1;
+                    }
                 } else {
-                    std::cerr << "[ERROR] Failed to start as service: " << error << "\n";
-                    return 1;
+                    return 0;  // Service handled
                 }
-            } else {
-                return 0;  // Service was handled
-            }
+                break;
+                
+            case ServerConfig::Mode::Run:
+            default:
+                // Fall through to normal execution
+                break;
         }
 #endif
         
         // Setup signal handlers for graceful shutdown
         setupSignalHandlers();
         
-        // Run the server
+        // Run the server in foreground
         runServer(config);
         
         return 0;
