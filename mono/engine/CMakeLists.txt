@@ -17,6 +17,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Options
 option(AIPR_BUILD_TESTS "Build tests" ON)
 option(AIPR_BUILD_TOOLS "Build utility tools" ON)
+option(AIPR_BUILD_SERVER "Build gRPC server executable" ON)
 option(AIPR_USE_FAISS "Use FAISS for vector search" ON)
 option(AIPR_USE_TREE_SITTER "Use tree-sitter for AST parsing" ON)
 
@@ -82,6 +83,109 @@ if(AIPR_USE_FAISS)
     endif()
 else()
     set(FAISS_LIBRARIES "")
+endif()
+
+# =============================================================================
+# gRPC Dependencies (for server build)
+# =============================================================================
+
+if(AIPR_BUILD_SERVER)
+    message(STATUS "Building gRPC server - fetching dependencies...")
+    
+    # Try to find system gRPC first
+    find_package(gRPC CONFIG QUIET)
+    find_package(Protobuf CONFIG QUIET)
+    
+    if(gRPC_FOUND AND Protobuf_FOUND)
+        message(STATUS "Found system gRPC: ${gRPC_VERSION}")
+        message(STATUS "Found system Protobuf: ${Protobuf_VERSION}")
+        
+        set(GRPC_LIBRARIES gRPC::grpc++ gRPC::grpc++_reflection)
+        set(PROTOBUF_LIBRARIES protobuf::libprotobuf)
+        
+        # Get the grpc_cpp_plugin location
+        get_target_property(GRPC_CPP_PLUGIN gRPC::grpc_cpp_plugin LOCATION)
+        get_target_property(PROTOC protobuf::protoc LOCATION)
+        
+    else()
+        message(STATUS "gRPC not found, downloading via FetchContent (this may take a while)...")
+        
+        # Abseil (required by gRPC)
+        set(ABSL_PROPAGATE_CXX_STD ON)
+        set(ABSL_ENABLE_INSTALL ON)
+        FetchContent_Declare(
+            abseil-cpp
+            GIT_REPOSITORY https://github.com/abseil/abseil-cpp.git
+            GIT_TAG 20240116.1
+            GIT_SHALLOW TRUE
+        )
+        
+        # gRPC
+        set(gRPC_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(gRPC_BUILD_CSHARP_EXT OFF CACHE BOOL "" FORCE)
+        set(gRPC_BUILD_GRPC_CSHARP_PLUGIN OFF CACHE BOOL "" FORCE)
+        set(gRPC_BUILD_GRPC_NODE_PLUGIN OFF CACHE BOOL "" FORCE)
+        set(gRPC_BUILD_GRPC_OBJECTIVE_C_PLUGIN OFF CACHE BOOL "" FORCE)
+        set(gRPC_BUILD_GRPC_PHP_PLUGIN OFF CACHE BOOL "" FORCE)
+        set(gRPC_BUILD_GRPC_PYTHON_PLUGIN OFF CACHE BOOL "" FORCE)
+        set(gRPC_BUILD_GRPC_RUBY_PLUGIN OFF CACHE BOOL "" FORCE)
+        set(gRPC_INSTALL ON CACHE BOOL "" FORCE)
+        
+        FetchContent_Declare(
+            grpc
+            GIT_REPOSITORY https://github.com/grpc/grpc.git
+            GIT_TAG v1.60.0
+            GIT_SHALLOW TRUE
+        )
+        
+        FetchContent_MakeAvailable(abseil-cpp grpc)
+        
+        set(GRPC_LIBRARIES grpc++ grpc++_reflection)
+        set(PROTOBUF_LIBRARIES libprotobuf)
+        set(GRPC_CPP_PLUGIN $<TARGET_FILE:grpc_cpp_plugin>)
+        set(PROTOC $<TARGET_FILE:protoc>)
+        
+        message(STATUS "gRPC downloaded and configured")
+    endif()
+    
+    # Proto file location
+    set(PROTO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../proto")
+    set(PROTO_FILE "${PROTO_DIR}/engine.proto")
+    set(PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/proto-gen")
+    
+    # Create output directory
+    file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
+    
+    # Generated file names
+    set(PROTO_GENERATED_SRCS
+        "${PROTO_GEN_DIR}/engine.pb.cc"
+        "${PROTO_GEN_DIR}/engine.grpc.pb.cc"
+    )
+    set(PROTO_GENERATED_HDRS
+        "${PROTO_GEN_DIR}/engine.pb.h"
+        "${PROTO_GEN_DIR}/engine.grpc.pb.h"
+    )
+    
+    # Custom command to generate protobuf/grpc code
+    add_custom_command(
+        OUTPUT ${PROTO_GENERATED_SRCS} ${PROTO_GENERATED_HDRS}
+        COMMAND ${PROTOC}
+            --proto_path=${PROTO_DIR}
+            --cpp_out=${PROTO_GEN_DIR}
+            --grpc_out=${PROTO_GEN_DIR}
+            --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
+            ${PROTO_FILE}
+        DEPENDS ${PROTO_FILE}
+        COMMENT "Generating C++ protobuf/gRPC sources from engine.proto"
+        VERBATIM
+    )
+    
+    # Mark generated files
+    set_source_files_properties(${PROTO_GENERATED_SRCS} ${PROTO_GENERATED_HDRS}
+        PROPERTIES GENERATED TRUE
+    )
+    
+    message(STATUS "Proto generation configured: ${PROTO_FILE}")
 endif()
 
 # Include directories
@@ -178,6 +282,56 @@ if(AIPR_BUILD_TOOLS)
     target_link_libraries(aipr-engine-doctor PRIVATE aipr-engine)
 endif()
 
+# =============================================================================
+# gRPC Server Executable
+# =============================================================================
+
+if(AIPR_BUILD_SERVER)
+    message(STATUS "Building aipr-engine gRPC server executable...")
+    
+    # Server source files
+    set(SERVER_SOURCES
+        src/server/main.cpp
+        src/server/engine_service_impl.cpp
+        ${PROTO_GENERATED_SRCS}
+    )
+    
+    # Create the server executable
+    add_executable(aipr-engine-server ${SERVER_SOURCES})
+    
+    # Set output name (without -server suffix for cleaner binary name)
+    set_target_properties(aipr-engine-server PROPERTIES
+        OUTPUT_NAME aipr-engine
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    )
+    
+    # Include directories for generated proto files
+    target_include_directories(aipr-engine-server PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${PROTO_GEN_DIR}
+    )
+    
+    # Link dependencies
+    target_link_libraries(aipr-engine-server PRIVATE
+        aipr-engine
+        ${GRPC_LIBRARIES}
+        ${PROTOBUF_LIBRARIES}
+        Threads::Threads
+    )
+    
+    # Windows-specific: link ws2_32 for sockets
+    if(WIN32)
+        target_link_libraries(aipr-engine-server PRIVATE ws2_32)
+    endif()
+    
+    # Install the server executable
+    install(TARGETS aipr-engine-server
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+    
+    message(STATUS "Server executable will be: ${CMAKE_BINARY_DIR}/bin/aipr-engine${CMAKE_EXECUTABLE_SUFFIX}")
+endif()
+
 # Tests
 if(AIPR_BUILD_TESTS)
     enable_testing()
@@ -228,9 +382,15 @@ install(FILES
 # Summary
 message(STATUS "")
 message(STATUS "AI PR Reviewer Engine Configuration:")
-message(STATUS "  Version:      ${PROJECT_VERSION}")
-message(STATUS "  Build tests:  ${AIPR_BUILD_TESTS}")
-message(STATUS "  Build tools:  ${AIPR_BUILD_TOOLS}")
-message(STATUS "  Use FAISS:    ${AIPR_USE_FAISS}")
+message(STATUS "  Version:         ${PROJECT_VERSION}")
+message(STATUS "  Build tests:     ${AIPR_BUILD_TESTS}")
+message(STATUS "  Build tools:     ${AIPR_BUILD_TOOLS}")
+message(STATUS "  Build server:    ${AIPR_BUILD_SERVER}")
+message(STATUS "  Use FAISS:       ${AIPR_USE_FAISS}")
 message(STATUS "  Use tree-sitter: ${AIPR_USE_TREE_SITTER}")
+if(AIPR_BUILD_SERVER)
+    message(STATUS "")
+    message(STATUS "  Server binary:   ${CMAKE_BINARY_DIR}/bin/aipr-engine${CMAKE_EXECUTABLE_SUFFIX}")
+    message(STATUS "  Default port:    50051")
+endif()
 message(STATUS "")

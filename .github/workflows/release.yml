@@ -78,6 +78,8 @@ jobs:
   # ===========================================================================
   # Build Engine for All Platforms
   # ===========================================================================
+  # Build Engine for All Platforms (gRPC Server)
+  # ===========================================================================
   build-engine:
     name: Build Engine (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
@@ -102,6 +104,19 @@ jobs:
         with:
           ref: v${{ needs.version.outputs.version }}
       
+      - name: Install Dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libomp-dev libopenblas-dev liblapack-dev
+      
+      - name: Install Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install libomp openblas protobuf grpc
+          echo "OpenBLAS_HOME=$(brew --prefix openblas)" >> $GITHUB_ENV
+          echo "OpenMP_ROOT=$(brew --prefix libomp)" >> $GITHUB_ENV
+      
       - name: Setup CMake
         uses: lukka/get-cmake@latest
         with:
@@ -111,7 +126,9 @@ jobs:
         run: |
           cmake -B build -S ${{ env.MONO_DIR }}/engine \
             -DCMAKE_BUILD_TYPE=Release \
-            -DAIPR_BUILD_TESTS=OFF
+            -DAIPR_BUILD_TESTS=OFF \
+            -DAIPR_BUILD_SERVER=ON \
+            -DAIPR_USE_FAISS=OFF
       
       - name: Build
         run: cmake --build build --config Release --parallel 4
@@ -119,12 +136,20 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          mkdir -p dist
-          cp build/lib* dist/ 2>/dev/null || true
-          cp build/*.dll dist/ 2>/dev/null || true
-          cp build/*.dylib dist/ 2>/dev/null || true
-          cp build/*.so dist/ 2>/dev/null || true
-          cp build/Release/*.dll dist/ 2>/dev/null || true
+          mkdir -p dist/bin dist/lib
+          
+          # Copy server executable (primary artifact)
+          cp build/bin/aipr-engine dist/bin/ 2>/dev/null || true
+          cp build/bin/Release/aipr-engine.exe dist/bin/ 2>/dev/null || true
+          cp build/bin/aipr-engine.exe dist/bin/ 2>/dev/null || true
+          
+          # Copy libraries (for backward compat)
+          cp build/lib* dist/lib/ 2>/dev/null || true
+          cp build/*.dll dist/lib/ 2>/dev/null || true
+          cp build/*.dylib dist/lib/ 2>/dev/null || true
+          cp build/*.so dist/lib/ 2>/dev/null || true
+          cp build/Release/*.dll dist/lib/ 2>/dev/null || true
+          
           tar -czvf aipr-engine-${{ matrix.target }}.tar.gz -C dist .
       
       - name: Upload Artifact
@@ -291,11 +316,21 @@ jobs:
           cd aipr-${{ needs.version.outputs.version }}
           
           # Configure
-          vi config/application.yml
+          vi config/rtserverprops.xml
           
-          # Run
+          # Start C++ Engine (gRPC server on port 50051)
+          ./bin/aipr-engine-start &
+          
+          # Start Java Server
           ./bin/aipr-server
           ```
+          
+          ### Architecture Note
+          
+          The C++ engine now runs as a **standalone gRPC server** on port 50051.
+          The Java server connects to it via gRPC. Both must be running for full functionality.
+          
+          For Docker deployments, docker-compose handles the orchestration automatically.
           
           See [Setup Guide](docs/setup.md) for full documentation.
           EOF

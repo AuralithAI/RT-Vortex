@@ -71,8 +71,20 @@
     </grpc-server>
 
     <!-- ===================================================================== -->
-    <!-- gRPC Engine Client (C++ engine — internal communication)              -->
+    <!-- gRPC Engine Client (C++ engine — standalone gRPC server process)    -->
     <!-- ===================================================================== -->
+    <!--
+        The C++ engine now runs as a standalone gRPC server process on port 50051.
+        The Java server connects to it as a gRPC client. This replaces the previous
+        JNI-based integration.
+        
+        To start the engine:
+          - Linux/Mac: ./bin/aipr-engine-start (or ./bin/aipr-engine directly)
+          - Windows:   bin\aipr-engine-start.bat
+          - Docker:    Included in docker-compose.yml
+        
+        The engine must be running before the Java server starts.
+    -->
     <engine host="${ENGINE_HOST:localhost}"
             port="${ENGINE_PORT:50051}"
             timeout-ms="${ENGINE_TIMEOUT_MS:30000}"

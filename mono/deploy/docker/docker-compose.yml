@@ -1,31 +1,100 @@
 version: '3.8'
 
+# =============================================================================
+# AI PR Reviewer - Docker Compose
+# =============================================================================
+#
+# Architecture:
+#   - engine:  C++ gRPC server (port 50051, internal)
+#   - server:  Java REST/gRPC API (ports 8080, 9090)
+#   - postgres: Database
+#   - redis:    Cache (optional)
+#
+# Quick Start:
+#   export LLM_API_KEY=your_api_key
+#   docker compose up -d
+#
+# =============================================================================
+
 services:
-  # Main server
+  # ===========================================================================
+  # C++ Engine - gRPC Server
+  # ===========================================================================
+  engine:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+      target: engine-runtime  # If using multi-target, or just use Dockerfile.engine
+    image: aipr-engine:latest
+    container_name: aipr-engine
+    # Engine only listens internally, not exposed to host by default
+    # Uncomment to expose for debugging:
+    # ports:
+    #   - "50051:50051"
+    environment:
+      - ENGINE_HOST=0.0.0.0
+      - ENGINE_PORT=50051
+      - ENGINE_TLS_ENABLED=false
+    volumes:
+      - aipr-data:/app/data
+      - aipr-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Java Server - REST & gRPC API
+  # ===========================================================================
   server:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
     container_name: aipr-server
     ports:
-      - "8080:8080"
-      - "50051:50051"
+      - "8080:8080"   # REST API
+      - "9090:9090"   # gRPC API (for SDK clients)
     environment:
       - SPRING_PROFILES_ACTIVE=production
+      # Database
       - DATABASE_URL=jdbc:postgresql://postgres:5432/aipr
       - DATABASE_USER=aipr
       - DATABASE_PASSWORD=${DB_PASSWORD:-aipr}
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Engine (connects to engine container via gRPC)
+      - ENGINE_HOST=engine
+      - ENGINE_PORT=50051
+      - ENGINE_NEGOTIATION=PLAINTEXT
+      # LLM
       - LLM_PROVIDER=${LLM_PROVIDER:-openai-compatible}
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_MODEL=${LLM_MODEL:-gpt-4-turbo-preview}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      # Storage
       - STORAGE_TYPE=local
       - STORAGE_PATH=/app/data
     volumes:
       - aipr-data:/app/data
       - aipr-logs:/app/logs
     depends_on:
+      engine:
+        condition: service_healthy
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
@@ -43,9 +112,11 @@ services:
           memory: 1G
     restart: unless-stopped
 
-  # PostgreSQL database
+  # ===========================================================================
+  # PostgreSQL Database
+  # ===========================================================================
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     container_name: aipr-postgres
     environment:
       - POSTGRES_USER=aipr
@@ -65,7 +136,9 @@ services:
           memory: 1G
     restart: unless-stopped
 
-  # Redis for caching (optional)
+  # ===========================================================================
+  # Redis Cache
+  # ===========================================================================
   redis:
     image: redis:7-alpine
     container_name: aipr-redis
@@ -84,12 +157,14 @@ services:
           memory: 512M
     restart: unless-stopped
 
-  # Prometheus for metrics
+  # ===========================================================================
+  # Prometheus (Metrics)
+  # ===========================================================================
   prometheus:
     image: prom/prometheus:v2.47.0
     container_name: aipr-prometheus
     ports:
-      - "9090:9090"
+      - "9091:9090"  # Changed to avoid conflict with server gRPC port
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus

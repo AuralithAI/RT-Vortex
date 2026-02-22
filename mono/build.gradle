@@ -175,18 +175,40 @@ tasks.register('copyServerDeps', Copy) {
     into "${distDir}/lib"
 }
 
-// Task to copy engine native library
+// Task to copy engine native library (DEPRECATED - Engine is now a separate gRPC server)
+// Kept for backward compatibility during transition period
 tasks.register('copyEngineLib', Copy) {
     group = 'Distribution'
-    description = 'Copies C++ engine library to distribution'
+    description = '[DEPRECATED] Copies C++ engine library to distribution. Engine is now a standalone gRPC server.'
+    dependsOn 'prepareDist'
+    
+    // No longer copies .so/.dll — engine runs as separate process on port 50051
+    // This task is now a no-op but kept for compatibility
+    doLast {
+        logger.lifecycle("NOTE: Engine is now a standalone gRPC server process.")
+        logger.lifecycle("      Java connects to it via gRPC on ENGINE_HOST:ENGINE_PORT (default localhost:50051)")
+        logger.lifecycle("      The aipr-engine binary should be started separately or via Docker/systemd.")
+    }
+}
+
+// Task to copy engine server binary (new architecture)
+tasks.register('copyEngineBinary', Copy) {
+    group = 'Distribution'
+    description = 'Copies C++ engine gRPC server binary to distribution'
     dependsOn 'prepareDist', 'buildEngine'
 
-    from("engine/build") {
-        include "*.so"
-        include "*.dll"
-        include "*.dylib"
+    from("engine/build/bin") {
+        include "aipr-engine"
+        include "aipr-engine.exe"
     }
-    into "${distDir}/lib"
+    into "${distDir}/bin"
+    
+    // Make executable on Unix
+    doLast {
+        if (!System.getProperty('os.name').toLowerCase().contains('windows')) {
+            file("${distDir}/bin/aipr-engine").setExecutable(true)
+        }
+    }
 }
 
 // Task to copy configuration files
@@ -273,10 +295,9 @@ for jar in "$RT_HOME/lib"/*.jar; do
     fi
 done
 
-# Run server
+# Run server (connects to C++ engine via gRPC - no JNI)
 exec java $JAVA_OPTS \\
     -Drt.home="$RT_HOME" \\
-    -Djava.library.path="$RT_HOME/lib" \\
     -cp "$CLASSPATH" \\
     ai.aipr.server.AiprServerApplication \\
     "$@"
@@ -301,9 +322,9 @@ for %%j in ("%RT_HOME%\\lib\\*.jar") do (
     )
 )
 
+REM Run server (connects to C++ engine via gRPC - no JNI)
 java %JAVA_OPTS% ^
     -Drt.home="%RT_HOME%" ^
-    -Djava.library.path="%RT_HOME%\\lib" ^
     -cp "%CLASSPATH%" ^
     ai.aipr.server.AiprServerApplication ^
     %*
@@ -311,9 +332,59 @@ java %JAVA_OPTS% ^
 endlocal
 '''
 
+        // Create engine startup script (new - for standalone engine server)
+        file("${distDir}/bin/aipr-engine-start").text = '''#!/bin/bash
+#
+# AI PR Reviewer - Start C++ Engine gRPC Server
+#
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+export RT_HOME="$(dirname "$SCRIPT_DIR")"
+
+# Engine defaults
+ENGINE_HOST="${ENGINE_HOST:-0.0.0.0}"
+ENGINE_PORT="${ENGINE_PORT:-50051}"
+ENGINE_CONFIG="${ENGINE_CONFIG:-$RT_HOME/config/default.yml}"
+
+echo "Starting AI PR Reviewer Engine..."
+echo "  Host: $ENGINE_HOST"
+echo "  Port: $ENGINE_PORT"
+echo "  Config: $ENGINE_CONFIG"
+echo ""
+
+exec "$SCRIPT_DIR/aipr-engine" \\
+    --host "$ENGINE_HOST" \\
+    --port "$ENGINE_PORT" \\
+    --config "$ENGINE_CONFIG" \\
+    "$@"
+'''
+
+        file("${distDir}/bin/aipr-engine-start.bat").text = '''@echo off
+REM AI PR Reviewer - Start C++ Engine gRPC Server
+
+set SCRIPT_DIR=%~dp0
+set RT_HOME=%SCRIPT_DIR%..
+
+if "%ENGINE_HOST%"=="" set ENGINE_HOST=0.0.0.0
+if "%ENGINE_PORT%"=="" set ENGINE_PORT=50051
+if "%ENGINE_CONFIG%"=="" set ENGINE_CONFIG=%RT_HOME%\\config\\default.yml
+
+echo Starting AI PR Reviewer Engine...
+echo   Host: %ENGINE_HOST%
+echo   Port: %ENGINE_PORT%
+echo   Config: %ENGINE_CONFIG%
+echo.
+
+"%SCRIPT_DIR%\\aipr-engine.exe" ^
+    --host %ENGINE_HOST% ^
+    --port %ENGINE_PORT% ^
+    --config %ENGINE_CONFIG% ^
+    %*
+'''
+
         // Make scripts executable on Unix
         if (!System.getProperty('os.name').toLowerCase().contains('windows')) {
             file("${distDir}/bin/aipr-server").setExecutable(true)
+            file("${distDir}/bin/aipr-engine-start").setExecutable(true)
         }
     }
 }
@@ -596,15 +667,19 @@ LLM:
   LLM_API_KEY           your_api_key
   LLM_MODEL             gpt-4-turbo-preview
 
-C++ Engine:
-  ENGINE_HOST           localhost
+C++ Engine (runs as separate gRPC server process):
+  ENGINE_HOST           localhost (or hostname of engine server)
   ENGINE_PORT           50051
   ENGINE_NEGOTIATION    TLS (or PLAINTEXT for dev)
+  ENGINE_TLS_ENABLED    true (set to false for local dev)
 
 DIRECTORY STRUCTURE
 -------------------
-  bin/           Startup scripts
-  lib/           JAR files and native engine library
+  bin/           Startup scripts:
+                   aipr-server       — Java server (REST/gRPC API)
+                   aipr-engine       — C++ engine (gRPC server, port 50051)
+                   aipr-engine-start — Convenience wrapper for engine
+  lib/           JAR files (no native libraries - engine is separate)
   config/        application.yml and XML config files (edit these)
   certificates/  TLS certificates (dev certs included, replace for production)
   data/sql/      Database SQL files:
@@ -614,6 +689,16 @@ DIRECTORY STRUCTURE
   data/logs/     Log files (created at runtime)
   data/cache/    Cache files (created at runtime)
   docs/          Documentation
+
+ARCHITECTURE NOTE
+-----------------
+The C++ engine runs as a standalone gRPC server on port 50051. The Java server
+connects to it via gRPC. You must start the engine before the Java server:
+
+  1. Start engine:  ./bin/aipr-engine-start (or ./bin/aipr-engine directly)
+  2. Start server:  ./bin/aipr-server
+
+Or use docker-compose which handles orchestration automatically.
 
 TLS CERTIFICATES
 ----------------
@@ -648,7 +733,8 @@ Online: https://github.com/AuralithAI/RT-AI-PR-Reviewer
 tasks.register('installDist') {
     group = 'Distribution'
     description = 'Assembles the distribution into build/install'
-    dependsOn 'copyServerJar', 'copyServerDeps', 'copyEngineLib', 'copyConfig', 'copyCertificates', 'copySqlFiles', 'copyDocs', 'createStartScripts', 'createRootScripts', 'createDistReadme'
+    // Note: copyEngineBinary replaces copyEngineLib - engine is now standalone gRPC server
+    dependsOn 'copyServerJar', 'copyServerDeps', 'copyEngineBinary', 'copyConfig', 'copyCertificates', 'copySqlFiles', 'copyDocs', 'createStartScripts', 'createRootScripts', 'createDistReadme'
 }
 
 // Create distribution ZIP

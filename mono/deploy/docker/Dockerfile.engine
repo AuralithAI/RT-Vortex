@@ -1,0 +1,85 @@
+# AI PR Reviewer - C++ Engine Only
+#
+# Standalone gRPC server for the indexing and retrieval engine.
+# Use this when deploying engine and server separately.
+#
+# Build:
+#   docker build -f Dockerfile.engine -t aipr-engine .
+#
+# Run:
+#   docker run -p 50051:50051 aipr-engine
+
+# =============================================================================
+# Stage 1: Build
+# =============================================================================
+FROM ubuntu:22.04 AS builder
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy source
+COPY engine/ ./engine/
+COPY proto/engine.proto ./proto/
+
+# Build with gRPC server
+RUN cmake -B build -S engine \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DAIPR_BUILD_TESTS=OFF \
+    -DAIPR_BUILD_SERVER=ON \
+    -DAIPR_USE_FAISS=OFF \
+    && cmake --build build --config Release --parallel $(nproc)
+
+
+# =============================================================================
+# Stage 2: Runtime
+# =============================================================================
+FROM ubuntu:22.04
+
+LABEL org.opencontainers.image.title="AI PR Reviewer Engine"
+LABEL org.opencontainers.image.description="C++ gRPC engine for code indexing and retrieval"
+
+# Runtime dependencies
+RUN apt-get update && apt-get install -y \
+    libstdc++6 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -r aipr && useradd -r -g aipr aipr
+
+WORKDIR /app
+
+# Copy binary
+COPY --from=builder /build/build/bin/aipr-engine /app/bin/aipr-engine
+RUN chmod +x /app/bin/aipr-engine
+
+# Copy default config
+COPY config/default.yml /app/config/default.yml
+
+# Create data directory
+RUN mkdir -p /app/data && chown -R aipr:aipr /app
+
+USER aipr
+
+# Default port
+EXPOSE 50051
+
+# Environment
+ENV ENGINE_HOST=0.0.0.0
+ENV ENGINE_PORT=50051
+ENV ENGINE_CONFIG=/app/config/default.yml
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+    CMD nc -z localhost 50051 || exit 1
+
+# Entry point
+ENTRYPOINT ["/app/bin/aipr-engine"]
+CMD ["--host", "0.0.0.0", "--port", "50051", "--config", "/app/config/default.yml"]

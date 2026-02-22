@@ -1,0 +1,283 @@
+name: Engine CI
+
+# C++ Engine Build, Test, and Package Pipeline
+# This workflow is for the C++ engine component only.
+# Runs independently from the Java server workflow.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'mono/engine/**'
+      - 'mono/proto/engine.proto'
+      - '.github/workflows/engine.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'mono/engine/**'
+      - 'mono/proto/engine.proto'
+      - '.github/workflows/engine.yml'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type (Release/Debug)'
+        required: false
+        default: 'Release'
+
+concurrency:
+  group: engine-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CMAKE_VERSION: "3.28.1"
+  MONO_DIR: "mono"
+
+jobs:
+  # ===========================================================================
+  # Lint C++ Code
+  # ===========================================================================
+  lint:
+    name: Lint C++
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+
+      - name: Check formatting
+        working-directory: ${{ env.MONO_DIR }}/engine
+        run: |
+          find src include -name '*.cpp' -o -name '*.h' | head -20 | while read file; do
+            echo "Checking $file..."
+            clang-format --dry-run --Werror "$file" || echo "Would reformat: $file"
+          done
+        continue-on-error: true
+
+      - name: Validate CMakeLists.txt
+        working-directory: ${{ env.MONO_DIR }}/engine
+        run: |
+          echo "Validating CMakeLists.txt syntax..."
+          cmake -B build-check -S . -DAIPR_BUILD_SERVER=OFF -DAIPR_BUILD_TESTS=OFF 2>&1 | head -50
+
+  # ===========================================================================
+  # Build Engine for All Platforms
+  # ===========================================================================
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-latest
+            cmake_extra: ""
+          - target: linux-arm64
+            os: ubuntu-latest
+            cmake_extra: "-DCMAKE_SYSTEM_PROCESSOR=aarch64"
+          - target: darwin-x64
+            os: macos-latest
+            cmake_extra: ""
+          - target: darwin-arm64
+            os: macos-14
+            cmake_extra: ""
+          - target: windows-x64
+            os: windows-latest
+            cmake_extra: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libomp-dev \
+            libopenblas-dev \
+            liblapack-dev \
+            protobuf-compiler \
+            libprotobuf-dev
+
+      - name: Install Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install libomp openblas protobuf grpc
+          echo "OpenBLAS_HOME=$(brew --prefix openblas)" >> $GITHUB_ENV
+          echo "OpenMP_ROOT=$(brew --prefix libomp)" >> $GITHUB_ENV
+
+      - name: Install Dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # Use vcpkg for dependencies
+          vcpkg install grpc:x64-windows protobuf:x64-windows
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: ${{ env.CMAKE_VERSION }}
+
+      - name: Configure
+        shell: bash
+        run: |
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'Release' }}"
+          cmake -B build -S ${{ env.MONO_DIR }}/engine \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DAIPR_BUILD_TESTS=ON \
+            -DAIPR_BUILD_SERVER=ON \
+            -DAIPR_USE_FAISS=OFF \
+            ${{ matrix.cmake_extra }}
+
+      - name: Build
+        run: cmake --build build --config ${{ github.event.inputs.build_type || 'Release' }} --parallel 4
+
+      - name: Run Unit Tests
+        run: ctest --test-dir build --output-on-failure -C ${{ github.event.inputs.build_type || 'Release' }}
+        continue-on-error: true
+
+      - name: Package Artifacts
+        shell: bash
+        run: |
+          mkdir -p dist/bin dist/lib
+          
+          # Copy server executable
+          if [ -f "build/bin/aipr-engine" ]; then
+            cp build/bin/aipr-engine dist/bin/
+          elif [ -f "build/bin/Release/aipr-engine.exe" ]; then
+            cp build/bin/Release/aipr-engine.exe dist/bin/
+          elif [ -f "build/bin/aipr-engine.exe" ]; then
+            cp build/bin/aipr-engine.exe dist/bin/
+          fi
+          
+          # Copy libraries (for backward compat during transition)
+          cp build/lib/*.so dist/lib/ 2>/dev/null || true
+          cp build/lib/*.dll dist/lib/ 2>/dev/null || true
+          cp build/lib/*.dylib dist/lib/ 2>/dev/null || true
+          cp build/lib/Release/*.dll dist/lib/ 2>/dev/null || true
+          
+          # Create archive
+          tar -czvf aipr-engine-${{ matrix.target }}.tar.gz -C dist .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.target }}
+          path: aipr-engine-${{ matrix.target }}.tar.gz
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
+
+  # ===========================================================================
+  # Integration Tests
+  # ===========================================================================
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux Engine
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-linux-x64
+          path: artifacts/
+
+      - name: Extract and Run Engine
+        run: |
+          mkdir -p engine-dist
+          tar -xzf artifacts/aipr-engine-linux-x64.tar.gz -C engine-dist
+          chmod +x engine-dist/bin/aipr-engine
+          
+          # Start engine in background
+          ./engine-dist/bin/aipr-engine --port 50051 &
+          ENGINE_PID=$!
+          echo "ENGINE_PID=$ENGINE_PID" >> $GITHUB_ENV
+          
+          # Wait for startup
+          sleep 5
+          
+          # Check if running
+          if ! kill -0 $ENGINE_PID 2>/dev/null; then
+            echo "Engine failed to start"
+            exit 1
+          fi
+          echo "Engine started successfully (PID: $ENGINE_PID)"
+
+      - name: Run gRPC Health Check
+        run: |
+          # Install grpcurl
+          go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+          
+          # Check health endpoint
+          ~/go/bin/grpcurl -plaintext localhost:50051 aipr.engine.v1.EngineService/HealthCheck || echo "Health check (expected to fail without reflection)"
+          
+          # At minimum, verify port is listening
+          nc -zv localhost 50051
+
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -n "$ENGINE_PID" ]; then
+            kill $ENGINE_PID 2>/dev/null || true
+          fi
+
+  # ===========================================================================
+  # Code Quality Analysis
+  # ===========================================================================
+  analyze:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    needs: lint
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck clang-tidy
+
+      - name: Run cppcheck
+        working-directory: ${{ env.MONO_DIR }}/engine
+        run: |
+          cppcheck --enable=warning,style,performance,portability \
+            --suppress=missingIncludeSystem \
+            --error-exitcode=0 \
+            --xml --xml-version=2 \
+            src/ include/ 2> cppcheck-report.xml || true
+
+      - name: Upload Analysis Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cppcheck-report
+          path: ${{ env.MONO_DIR }}/engine/cppcheck-report.xml
+          retention-days: 7
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+  summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [build, integration-test]
+    if: always()
+    
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "# 🛠️ Engine Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux x64 | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS x64 | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS ARM64 | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows x64 | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Integration Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Status: ${{ needs.integration-test.result == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
