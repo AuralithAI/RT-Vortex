@@ -3,32 +3,19 @@ package ai.aipr.server.model;
 /**
  * Review filter criteria.
  */
-public class ReviewFilter {
-    
-    private final String status;
-    private final String repositoryId;
-    private final Integer prNumber;
-    private final String author;
-    
-    public ReviewFilter(String status, String repositoryId, Integer prNumber, String author) {
-        this.status = status;
-        this.repositoryId = repositoryId;
-        this.prNumber = prNumber;
-        this.author = author;
-    }
-    
-    public String getStatus() { return status; }
-    public String getRepositoryId() { return repositoryId; }
-    public Integer getPrNumber() { return prNumber; }
-    public String getAuthor() { return author; }
-    
+public record ReviewFilter(
+        String status,
+        String repoId,
+        Integer prNumber,
+        String author
+) {
     public static Builder builder() {
         return new Builder();
     }
     
     public static class Builder {
         private String status;
-        private String repositoryId;
+        private String repoId;
         private Integer prNumber;
         private String author;
         
@@ -37,8 +24,8 @@ public class ReviewFilter {
             return this;
         }
         
-        public Builder repositoryId(String repositoryId) {
-            this.repositoryId = repositoryId;
+        public Builder repoId(String repoId) {
+            this.repoId = repoId;
             return this;
         }
         
@@ -53,7 +40,7 @@ public class ReviewFilter {
         }
         
         public ReviewFilter build() {
-            return new ReviewFilter(status, repositoryId, prNumber, author);
+            return new ReviewFilter(status, repoId, prNumber, author);
         }
     }
 }

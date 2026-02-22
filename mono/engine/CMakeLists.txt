@@ -17,7 +17,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Options
 option(AIPR_BUILD_TESTS "Build tests" ON)
 option(AIPR_BUILD_TOOLS "Build utility tools" ON)
-option(AIPR_USE_FAISS "Use FAISS for vector search" OFF)
+option(AIPR_USE_FAISS "Use FAISS for vector search" ON)
 option(AIPR_USE_TREE_SITTER "Use tree-sitter for AST parsing" ON)
 
 # Output directories
@@ -35,15 +35,53 @@ endif()
 # Find dependencies
 find_package(Threads REQUIRED)
 
+# FetchContent for downloading dependencies
+include(FetchContent)
+
 # Optional: FAISS for vector search
 if(AIPR_USE_FAISS)
     find_package(faiss QUIET)
     if(faiss_FOUND)
-        message(STATUS "FAISS found")
+        message(STATUS "FAISS found (system)")
         add_definitions(-DAIPR_HAS_FAISS)
+        set(FAISS_LIBRARIES faiss)
     else()
-        message(WARNING "FAISS not found, using fallback vector search")
+        message(STATUS "FAISS not found, downloading via FetchContent...")
+        
+        # FAISS requires OpenMP and BLAS
+        find_package(OpenMP QUIET)
+        find_package(BLAS QUIET)
+        
+        if(OpenMP_FOUND AND BLAS_FOUND)
+            FetchContent_Declare(
+                faiss
+                GIT_REPOSITORY https://github.com/facebookresearch/faiss.git
+                GIT_TAG v1.7.4
+                GIT_SHALLOW TRUE
+            )
+            
+            # Configure FAISS build options
+            set(FAISS_ENABLE_GPU OFF CACHE BOOL "" FORCE)
+            set(FAISS_ENABLE_PYTHON OFF CACHE BOOL "" FORCE)
+            set(FAISS_ENABLE_C_API ON CACHE BOOL "" FORCE)
+            set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+            set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+            
+            FetchContent_MakeAvailable(faiss)
+            
+            add_definitions(-DAIPR_HAS_FAISS)
+            set(FAISS_LIBRARIES faiss)
+            message(STATUS "FAISS downloaded and configured")
+        else()
+            message(WARNING "FAISS requires OpenMP and BLAS. Install them or FAISS will be disabled.")
+            message(WARNING "  Ubuntu/Debian: sudo apt-get install libomp-dev libopenblas-dev")
+            message(WARNING "  macOS: brew install libomp openblas")
+            message(WARNING "Using fallback vector search")
+            set(FAISS_LIBRARIES "")
+        endif()
     endif()
+else()
+    set(FAISS_LIBRARIES "")
 endif()
 
 # Include directories
@@ -100,8 +138,8 @@ target_link_libraries(aipr-engine PUBLIC
     Threads::Threads
 )
 
-if(faiss_FOUND)
-    target_link_libraries(aipr-engine PUBLIC faiss)
+if(FAISS_LIBRARIES)
+    target_link_libraries(aipr-engine PUBLIC ${FAISS_LIBRARIES})
 endif()
 
 # Shared library version
@@ -120,6 +158,10 @@ target_include_directories(aipr-engine-shared PUBLIC
 target_link_libraries(aipr-engine-shared PUBLIC
     Threads::Threads
 )
+
+if(FAISS_LIBRARIES)
+    target_link_libraries(aipr-engine-shared PUBLIC ${FAISS_LIBRARIES})
+endif()
 
 set_target_properties(aipr-engine-shared PROPERTIES
     VERSION ${PROJECT_VERSION}

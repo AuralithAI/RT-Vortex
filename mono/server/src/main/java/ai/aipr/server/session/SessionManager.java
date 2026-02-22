@@ -65,9 +65,10 @@ public class SessionManager {
     /**
      * Create a new session for a user.
      *
-     * @param userId      The user ID
-     * @param platform    The platform (github, gitlab, etc.)
-     * @param deviceInfo  Optional device information
+     * @param userId        The user ID
+     * @param platform      The platform (github, gitlab, etc.)
+     * @param clientType    The type of client (sdk_java, sdk_python, cli, web)
+     * @param clientVersion The version of the client
      * @return The created session
      */
     public ValidatedSession createSession(String userId, String platform, 
@@ -78,17 +79,11 @@ public class SessionManager {
         long expiresAt = Instant.now().plusSeconds(86400).toEpochMilli(); // 24 hours
 
         // Get user info
-        var user = userRepository.findById(UUID.fromString(userId)).orElse(null);
-        String username = user != null ? user.getUsername() : "unknown";
+        var user = userRepository.findById(userId).orElse(null);
+        String username = user != null ? user.username() : "unknown";
 
-        // Store in database
-        sessionRepository.createSession(
-            UUID.fromString(sessionId),
-            UUID.fromString(userId),
-            sessionToken,
-            grpcChannelId,
-            Instant.ofEpochMilli(expiresAt)
-        );
+        // Store in repository
+        sessionRepository.createSession(userId, 86400 * 1000L); // 24 hours in ms
 
         ValidatedSession session = new ValidatedSession(
             sessionId, userId, username, grpcChannelId, expiresAt
@@ -122,31 +117,32 @@ public class SessionManager {
             return cached;
         }
 
-        // Query database
-        var dbSession = sessionRepository.findActiveSession(sessionToken);
-        if (dbSession == null) {
+        // Query repository
+        var dbSessionOpt = sessionRepository.findActiveSession(sessionToken);
+        if (dbSessionOpt.isEmpty()) {
             return null;
         }
+        var dbSession = dbSessionOpt.get();
 
         // Get user info
-        var user = userRepository.findById(dbSession.getUserId()).orElse(null);
+        var user = userRepository.findById(dbSession.userId()).orElse(null);
         if (user == null) {
             return null;
         }
 
         ValidatedSession session = new ValidatedSession(
-            dbSession.getId().toString(),
-            dbSession.getUserId().toString(),
-            user.getUsername(),
-            dbSession.getGrpcChannelId(),
-            dbSession.getExpiresAt().toEpochMilli()
+            dbSession.sessionId(),
+            dbSession.userId(),
+            user.username(),
+            UUID.randomUUID().toString(),
+            dbSession.expiresAt()
         );
 
         // Cache for future requests
         sessionCache.put(sessionToken, session);
 
-        // Update last activity
-        sessionRepository.updateLastActivity(dbSession.getId());
+        // Touch to update last activity
+        sessionRepository.touch(dbSession.sessionId());
 
         return session;
     }
@@ -167,7 +163,7 @@ public class SessionManager {
         // Remove from cache
         sessionCache.entrySet().removeIf(e -> e.getValue().getUserId().equals(userId));
         
-        int count = sessionRepository.revokeAllUserSessions(UUID.fromString(userId));
+        int count = sessionRepository.revokeAllUserSessions(userId);
         log.info("Revoked {} sessions for user {}", count, userId);
         return count;
     }

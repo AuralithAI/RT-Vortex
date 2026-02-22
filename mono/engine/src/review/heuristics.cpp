@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include <regex>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace aipr {

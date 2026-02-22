@@ -3,29 +3,35 @@ package ai.aipr.server.model;
 /**
  * User information.
  */
-public class UserInfo {
-    
-    private final String id;
-    private final String platform;
-    private final String username;
-    private final String email;
-    private final String displayName;
-    private final String avatarUrl;
-    
-    public UserInfo(String id, String platform, String username, 
-                    String email, String displayName, String avatarUrl) {
-        this.id = id;
-        this.platform = platform;
-        this.username = username;
-        this.email = email;
-        this.displayName = displayName;
-        this.avatarUrl = avatarUrl;
+public record UserInfo(
+        String id,
+        String platform,
+        String username,
+        String email,
+        String displayName,
+        String avatarUrl
+) {
+    public static Builder builder() {
+        return new Builder();
     }
     
-    public String getId() { return id; }
-    public String getPlatform() { return platform; }
-    public String getUsername() { return username; }
-    public String getEmail() { return email; }
-    public String getDisplayName() { return displayName; }
-    public String getAvatarUrl() { return avatarUrl; }
+    public static class Builder {
+        private String id;
+        private String platform;
+        private String username;
+        private String email;
+        private String displayName;
+        private String avatarUrl;
+        
+        public Builder id(String id) { this.id = id; return this; }
+        public Builder platform(String platform) { this.platform = platform; return this; }
+        public Builder username(String username) { this.username = username; return this; }
+        public Builder email(String email) { this.email = email; return this; }
+        public Builder displayName(String displayName) { this.displayName = displayName; return this; }
+        public Builder avatarUrl(String avatarUrl) { this.avatarUrl = avatarUrl; return this; }
+        
+        public UserInfo build() {
+            return new UserInfo(id, platform, username, email, displayName, avatarUrl);
+        }
+    }
 }

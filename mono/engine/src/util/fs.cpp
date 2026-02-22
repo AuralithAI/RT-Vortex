@@ -9,8 +9,10 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <cstdint>
 #include <cstring>
 #include <algorithm>
+#include <functional>
 
 #ifdef _WIN32
 #include <windows.h>

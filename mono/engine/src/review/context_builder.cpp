@@ -5,9 +5,11 @@
  */
 
 #include "engine_api.h"
+#include "retriever.h"
 #include "types.h"
 #include <string>
 #include <vector>
+#include <unordered_set>
 #include <sstream>
 #include <algorithm>
 

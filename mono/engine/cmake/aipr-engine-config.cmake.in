@@ -1,0 +1,32 @@
+@PACKAGE_INIT@
+
+# AI PR Reviewer Engine CMake Package Configuration
+#
+# This file is used by find_package(aipr-engine) to locate the library.
+#
+# Usage:
+#   find_package(aipr-engine REQUIRED)
+#   target_link_libraries(your_target PRIVATE aipr::aipr-engine)
+
+include(CMakeFindDependencyMacro)
+
+# Required dependencies
+find_dependency(Threads REQUIRED)
+
+# Optional dependencies based on build configuration
+if(@AIPR_USE_FAISS@)
+    find_dependency(faiss)
+endif()
+
+# Include the targets file
+include("${CMAKE_CURRENT_LIST_DIR}/aipr-engine-targets.cmake")
+
+# Check required components
+check_required_components(aipr-engine)
+
+# Provide information about the package
+set(AIPR_ENGINE_VERSION "@PROJECT_VERSION@")
+set(AIPR_ENGINE_INCLUDE_DIRS "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@")
+set(AIPR_ENGINE_LIBRARIES aipr::aipr-engine)
+
+message(STATUS "Found aipr-engine version ${AIPR_ENGINE_VERSION}")

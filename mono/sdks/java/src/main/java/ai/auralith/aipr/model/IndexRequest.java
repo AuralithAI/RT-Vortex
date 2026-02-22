@@ -54,7 +54,7 @@ public class IndexRequest {
     
     public static class Builder {
         private String repositoryUrl;
-        private String branch = "main";
+        private String branch;  // No default - must be provided by user/UI
         private String commitSha;
         private List<String> includePatterns;
         private List<String> excludePatterns;

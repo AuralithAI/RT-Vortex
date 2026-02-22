@@ -60,10 +60,21 @@ task copyProtos(type: Copy) {
     from '../proto'
     into 'src/main/proto'
     include '*.proto'
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+}
+
+// Ensure copyProtos runs before any proto generation tasks
+tasks.matching { it.name.startsWith('generateProto') }.configureEach {
+    dependsOn copyProtos
 }
 
 compileJava.dependsOn copyProtos
-processResources.dependsOn copyProtos
+
+// Handle duplicate resources
+processResources {
+    dependsOn copyProtos
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+}
 
 // Clean copied protos
 clean {

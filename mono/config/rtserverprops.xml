@@ -1,157 +1,151 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  AI PR Reviewer - Server Configuration
-  
-  This file contains all server-related configuration.
-  Edit this file before starting the server.
+  ==============================================================================================
+  AI-PR-Reviewer Server Configuration
+  ==============================================================================================
+
+  This file contains the configuration parameters for the AI-PR-Reviewer server.
+  Platform authentication settings are in vcsplatforms.xml.
+
+  Variables of the form ${ENV_VAR:default} are resolved at load time:
+    1. Environment variable ENV_VAR
+    2. The default value after the colon
+    3. Empty string if neither is available
+
+  ${aipr.home} is replaced with the RT_HOME installation directory.
+  ==============================================================================================
 -->
-<configuration>
-    
-    <!-- =================================================================== -->
-    <!-- Server Settings                                                     -->
-    <!-- =================================================================== -->
-    <server>
-        <port>8080</port>
-        <shutdown>graceful</shutdown>
-        <context-path>/</context-path>
-    </server>
-    
-    <!-- =================================================================== -->
-    <!-- Database Configuration                                              -->
-    <!-- =================================================================== -->
-    <database>
-        <type>postgresql</type>
-        <host>localhost</host>
-        <port>5432</port>
-        <name>aipr</name>
-        <username>aipr</username>
-        <password>aipr_secret</password>
-        
-        <!-- Connection Pool -->
-        <pool>
-            <max-size>20</max-size>
-            <min-idle>5</min-idle>
-            <connection-timeout-ms>30000</connection-timeout-ms>
-            <idle-timeout-ms>600000</idle-timeout-ms>
-        </pool>
+<serverproperties>
+
+    <!-- ===================================================================== -->
+    <!-- REST API Server                                                       -->
+    <!-- ===================================================================== -->
+    <server port="${SERVER_PORT:8080}" shutdown="graceful" context-path="/"/>
+
+    <!-- ===================================================================== -->
+    <!-- Database (PostgreSQL)                                                 -->
+    <!-- ===================================================================== -->
+    <database url="${DATABASE_URL:jdbc:postgresql://localhost:5432/aipr}"
+              username="${DATABASE_USER:aipr}"
+              password="${DATABASE_PASSWORD:aipr_secret}"
+              driver="org.postgresql.Driver">
+
+        <pool name="aipr-pool"
+              max-size="${DB_POOL_SIZE:20}"
+              min-idle="5"
+              connection-timeout-ms="30000"
+              idle-timeout-ms="600000"
+              max-lifetime-ms="1800000"
+              leak-detection-threshold-ms="60000"/>
+
+        <flyway enabled="true"
+                locations="classpath:db/migration"
+                baseline-on-migrate="true"/>
     </database>
-    
-    <!-- =================================================================== -->
-    <!-- Redis Cache Configuration                                           -->
-    <!-- =================================================================== -->
-    <redis>
-        <enabled>true</enabled>
-        <host>localhost</host>
-        <port>6379</port>
-        <password></password>
-        <database>0</database>
-        
-        <pool>
-            <max-active>16</max-active>
-            <max-idle>8</max-idle>
-            <min-idle>2</min-idle>
-        </pool>
+
+    <!-- ===================================================================== -->
+    <!-- Redis                                                                 -->
+    <!-- ===================================================================== -->
+    <redis host="${REDIS_HOST:localhost}"
+           port="${REDIS_PORT:6379}"
+           password="${REDIS_PASSWORD:}"
+           database="${REDIS_DATABASE:0}"
+           timeout-ms="5000">
+
+        <pool max-active="16" max-idle="8" min-idle="2" max-wait-ms="5000"/>
+
+        <cluster enabled="${REDIS_CLUSTER_ENABLED:false}"
+                 nodes="${REDIS_CLUSTER_NODES:}"/>
     </redis>
-    
-    <!-- =================================================================== -->
-    <!-- gRPC Engine Configuration                                           -->
-    <!-- =================================================================== -->
-    <engine>
-        <host>localhost</host>
-        <port>50051</port>
-        <timeout-ms>30000</timeout-ms>
-        
-        <!-- TLS Settings -->
-        <!-- For development: use included self-signed certificates -->
-        <!-- For production: generate proper certificates (see certificates/README.md) -->
-        <tls>
-            <enabled>false</enabled>
-            <cert-path>certificates/server.crt</cert-path>
-            <key-path>certificates/server.key</key-path>
-            <ca-path>certificates/ca.crt</ca-path>
-            <!-- Enable mutual TLS (client certificate required) -->
-            <mtls-enabled>false</mtls-enabled>
-            <client-cert-path>certificates/client.crt</client-cert-path>
-            <client-key-path>certificates/client.key</client-key-path>
-        </tls>
-        
-        <!-- Connection Pool -->
-        <pool>
-            <max-channels>10</max-channels>
-            <idle-timeout-seconds>300</idle-timeout-seconds>
-        </pool>
-        
-        <!-- Retry Settings -->
-        <retry>
-            <max-attempts>3</max-attempts>
-            <initial-backoff-ms>100</initial-backoff-ms>
-            <max-backoff-ms>5000</max-backoff-ms>
-        </retry>
+
+    <!-- ===================================================================== -->
+    <!-- gRPC Server (Java — SDK clients, CLI connect here)                    -->
+    <!-- ===================================================================== -->
+    <grpc-server port="${GRPC_SERVER_PORT:9090}">
+
+        <security enabled="${GRPC_TLS_ENABLED:true}"
+                  cert-chain="${GRPC_SERVER_CERT:config/certificates/server.crt}"
+                  private-key="${GRPC_SERVER_KEY:config/certificates/server.key}"
+                  trust-certs="${GRPC_TRUST_CERT:config/certificates/ca.crt}"
+                  client-auth="${GRPC_CLIENT_AUTH:OPTIONAL}"/>
+    </grpc-server>
+
+    <!-- ===================================================================== -->
+    <!-- gRPC Engine Client (C++ engine — internal communication)              -->
+    <!-- ===================================================================== -->
+    <engine host="${ENGINE_HOST:localhost}"
+            port="${ENGINE_PORT:50051}"
+            timeout-ms="${ENGINE_TIMEOUT_MS:30000}"
+            negotiation-type="${ENGINE_NEGOTIATION:TLS}">
+
+        <!--
+            For TLS/mTLS to the C++ engine, provide client certificate paths.
+            For development: use PLAINTEXT negotiation and skip these.
+        -->
+        <tls cert-chain="${ENGINE_TLS_CERT:config/certificates/client.crt}"
+             private-key="${ENGINE_TLS_KEY:config/certificates/client.key}"
+             trust-certs="${ENGINE_TLS_CA:config/certificates/ca.crt}"/>
+
+        <retry max-attempts="3"
+               initial-backoff-ms="100"
+               max-backoff-ms="5000"/>
+
+        <pool max-channels="${ENGINE_MAX_CHANNELS:10}"
+              idle-timeout-seconds="300"/>
     </engine>
-    
-    <!-- =================================================================== -->
-    <!-- LLM Provider Configuration                                          -->
-    <!-- =================================================================== -->
-    <llm>
-        <provider>openai-compatible</provider>
-        <base-url>https://api.openai.com/v1</base-url>
-        <api-key></api-key>
-        <model>gpt-4-turbo-preview</model>
-        <max-tokens>4096</max-tokens>
-        <temperature>0.1</temperature>
-        <timeout-ms>120000</timeout-ms>
-    </llm>
-    
-    <!-- =================================================================== -->
-    <!-- Review Settings                                                     -->
-    <!-- =================================================================== -->
-    <review>
-        <max-diff-size>500000</max-diff-size>
-        <max-files-per-pr>100</max-files-per-pr>
-        <max-comments-per-review>50</max-comments-per-review>
-        <enable-heuristics>true</enable-heuristics>
-        <enable-context-retrieval>true</enable-context-retrieval>
-    </review>
-    
-    <!-- =================================================================== -->
-    <!-- Security Settings                                                   -->
-    <!-- =================================================================== -->
-    <security>
-        <jwt-secret></jwt-secret>
-        <jwt-expiration-ms>3600000</jwt-expiration-ms>
-        <session-timeout>24h</session-timeout>
-        <encryption-key></encryption-key>
-        <allowed-origins>http://localhost:3000</allowed-origins>
-    </security>
-    
-    <!-- =================================================================== -->
-    <!-- Storage Settings                                                    -->
-    <!-- =================================================================== -->
-    <storage>
-        <type>local</type>
-        <local>
-            <base-path>${RT_HOME}/data</base-path>
-        </local>
-        <s3>
-            <bucket></bucket>
-            <region>us-east-1</region>
-        </s3>
+
+    <!-- ===================================================================== -->
+    <!-- LLM Provider                                                          -->
+    <!-- ===================================================================== -->
+    <llm provider="${LLM_PROVIDER:openai-compatible}"
+         base-url="${LLM_BASE_URL:https://api.openai.com/v1}"
+         api-key="${LLM_API_KEY:}"
+         model="${LLM_MODEL:gpt-4-turbo-preview}"
+         max-tokens="${LLM_MAX_TOKENS:4096}"
+         temperature="${LLM_TEMPERATURE:0.1}"
+         timeout-ms="${LLM_TIMEOUT_MS:120000}"/>
+
+    <!-- ===================================================================== -->
+    <!-- Review Settings                                                       -->
+    <!-- ===================================================================== -->
+    <review max-diff-size="${MAX_DIFF_SIZE:500000}"
+            max-files-per-pr="${MAX_FILES_PER_PR:100}"
+            max-comments="${MAX_COMMENTS:50}"
+            enable-heuristics="true"
+            enable-context-retrieval="true"/>
+
+    <!-- ===================================================================== -->
+    <!-- Rate Limiting                                                         -->
+    <!-- ===================================================================== -->
+    <rate-limit enabled="${RATE_LIMIT_ENABLED:true}"
+                reviews-per-hour="${RATE_LIMIT_REVIEWS:500}"
+                index-requests-per-hour="${RATE_LIMIT_INDEX:50}"/>
+
+    <!-- ===================================================================== -->
+    <!-- Security                                                              -->
+    <!-- ===================================================================== -->
+    <security jwt-secret="${JWT_SECRET:}"
+              jwt-expiration-ms="${JWT_EXPIRATION_MS:3600000}"
+              allowed-origins="${ALLOWED_ORIGINS:http://localhost:3000}"
+              encryption-key="${AIPR_ENCRYPTION_KEY:}"/>
+
+    <!-- ===================================================================== -->
+    <!-- Storage                                                               -->
+    <!-- ===================================================================== -->
+    <storage type="${STORAGE_TYPE:local}">
+        <local base-path="${STORAGE_PATH:./data}"/>
+        <s3 bucket="${S3_BUCKET:}" region="${S3_REGION:us-east-1}"/>
     </storage>
-    
-    <!-- =================================================================== -->
-    <!-- Logging Settings                                                    -->
-    <!-- =================================================================== -->
-    <logging>
-        <level>
-            <root>INFO</root>
-            <aipr>DEBUG</aipr>
-        </level>
-        <file>
-            <enabled>true</enabled>
-            <path>${RT_HOME}/data/logs</path>
-            <max-size>100MB</max-size>
-            <max-history>30</max-history>
-        </file>
-    </logging>
-    
-</configuration>
+
+    <!-- ===================================================================== -->
+    <!-- Repository Cloning                                                    -->
+    <!-- ===================================================================== -->
+    <repositories base-path="${REPOS_PATH:./repos}"/>
+
+    <!-- ===================================================================== -->
+    <!-- Logging                                                               -->
+    <!-- ===================================================================== -->
+    <logging root-level="${LOG_LEVEL_ROOT:INFO}" app-level="${LOG_LEVEL_APP:DEBUG}"/>
+
+</serverproperties>
+

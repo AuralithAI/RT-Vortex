@@ -1,22 +1,26 @@
 package ai.aipr.server.dto;
 
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
+
+import org.jetbrains.annotations.NotNull;
+
+import java.util.List;
 
 /**
  * Request to review a PR.
  */
 public record ReviewRequest(
-        @NotBlank String repoId,
+        @NotNull String repoId,
         @NotNull Integer prNumber,
-        @NotBlank String diff,
+        @NotNull String diff,
         String prTitle,
         String prDescription,
         String baseBranch,
         String headBranch,
         String headCommit,
+        List<String> changedFiles,
         ReviewConfig config
 ) {
+    @NotNull
     public static Builder builder() {
         return new Builder();
     }
@@ -30,6 +34,7 @@ public record ReviewRequest(
         private String baseBranch;
         private String headBranch;
         private String headCommit;
+        private List<String> changedFiles;
         private ReviewConfig config;
 
         public Builder repoId(String repoId) { this.repoId = repoId; return this; }
@@ -40,11 +45,12 @@ public record ReviewRequest(
         public Builder baseBranch(String baseBranch) { this.baseBranch = baseBranch; return this; }
         public Builder headBranch(String headBranch) { this.headBranch = headBranch; return this; }
         public Builder headCommit(String headCommit) { this.headCommit = headCommit; return this; }
+        public Builder changedFiles(List<String> changedFiles) { this.changedFiles = changedFiles; return this; }
         public Builder config(ReviewConfig config) { this.config = config; return this; }
 
         public ReviewRequest build() {
-            return new ReviewRequest(repoId, prNumber, diff, prTitle, prDescription, 
-                    baseBranch, headBranch, headCommit, config);
+            return new ReviewRequest(repoId, prNumber, diff, prTitle, prDescription,
+                    baseBranch, headBranch, headCommit, changedFiles, config);
         }
     }
 }

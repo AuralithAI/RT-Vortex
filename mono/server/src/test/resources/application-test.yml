@@ -1,26 +1,33 @@
 # Test profile configuration
+# Note: Do not set spring.profiles.active here - it's set by @ActiveProfiles annotation
+
 spring:
-  profiles:
-    active: test
-  
-  # Use H2 in-memory database for tests
+  # Use embedded PostgreSQL or Testcontainers for integration tests.
+  # For unit tests, repositories are mocked.
   datasource:
-    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
     driver-class-name: org.h2.Driver
     username: sa
-    password: 
-  
-  jpa:
-    database-platform: org.hibernate.dialect.H2Dialect
-    hibernate:
-      ddl-auto: create-drop
-    show-sql: false
-  
+    password:
+
+  # Disable Flyway for tests — schema is created via H2 MODE=PostgreSQL
+  flyway:
+    enabled: false
+
   # Disable Redis for tests
   data:
     redis:
       repositories:
         enabled: false
+
+  # Use simple in-memory cache for tests
+  cache:
+    type: simple
+
+# Disable gRPC server in tests
+grpc:
+  server:
+    port: -1  # Disables gRPC server
 
 # Disable actuator endpoints in tests
 management:

@@ -19,6 +19,7 @@ tasks.withType(JavaCompile).configureEach {
     options.compilerArgs << '-Xlint:unchecked' << '-Xlint:deprecation'
 }
 
+
 tasks.named('test') {
     useJUnitPlatform()
     testLogging {
@@ -31,19 +32,19 @@ publishing {
     publications {
         maven(MavenPublication) {
             from components.java
-            
+
             pom {
                 name = project.name
                 description = project.description ?: 'AI PR Reviewer component'
                 url = 'https://github.com/AuralithAI/RT-AI-PR-Reviewer'
-                
+
                 licenses {
                     license {
                         name = 'MIT License'
                         url = 'https://opensource.org/licenses/MIT'
                     }
                 }
-                
+
                 developers {
                     developer {
                         id = 'auralithai'
@@ -51,7 +52,7 @@ publishing {
                         email = 'dev@auralithai.com'
                     }
                 }
-                
+
                 scm {
                     connection = 'scm:git:git://github.com/AuralithAI/RT-AI-PR-Reviewer.git'
                     developerConnection = 'scm:git:ssh://github.com/AuralithAI/RT-AI-PR-Reviewer.git'
