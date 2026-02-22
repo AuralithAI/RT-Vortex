@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
@@ -17,10 +19,10 @@ public record Symbol(
         List<String> callers,
         List<String> callees
 ) {
-    public static Builder builder() {
+    @NotNull public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String name;
         private String qualifiedName;
@@ -32,7 +34,7 @@ public record Symbol(
         private String docComment;
         private List<String> callers = List.of();
         private List<String> callees = List.of();
-        
+
         public Builder name(String name) { this.name = name; return this; }
         public Builder qualifiedName(String qualifiedName) { this.qualifiedName = qualifiedName; return this; }
         public Builder kind(TouchedSymbol.SymbolKind kind) { this.kind = kind; return this; }
@@ -43,7 +45,7 @@ public record Symbol(
         public Builder docComment(String docComment) { this.docComment = docComment; return this; }
         public Builder callers(List<String> callers) { this.callers = callers; return this; }
         public Builder callees(List<String> callees) { this.callees = callees; return this; }
-        
+
         public Symbol build() {
             return new Symbol(name, qualifiedName, kind, filePath, startLine, endLine, signature, docComment, callers, callees);
         }

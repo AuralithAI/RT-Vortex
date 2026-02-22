@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.time.Instant;
 
 /**
@@ -13,7 +15,7 @@ public record ReviewMetadata(
         int contextChunksUsed,
         int tokensUsed
 ) {
-    public static Builder builder() {
+    @NotNull public static Builder builder() {
         return new Builder();
     }
 
@@ -33,7 +35,7 @@ public record ReviewMetadata(
         public Builder tokensUsed(int tokensUsed) { this.tokensUsed = tokensUsed; return this; }
 
         public ReviewMetadata build() {
-            return new ReviewMetadata(startTime, endTime, engineVersion, 
+            return new ReviewMetadata(startTime, endTime, engineVersion,
                     modelUsed, contextChunksUsed, tokensUsed);
         }
     }

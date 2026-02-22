@@ -1,6 +1,7 @@
 package ai.aipr.server.dto;
 
-import java.time.Instant;
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
@@ -14,10 +15,11 @@ public record ReviewResponse(
         String summary,
         String overallAssessment,
         List<ReviewComment> comments,
+        List<String> suggestions,
         ReviewMetrics metrics,
         ReviewMetadata metadata
 ) {
-    public static Builder builder() {
+    @NotNull public static Builder builder() {
         return new Builder();
     }
 
@@ -29,6 +31,7 @@ public record ReviewResponse(
         private String summary;
         private String overallAssessment;
         private List<ReviewComment> comments = List.of();
+        private List<String> suggestions = List.of();
         private ReviewMetrics metrics;
         private ReviewMetadata metadata;
 
@@ -39,12 +42,13 @@ public record ReviewResponse(
         public Builder summary(String summary) { this.summary = summary; return this; }
         public Builder overallAssessment(String overallAssessment) { this.overallAssessment = overallAssessment; return this; }
         public Builder comments(List<ReviewComment> comments) { this.comments = comments; return this; }
+        public Builder suggestions(List<String> suggestions) { this.suggestions = suggestions; return this; }
         public Builder metrics(ReviewMetrics metrics) { this.metrics = metrics; return this; }
         public Builder metadata(ReviewMetadata metadata) { this.metadata = metadata; return this; }
 
         public ReviewResponse build() {
-            return new ReviewResponse(reviewId, repoId, prNumber, status, summary, 
-                    overallAssessment, comments, metrics, metadata);
+            return new ReviewResponse(reviewId, repoId, prNumber, status, summary,
+                    overallAssessment, comments, suggestions, metrics, metadata);
         }
     }
 }

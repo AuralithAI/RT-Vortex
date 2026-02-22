@@ -10,7 +10,6 @@ option java_outer_classname = "ApiProto";
 option java_multiple_files = true;
 
 import "google/protobuf/timestamp.proto";
-import "google/protobuf/struct.proto";
 
 // =============================================================================
 // Review Service - Main PR Review Operations
@@ -19,16 +18,16 @@ import "google/protobuf/struct.proto";
 service ReviewService {
     // Submit a new review request
     rpc SubmitReview(SubmitReviewRequest) returns (SubmitReviewResponse);
-    
+
     // Get review status and results
     rpc GetReview(GetReviewRequest) returns (Review);
-    
+
     // List reviews with filtering
     rpc ListReviews(ListReviewsRequest) returns (ListReviewsResponse);
-    
+
     // Cancel a pending or running review
     rpc CancelReview(CancelReviewRequest) returns (CancelReviewResponse);
-    
+
     // Stream review progress updates
     rpc StreamReviewProgress(StreamReviewRequest) returns (stream ReviewProgress);
 }
@@ -40,22 +39,22 @@ service ReviewService {
 service RepositoryService {
     // Register a new repository
     rpc RegisterRepository(RegisterRepositoryRequest) returns (Repository);
-    
+
     // Get repository details
     rpc GetRepository(GetRepositoryRequest) returns (Repository);
-    
+
     // List repositories
     rpc ListRepositories(ListRepositoriesRequest) returns (ListRepositoriesResponse);
-    
+
     // Update repository configuration
     rpc UpdateRepository(UpdateRepositoryRequest) returns (Repository);
-    
+
     // Delete repository and its index
     rpc DeleteRepository(DeleteRepositoryRequest) returns (DeleteRepositoryResponse);
-    
+
     // Trigger repository indexing
     rpc IndexRepository(IndexRepositoryRequest) returns (IndexJob);
-    
+
     // Get index status
     rpc GetIndexStatus(GetIndexStatusRequest) returns (IndexStatus);
 }

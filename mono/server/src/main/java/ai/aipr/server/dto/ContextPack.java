@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
@@ -17,10 +19,10 @@ public record ContextPack(
         List<String> heuristicWarnings,
         int totalTokens
 ) {
-    public static Builder builder() {
+    @NotNull public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String repoId;
         private String prTitle;
@@ -32,15 +34,15 @@ public record ContextPack(
         private List<TouchedSymbol> touchedSymbols = List.of();
         private List<String> heuristicWarnings = List.of();
         private int totalTokens;
-        
+
         public Builder repoId(String repoId) { this.repoId = repoId; return this; }
         public Builder prTitle(String prTitle) { this.prTitle = prTitle; return this; }
         public Builder prDescription(String prDescription) { this.prDescription = prDescription; return this; }
         public Builder diff(String diff) { this.diff = diff; return this; }
-        public Builder diff(DiffAnalysis diffAnalysis) { 
+        public Builder diff(@NotNull DiffAnalysis diffAnalysis) {
             this.changedFiles = diffAnalysis.changedFiles();
             this.touchedSymbols = diffAnalysis.touchedSymbols();
-            return this; 
+            return this;
         }
         public Builder changedFiles(List<FileChange> changedFiles) { this.changedFiles = changedFiles; return this; }
         public Builder contextChunks(List<ContextChunk> contextChunks) { this.contextChunks = contextChunks; return this; }
@@ -48,7 +50,7 @@ public record ContextPack(
         public Builder touchedSymbols(List<TouchedSymbol> touchedSymbols) { this.touchedSymbols = touchedSymbols; return this; }
         public Builder heuristicWarnings(List<String> heuristicWarnings) { this.heuristicWarnings = heuristicWarnings; return this; }
         public Builder totalTokens(int totalTokens) { this.totalTokens = totalTokens; return this; }
-        
+
         public ContextPack build() {
             return new ContextPack(repoId, prTitle, prDescription, diff, changedFiles, contextChunks, chunks, touchedSymbols, heuristicWarnings, totalTokens);
         }

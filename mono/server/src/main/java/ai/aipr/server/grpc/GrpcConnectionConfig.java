@@ -1,11 +1,16 @@
 package ai.aipr.server.grpc;
 
+import org.jetbrains.annotations.NotNull;
+
 /**
  * Configuration for gRPC connections.
  */
 public class GrpcConnectionConfig {
 
     private boolean usePlaintext = true;
+    private String certChainPath;   // Client cert for mTLS
+    private String privateKeyPath;  // Client key for mTLS
+    private String trustCertsPath;  // CA cert to verify server
     private long keepAliveTimeSeconds = 60;
     private long keepAliveTimeoutSeconds = 20;
     private boolean keepAliveWithoutCalls = true;
@@ -16,12 +21,26 @@ public class GrpcConnectionConfig {
     private long healthCheckTimeoutMs = 5000;
     private long deadlineMs = 30000;
 
+    @NotNull
     public static GrpcConnectionConfig defaults() {
         return new GrpcConnectionConfig();
     }
 
+    @NotNull
+    public static GrpcConnectionConfig withTls(String certChainPath, String privateKeyPath, String trustCertsPath) {
+        GrpcConnectionConfig config = new GrpcConnectionConfig();
+        config.usePlaintext = false;
+        config.certChainPath = certChainPath;
+        config.privateKeyPath = privateKeyPath;
+        config.trustCertsPath = trustCertsPath;
+        return config;
+    }
+
     // Getters
     public boolean isUsePlaintext() { return usePlaintext; }
+    public String getCertChainPath() { return certChainPath; }
+    public String getPrivateKeyPath() { return privateKeyPath; }
+    public String getTrustCertsPath() { return trustCertsPath; }
     public long getKeepAliveTimeSeconds() { return keepAliveTimeSeconds; }
     public long getKeepAliveTimeoutSeconds() { return keepAliveTimeoutSeconds; }
     public boolean isKeepAliveWithoutCalls() { return keepAliveWithoutCalls; }
@@ -35,6 +54,21 @@ public class GrpcConnectionConfig {
     // Builder-style setters
     public GrpcConnectionConfig usePlaintext(boolean usePlaintext) {
         this.usePlaintext = usePlaintext;
+        return this;
+    }
+
+    public GrpcConnectionConfig certChainPath(String path) {
+        this.certChainPath = path;
+        return this;
+    }
+
+    public GrpcConnectionConfig privateKeyPath(String path) {
+        this.privateKeyPath = path;
+        return this;
+    }
+
+    public GrpcConnectionConfig trustCertsPath(String path) {
+        this.trustCertsPath = path;
         return this;
     }
 

@@ -4,6 +4,7 @@
 -- Enable extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";   -- gen_random_bytes() for token hashing
 
 -- ============================================================================
 -- REPOSITORIES
@@ -85,7 +86,7 @@ CREATE TABLE reviews (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     started_at TIMESTAMP WITH TIME ZONE,
     completed_at TIMESTAMP WITH TIME ZONE,
-    
+
     UNIQUE(repository_id, pr_number, head_commit)
 );
 
@@ -188,7 +189,7 @@ CREATE TABLE configurations (
     value JSONB NOT NULL,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    
+
     UNIQUE(scope, scope_id, key)
 );
 

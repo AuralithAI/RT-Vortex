@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
@@ -23,11 +25,11 @@ public record ContextChunk(
         FILE_HEADER,
         DIRECT_REFERENCE
     }
-    
-    public static Builder builder() {
+
+    @NotNull public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String id;
         private String filePath;
@@ -38,7 +40,7 @@ public record ContextChunk(
         private List<String> symbols = List.of();
         private float relevanceScore;
         private ChunkSource source = ChunkSource.VECTOR_SEARCH;
-        
+
         public Builder id(String id) { this.id = id; return this; }
         public Builder filePath(String filePath) { this.filePath = filePath; return this; }
         public Builder startLine(int startLine) { this.startLine = startLine; return this; }
@@ -48,7 +50,7 @@ public record ContextChunk(
         public Builder symbols(List<String> symbols) { this.symbols = symbols; return this; }
         public Builder relevanceScore(float relevanceScore) { this.relevanceScore = relevanceScore; return this; }
         public Builder source(ChunkSource source) { this.source = source; return this; }
-        
+
         public ContextChunk build() {
             return new ContextChunk(id, filePath, startLine, endLine, content, language, symbols, relevanceScore, source);
         }

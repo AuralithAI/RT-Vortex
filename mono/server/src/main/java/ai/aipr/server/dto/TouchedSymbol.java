@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
@@ -30,17 +32,17 @@ public record TouchedSymbol(
         PROPERTY,
         FIELD
     }
-    
+
     public enum ChangeType {
         ADDED,
         MODIFIED,
         DELETED
     }
-    
-    public static Builder builder() {
+
+    @NotNull public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String name;
         private String qualifiedName;
@@ -51,7 +53,7 @@ public record TouchedSymbol(
         private ChangeType changeType = ChangeType.MODIFIED;
         private List<String> callers = List.of();
         private List<String> callees = List.of();
-        
+
         public Builder name(String name) { this.name = name; return this; }
         public Builder qualifiedName(String qualifiedName) { this.qualifiedName = qualifiedName; return this; }
         public Builder kind(SymbolKind kind) { this.kind = kind; return this; }
@@ -61,7 +63,7 @@ public record TouchedSymbol(
         public Builder changeType(ChangeType changeType) { this.changeType = changeType; return this; }
         public Builder callers(List<String> callers) { this.callers = callers; return this; }
         public Builder callees(List<String> callees) { this.callees = callees; return this; }
-        
+
         public TouchedSymbol build() {
             return new TouchedSymbol(name, qualifiedName, kind, filePath, startLine, endLine, changeType, callers, callees);
         }

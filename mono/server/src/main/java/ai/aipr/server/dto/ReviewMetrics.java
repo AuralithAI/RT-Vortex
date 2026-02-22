@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 /**
  * Metrics from a review.
  * Contains both analysis scores and quantitative metrics.
@@ -23,18 +25,18 @@ public record ReviewMetrics(
     // Constructor for score-based metrics only
     public ReviewMetrics(Double securityScore, Double reliabilityScore, Double performanceScore,
                          Double testingScore, Double documentationScore, Double overallScore) {
-        this(securityScore, reliabilityScore, performanceScore, testingScore, 
+        this(securityScore, reliabilityScore, performanceScore, testingScore,
              documentationScore, overallScore, null, null, null, null, null, null);
     }
-    
+
     // Constructor for quantitative metrics only
-    public ReviewMetrics(int filesAnalyzed, int linesAdded, int linesRemoved, 
+    public ReviewMetrics(int filesAnalyzed, int linesAdded, int linesRemoved,
                          int totalFindings, int tokensUsed, int latencyMs) {
-        this(null, null, null, null, null, null, 
+        this(null, null, null, null, null, null,
              filesAnalyzed, linesAdded, linesRemoved, totalFindings, tokensUsed, latencyMs);
     }
-    
-    public static Builder builder() {
+
+    @NotNull public static Builder builder() {
         return new Builder();
     }
 

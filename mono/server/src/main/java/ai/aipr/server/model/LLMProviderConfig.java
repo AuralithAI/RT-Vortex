@@ -1,5 +1,7 @@
 package ai.aipr.server.model;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.Map;
 
 /**
@@ -15,10 +17,10 @@ public record LLMProviderConfig(
         boolean setAsDefault,
         Map<String, String> extraConfig
 ) {
-    public static Builder builder() {
+    @NotNull public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String providerId;
         private String name;
@@ -28,7 +30,7 @@ public record LLMProviderConfig(
         private String defaultModel;
         private boolean setAsDefault;
         private Map<String, String> extraConfig;
-        
+
         public Builder providerId(String providerId) { this.providerId = providerId; return this; }
         public Builder name(String name) { this.name = name; return this; }
         public Builder providerType(String providerType) { this.providerType = providerType; return this; }
@@ -37,9 +39,9 @@ public record LLMProviderConfig(
         public Builder defaultModel(String defaultModel) { this.defaultModel = defaultModel; return this; }
         public Builder setAsDefault(boolean setAsDefault) { this.setAsDefault = setAsDefault; return this; }
         public Builder extraConfig(Map<String, String> extraConfig) { this.extraConfig = extraConfig; return this; }
-        
+
         public LLMProviderConfig build() {
-            return new LLMProviderConfig(providerId, name, providerType, baseUrl, apiKey, 
+            return new LLMProviderConfig(providerId, name, providerType, baseUrl, apiKey,
                                          defaultModel, setAsDefault, extraConfig);
         }
     }

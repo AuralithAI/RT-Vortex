@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.time.Instant;
 import java.util.List;
 
@@ -22,17 +24,18 @@ public record IndexStatus(
     /**
      * Get the status string.
      */
+    @NotNull
     public String status() {
         return state != null ? state.name() : "UNKNOWN";
     }
-    
+
     /**
      * Check if the indexing is completed.
      */
     public boolean isCompleted() {
         return state == IndexState.COMPLETED;
     }
-    
+
     /**
      * Get progress as float (0.0 to 1.0).
      */
@@ -40,10 +43,10 @@ public record IndexStatus(
         return progress / 100.0f;
     }
 
-    public static Builder builder() {
+    @NotNull public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String jobId;
         private String repoId;
@@ -56,7 +59,7 @@ public record IndexStatus(
         private Instant endTime;
         private IndexStats stats;
         private List<String> errors = List.of();
-        
+
         public Builder jobId(String jobId) { this.jobId = jobId; return this; }
         public Builder repoId(String repoId) { this.repoId = repoId; return this; }
         public Builder state(IndexState state) { this.state = state; return this; }
@@ -69,7 +72,7 @@ public record IndexStatus(
         public Builder endTime(Instant endTime) { this.endTime = endTime; return this; }
         public Builder stats(IndexStats stats) { this.stats = stats; return this; }
         public Builder errors(List<String> errors) { this.errors = errors; return this; }
-        
+
         public IndexStatus build() {
             return new IndexStatus(jobId, repoId, state, progress, message, error, filesProcessed, startTime, endTime, stats, errors);
         }

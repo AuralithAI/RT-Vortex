@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 /**
  * Statistics from an indexing operation.
  */
@@ -12,10 +14,11 @@ public record IndexStats(
         long totalSizeBytes,
         long durationMs
 ) {
+    @NotNull
     public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private int totalFiles;
         private int indexedFiles;
@@ -24,7 +27,7 @@ public record IndexStats(
         private int totalSymbols;
         private long totalSizeBytes;
         private long durationMs;
-        
+
         public Builder totalFiles(int totalFiles) { this.totalFiles = totalFiles; return this; }
         public Builder indexedFiles(int indexedFiles) { this.indexedFiles = indexedFiles; return this; }
         public Builder skippedFiles(int skippedFiles) { this.skippedFiles = skippedFiles; return this; }
@@ -33,7 +36,7 @@ public record IndexStats(
         public Builder totalSymbols(int totalSymbols) { this.totalSymbols = totalSymbols; return this; }
         public Builder totalSizeBytes(long totalSizeBytes) { this.totalSizeBytes = totalSizeBytes; return this; }
         public Builder durationMs(long durationMs) { this.durationMs = durationMs; return this; }
-        
+
         public IndexStats build() {
             return new IndexStats(totalFiles, indexedFiles, skippedFiles, totalChunks, totalSymbols, totalSizeBytes, durationMs);
         }

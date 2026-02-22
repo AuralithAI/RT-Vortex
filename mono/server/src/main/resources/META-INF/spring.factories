@@ -1,0 +1,4 @@
+# Register the XML config bridge so it fires before @Value resolution
+org.springframework.boot.env.EnvironmentPostProcessor=\
+  ai.aipr.server.config.XmlConfigEnvironmentPostProcessor
+

@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 /**
  * LLM completion response.
  */
@@ -18,11 +20,12 @@ public record LLMResponse(
     public int tokensUsed() {
         return totalTokens > 0 ? totalTokens : promptTokens + completionTokens;
     }
-    
+
+    @NotNull
     public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String content;
         private String model;
@@ -31,7 +34,7 @@ public record LLMResponse(
         private int totalTokens;
         private String finishReason;
         private long latencyMs;
-        
+
         public Builder content(String content) { this.content = content; return this; }
         public Builder model(String model) { this.model = model; return this; }
         public Builder promptTokens(int promptTokens) { this.promptTokens = promptTokens; return this; }
@@ -40,7 +43,7 @@ public record LLMResponse(
         public Builder tokensUsed(int tokensUsed) { this.totalTokens = tokensUsed; return this; }
         public Builder finishReason(String finishReason) { this.finishReason = finishReason; return this; }
         public Builder latencyMs(long latencyMs) { this.latencyMs = latencyMs; return this; }
-        
+
         public LLMResponse build() {
             return new LLMResponse(content, model, promptTokens, completionTokens, totalTokens, finishReason, latencyMs);
         }

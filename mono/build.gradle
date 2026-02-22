@@ -22,7 +22,7 @@ subprojects {
     // Apply common plugins
     apply plugin: 'java'
     apply plugin: 'java-library'
-    
+
     // Java toolchain configuration
     java {
         toolchain {
@@ -31,7 +31,7 @@ subprojects {
         withJavadocJar()
         withSourcesJar()
     }
-    
+
     // Common dependencies for all Java subprojects
     dependencies {
         // Testing
@@ -39,7 +39,7 @@ subprojects {
         testImplementation libs.junit.jupiter
         testRuntimeOnly libs.junit.platform.launcher
     }
-    
+
     // Test configuration
     tasks.named('test') {
         useJUnitPlatform()
@@ -48,11 +48,17 @@ subprojects {
             exceptionFormat "full"
         }
     }
-    
+
     // Compiler options
     tasks.withType(JavaCompile).configureEach {
         options.encoding = 'UTF-8'
         options.compilerArgs << '-Xlint:unchecked' << '-Xlint:deprecation'
+    }
+
+    // JDK 21 javadoc is strict about heading order — disable doclint
+    tasks.withType(Javadoc).configureEach {
+        options.addStringOption('Xdoclint:none', '-quiet')
+        failOnError = false
     }
 }
 
@@ -86,14 +92,14 @@ tasks.register('buildEngine', Exec) {
     group = 'Build'
     description = 'Builds the C++ engine using CMake'
     workingDir = file('engine')
-    
+
     // Determine the build command based on OS
     if (System.getProperty('os.name').toLowerCase().contains('windows')) {
         commandLine 'cmd', '/c', 'cmake -B build && cmake --build build --config Release'
     } else {
         commandLine 'sh', '-c', 'cmake -B build && cmake --build build --config Release'
     }
-    
+
     // Don't fail if engine directory doesn't exist yet
     ignoreExitValue = true
 }
@@ -132,7 +138,7 @@ tasks.register('prepareDist') {
     group = 'Distribution'
     description = 'Prepares the distribution directory structure'
     dependsOn 'buildAll'
-    
+
     doLast {
         // Create directory structure
         mkdir "${distDir}/bin"
@@ -150,7 +156,7 @@ tasks.register('copyServerJar', Copy) {
     group = 'Distribution'
     description = 'Copies server JAR to distribution'
     dependsOn 'prepareDist', ':server:jar'
-    
+
     from("server/build/libs") {
         include "aipr-server.jar"
     }
@@ -162,7 +168,7 @@ tasks.register('copyServerDeps', Copy) {
     group = 'Distribution'
     description = 'Copies server runtime dependencies to distribution'
     dependsOn 'prepareDist', ':server:jar'
-    
+
     from(project(':server').configurations.runtimeClasspath) {
         include "*.jar"
     }
@@ -174,7 +180,7 @@ tasks.register('copyEngineLib', Copy) {
     group = 'Distribution'
     description = 'Copies C++ engine library to distribution'
     dependsOn 'prepareDist', 'buildEngine'
-    
+
     from("engine/build") {
         include "*.so"
         include "*.dll"
@@ -188,10 +194,9 @@ tasks.register('copyConfig', Copy) {
     group = 'Distribution'
     description = 'Copies configuration files to distribution'
     dependsOn 'prepareDist'
-    
+
     from("server/src/main/resources") {
         include "application.yml"
-        include "application-production.yml"
         include "logback*.xml"
     }
     from("config") {
@@ -210,7 +215,7 @@ tasks.register('copyCertificates', Copy) {
     group = 'Distribution'
     description = 'Copies TLS certificates to distribution'
     dependsOn 'prepareDist'
-    
+
     from("config/certificates") {
         include "*.crt"
         include "*.key"
@@ -222,9 +227,9 @@ tasks.register('copyCertificates', Copy) {
 // Task to copy SQL migration files
 tasks.register('copySqlFiles', Copy) {
     group = 'Distribution'
-    description = 'Copies SQL migration files to distribution'
+    description = 'Copies SQL files to distribution (bootstrap + Flyway migrations)'
     dependsOn 'prepareDist'
-    
+
     from("server/src/main/resources/db/migration") {
         include "*.sql"
     }
@@ -236,7 +241,7 @@ tasks.register('copyDocs', Copy) {
     group = 'Distribution'
     description = 'Copies documentation to distribution'
     dependsOn 'prepareDist'
-    
+
     from("${rootDir}/../docs") {
         include "*.md"
     }
@@ -248,7 +253,7 @@ tasks.register('createStartScripts') {
     group = 'Distribution'
     description = 'Creates startup scripts for bin directory'
     dependsOn 'prepareDist'
-    
+
     doLast {
         // Linux/Mac server script in bin/
         file("${distDir}/bin/aipr-server").text = '''#!/bin/bash
@@ -276,7 +281,7 @@ exec java $JAVA_OPTS \\
     ai.aipr.server.AiprServerApplication \\
     "$@"
 '''
-        
+
         // Windows server script in bin/
         file("${distDir}/bin/aipr-server.bat").text = '''@echo off
 setlocal enabledelayedexpansion
@@ -305,7 +310,7 @@ java %JAVA_OPTS% ^
 
 endlocal
 '''
-        
+
         // Make scripts executable on Unix
         if (!System.getProperty('os.name').toLowerCase().contains('windows')) {
             file("${distDir}/bin/aipr-server").setExecutable(true)
@@ -318,7 +323,7 @@ tasks.register('createRootScripts') {
     group = 'Distribution'
     description = 'Creates setup and run scripts in distribution root'
     dependsOn 'prepareDist'
-    
+
     doLast {
         // =====================================================================
         // Linux/Mac Setup Script (run once to set up environment)
@@ -326,14 +331,14 @@ tasks.register('createRootScripts') {
         file("${distDir}/setup.sh").text = '''#!/bin/bash
 #
 # AI PR Reviewer - Environment Setup
-# Run this script once to configure your environment.
+# Run this script once to verify your environment.
 #
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 export RT_HOME="$SCRIPT_DIR"
 
 echo "========================================"
-echo " AI PR Reviewer - Setup"
+echo " AI PR Reviewer - Setup Check"
 echo "========================================"
 echo ""
 echo "RT_HOME: $RT_HOME"
@@ -368,19 +373,29 @@ if [ ! -f "$RT_HOME/config/vcsplatforms.xml" ]; then
 fi
 echo "[OK] Config: $RT_HOME/config/vcsplatforms.xml"
 
+# Check SQL bootstrap
+if [ ! -f "$RT_HOME/data/sql/create_aipr_user.sql" ]; then
+    echo "[WARN] Bootstrap SQL not found: $RT_HOME/data/sql/create_aipr_user.sql"
+fi
+
 echo ""
 echo "========================================"
 echo " Setup Complete!"
 echo "========================================"
 echo ""
 echo "Next steps:"
-echo "  1. Edit config/rtserverprops.xml    (database, redis, etc.)"
-echo "  2. Edit config/vcsplatforms.xml     (GitHub/GitLab/Bitbucket)"
-echo "  3. Run: ./run.sh"
+echo "  1. Bootstrap the database (run ONCE as superuser):"
+echo "       psql -U postgres -v aipr_password=YOUR_PASS \\\\"
+echo "            -f $RT_HOME/data/sql/create_aipr_user.sql"
 echo ""
-echo "To add RT_HOME permanently, add this to ~/.bashrc or ~/.zshrc:"
-echo "  export RT_HOME=$RT_HOME"
-echo "  export PATH=\\$RT_HOME/bin:\\$PATH"
+echo "  2. Edit config files with your settings:"
+echo "       $RT_HOME/config/rtserverprops.xml   (database, redis, engine, LLM)"
+echo "       $RT_HOME/config/vcsplatforms.xml    (GitHub, GitLab, Bitbucket)"
+echo ""
+echo "  3. Run: ./run.sh"
+echo "     (Flyway applies V1 + V2 SQL migrations automatically)"
+echo ""
+echo "See README.txt for the full list of environment variables."
 echo ""
 '''
 
@@ -408,15 +423,15 @@ exec "$RT_HOME/bin/aipr-server" "$@"
         // =====================================================================
         file("${distDir}/setup.bat").text = '''@echo off
 REM
-REM AI PR Reviewer - Environment Setup
-REM Run this script once to configure your environment.
+REM AI PR Reviewer - Environment Setup Check
+REM Run this script once to verify your environment.
 REM
 
 set RT_HOME=%~dp0
 set RT_HOME=%RT_HOME:~0,-1%
 
 echo ========================================
-echo  AI PR Reviewer - Setup
+echo  AI PR Reviewer - Setup Check
 echo ========================================
 echo.
 echo RT_HOME: %RT_HOME%
@@ -431,22 +446,24 @@ if %ERRORLEVEL% NEQ 0 (
     echo [ERROR] Java not found. Please install JDK 21+.
     exit /b 1
 )
-
-for /f "tokens=3" %%g in (\'java -version 2^>^&1 ^| findstr /i "version"\') do set JAVA_VERSION=%%g
 echo [OK] Java found
 
-REM Check config files
+REM Check config
 if not exist "%RT_HOME%\\config\\rtserverprops.xml" (
-    echo [ERROR] Config file not found: %RT_HOME%\\config\\rtserverprops.xml
+    echo [ERROR] Config not found: %RT_HOME%\\config\\rtserverprops.xml
     exit /b 1
 )
 echo [OK] Config: %RT_HOME%\\config\\rtserverprops.xml
 
 if not exist "%RT_HOME%\\config\\vcsplatforms.xml" (
-    echo [ERROR] Config file not found: %RT_HOME%\\config\\vcsplatforms.xml
+    echo [ERROR] Config not found: %RT_HOME%\\config\\vcsplatforms.xml
     exit /b 1
 )
 echo [OK] Config: %RT_HOME%\\config\\vcsplatforms.xml
+
+if not exist "%RT_HOME%\\data\\sql\\create_aipr_user.sql" (
+    echo [WARN] Bootstrap SQL not found: %RT_HOME%\\data\\sql\\create_aipr_user.sql
+)
 
 echo.
 echo ========================================
@@ -454,13 +471,18 @@ echo  Setup Complete!
 echo ========================================
 echo.
 echo Next steps:
-echo   1. Edit config\\rtserverprops.xml    (database, redis, etc.)
-echo   2. Edit config\\vcsplatforms.xml     (GitHub/GitLab/Bitbucket)
-echo   3. Run: run.bat
+echo   1. Bootstrap the database (run ONCE as PostgreSQL superuser):
+echo        psql -U postgres -v aipr_password=YOUR_PASS ^
+echo             -f "%RT_HOME%\\data\\sql\\create_aipr_user.sql"
 echo.
-echo To set RT_HOME permanently, run as Administrator:
-echo   setx RT_HOME "%RT_HOME%"
-echo   setx PATH "%RT_HOME%\\bin;%%PATH%%"
+echo   2. Edit config files with your settings:
+echo        %RT_HOME%\\config\\rtserverprops.xml   (database, redis, engine, LLM)
+echo        %RT_HOME%\\config\\vcsplatforms.xml    (GitHub, GitLab, Bitbucket)
+echo.
+echo   3. Run: run.bat
+echo      (Flyway applies V1 + V2 SQL migrations automatically)
+echo.
+echo See README.txt for the full list of settings.
 echo.
 '''
 
@@ -496,108 +518,122 @@ tasks.register('createDistReadme') {
     group = 'Distribution'
     description = 'Creates README for distribution'
     dependsOn 'prepareDist'
-    
+
     doLast {
         file("${distDir}/README.txt").text = """AI PR Reviewer v${distVersion}
 ================================================================================
 
-QUICK START (LOCAL)
--------------------
+QUICK START
+-----------
 1. Prerequisites:
    - JDK 21+
    - PostgreSQL 15+
    - Redis 7+
 
-2. Configure:
-   - Edit config/application.yml with your database and platform settings
-   - Or set environment variables (see below)
+2. Bootstrap the database (run ONCE as a PostgreSQL superuser):
 
-3. Initialize Database:
-   - SQL migration files are in data/sql/
-   - Flyway will auto-run migrations on startup
-   - Or run manually: psql -d aipr -f data/sql/V1__initial_schema.sql
+   Using defaults (role: aipr, password: aipr_secret, db: aipr):
+     psql -U postgres -f data/sql/create_aipr_user.sql
 
-4. Run:
+   With a custom password:
+     psql -U postgres -v aipr_password='MyStr0ngPass!' \\
+          -f data/sql/create_aipr_user.sql
+
+   Fully custom (separate dev/staging databases):
+     psql -U postgres \\
+          -v aipr_user=aipr_dev \\
+          -v aipr_password='devpass' \\
+          -v aipr_db=aipr_dev \\
+          -f data/sql/create_aipr_user.sql
+
+3. Set environment variables (minimum required):
+     export DATABASE_URL=jdbc:postgresql://localhost:5432/aipr
+     export DATABASE_USER=aipr
+     export DATABASE_PASSWORD=aipr_secret
+     export REDIS_HOST=localhost
+
+4. Run — Flyway applies V1 + V2 migrations automatically on first startup:
    - Linux/Mac: ./bin/aipr-server
    - Windows:   bin\\aipr-server.bat
 
-5. Access:
-   - http://localhost:8080
+5. Access: http://localhost:8080
+
+NOTE: V1__initial_schema.sql and V2__user_sessions.sql are in data/sql/ for
+reference. You do NOT run them manually — Flyway runs them automatically at
+startup. Only create_aipr_user.sql needs a manual one-time run.
 
 ENVIRONMENT VARIABLES
 ---------------------
-Required:
+Database (required):
   DATABASE_URL          jdbc:postgresql://localhost:5432/aipr
   DATABASE_USER         aipr
   DATABASE_PASSWORD     your_password
+  DATABASE_POOL_SIZE    20 (optional)
+
+Redis (required):
   REDIS_HOST            localhost
+  REDIS_PORT            6379
+  REDIS_PASSWORD        (optional)
 
 Platform Auth (enable at least one):
-  GITHUB_AUTH_ENABLED   true
+  GITHUB_ENABLED        true
   GITHUB_CLIENT_ID      your_client_id
-  GITHUB_CLIENT_SECRET  your_secret
-  GITHUB_BASE_URL       https://github.com (or enterprise URL)
-  
-  GITLAB_AUTH_ENABLED   true
+  GITHUB_CLIENT_SECRET  your_client_secret
+  GITHUB_BASE_URL       https://github.com (or GitHub Enterprise URL)
+  GITHUB_WEBHOOK_SECRET your_webhook_secret
+
+  GITLAB_ENABLED        false
   GITLAB_APPLICATION_ID your_app_id
   GITLAB_APPLICATION_SECRET your_secret
   GITLAB_BASE_URL       https://gitlab.com (or self-hosted URL)
-  
-  BITBUCKET_AUTH_ENABLED true
+
+  BITBUCKET_ENABLED     false
   BITBUCKET_CLIENT_ID   your_client_id
   BITBUCKET_CLIENT_SECRET your_secret
+
+LLM:
+  LLM_BASE_URL          https://api.openai.com/v1
+  LLM_API_KEY           your_api_key
+  LLM_MODEL             gpt-4-turbo-preview
+
+C++ Engine:
+  ENGINE_HOST           localhost
+  ENGINE_PORT           50051
+  ENGINE_NEGOTIATION    TLS (or PLAINTEXT for dev)
 
 DIRECTORY STRUCTURE
 -------------------
   bin/           Startup scripts
-  lib/           JAR files and native libraries (engine)
-  config/        Configuration files (edit these)
-  certificates/  TLS certificates for gRPC (dev certs included)
-  data/sql/      Database migration scripts
+  lib/           JAR files and native engine library
+  config/        application.yml and XML config files (edit these)
+  certificates/  TLS certificates (dev certs included, replace for production)
+  data/sql/      Database SQL files:
+                   create_aipr_user.sql  — run once manually as superuser
+                   V1__initial_schema.sql — auto-applied by Flyway
+                   V2__user_sessions.sql  — auto-applied by Flyway
   data/logs/     Log files (created at runtime)
   data/cache/    Cache files (created at runtime)
   docs/          Documentation
 
 TLS CERTIFICATES
 ----------------
-The certificates/ folder contains self-signed certificates for LOCAL DEVELOPMENT.
+The certificates/ folder contains SELF-SIGNED certificates for LOCAL DEVELOPMENT.
 
 For PRODUCTION:
-  1. Generate proper certificates (see certificates/README.md)
-  2. Update config/rtserverprops.xml with new paths
-  3. Enable TLS: <tls><enabled>true</enabled></tls>
+  1. Replace with proper certificates from your CA
+  2. Update paths via environment variables:
+       GRPC_SERVER_CERT, GRPC_SERVER_KEY, GRPC_TRUST_CERT
+       ENGINE_TLS_CERT, ENGINE_TLS_KEY, ENGINE_TLS_CA
 
 DEPLOYMENT OPTIONS
 ------------------
-See docs/setup.md for detailed instructions:
-
-1. LOCAL/VM:
-   - Extract zip, configure, run ./bin/aipr-server
-
-2. DOCKER:
-   docker run -d -p 8080:8080 \\
-     -e DATABASE_URL=jdbc:postgresql://host:5432/aipr \\
-     -e GITHUB_CLIENT_ID=xxx \\
-     ghcr.io/auralithai/aipr-server:${distVersion}
-
-3. KUBERNETES/HELM:
-   See docs/architecture.md for Kubernetes deployment
-
-4. DOCKER COMPOSE:
-   See deploy/docker/docker-compose.yml in the source repo
-
-DOCUMENTATION
--------------
-  docs/setup.md        - Full setup guide
-  docs/architecture.md - System architecture
+1. LOCAL/VM:    Extract zip, bootstrap DB, set env vars, run ./bin/aipr-server
+2. DOCKER:      docker compose -f deploy/docker/docker-compose.yml up
+3. KUBERNETES:  helm install aipr deploy/helm/aipr/
 
 Online: https://github.com/AuralithAI/RT-AI-PR-Reviewer
-
-LICENSE
--------
-Apache 2.0 - See LICENSE file
 """
-        
+
         // Copy LICENSE from root
         if (file("${rootDir}/../LICENSE").exists()) {
             copy {
@@ -620,11 +656,11 @@ tasks.register('distZip', Zip) {
     group = 'Distribution'
     description = 'Creates a ZIP distribution package'
     dependsOn 'installDist'
-    
+
     archiveBaseName.set('aipr')
     archiveVersion.set(distVersion)
     destinationDirectory.set(file("${buildDir}/distributions"))
-    
+
     from(distDir) {
         into "aipr-${distVersion}"
     }
@@ -635,13 +671,13 @@ tasks.register('distTar', Tar) {
     group = 'Distribution'
     description = 'Creates a TAR.GZ distribution package'
     dependsOn 'installDist'
-    
+
     archiveBaseName.set('aipr')
     archiveVersion.set(distVersion)
     compression = Compression.GZIP
     archiveExtension.set('tar.gz')
     destinationDirectory.set(file("${buildDir}/distributions"))
-    
+
     from(distDir) {
         into "aipr-${distVersion}"
     }
@@ -662,14 +698,14 @@ idea {
     project {
         jdkName = '21'
         languageLevel = '21'
-        
+
         vcs = 'Git'
     }
-    
+
     module {
         downloadJavadoc = true
         downloadSources = true
-        
+
         // Exclude directories from indexing
         excludeDirs += file('engine/build')
         excludeDirs += file('.gradle')
@@ -714,7 +750,7 @@ tasks.register('checkPrereqs') {
     description = 'Checks if all prerequisites are installed'
     doLast {
         println "\nChecking prerequisites...\n"
-        
+
         // Check Java
         def javaVersion = System.getProperty('java.version')
         def javaMajor = javaVersion.tokenize('.')[0].toInteger()
@@ -723,10 +759,10 @@ tasks.register('checkPrereqs') {
         } else {
             println "[FAIL] Java: ${javaVersion} (requires 21+)"
         }
-        
+
         // Check Gradle
         println "[OK] Gradle: ${gradle.gradleVersion}"
-        
+
         // Check CMake
         try {
             def cmakeProc = ['cmake', '--version'].execute()
@@ -736,7 +772,7 @@ tasks.register('checkPrereqs') {
         } catch (Exception e) {
             println "[FAIL] CMake: Not found"
         }
-        
+
         // Check Docker (optional)
         try {
             def dockerProc = ['docker', '--version'].execute()
@@ -746,7 +782,7 @@ tasks.register('checkPrereqs') {
         } catch (Exception e) {
             println "[WARN] Docker: Not found (optional)"
         }
-        
+
         println """
 +----------------------------------------------------------------+
 | Required:  JDK 21+, Gradle 8.5+, CMake 3.20+                   |

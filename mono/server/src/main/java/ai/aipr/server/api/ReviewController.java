@@ -4,6 +4,7 @@ import ai.aipr.server.dto.ReviewRequest;
 import ai.aipr.server.dto.ReviewResponse;
 import ai.aipr.server.service.ReviewService;
 import jakarta.validation.Valid;
+import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -24,34 +25,34 @@ import java.util.concurrent.CompletableFuture;
 @RestController
 @RequestMapping("/api/v1/reviews")
 public class ReviewController {
-    
+
     private static final Logger log = LoggerFactory.getLogger(ReviewController.class);
-    
+
     private final ReviewService reviewService;
-    
+
     public ReviewController(ReviewService reviewService) {
         this.reviewService = reviewService;
     }
-    
+
     /**
      * Submit a PR for review.
      */
     @PostMapping
     public CompletableFuture<ResponseEntity<ReviewResponse>> submitReview(
-            @Valid @RequestBody ReviewRequest request,
-            @RequestHeader(value = "X-Request-ID", required = false) String requestId
+        @NotNull @Valid @RequestBody ReviewRequest request,
+        @RequestHeader(value = "X-Request-ID", required = false) String requestId
     ) {
         log.info("Review request received: repo={}, pr={}", request.repoId(), request.prNumber());
-        
+
         return reviewService.reviewPullRequest(request)
                 .thenApply(ResponseEntity::ok)
                 .exceptionally(ex -> {
-                    log.error("Review failed: repo={}, pr={}, error={}", 
+                    log.error("Review failed: repo={}, pr={}, error={}",
                             request.repoId(), request.prNumber(), ex.getMessage(), ex);
                     throw new RuntimeException("Review failed", ex);
                 });
     }
-    
+
     /**
      * Get review by ID.
      */
@@ -61,7 +62,7 @@ public class ReviewController {
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
-    
+
     /**
      * Get reviews for a repository.
      */

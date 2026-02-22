@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
@@ -17,10 +19,11 @@ public record Chunk(
         List<String> symbols,
         List<String> imports
 ) {
+    @NotNull
     public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String id;
         private String filePath;
@@ -32,7 +35,7 @@ public record Chunk(
         private String parentSymbol;
         private List<String> symbols = List.of();
         private List<String> imports = List.of();
-        
+
         public Builder id(String id) { this.id = id; return this; }
         public Builder filePath(String filePath) { this.filePath = filePath; return this; }
         public Builder startLine(int startLine) { this.startLine = startLine; return this; }
@@ -43,7 +46,7 @@ public record Chunk(
         public Builder parentSymbol(String parentSymbol) { this.parentSymbol = parentSymbol; return this; }
         public Builder symbols(List<String> symbols) { this.symbols = symbols; return this; }
         public Builder imports(List<String> imports) { this.imports = imports; return this; }
-        
+
         public Chunk build() {
             return new Chunk(id, filePath, startLine, endLine, content, contentHash, language, parentSymbol, symbols, imports);
         }

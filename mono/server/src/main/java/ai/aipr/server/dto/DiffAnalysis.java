@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
@@ -13,10 +15,11 @@ public record DiffAnalysis(
         int totalAdditions,
         int totalDeletions
 ) {
+    @NotNull
     public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String repoId;
         private List<FileChange> changedFiles = List.of();
@@ -24,14 +27,14 @@ public record DiffAnalysis(
         private List<DiffHunk> hunks = List.of();
         private int totalAdditions;
         private int totalDeletions;
-        
+
         public Builder repoId(String repoId) { this.repoId = repoId; return this; }
         public Builder changedFiles(List<FileChange> changedFiles) { this.changedFiles = changedFiles; return this; }
         public Builder touchedSymbols(List<TouchedSymbol> touchedSymbols) { this.touchedSymbols = touchedSymbols; return this; }
         public Builder hunks(List<DiffHunk> hunks) { this.hunks = hunks; return this; }
         public Builder totalAdditions(int totalAdditions) { this.totalAdditions = totalAdditions; return this; }
         public Builder totalDeletions(int totalDeletions) { this.totalDeletions = totalDeletions; return this; }
-        
+
         public DiffAnalysis build() {
             return new DiffAnalysis(repoId, changedFiles, touchedSymbols, hunks, totalAdditions, totalDeletions);
         }

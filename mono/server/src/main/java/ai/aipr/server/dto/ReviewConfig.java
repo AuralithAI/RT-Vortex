@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
@@ -36,15 +38,16 @@ public record ReviewConfig(
             String reviewDepth,
             String responseLanguage
     ) {
-        this(llmProvider, llmModel, maxContextTokens, includeSecurityChecks, 
+        this(llmProvider, llmModel, maxContextTokens, includeSecurityChecks,
              includePerformanceChecks, includeStyleChecks, focusAreas, ignorePaths,
              reviewDepth, responseLanguage, List.of(), "info", 100, true, false);
     }
-    
+
+    @NotNull
     public static ReviewConfig defaults() {
         return new ReviewConfig(
-                null,  // No default - should be configured
-                null,  // No default - should be configured
+                null,
+                null,
                 128000,
                 true,
                 true,
@@ -60,11 +63,11 @@ public record ReviewConfig(
                 false
         );
     }
-    
-    public static Builder builder() {
+
+    @NotNull public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String llmProvider;
         private String llmModel;
@@ -81,7 +84,7 @@ public record ReviewConfig(
         private Integer maxComments = 100;
         private boolean includeSuggestions = true;
         private boolean postToPlatform = false;
-        
+
         public Builder llmProvider(String llmProvider) { this.llmProvider = llmProvider; return this; }
         public Builder llmModel(String llmModel) { this.llmModel = llmModel; return this; }
         public Builder maxContextTokens(int maxContextTokens) { this.maxContextTokens = maxContextTokens; return this; }
@@ -97,10 +100,10 @@ public record ReviewConfig(
         public Builder maxComments(Integer maxComments) { this.maxComments = maxComments; return this; }
         public Builder includeSuggestions(boolean includeSuggestions) { this.includeSuggestions = includeSuggestions; return this; }
         public Builder postToPlatform(boolean postToPlatform) { this.postToPlatform = postToPlatform; return this; }
-        
+
         public ReviewConfig build() {
-            return new ReviewConfig(llmProvider, llmModel, maxContextTokens, 
-                    includeSecurityChecks, includePerformanceChecks, includeStyleChecks, 
+            return new ReviewConfig(llmProvider, llmModel, maxContextTokens,
+                    includeSecurityChecks, includePerformanceChecks, includeStyleChecks,
                     focusAreas, ignorePaths, reviewDepth, responseLanguage,
                     categories, minSeverity, maxComments, includeSuggestions, postToPlatform);
         }

@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
@@ -14,10 +16,11 @@ public record DiffHunk(
         String header,
         List<String> lines
 ) {
+    @NotNull
     public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String filePath;
         private int oldStart;
@@ -26,7 +29,7 @@ public record DiffHunk(
         private int newLines;
         private String header;
         private List<String> lines = List.of();
-        
+
         public Builder filePath(String filePath) { this.filePath = filePath; return this; }
         public Builder oldStart(int oldStart) { this.oldStart = oldStart; return this; }
         public Builder oldLines(int oldLines) { this.oldLines = oldLines; return this; }
@@ -34,7 +37,7 @@ public record DiffHunk(
         public Builder newLines(int newLines) { this.newLines = newLines; return this; }
         public Builder header(String header) { this.header = header; return this; }
         public Builder lines(List<String> lines) { this.lines = lines; return this; }
-        
+
         public DiffHunk build() {
             return new DiffHunk(filePath, oldStart, oldLines, newStart, newLines, header, lines);
         }

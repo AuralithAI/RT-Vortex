@@ -16,15 +16,15 @@ service EngineService {
     rpc IncrementalIndex(IncrementalIndexRequest) returns (IndexResponse);
     rpc GetIndexStats(IndexStatsRequest) returns (IndexStatsResponse);
     rpc DeleteIndex(DeleteIndexRequest) returns (DeleteIndexResponse);
-    
+
     // Retrieval Operations
     rpc Search(SearchRequest) returns (SearchResponse);
     rpc SearchStream(SearchRequest) returns (stream ContextChunk);
-    
+
     // Review Operations
     rpc BuildReviewContext(ReviewContextRequest) returns (ReviewContextResponse);
     rpc RunHeuristics(HeuristicsRequest) returns (HeuristicsResponse);
-    
+
     // Health & Diagnostics
     rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
     rpc GetDiagnostics(DiagnosticsRequest) returns (DiagnosticsResponse);
@@ -197,6 +197,9 @@ message TouchedSymbol {
     string file_path = 4;
     uint32 line = 5;
     string change_type = 6;  // "added", "modified", "deleted"
+    uint32 end_line = 7;     // End line of the symbol (0 = same as line)
+    repeated string callers = 8;   // Qualified names of symbols that call this one
+    repeated string callees = 9;   // Qualified names of symbols called by this one
 }
 
 message HeuristicsRequest {
@@ -219,6 +222,7 @@ message HeuristicFinding {
     string suggestion = 8;
     string evidence = 9;
     string rule_id = 10;
+    uint32 end_line = 11;  // End line of the finding (0 = same as line)
 }
 
 // ============================================================================

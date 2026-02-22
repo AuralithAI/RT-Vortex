@@ -19,19 +19,19 @@ import "google/protobuf/any.proto";
 service SessionService {
     // Create a new session
     rpc CreateSession(CreateSessionRequest) returns (SessionInfo);
-    
+
     // Validate and get session info
     rpc GetSession(GetSessionRequest) returns (SessionInfo);
-    
+
     // Refresh session token
     rpc RefreshSession(RefreshSessionRequest) returns (SessionInfo);
-    
+
     // Revoke/logout session
     rpc RevokeSession(RevokeSessionRequest) returns (RevokeSessionResponse);
-    
+
     // Heartbeat for connection keep-alive
     rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
-    
+
     // Stream session events (for real-time updates)
     rpc StreamSessionEvents(StreamSessionRequest) returns (stream SessionEvent);
 }
@@ -43,10 +43,10 @@ service SessionService {
 service DataService {
     // Generic data operations - delegated through session context
     rpc Execute(DataRequest) returns (DataResponse);
-    
+
     // Stream data operations
     rpc ExecuteStream(DataRequest) returns (stream DataResponse);
-    
+
     // Batch operations
     rpc ExecuteBatch(BatchDataRequest) returns (BatchDataResponse);
 }
@@ -62,19 +62,27 @@ service UserSessionRemote {
     rpc GetReviewStatus(SessionGetReviewRequest) returns (SessionReviewResponse);
     rpc ListReviews(SessionListReviewsRequest) returns (SessionListReviewsResponse);
     rpc CancelReview(SessionCancelReviewRequest) returns (SessionCancelReviewResponse);
-    
+
     // Index operations within session context
     rpc TriggerIndex(SessionIndexRequest) returns (SessionIndexResponse);
     rpc GetIndexStatus(SessionGetIndexStatusRequest) returns (SessionIndexStatusResponse);
-    
+    rpc DeleteIndex(SessionDeleteIndexRequest) returns (SessionDeleteIndexResponse);
+
+    // Search operations within session context
+    rpc SearchCode(SessionSearchRequest) returns (SessionSearchResponse);
+
     // Repository operations within session context
     rpc ListRepositories(SessionListReposRequest) returns (SessionListReposResponse);
     rpc GetRepository(SessionGetRepoRequest) returns (SessionRepoResponse);
-    
+
     // LLM provider operations
     rpc ListLLMProviders(SessionListLLMRequest) returns (SessionListLLMResponse);
     rpc TestLLMConnection(SessionTestLLMRequest) returns (SessionTestLLMResponse);
     rpc ConfigureLLMProvider(SessionConfigureLLMRequest) returns (SessionConfigureLLMResponse);
+
+    // Engine health & diagnostics
+    rpc GetEngineHealth(SessionEngineHealthRequest) returns (SessionEngineHealthResponse);
+    rpc GetEngineDiagnostics(SessionEngineDiagnosticsRequest) returns (SessionEngineDiagnosticsResponse);
 }
 
 // =============================================================================
@@ -190,6 +198,11 @@ message SessionReviewRequest {
     string head_commit = 4;
     string base_commit = 5;
     ReviewOptions options = 6;
+    string diff = 7;                  // PR diff content
+    string pr_title = 8;              // Pull request title
+    string pr_description = 9;        // Pull request description
+    string base_branch = 10;          // Base branch name
+    string head_branch = 11;          // Head branch name
 }
 
 message ReviewOptions {
@@ -211,6 +224,8 @@ message SessionReviewResponse {
     ReviewMetrics metrics = 5;
     google.protobuf.Timestamp created_at = 6;
     google.protobuf.Timestamp completed_at = 7;
+    string overall_assessment = 8;    // APPROVE, REQUEST_CHANGES, COMMENT
+    repeated string suggestions = 9;  // General improvement suggestions from LLM
 }
 
 message ReviewComment {
@@ -271,6 +286,9 @@ message SessionIndexRequest {
     string session_token = 1;
     string repository_id = 2;
     bool full_reindex = 3;
+    string branch = 4;                 // Branch to index (empty = repo default branch)
+    string commit_sha = 5;             // Specific commit to index (empty = HEAD)
+    string since_commit = 6;           // For incremental: only index changes since this commit
 }
 
 message SessionIndexResponse {
@@ -294,6 +312,80 @@ message SessionIndexStatusResponse {
     google.protobuf.Timestamp last_indexed_at = 7;
     string job_status = 8;
     float job_progress = 9;
+}
+
+message SessionDeleteIndexRequest {
+    string session_token = 1;
+    string repository_id = 2;
+}
+
+message SessionDeleteIndexResponse {
+    bool success = 1;
+    string message = 2;
+}
+
+// =============================================================================
+// Session-Scoped Search Messages
+// =============================================================================
+
+message SessionSearchRequest {
+    string session_token = 1;
+    string repository_id = 2;
+    string query = 3;
+    repeated string touched_symbols = 4;
+    int32 top_k = 5;                   // Max results (default 10)
+}
+
+message SessionSearchResponse {
+    repeated SessionContextChunk chunks = 1;
+    int32 total_results = 2;
+}
+
+message SessionContextChunk {
+    string id = 1;
+    string file_path = 2;
+    int32 start_line = 3;
+    int32 end_line = 4;
+    string content = 5;
+    string language = 6;
+    repeated string symbols = 7;
+    float relevance_score = 8;
+}
+
+// =============================================================================
+// Session-Scoped Engine Health & Diagnostics Messages
+// =============================================================================
+
+message SessionEngineHealthRequest {
+    string session_token = 1;
+}
+
+message SessionEngineHealthResponse {
+    bool healthy = 1;
+    string engine_version = 2;
+    int64 uptime_seconds = 3;
+    map<string, string> components = 4;
+}
+
+message SessionEngineDiagnosticsRequest {
+    string session_token = 1;
+    bool include_memory = 2;
+    bool include_indices = 3;
+}
+
+message SessionEngineDiagnosticsResponse {
+    int64 heap_used_bytes = 1;
+    int64 heap_total_bytes = 2;
+    int64 rss_bytes = 3;
+    repeated SessionIndexDiagnostic indices = 4;
+    map<string, string> config = 5;
+}
+
+message SessionIndexDiagnostic {
+    string repo_id = 1;
+    int64 size_bytes = 2;
+    string last_updated = 3;
+    bool is_loaded = 4;
 }
 
 // =============================================================================

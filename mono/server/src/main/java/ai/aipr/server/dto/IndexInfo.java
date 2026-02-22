@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.time.Instant;
 
 /**
@@ -19,10 +21,11 @@ public record IndexInfo(
         IndexStats stats,
         IndexState state
 ) {
+    @NotNull
     public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private String repoId;
         private String indexVersion;
@@ -36,7 +39,7 @@ public record IndexInfo(
         private Instant updatedAt;
         private IndexStats stats;
         private IndexState state;
-        
+
         public Builder repoId(String repoId) { this.repoId = repoId; return this; }
         public Builder indexVersion(String indexVersion) { this.indexVersion = indexVersion; return this; }
         public Builder commitSha(String commitSha) { this.commitSha = commitSha; return this; }
@@ -49,7 +52,7 @@ public record IndexInfo(
         public Builder updatedAt(Instant updatedAt) { this.updatedAt = updatedAt; return this; }
         public Builder stats(IndexStats stats) { this.stats = stats; return this; }
         public Builder state(IndexState state) { this.state = state; return this; }
-        
+
         public IndexInfo build() {
             return new IndexInfo(repoId, indexVersion, commitSha, branch, fileCount, chunkCount, symbolCount, lastIndexedAt, createdAt, updatedAt, stats, state);
         }

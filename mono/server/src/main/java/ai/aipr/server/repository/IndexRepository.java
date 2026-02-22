@@ -3,147 +3,197 @@ package ai.aipr.server.repository;
 import ai.aipr.server.dto.IndexInfo;
 import ai.aipr.server.dto.IndexState;
 import ai.aipr.server.dto.IndexStatus;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.UUID;
 
 /**
- * Repository for storing indexing status and information.
- * Uses in-memory storage for now, can be replaced with Redis/DB.
+ * Repository for indexing status and information backed by PostgreSQL via {@link JdbcTemplate}.
+ * Maps to the {@code index_jobs} and {@code index_stats} tables created by
+ * {@code V1__initial_schema.sql}.
  */
 @Repository
 public class IndexRepository {
-    
-    private final ConcurrentHashMap<String, IndexStatus> statusMap = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, IndexInfo> infoMap = new ConcurrentHashMap<>();
-    
-    /**
-     * Save or update indexing status.
-     */
-    public void saveStatus(IndexStatus status) {
-        statusMap.put(status.jobId(), status);
+
+    private final JdbcTemplate jdbc;
+
+    public IndexRepository(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
     }
-    
-    /**
-     * Update status fields for a job.
-     */
+
+    // =====================================================================
+    // IndexStatus (index_jobs table)
+    // =====================================================================
+
+    public void saveStatus(IndexStatus status) {
+        String id = status.jobId() != null ? status.jobId() : UUID.randomUUID().toString();
+        jdbc.update("""
+            INSERT INTO index_jobs (id, repository_id, job_type, status, progress, files_processed, error_message, started_at, completed_at, created_at)
+            VALUES (?::uuid, ?::uuid, 'full', ?, ?, ?, ?, ?, ?, NOW())
+            ON CONFLICT (id) DO UPDATE
+              SET status          = EXCLUDED.status,
+                  progress        = EXCLUDED.progress,
+                  files_processed = EXCLUDED.files_processed,
+                  error_message   = EXCLUDED.error_message,
+                  started_at      = EXCLUDED.started_at,
+                  completed_at    = EXCLUDED.completed_at
+            """,
+            id, status.repoId(),
+            status.state() != null ? status.state().name().toLowerCase() : "pending",
+            status.progress(),
+            status.filesProcessed(),
+            status.error(),
+            status.startTime() != null ? Timestamp.from(status.startTime()) : null,
+            status.endTime() != null ? Timestamp.from(status.endTime()) : null
+        );
+    }
+
     public void updateStatus(String jobId, IndexState state, int progress, String message) {
-        var existing = statusMap.get(jobId);
-        if (existing != null) {
-            var updated = IndexStatus.builder()
-                    .jobId(existing.jobId())
-                    .repoId(existing.repoId())
-                    .state(state)
-                    .progress(progress)
-                    .message(message)
-                    .startTime(existing.startTime())
-                    .endTime(existing.endTime())
-                    .stats(existing.stats())
-                    .errors(existing.errors())
-                    .build();
-            statusMap.put(jobId, updated);
+        jdbc.update("""
+            UPDATE index_jobs
+               SET status = ?, progress = ?, error_message = ?
+             WHERE id = ?::uuid
+            """,
+            state.name().toLowerCase(), progress, message, jobId
+        );
+    }
+
+    public Optional<IndexStatus> findStatusByJobId(String jobId) {
+        try {
+            return Optional.ofNullable(
+                jdbc.queryForObject("SELECT * FROM index_jobs WHERE id = ?::uuid", STATUS_ROW_MAPPER, jobId));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
         }
     }
-    
-    /**
-     * Get indexing status by job ID.
-     */
-    public Optional<IndexStatus> findStatusByJobId(String jobId) {
-        return Optional.ofNullable(statusMap.get(jobId));
-    }
-    
-    /**
-     * Alias for findStatusByJobId.
-     */
+
     public Optional<IndexStatus> findStatusById(String jobId) {
         return findStatusByJobId(jobId);
     }
-    
-    /**
-     * Get all active indexing jobs for a repository.
-     */
+
     public List<IndexStatus> findActiveJobsByRepoId(String repoId) {
-        return statusMap.values().stream()
-                .filter(s -> s.repoId().equals(repoId))
-                .filter(s -> s.state() == IndexState.RUNNING || s.state() == IndexState.PENDING)
-                .toList();
+        return jdbc.query(
+            "SELECT * FROM index_jobs WHERE repository_id = ?::uuid AND status IN ('pending', 'running') ORDER BY created_at DESC",
+            STATUS_ROW_MAPPER, repoId);
     }
-    
-    /**
-     * Delete indexing status by job ID.
-     */
+
     public void deleteStatus(String jobId) {
-        statusMap.remove(jobId);
+        jdbc.update("DELETE FROM index_jobs WHERE id = ?::uuid", jobId);
     }
-    
-    /**
-     * Save or update index information.
-     */
+
+    // =====================================================================
+    // IndexInfo (index_stats table)
+    // =====================================================================
+
     public void saveInfo(IndexInfo info) {
-        infoMap.put(info.repoId(), info);
+        jdbc.update("""
+            INSERT INTO index_stats (id, repository_id, index_version, total_files, indexed_files, total_chunks, total_symbols, last_commit, last_indexed_at, updated_at)
+            VALUES (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, NOW())
+            ON CONFLICT (repository_id) DO UPDATE
+              SET index_version  = EXCLUDED.index_version,
+                  total_files    = EXCLUDED.total_files,
+                  indexed_files  = EXCLUDED.indexed_files,
+                  total_chunks   = EXCLUDED.total_chunks,
+                  total_symbols  = EXCLUDED.total_symbols,
+                  last_commit    = EXCLUDED.last_commit,
+                  last_indexed_at = EXCLUDED.last_indexed_at,
+                  updated_at     = NOW()
+            """,
+            UUID.randomUUID().toString(), info.repoId(),
+            info.indexVersion(),
+            info.fileCount(), info.fileCount(),
+            info.chunkCount(), info.symbolCount(),
+            info.commitSha(),
+            info.lastIndexedAt() != null ? Timestamp.from(info.lastIndexedAt()) : null
+        );
     }
-    
-    /**
-     * Get index information by repository ID.
-     */
+
     public Optional<IndexInfo> findInfoByRepoId(String repoId) {
-        return Optional.ofNullable(infoMap.get(repoId));
-    }
-    
-    /**
-     * Check if a repository is indexed.
-     */
-    public boolean isIndexed(String repoId) {
-        return infoMap.containsKey(repoId);
-    }
-    
-    /**
-     * Delete index information by repository ID.
-     */
-    public void deleteInfo(String repoId) {
-        infoMap.remove(repoId);
-    }
-    
-    /**
-     * Delete all data for a repository.
-     */
-    public void deleteByRepoId(String repoId) {
-        // Remove index info
-        infoMap.remove(repoId);
-        
-        // Remove all status entries for this repo
-        statusMap.entrySet().removeIf(e -> e.getValue().repoId().equals(repoId));
-    }
-    
-    /**
-     * List all indexed repositories.
-     */
-    public List<IndexInfo> listAllIndexes() {
-        return List.copyOf(infoMap.values());
-    }
-    
-    /**
-     * Clean up completed/failed jobs older than a certain age.
-     */
-    public int cleanupOldJobs(long maxAgeMs) {
-        long cutoff = System.currentTimeMillis() - maxAgeMs;
-        int removed = 0;
-        
-        var iterator = statusMap.entrySet().iterator();
-        while (iterator.hasNext()) {
-            var entry = iterator.next();
-            var status = entry.getValue();
-            
-            if ((status.state() == IndexState.COMPLETED || status.state() == IndexState.FAILED) 
-                    && status.endTime() != null 
-                    && status.endTime().toEpochMilli() < cutoff) {
-                iterator.remove();
-                removed++;
-            }
+        try {
+            return Optional.ofNullable(
+                jdbc.queryForObject("SELECT * FROM index_stats WHERE repository_id = ?::uuid", INFO_ROW_MAPPER, repoId));
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
         }
-        
-        return removed;
+    }
+
+    public boolean isIndexed(String repoId) {
+        Integer count = jdbc.queryForObject(
+            "SELECT COUNT(*) FROM index_stats WHERE repository_id = ?::uuid", Integer.class, repoId);
+        return count != null && count > 0;
+    }
+
+    public void deleteInfo(String repoId) {
+        jdbc.update("DELETE FROM index_stats WHERE repository_id = ?::uuid", repoId);
+    }
+
+    public void deleteByRepoId(String repoId) {
+        jdbc.update("DELETE FROM index_stats WHERE repository_id = ?::uuid", repoId);
+        jdbc.update("DELETE FROM index_jobs WHERE repository_id = ?::uuid", repoId);
+    }
+
+    public List<IndexInfo> listAllIndexes() {
+        return jdbc.query("SELECT * FROM index_stats ORDER BY updated_at DESC", INFO_ROW_MAPPER);
+    }
+
+    public int cleanupOldJobs(long maxAgeMs) {
+        Timestamp cutoff = Timestamp.from(Instant.now().minusMillis(maxAgeMs));
+        return jdbc.update(
+            "DELETE FROM index_jobs WHERE status IN ('completed', 'failed') AND completed_at < ?",
+            cutoff
+        );
+    }
+
+    // =====================================================================
+    // Row Mappers
+    // =====================================================================
+
+    private static final RowMapper<IndexStatus> STATUS_ROW_MAPPER = (rs, rowNum) -> {
+        Timestamp started = rs.getTimestamp("started_at");
+        Timestamp completed = rs.getTimestamp("completed_at");
+        return IndexStatus.builder()
+            .jobId(rs.getString("id"))
+            .repoId(rs.getString("repository_id"))
+            .state(parseState(rs.getString("status")))
+            .progress((int) rs.getDouble("progress"))
+            .filesProcessed(rs.getInt("files_processed"))
+            .error(rs.getString("error_message"))
+            .startTime(started != null ? started.toInstant() : null)
+            .endTime(completed != null ? completed.toInstant() : null)
+            .build();
+    };
+
+    private static final RowMapper<IndexInfo> INFO_ROW_MAPPER = (rs, rowNum) -> {
+        Timestamp lastIndexed = rs.getTimestamp("last_indexed_at");
+        Timestamp created = rs.getTimestamp("created_at");
+        Timestamp updated = rs.getTimestamp("updated_at");
+        return IndexInfo.builder()
+            .repoId(rs.getString("repository_id"))
+            .indexVersion(rs.getString("index_version"))
+            .commitSha(rs.getString("last_commit"))
+            .fileCount(rs.getInt("total_files"))
+            .chunkCount(rs.getInt("total_chunks"))
+            .symbolCount(rs.getInt("total_symbols"))
+            .lastIndexedAt(lastIndexed != null ? lastIndexed.toInstant() : null)
+            .createdAt(created != null ? created.toInstant() : null)
+            .updatedAt(updated != null ? updated.toInstant() : null)
+            .state(IndexState.COMPLETED)
+            .build();
+    };
+
+    private static IndexState parseState(String value) {
+        if (value == null) return IndexState.PENDING;
+        try {
+            return IndexState.valueOf(value.toUpperCase());
+        } catch (IllegalArgumentException e) {
+            return IndexState.PENDING;
+        }
     }
 }

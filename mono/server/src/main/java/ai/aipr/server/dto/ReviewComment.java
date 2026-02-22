@@ -1,5 +1,7 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
@@ -18,6 +20,7 @@ public record ReviewComment(
         Double confidence,
         String source
 ) {
+    @NotNull
     public static Builder builder() {
         return new Builder();
     }
@@ -48,7 +51,7 @@ public record ReviewComment(
         public Builder source(String source) { this.source = source; return this; }
 
         public ReviewComment build() {
-            return new ReviewComment(id, filePath, line, endLine, severity, 
+            return new ReviewComment(id, filePath, line, endLine, severity,
                     category, message, suggestion, references, confidence, source);
         }
     }

@@ -1,10 +1,12 @@
 package ai.aipr.server.dto;
 
+import org.jetbrains.annotations.NotNull;
+
 import java.util.List;
 
 /**
  * Configuration for indexing operations.
- * 
+ *
  * <p>The embedding model should be configured by the user through the UI or
  * application configuration. No default model is assumed.</p>
  */
@@ -23,6 +25,7 @@ public record IndexConfig(
      * Create a configuration with default values except embedding model.
      * The embedding model must be provided separately.
      */
+    @NotNull
     public static IndexConfig defaultsWithModel(String embeddingModel) {
         return new IndexConfig(
                 List.of("**/*.java", "**/*.kt", "**/*.py", "**/*.js", "**/*.ts", "**/*.cpp", "**/*.c", "**/*.h", "**/*.go", "**/*.rs"),
@@ -36,11 +39,11 @@ public record IndexConfig(
                 64
         );
     }
-    
-    public static Builder builder() {
+
+    @NotNull public static Builder builder() {
         return new Builder();
     }
-    
+
     public static class Builder {
         private List<String> includePatterns = List.of();
         private List<String> excludePatterns = List.of();
@@ -51,7 +54,7 @@ public record IndexConfig(
         private String embeddingModel;  // No default - must be configured
         private int chunkSizeTokens = 512;
         private int chunkOverlapTokens = 64;
-        
+
         public Builder includePatterns(List<String> patterns) { this.includePatterns = patterns; return this; }
         public Builder excludePatterns(List<String> patterns) { this.excludePatterns = patterns; return this; }
         public Builder maxFileSizeBytes(int size) { this.maxFileSizeBytes = size; return this; }
@@ -61,7 +64,7 @@ public record IndexConfig(
         public Builder embeddingModel(String model) { this.embeddingModel = model; return this; }
         public Builder chunkSizeTokens(int size) { this.chunkSizeTokens = size; return this; }
         public Builder chunkOverlapTokens(int overlap) { this.chunkOverlapTokens = overlap; return this; }
-        
+
         public IndexConfig build() {
             return new IndexConfig(includePatterns, excludePatterns, maxFileSizeBytes, indexBinaries, extractSymbols, generateEmbeddings, embeddingModel, chunkSizeTokens, chunkOverlapTokens);
         }

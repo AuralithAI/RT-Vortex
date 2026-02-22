@@ -1,19 +1,28 @@
 package ai.aipr.server.repository;
 
-import ai.aipr.server.model.UserInfo;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
+import java.sql.Timestamp;
+import java.time.Instant;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.UUID;
 
 /**
- * Repository for user sessions.
+ * Repository for user sessions backed by PostgreSQL via {@link JdbcTemplate}.
+ * Maps to the {@code user_sessions} table created by {@code V2__user_sessions.sql}.
  */
 @Repository
 public class UserSessionRepository {
-    
-    private final ConcurrentHashMap<String, UserSession> sessionMap = new ConcurrentHashMap<>();
-    
+
+    private final JdbcTemplate jdbc;
+
+    public UserSessionRepository(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
     public record UserSession(
             String sessionId,
             String userId,
@@ -21,114 +30,92 @@ public class UserSessionRepository {
             long lastAccessedAt,
             long expiresAt
     ) {}
-    
-    /**
-     * Create a new session.
-     */
+
     public UserSession createSession(String userId, long ttlMs) {
-        String sessionId = java.util.UUID.randomUUID().toString();
+        String sessionToken = UUID.randomUUID().toString().replace("-", "")
+                + UUID.randomUUID().toString().replace("-", "");
+        String sessionId = UUID.randomUUID().toString();
         long now = System.currentTimeMillis();
-        
-        var session = new UserSession(
-                sessionId,
-                userId,
-                now,
-                now,
-                now + ttlMs
+        Timestamp createdTs = Timestamp.from(Instant.ofEpochMilli(now));
+        Timestamp expiresTs = Timestamp.from(Instant.ofEpochMilli(now + ttlMs));
+
+        jdbc.update("""
+            INSERT INTO user_sessions (id, user_id, session_token, status, created_at, expires_at, last_activity_at)
+            VALUES (?::uuid, ?::uuid, ?, 'active', ?, ?, ?)
+            """,
+            sessionId, userId, sessionToken, createdTs, expiresTs, createdTs
         );
-        
-        sessionMap.put(sessionId, session);
-        return session;
+
+        return new UserSession(sessionToken, userId, now, now, now + ttlMs);
     }
-    
-    /**
-     * Find a session by ID.
-     */
-    public Optional<UserSession> findById(String sessionId) {
-        var session = sessionMap.get(sessionId);
-        if (session == null) {
+
+    public Optional<UserSession> findById(String sessionToken) {
+        try {
+            UserSession session = jdbc.queryForObject(
+                "SELECT * FROM user_sessions WHERE session_token = ? AND status = 'active'",
+                SESSION_ROW_MAPPER, sessionToken);
+            if (session == null) return Optional.empty();
+
+            // Check expiration
+            if (System.currentTimeMillis() > session.expiresAt()) {
+                invalidate(sessionToken);
+                return Optional.empty();
+            }
+            return Optional.of(session);
+        } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
         }
-        
-        // Check expiration
-        if (System.currentTimeMillis() > session.expiresAt()) {
-            sessionMap.remove(sessionId);
-            return Optional.empty();
-        }
-        
-        return Optional.of(session);
     }
-    
-    /**
-     * Update the last accessed time.
-     */
-    public void touch(String sessionId) {
-        var existing = sessionMap.get(sessionId);
-        if (existing != null && System.currentTimeMillis() < existing.expiresAt()) {
-            var updated = new UserSession(
-                    existing.sessionId(),
-                    existing.userId(),
-                    existing.createdAt(),
-                    System.currentTimeMillis(),
-                    existing.expiresAt()
-            );
-            sessionMap.put(sessionId, updated);
-        }
+
+    public void touch(String sessionToken) {
+        jdbc.update(
+            "UPDATE user_sessions SET last_activity_at = NOW() WHERE session_token = ? AND status = 'active'",
+            sessionToken
+        );
     }
-    
-    /**
-     * Invalidate a session.
-     */
-    public void invalidate(String sessionId) {
-        sessionMap.remove(sessionId);
+
+    public void invalidate(String sessionToken) {
+        jdbc.update(
+            "UPDATE user_sessions SET status = 'revoked', revoked_at = NOW() WHERE session_token = ?",
+            sessionToken
+        );
     }
-    
-    /**
-     * Revoke a session (alias for invalidate).
-     */
+
     public void revokeSession(String sessionToken) {
-        // Session token is the session ID in this simple implementation
-        sessionMap.remove(sessionToken);
+        invalidate(sessionToken);
     }
-    
-    /**
-     * Find an active session by token.
-     */
+
     public Optional<UserSession> findActiveSession(String sessionToken) {
         return findById(sessionToken);
     }
-    
-    /**
-     * Revoke all sessions for a user.
-     */
+
     public int revokeAllUserSessions(String userId) {
         return invalidateAllForUser(userId);
     }
-    
-    /**
-     * Invalidate all sessions for a user.
-     */
+
     public int invalidateAllForUser(String userId) {
-        var toRemove = sessionMap.entrySet().stream()
-                .filter(e -> e.getValue().userId().equals(userId))
-                .map(e -> e.getKey())
-                .toList();
-        
-        toRemove.forEach(sessionMap::remove);
-        return toRemove.size();
+        return jdbc.update(
+            "UPDATE user_sessions SET status = 'revoked', revoked_at = NOW() WHERE user_id = ?::uuid AND status = 'active'",
+            userId
+        );
     }
-    
-    /**
-     * Clean up expired sessions.
-     */
+
     public int cleanupExpired() {
-        long now = System.currentTimeMillis();
-        var toRemove = sessionMap.entrySet().stream()
-                .filter(e -> now > e.getValue().expiresAt())
-                .map(e -> e.getKey())
-                .toList();
-        
-        toRemove.forEach(sessionMap::remove);
-        return toRemove.size();
+        return jdbc.update(
+            "UPDATE user_sessions SET status = 'expired' WHERE status = 'active' AND expires_at < NOW()"
+        );
     }
+
+    private static final RowMapper<UserSession> SESSION_ROW_MAPPER = (rs, rowNum) -> {
+        Timestamp created = rs.getTimestamp("created_at");
+        Timestamp lastActivity = rs.getTimestamp("last_activity_at");
+        Timestamp expires = rs.getTimestamp("expires_at");
+        return new UserSession(
+            rs.getString("session_token"),
+            rs.getString("user_id"),
+            created != null ? created.getTime() : 0,
+            lastActivity != null ? lastActivity.getTime() : 0,
+            expires != null ? expires.getTime() : 0
+        );
+    };
 }

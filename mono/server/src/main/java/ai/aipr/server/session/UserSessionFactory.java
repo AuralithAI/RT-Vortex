@@ -1,19 +1,15 @@
 package ai.aipr.server.session;
 
-import ai.aipr.server.grpc.GrpcConnectionConfig;
 import ai.aipr.server.grpc.GrpcDataServiceDelegator;
 import ai.aipr.server.model.UserInfo;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-
-import java.util.List;
 
 /**
  * Factory for creating user sessions.
- * 
+ *
  * <p>This factory handles the creation of {@link IUserSession} instances,
  * managing the connection to the gRPC server and session lifecycle.</p>
  */
@@ -23,25 +19,15 @@ public class UserSessionFactory {
     private static final Logger log = LoggerFactory.getLogger(UserSessionFactory.class);
 
     private final SessionManager sessionManager;
-    private final GrpcConnectionConfig grpcConfig;
-    private final List<GrpcDataServiceDelegator.ServerInstance> serverInstances;
+    private final GrpcDataServiceDelegator delegator;
 
     @Autowired
     public UserSessionFactory(
             SessionManager sessionManager,
-            @Value("${aipr.engine.host:localhost}") String engineHost,
-            @Value("${aipr.engine.port:50051}") int enginePort,
-            @Value("${grpc.server.port:9090}") int grpcServerPort) {
-        
+            GrpcDataServiceDelegator delegator) {
+
         this.sessionManager = sessionManager;
-        this.grpcConfig = GrpcConnectionConfig.defaults();
-        
-        // Configure server instances
-        // For SDK clients, they connect to the Java gRPC server (port 9090)
-        // The Java server then connects to C++ engine (port 50051)
-        this.serverInstances = List.of(
-            new GrpcDataServiceDelegator.ServerInstance("localhost", grpcServerPort, 1)
-        );
+        this.delegator = delegator;
     }
 
     /**
@@ -68,24 +54,19 @@ public class UserSessionFactory {
                                        String clientType, String clientVersion) {
         // Authenticate with platform and get/create user
         UserInfo user = authenticateWithPlatform(platform, accessToken);
-        
+
         // Create session in database
         SessionManager.ValidatedSession validatedSession = sessionManager.createSession(
             user.id(), platform, clientType, clientVersion
         );
-        
-        // Create gRPC delegator for this session
-        GrpcDataServiceDelegator delegator = new GrpcDataServiceDelegator(
-            grpcConfig, serverInstances
-        );
-        
-        // Create remote session wrapper
+
+        // Create remote session wrapper using shared delegator
         IUserSessionRemote remote = new UserSessionRemote(
-            validatedSession.getSessionId(), // Using session ID as token for simplicity
+            validatedSession.getSessionId(),
             validatedSession.getGrpcChannelId(),
             delegator
         );
-        
+
         // Create and return the session
         return new UserSession(
             validatedSession.getSessionId(),
@@ -107,7 +88,7 @@ public class UserSessionFactory {
         if (validatedSession == null) {
             return null;
         }
-        
+
         // Create user info from validated session
         UserInfo user = new UserInfo(
             validatedSession.getUserId(),
@@ -115,19 +96,14 @@ public class UserSessionFactory {
             validatedSession.getUsername(),
             null, null, null
         );
-        
-        // Create gRPC delegator
-        GrpcDataServiceDelegator delegator = new GrpcDataServiceDelegator(
-            grpcConfig, serverInstances
-        );
-        
-        // Create remote session wrapper
+
+        // Create remote session wrapper using shared delegator
         IUserSessionRemote remote = new UserSessionRemote(
             sessionToken,
             validatedSession.getGrpcChannelId(),
             delegator
         );
-        
+
         return new UserSession(
             validatedSession.getSessionId(),
             sessionToken,
@@ -144,12 +120,12 @@ public class UserSessionFactory {
         // TODO: Implement actual OAuth validation with GitHub/GitLab/Bitbucket
         // For now, return a placeholder
         log.info("Authenticating with platform: {}", platform);
-        
+
         // This would:
         // 1. Call platform API to validate token and get user info
         // 2. Create or update user in database
         // 3. Return UserInfo
-        
+
         return new UserInfo(
             java.util.UUID.randomUUID().toString(),
             platform,
