@@ -137,12 +137,18 @@ endif()
 # FAISS for Production Vector Search
 # =============================================================================
 # FAISS requires BLAS (OpenBLAS or MKL) and OpenMP
-# Auto-detection order: MKL > OpenBLAS > Apple Accelerate > Fallback
+# On macOS: brew install faiss (provides system package)
+# On Ubuntu/Windows: Built from source in CI, installed to system
 
 if(AIPR_USE_FAISS)
-    find_package(faiss QUIET)
+    # First, try to find system/pre-built FAISS
+    find_package(faiss QUIET CONFIG)
+    if(NOT faiss_FOUND)
+        find_package(faiss QUIET)
+    endif()
+    
     if(faiss_FOUND)
-        message(STATUS "FAISS found (system installation)")
+        message(STATUS "FAISS found (system/pre-built installation)")
         add_definitions(-DAIPR_HAS_FAISS)
         set(FAISS_LIBRARIES faiss)
     else()

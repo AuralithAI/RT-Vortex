@@ -301,7 +301,25 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libomp-dev libopenblas-dev liblapack-dev
+          sudo apt-get install -y libcurl4-openssl-dev libomp-dev libopenblas-dev liblapack-dev libgflags-dev
+
+      - name: Build FAISS from source (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git /tmp/faiss
+          cd /tmp/faiss
+          mkdir build && cd build
+          cmake .. \
+            -DFAISS_ENABLE_GPU=OFF \
+            -DFAISS_ENABLE_PYTHON=OFF \
+            -DFAISS_ENABLE_C_API=ON \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBLA_VENDOR=OpenBLAS
+          cmake --build . --config Release --parallel 4
+          sudo cmake --install . --config Release
+          sudo ldconfig
       
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
@@ -313,10 +331,29 @@ jobs:
       - name: Install Dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          # Use vcpkg for Windows dependencies (FAISS build from source via CMake FetchContent)
           vcpkg install curl:x64-windows openblas:x64-windows
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows
+
+      - name: Build FAISS from source (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git C:\faiss
+          cd C:\faiss
+          mkdir build
+          cd build
+          cmake .. `
+            -DFAISS_ENABLE_GPU=OFF `
+            -DFAISS_ENABLE_PYTHON=OFF `
+            -DFAISS_ENABLE_C_API=ON `
+            -DBUILD_TESTING=OFF `
+            -DBUILD_SHARED_LIBS=ON `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake --build . --config Release --parallel 4
+          cmake --install . --config Release --prefix C:\faiss-install
+          echo "faiss_DIR=C:\faiss-install" >> $env:GITHUB_ENV
       
       - name: Setup CMake
         uses: lukka/get-cmake@latest
@@ -336,8 +373,16 @@ jobs:
       
       - name: Configure & Build (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          cmake -B build -S ${{ env.MONO_DIR }}/engine -DCMAKE_BUILD_TYPE=Release -DAIPR_BUILD_TESTS=ON -DAIPR_BUILD_SERVER=ON -DAIPR_USE_FAISS=ON -DAIPR_USE_TREE_SITTER=ON -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake -B build -S ${{ env.MONO_DIR }}/engine `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DAIPR_BUILD_TESTS=ON `
+            -DAIPR_BUILD_SERVER=ON `
+            -DAIPR_USE_FAISS=ON `
+            -DAIPR_USE_TREE_SITTER=ON `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DCMAKE_PREFIX_PATH="C:\faiss-install"
           cmake --build build --config Release --parallel 4
       
       - name: Run Tests
