@@ -8,6 +8,9 @@ import ai.aipr.engine.grpc.DiagnosticsResponse;
 import ai.aipr.engine.grpc.EngineServiceGrpc;
 import ai.aipr.engine.grpc.HealthCheckRequest;
 import ai.aipr.engine.grpc.HealthCheckResponse;
+import ai.aipr.engine.grpc.StorageConfigRequest;
+import ai.aipr.engine.grpc.StorageConfigResponse;
+import ai.aipr.engine.grpc.StorageProvider;
 import ai.aipr.engine.grpc.HeuristicsRequest;
 import ai.aipr.engine.grpc.HeuristicsResponse;
 import ai.aipr.engine.grpc.IncrementalIndexRequest;
@@ -20,6 +23,7 @@ import ai.aipr.engine.grpc.ReviewContextResponse;
 import ai.aipr.engine.grpc.SearchConfig;
 import ai.aipr.engine.grpc.SearchRequest;
 import ai.aipr.engine.grpc.SearchResponse;
+import ai.aipr.server.config.Environment;
 import ai.aipr.server.dto.Chunk;
 import ai.aipr.server.dto.ContextPack;
 import ai.aipr.server.dto.DiffAnalysis;
@@ -84,6 +88,9 @@ public class EngineClient {
                     HealthCheckRequest.newBuilder().build());
             engineVersion = health.getVersion();
             log.info("Engine connected: version={}, healthy={}", engineVersion, health.getHealthy());
+
+            // Push storage config from rtserverprops.xml to C++ engine
+            pushStorageConfig();
         } catch (StatusRuntimeException e) {
             log.warn("Engine not reachable at startup (will retry on first call): {}", e.getMessage());
         }
@@ -122,6 +129,96 @@ public class EngineClient {
      */
     public String getVersion() {
         return engineVersion;
+    }
+
+    // =========================================================================
+    // Storage Configuration — single source of truth from rtserverprops.xml
+    // =========================================================================
+
+    /**
+     * Push storage configuration from {@code rtserverprops.xml} to the C++ engine.
+     *
+     * <p>Called once at startup after health check succeeds. The Java server is the
+     * single source of truth for configuration; the C++ engine no longer needs to
+     * read environment variables for storage settings.</p>
+     */
+    private void pushStorageConfig() {
+        Environment.ConfigReader cfg = Environment.server();
+        String storageType = cfg.get("storage.type", "local");
+
+        StorageConfigRequest.Builder builder = StorageConfigRequest.newBuilder();
+
+        switch (storageType.toLowerCase()) {
+            case "local" -> {
+                builder.setProvider(StorageProvider.STORAGE_PROVIDER_LOCAL);
+                builder.setBasePath(cfg.get("storage.local.base-path", "./data"));
+            }
+            case "s3", "aws" -> {
+                builder.setProvider(StorageProvider.STORAGE_PROVIDER_AWS);
+                builder.setBucket(cfg.get("storage.s3.bucket", ""));
+                builder.setRegion(cfg.get("storage.s3.region", "us-east-1"));
+                builder.setEndpointUrl(cfg.get("storage.s3.endpoint", ""));
+                builder.setAccessKey(cfg.get("storage.s3.access-key", ""));
+                builder.setSecretKey(cfg.get("storage.s3.secret-key", ""));
+                builder.setSessionToken(cfg.get("storage.s3.session-token", ""));
+                builder.setUseIrsa(cfg.getBoolean("storage.s3.use-irsa", false));
+                builder.setRoleArn(cfg.get("storage.s3.role-arn", ""));
+            }
+            case "gcs", "gcp" -> {
+                builder.setProvider(StorageProvider.STORAGE_PROVIDER_GCP);
+                builder.setBucket(cfg.get("storage.gcs.bucket", ""));
+                builder.setUseWorkloadIdentity(cfg.getBoolean("storage.gcs.use-workload-identity", true));
+            }
+            case "azure" -> {
+                builder.setProvider(StorageProvider.STORAGE_PROVIDER_AZURE);
+                builder.setBucket(cfg.get("storage.azure.container", ""));
+                builder.setAzureAccountName(cfg.get("storage.azure.account-name", ""));
+                builder.setAzureAccountKey(cfg.get("storage.azure.account-key", ""));
+                builder.setAzureSasToken(cfg.get("storage.azure.sas-token", ""));
+                builder.setUseAzureAd(cfg.getBoolean("storage.azure.use-azure-ad", false));
+            }
+            case "oci" -> {
+                builder.setProvider(StorageProvider.STORAGE_PROVIDER_OCI);
+                builder.setBucket(cfg.get("storage.oci.bucket", ""));
+                builder.setRegion(cfg.get("storage.oci.region", ""));
+                builder.setOciNamespace(cfg.get("storage.oci.namespace", ""));
+                builder.setOciTenancy(cfg.get("storage.oci.tenancy", ""));
+                builder.setOciUser(cfg.get("storage.oci.user", ""));
+                builder.setOciFingerprint(cfg.get("storage.oci.fingerprint", ""));
+                builder.setOciKeyFile(cfg.get("storage.oci.key-file", ""));
+            }
+            case "minio" -> {
+                builder.setProvider(StorageProvider.STORAGE_PROVIDER_MINIO);
+                builder.setBucket(cfg.get("storage.minio.bucket", ""));
+                builder.setEndpointUrl(cfg.get("storage.minio.endpoint", "http://localhost:9000"));
+                builder.setAccessKey(cfg.get("storage.minio.access-key", ""));
+                builder.setSecretKey(cfg.get("storage.minio.secret-key", ""));
+                builder.setRegion("us-east-1"); // MinIO default
+            }
+            default -> {
+                builder.setProvider(StorageProvider.STORAGE_PROVIDER_LOCAL);
+                builder.setBasePath(cfg.get("storage.local.base-path", "./data"));
+                log.warn("Unknown storage type '{}', defaulting to local", storageType);
+            }
+        }
+
+        // Connection settings
+        builder.setTimeoutMs(cfg.getInt("storage.timeout-ms", 30000));
+        builder.setMaxRetries(cfg.getInt("storage.max-retries", 3));
+        builder.setUseSsl(cfg.getBoolean("storage.use-ssl", true));
+        builder.setVerifySsl(cfg.getBoolean("storage.verify-ssl", true));
+        builder.setCaBundlePath(cfg.get("storage.ca-bundle-path", ""));
+
+        try {
+            StorageConfigResponse response = getStub().configureStorage(builder.build());
+            if (response.getSuccess()) {
+                log.info("Storage configured on engine: provider={}", response.getActiveProvider());
+            } else {
+                log.error("Engine rejected storage config: {}", response.getMessage());
+            }
+        } catch (StatusRuntimeException e) {
+            log.warn("Failed to push storage config to engine: {}", e.getMessage());
+        }
     }
 
     // =========================================================================

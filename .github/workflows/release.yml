@@ -108,14 +108,20 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libomp-dev libopenblas-dev liblapack-dev
+          sudo apt-get install -y libcurl4-openssl-dev libomp-dev libopenblas-dev liblapack-dev libfaiss-dev
       
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install libomp openblas protobuf grpc
+          brew install libomp openblas faiss protobuf grpc
           echo "OpenBLAS_HOME=$(brew --prefix openblas)" >> $GITHUB_ENV
           echo "OpenMP_ROOT=$(brew --prefix libomp)" >> $GITHUB_ENV
+      
+      - name: Install Dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          # Use vcpkg for Windows dependencies
+          vcpkg install openblas:x64-windows grpc:x64-windows protobuf:x64-windows
       
       - name: Setup CMake
         uses: lukka/get-cmake@latest
@@ -128,7 +134,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DAIPR_BUILD_TESTS=OFF \
             -DAIPR_BUILD_SERVER=ON \
-            -DAIPR_USE_FAISS=OFF
+            -DAIPR_USE_FAISS=ON \
+            -DAIPR_USE_TREE_SITTER=ON
       
       - name: Build
         run: cmake --build build --config Release --parallel 4

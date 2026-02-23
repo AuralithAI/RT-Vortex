@@ -13,7 +13,7 @@
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://hub.docker.com/)
 [![gRPC](https://img.shields.io/badge/gRPC-TLS-4285F4.svg)](https://grpc.io/)
 
-A platform-neutral PR review engine with connectors for GitHub, GitLab, Bitbucket, and Jenkins.
+A platform-neutral PR review engine with connectors for GitHub, GitLab, Bitbucket, and Azure DevOps.
 
 [Setup Guide](docs/setup.md) | [Architecture](docs/architecture.md)
 
@@ -23,12 +23,14 @@ A platform-neutral PR review engine with connectors for GitHub, GitLab, Bitbucke
 
 ## Features
 
-- **Platform Agnostic**: Works with GitHub, GitLab, and Bitbucket (cloud & self-hosted)
-- **CI/CD Integration**: GitHub Actions, GitLab CI, Jenkins, Bitbucket Pipelines
+- **Platform Agnostic**: Works with GitHub, GitLab, Bitbucket, and Azure DevOps (cloud & self-hosted)
+- **CI/CD Integration**: GitHub Actions, GitLab CI, Jenkins, Bitbucket Pipelines, Azure Pipelines
 - **High Performance**: C++ engine for code indexing and analysis via gRPC
-- **LLM Powered**: Supports OpenAI, Anthropic, and compatible APIs
+- **LLM Powered**: Supports OpenAI, Anthropic, Azure OpenAI, Ollama, and compatible APIs
+- **Multi-Cloud Storage**: Local, AWS S3, GCS, Azure Blob, OCI Object Storage, MinIO
 - **Self-Hostable**: Deploy on your infrastructure with full control
 - **TLS/mTLS Support**: Secure gRPC communication with included dev certificates
+- **Unified Configuration**: Single XML config (`rtserverprops.xml`) drives both Java and C++ components
 
 ## Prerequisites
 
@@ -112,26 +114,35 @@ aipr-<version>.zip
 
 ## Configuration
 
-Edit XML configuration files (no environment variables needed):
+All configuration is centralized in `config/rtserverprops.xml`. The Java server reads this file and pushes relevant settings (storage, LLM, etc.) to the C++ engine via gRPC at startup.
 
 **`config/rtserverprops.xml`** - Server settings:
 ```xml
-<database>
-    <host>localhost</host>
-    <port>5432</port>
-    <name>aipr</name>
-    <username>aipr</username>
-    <password>your_password</password>
-</database>
+<!-- Database -->
+<database url="jdbc:postgresql://localhost:5432/aipr"
+          username="aipr" password="your_password"/>
+
+<!-- LLM Providers (multiple supported with failover) -->
+<llm primary="openai" fallback="ollama">
+    <openai api-key="${LLM_OPENAI_API_KEY}" model="gpt-4-turbo-preview"/>
+    <anthropic api-key="${LLM_ANTHROPIC_API_KEY}"/>
+    <azure-openai endpoint="${LLM_AZURE_OPENAI_ENDPOINT}" deployment="gpt-4"/>
+    <ollama base-url="http://localhost:11434"/>
+</llm>
+
+<!-- Storage (pushed to C++ engine via gRPC) -->
+<storage type="s3">
+    <s3 bucket="my-bucket" region="us-east-1"/>
+</storage>
 ```
 
 **`config/vcsplatforms.xml`** - Platform OAuth:
 ```xml
-<github>
-    <enabled>true</enabled>
-    <clientId>your_client_id</clientId>
-    <clientSecret>your_secret</clientSecret>
-</github>
+<github enabled="true" client-id="your_id" client-secret="your_secret"/>
+<azure-devops enabled="true" 
+              client-id="your_id" 
+              tenant-id="your_tenant"
+              webhook-secret="your_hmac_secret"/>
 ```
 
 ## Platform Authentication
@@ -140,6 +151,20 @@ Configure which platforms to enable in `config/vcsplatforms.xml`, then authentic
 - `http://localhost:8080/api/v1/auth/github/login`
 - `http://localhost:8080/api/v1/auth/gitlab/login`
 - `http://localhost:8080/api/v1/auth/bitbucket/login`
+- `http://localhost:8080/api/v1/auth/azure-devops/login`
+
+## LLM Provider Management
+
+The server auto-discovers local Ollama instances and provides a REST API for provider management:
+
+```bash
+# List all providers with health status
+curl http://localhost:8080/api/v1/llm/providers
+
+# Switch active provider
+curl -X POST http://localhost:8080/api/v1/llm/providers/switch \
+  -d '{"provider": "ollama-local"}'
+```
 
 ## CI/CD Integration
 

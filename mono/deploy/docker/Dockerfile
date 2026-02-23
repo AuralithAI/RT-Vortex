@@ -18,6 +18,10 @@ RUN apt-get update && apt-get install -y \
     git \
     pkg-config \
     libssl-dev \
+    libopenblas-dev \
+    liblapack-dev \
+    libomp-dev \
+    libfaiss-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -26,12 +30,13 @@ WORKDIR /build
 COPY engine/ ./engine/
 COPY proto/engine.proto ./proto/
 
-# Build engine with gRPC server
+# Build engine with gRPC server and FAISS support
 RUN cmake -B build -S engine \
     -DCMAKE_BUILD_TYPE=Release \
     -DAIPR_BUILD_TESTS=OFF \
     -DAIPR_BUILD_SERVER=ON \
-    -DAIPR_USE_FAISS=OFF \
+    -DAIPR_USE_FAISS=ON \
+    -DAIPR_USE_TREE_SITTER=ON \
     && cmake --build build --config Release --parallel $(nproc)
 
 

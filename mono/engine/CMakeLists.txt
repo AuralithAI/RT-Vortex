@@ -36,16 +36,20 @@ endif()
 # Find dependencies
 find_package(Threads REQUIRED)
 
+# FetchContent for downloading dependencies (MUST be before any FetchContent_Declare)
+include(FetchContent)
+
 # =============================================================================
 # libcurl for HTTP embedding API calls
 # =============================================================================
 find_package(CURL REQUIRED)
 if(CURL_FOUND)
     message(STATUS "Found libcurl: ${CURL_VERSION_STRING}")
+    add_definitions(-DAIPR_HAS_CURL)
 else()
-    message(FATAL_ERROR "libcurl is required for embedding API calls. Install with:\n"
+    message(FATAL_ERROR "libcurl is required for HTTP embedding API calls. Install with:\n"
                         "  Ubuntu/Debian: sudo apt-get install libcurl4-openssl-dev\n"
-                        "  macOS: brew install curl\n"
+                        "  macOS: brew install curl (or use system curl)\n"
                         "  Windows: vcpkg install curl")
 endif()
 
@@ -117,24 +121,87 @@ else()
     set(ONNX_LIBRARIES "")
 endif()
 
-# FetchContent for downloading dependencies
-include(FetchContent)
+# =============================================================================
+# FAISS for Production Vector Search
+# =============================================================================
+# FAISS requires BLAS (OpenBLAS or MKL) and OpenMP
+# Auto-detection order: MKL > OpenBLAS > Apple Accelerate > Fallback
 
-# Optional: FAISS for vector search
 if(AIPR_USE_FAISS)
     find_package(faiss QUIET)
     if(faiss_FOUND)
-        message(STATUS "FAISS found (system)")
+        message(STATUS "FAISS found (system installation)")
         add_definitions(-DAIPR_HAS_FAISS)
         set(FAISS_LIBRARIES faiss)
     else()
-        message(STATUS "FAISS not found, downloading via FetchContent...")
+        message(STATUS "FAISS not found, attempting to build from source...")
         
-        # FAISS requires OpenMP and BLAS
+        # Try to find OpenMP
         find_package(OpenMP QUIET)
-        find_package(BLAS QUIET)
         
-        if(OpenMP_FOUND AND BLAS_FOUND)
+        # BLAS detection: Try MKL first, then OpenBLAS, then Apple Accelerate
+        set(BLAS_FOUND FALSE)
+        set(BLAS_TYPE "none")
+        
+        # 1. Try Intel MKL
+        find_package(MKL QUIET)
+        if(MKL_FOUND)
+            set(BLAS_FOUND TRUE)
+            set(BLAS_TYPE "MKL")
+            set(BLAS_LIBRARIES ${MKL_LIBRARIES})
+            set(BLAS_INCLUDE_DIRS ${MKL_INCLUDE_DIRS})
+            message(STATUS "Found Intel MKL for BLAS")
+        endif()
+        
+        # 2. Try OpenBLAS if MKL not found
+        if(NOT BLAS_FOUND)
+            find_package(OpenBLAS QUIET)
+            if(OpenBLAS_FOUND)
+                set(BLAS_FOUND TRUE)
+                set(BLAS_TYPE "OpenBLAS")
+                set(BLAS_LIBRARIES ${OpenBLAS_LIBRARIES})
+                set(BLAS_INCLUDE_DIRS ${OpenBLAS_INCLUDE_DIRS})
+                message(STATUS "Found OpenBLAS for BLAS")
+            else()
+                # Try pkg-config for OpenBLAS
+                find_package(PkgConfig QUIET)
+                if(PkgConfig_FOUND)
+                    pkg_check_modules(OPENBLAS QUIET openblas)
+                    if(OPENBLAS_FOUND)
+                        set(BLAS_FOUND TRUE)
+                        set(BLAS_TYPE "OpenBLAS")
+                        set(BLAS_LIBRARIES ${OPENBLAS_LIBRARIES})
+                        set(BLAS_INCLUDE_DIRS ${OPENBLAS_INCLUDE_DIRS})
+                        message(STATUS "Found OpenBLAS via pkg-config")
+                    endif()
+                endif()
+            endif()
+        endif()
+        
+        # 3. Try generic BLAS
+        if(NOT BLAS_FOUND)
+            find_package(BLAS QUIET)
+            if(BLAS_FOUND)
+                set(BLAS_TYPE "Generic")
+                message(STATUS "Found generic BLAS")
+            endif()
+        endif()
+        
+        # 4. Apple Accelerate on macOS
+        if(NOT BLAS_FOUND AND APPLE)
+            find_library(ACCELERATE_FRAMEWORK Accelerate)
+            if(ACCELERATE_FRAMEWORK)
+                set(BLAS_FOUND TRUE)
+                set(BLAS_TYPE "Accelerate")
+                set(BLAS_LIBRARIES ${ACCELERATE_FRAMEWORK})
+                message(STATUS "Found Apple Accelerate framework for BLAS")
+            endif()
+        endif()
+        
+        # Build FAISS if we have BLAS
+        if(BLAS_FOUND)
+            message(STATUS "Using ${BLAS_TYPE} for FAISS BLAS backend")
+            
             FetchContent_Declare(
                 faiss
                 GIT_REPOSITORY https://github.com/facebookresearch/faiss.git
@@ -149,21 +216,165 @@ if(AIPR_USE_FAISS)
             set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
             set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
             
+            # Set BLAS type for FAISS
+            if(BLAS_TYPE STREQUAL "MKL")
+                set(BLA_VENDOR Intel10_64lp_seq CACHE STRING "" FORCE)
+            elseif(BLAS_TYPE STREQUAL "OpenBLAS")
+                set(BLA_VENDOR OpenBLAS CACHE STRING "" FORCE)
+            elseif(BLAS_TYPE STREQUAL "Accelerate")
+                set(BLA_VENDOR Apple CACHE STRING "" FORCE)
+            endif()
+            
             FetchContent_MakeAvailable(faiss)
             
             add_definitions(-DAIPR_HAS_FAISS)
             set(FAISS_LIBRARIES faiss)
-            message(STATUS "FAISS downloaded and configured")
+            message(STATUS "FAISS v1.7.4 configured with ${BLAS_TYPE}")
         else()
-            message(WARNING "FAISS requires OpenMP and BLAS. Install them or FAISS will be disabled.")
-            message(WARNING "  Ubuntu/Debian: sudo apt-get install libomp-dev libopenblas-dev")
-            message(WARNING "  macOS: brew install libomp openblas")
-            message(WARNING "Using fallback vector search")
+            message(WARNING "FAISS requires BLAS library. Install one of:")
+            message(WARNING "  Ubuntu/Debian: sudo apt-get install libopenblas-dev")
+            message(WARNING "  RHEL/CentOS:   sudo yum install openblas-devel")
+            message(WARNING "  macOS:         brew install openblas (or use Accelerate)")
+            message(WARNING "  Windows:       vcpkg install openblas")
+            message(WARNING "Using fallback brute-force vector search")
             set(FAISS_LIBRARIES "")
+        endif()
+        
+        if(NOT OpenMP_FOUND)
+            message(STATUS "OpenMP not found - FAISS will use single-threaded mode")
+            message(STATUS "  Ubuntu/Debian: sudo apt-get install libomp-dev")
+            message(STATUS "  macOS:         brew install libomp")
         endif()
     endif()
 else()
+    message(STATUS "FAISS disabled (brute-force fallback enabled)")
     set(FAISS_LIBRARIES "")
+endif()
+
+# =============================================================================
+# Tree-sitter for AST-based Code Chunking
+# =============================================================================
+
+if(AIPR_USE_TREE_SITTER)
+    message(STATUS "Configuring tree-sitter for AST parsing...")
+    
+    # Fetch tree-sitter core library
+    FetchContent_Declare(
+        tree_sitter
+        GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter.git
+        GIT_TAG v0.22.6
+        GIT_SHALLOW TRUE
+        SOURCE_SUBDIR lib
+    )
+    
+    # Fetch language grammars
+    FetchContent_Declare(
+        tree_sitter_c
+        GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter-c.git
+        GIT_TAG v0.21.0
+        GIT_SHALLOW TRUE
+    )
+    
+    FetchContent_Declare(
+        tree_sitter_cpp
+        GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter-cpp.git
+        GIT_TAG v0.22.0
+        GIT_SHALLOW TRUE
+    )
+    
+    FetchContent_Declare(
+        tree_sitter_java
+        GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter-java.git
+        GIT_TAG v0.21.0
+        GIT_SHALLOW TRUE
+    )
+    
+    FetchContent_Declare(
+        tree_sitter_python
+        GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter-python.git
+        GIT_TAG v0.21.0
+        GIT_SHALLOW TRUE
+    )
+    
+    FetchContent_Declare(
+        tree_sitter_javascript
+        GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter-javascript.git
+        GIT_TAG v0.21.0
+        GIT_SHALLOW TRUE
+    )
+    
+    FetchContent_Declare(
+        tree_sitter_typescript
+        GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter-typescript.git
+        GIT_TAG v0.21.0
+        GIT_SHALLOW TRUE
+    )
+    
+    FetchContent_Declare(
+        tree_sitter_go
+        GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter-go.git
+        GIT_TAG v0.21.0
+        GIT_SHALLOW TRUE
+    )
+    
+    FetchContent_Declare(
+        tree_sitter_rust
+        GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter-rust.git
+        GIT_TAG v0.21.2
+        GIT_SHALLOW TRUE
+    )
+    
+    # Make available
+    FetchContent_MakeAvailable(tree_sitter)
+    FetchContent_MakeAvailable(
+        tree_sitter_c
+        tree_sitter_cpp
+        tree_sitter_java
+        tree_sitter_python
+        tree_sitter_javascript
+        tree_sitter_typescript
+        tree_sitter_go
+        tree_sitter_rust
+    )
+    
+    # Build tree-sitter grammars as a static library
+    add_library(tree_sitter_grammars STATIC
+        ${tree_sitter_c_SOURCE_DIR}/src/parser.c
+        ${tree_sitter_cpp_SOURCE_DIR}/src/parser.c
+        ${tree_sitter_cpp_SOURCE_DIR}/src/scanner.c
+        ${tree_sitter_java_SOURCE_DIR}/src/parser.c
+        ${tree_sitter_python_SOURCE_DIR}/src/parser.c
+        ${tree_sitter_python_SOURCE_DIR}/src/scanner.c
+        ${tree_sitter_javascript_SOURCE_DIR}/src/parser.c
+        ${tree_sitter_javascript_SOURCE_DIR}/src/scanner.c
+        ${tree_sitter_typescript_SOURCE_DIR}/typescript/src/parser.c
+        ${tree_sitter_typescript_SOURCE_DIR}/typescript/src/scanner.c
+        ${tree_sitter_go_SOURCE_DIR}/src/parser.c
+        ${tree_sitter_rust_SOURCE_DIR}/src/parser.c
+        ${tree_sitter_rust_SOURCE_DIR}/src/scanner.c
+    )
+    
+    target_include_directories(tree_sitter_grammars PUBLIC
+        ${tree_sitter_SOURCE_DIR}/lib/include
+        ${tree_sitter_c_SOURCE_DIR}/src
+        ${tree_sitter_cpp_SOURCE_DIR}/src
+        ${tree_sitter_java_SOURCE_DIR}/src
+        ${tree_sitter_python_SOURCE_DIR}/src
+        ${tree_sitter_javascript_SOURCE_DIR}/src
+        ${tree_sitter_typescript_SOURCE_DIR}/typescript/src
+        ${tree_sitter_go_SOURCE_DIR}/src
+        ${tree_sitter_rust_SOURCE_DIR}/src
+    )
+    
+    target_link_libraries(tree_sitter_grammars PUBLIC tree-sitter)
+    
+    add_definitions(-DAIPR_HAS_TREE_SITTER)
+    set(TREE_SITTER_LIBRARIES tree_sitter_grammars tree-sitter)
+    
+    message(STATUS "Tree-sitter configured with grammars: C, C++, Java, Python, JavaScript, TypeScript, Go, Rust")
+else()
+    message(STATUS "Tree-sitter disabled (regex fallback enabled)")
+    set(TREE_SITTER_LIBRARIES "")
 endif()
 
 # =============================================================================
@@ -271,6 +482,7 @@ endif()
 
 # Include directories
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include/tms)
 
 # Source files - Indexing
 set(INDEXING_SOURCES
@@ -298,6 +510,33 @@ set(REVIEW_SOURCES
     src/review/heuristics.cpp
 )
 
+# Source files - Storage
+set(STORAGE_SOURCES
+    src/storage/local_storage.cpp
+    src/storage/cloud_storage.cpp
+)
+
+# Source files - Memory System (Brain-inspired RAG)
+set(MEMORY_SOURCES
+    src/memory/long_term_memory.cpp
+    src/memory/short_term_memory.cpp
+    src/memory/meta_task_memory.cpp
+    src/memory/cross_memory_attention.cpp
+    src/memory/memory_system.cpp
+)
+
+# Source files - TMS Cognitive Memory System (Production Brain-RAG)
+set(TMS_SOURCES
+    src/tms/core/tms_memory_system.cpp
+    src/tms/core/ltm_faiss.cpp
+    src/tms/core/stm.cpp
+    src/tms/core/mtm_graph.cpp
+    src/tms/core/compute_controller.cpp
+    src/tms/core/cross_memory_attention.cpp
+    src/tms/ingestion/embedding_engine.cpp
+    src/tms/ingestion/repo_parser.cpp
+)
+
 # Source files - Utilities
 set(UTIL_SOURCES
     src/util/json.cpp
@@ -311,6 +550,9 @@ add_library(aipr-engine STATIC
     ${INDEXING_SOURCES}
     ${RETRIEVAL_SOURCES}
     ${REVIEW_SOURCES}
+    ${STORAGE_SOURCES}
+    ${MEMORY_SOURCES}
+    ${TMS_SOURCES}
     ${UTIL_SOURCES}
 )
 
@@ -327,6 +569,10 @@ target_link_libraries(aipr-engine PUBLIC
 
 if(FAISS_LIBRARIES)
     target_link_libraries(aipr-engine PUBLIC ${FAISS_LIBRARIES})
+endif()
+
+if(TREE_SITTER_LIBRARIES)
+    target_link_libraries(aipr-engine PUBLIC ${TREE_SITTER_LIBRARIES})
 endif()
 
 if(AIPR_USE_ONNX AND ONNX_LIBRARIES)
@@ -375,6 +621,11 @@ if(AIPR_BUILD_TOOLS)
     
     add_executable(aipr-engine-doctor tools/aipr-engine-doctor.cpp)
     target_link_libraries(aipr-engine-doctor PRIVATE aipr-engine)
+    
+    # TMS Demo - Brain-Inspired RAG System
+    add_executable(tms-demo examples/tms_demo.cpp)
+    target_link_libraries(tms-demo PRIVATE aipr-engine)
+    target_include_directories(tms-demo PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 endif()
 
 # =============================================================================
@@ -483,6 +734,13 @@ message(STATUS "  Build tools:     ${AIPR_BUILD_TOOLS}")
 message(STATUS "  Build server:    ${AIPR_BUILD_SERVER}")
 message(STATUS "  Use FAISS:       ${AIPR_USE_FAISS}")
 message(STATUS "  Use tree-sitter: ${AIPR_USE_TREE_SITTER}")
+message(STATUS "")
+message(STATUS "  TMS Cognitive Memory System: ENABLED")
+message(STATUS "    - LTM (FAISS): Long-term code memory")
+message(STATUS "    - STM: Session context ring buffer")
+message(STATUS "    - MTM: Pattern/strategy graph")
+message(STATUS "    - Cross-Memory Attention: Multi-head fusion")
+message(STATUS "    - Compute Controller: Adaptive strategy selection")
 if(AIPR_BUILD_SERVER)
     message(STATUS "")
     message(STATUS "  Server binary:   ${CMAKE_BINARY_DIR}/bin/aipr-engine${CMAKE_EXECUTABLE_SUFFIX}")

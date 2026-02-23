@@ -1,0 +1,860 @@
+/**
+ * TMS Long-Term Memory (LTM) - FAISS Implementation
+ * 
+ * Production-grade vector search for massive code repositories.
+ */
+
+#include "tms/ltm_faiss.h"
+#include <fstream>
+#include <sstream>
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <numeric>
+
+#ifdef AIPR_HAS_FAISS
+#include <faiss/IndexFlat.h>
+#include <faiss/IndexIVFFlat.h>
+#include <faiss/IndexIVFPQ.h>
+#include <faiss/IndexHNSW.h>
+#include <faiss/IndexIDMap.h>
+#include <faiss/index_io.h>
+#include <faiss/MetricType.h>
+#endif
+
+namespace aipr::tms {
+
+// =============================================================================
+// Lexical Index (BM25-style)
+// =============================================================================
+
+class LTMFaiss::LexicalIndex {
+public:
+    void add(const std::string& id, const std::string& content) {
+        // Tokenize content
+        auto tokens = tokenize(content);
+        
+        // Update document frequency
+        std::unordered_set<std::string> unique_tokens(tokens.begin(), tokens.end());
+        for (const auto& token : unique_tokens) {
+            doc_freq_[token]++;
+        }
+        
+        // Store term frequencies
+        std::unordered_map<std::string, int> tf;
+        for (const auto& token : tokens) {
+            tf[token]++;
+        }
+        doc_terms_[id] = tf;
+        doc_lengths_[id] = tokens.size();
+        
+        total_docs_++;
+        avg_doc_length_ = (avg_doc_length_ * (total_docs_ - 1) + tokens.size()) / total_docs_;
+    }
+    
+    void remove(const std::string& id) {
+        auto it = doc_terms_.find(id);
+        if (it != doc_terms_.end()) {
+            // Update document frequency
+            for (const auto& [token, _] : it->second) {
+                if (--doc_freq_[token] == 0) {
+                    doc_freq_.erase(token);
+                }
+            }
+            
+            // Update average
+            if (total_docs_ > 1) {
+                avg_doc_length_ = (avg_doc_length_ * total_docs_ - doc_lengths_[id]) / (total_docs_ - 1);
+            } else {
+                avg_doc_length_ = 0;
+            }
+            
+            doc_terms_.erase(id);
+            doc_lengths_.erase(id);
+            total_docs_--;
+        }
+    }
+    
+    std::vector<std::pair<std::string, float>> search(const std::string& query, int top_k) {
+        auto query_tokens = tokenize(query);
+        
+        std::unordered_map<std::string, float> scores;
+        
+        // BM25 scoring
+        const float k1 = 1.2f;
+        const float b = 0.75f;
+        
+        for (const auto& [doc_id, terms] : doc_terms_) {
+            float score = 0.0f;
+            float doc_len = static_cast<float>(doc_lengths_[doc_id]);
+            
+            for (const auto& token : query_tokens) {
+                auto tf_it = terms.find(token);
+                if (tf_it == terms.end()) continue;
+                
+                float tf = static_cast<float>(tf_it->second);
+                auto df_it = doc_freq_.find(token);
+                float df = df_it != doc_freq_.end() ? static_cast<float>(df_it->second) : 0.0f;
+                
+                // IDF
+                float idf = std::log((total_docs_ - df + 0.5f) / (df + 0.5f) + 1.0f);
+                
+                // TF normalization
+                float tf_norm = (tf * (k1 + 1.0f)) / 
+                               (tf + k1 * (1.0f - b + b * doc_len / avg_doc_length_));
+                
+                score += idf * tf_norm;
+            }
+            
+            if (score > 0) {
+                scores[doc_id] = score;
+            }
+        }
+        
+        // Sort by score
+        std::vector<std::pair<std::string, float>> results(scores.begin(), scores.end());
+        std::partial_sort(
+            results.begin(),
+            results.begin() + std::min(static_cast<size_t>(top_k), results.size()),
+            results.end(),
+            [](const auto& a, const auto& b) { return a.second > b.second; }
+        );
+        
+        if (results.size() > static_cast<size_t>(top_k)) {
+            results.resize(top_k);
+        }
+        
+        return results;
+    }
+    
+private:
+    std::unordered_map<std::string, std::unordered_map<std::string, int>> doc_terms_;
+    std::unordered_map<std::string, size_t> doc_lengths_;
+    std::unordered_map<std::string, int> doc_freq_;
+    size_t total_docs_ = 0;
+    float avg_doc_length_ = 0.0f;
+    
+    std::vector<std::string> tokenize(const std::string& text) {
+        std::vector<std::string> tokens;
+        std::string current;
+        
+        for (char c : text) {
+            if (std::isalnum(c) || c == '_') {
+                current += std::tolower(c);
+            } else if (!current.empty()) {
+                if (current.length() >= 2 && current.length() <= 50) {
+                    tokens.push_back(current);
+                }
+                current.clear();
+            }
+        }
+        
+        if (!current.empty() && current.length() >= 2 && current.length() <= 50) {
+            tokens.push_back(current);
+        }
+        
+        return tokens;
+    }
+};
+
+// =============================================================================
+// FAISS Index Implementation
+// =============================================================================
+
+class LTMFaiss::FAISSIndexImpl {
+public:
+    explicit FAISSIndexImpl(const LTMConfig& config) : config_(config) {
+    }
+    
+    ~FAISSIndexImpl() {
+#ifdef AIPR_HAS_FAISS
+        delete index_;
+        index_ = nullptr;
+#endif
+    }
+    
+    void initialize(FAISSIndexType type) {
+#ifdef AIPR_HAS_FAISS
+        type_ = type;
+        
+        switch (type) {
+            case FAISSIndexType::FLAT_L2: {
+                auto flat = new faiss::IndexFlatL2(config_.dimension);
+                index_ = new faiss::IndexIDMap(flat);
+                trained_ = true;
+                break;
+            }
+            case FAISSIndexType::FLAT_IP: {
+                auto flat = new faiss::IndexFlatIP(config_.dimension);
+                index_ = new faiss::IndexIDMap(flat);
+                trained_ = true;
+                break;
+            }
+            case FAISSIndexType::IVF_FLAT: {
+                auto quantizer = new faiss::IndexFlatL2(config_.dimension);
+                auto ivf = new faiss::IndexIVFFlat(quantizer, config_.dimension, 
+                                                   config_.nlist, faiss::METRIC_L2);
+                ivf->own_fields = true;
+                ivf->nprobe = config_.nprobe;
+                index_ = new faiss::IndexIDMap(ivf);
+                trained_ = false;
+                break;
+            }
+            case FAISSIndexType::IVF_PQ: {
+                auto quantizer = new faiss::IndexFlatL2(config_.dimension);
+                auto ivf = new faiss::IndexIVFPQ(quantizer, config_.dimension,
+                                                  config_.nlist, config_.pq_m, config_.pq_bits);
+                ivf->own_fields = true;
+                ivf->nprobe = config_.nprobe;
+                index_ = new faiss::IndexIDMap(ivf);
+                trained_ = false;
+                break;
+            }
+            case FAISSIndexType::HNSW_FLAT: {
+                auto hnsw = new faiss::IndexHNSWFlat(config_.dimension, config_.hnsw_m);
+                hnsw->hnsw.efConstruction = config_.hnsw_ef_construction;
+                hnsw->hnsw.efSearch = config_.hnsw_ef_search;
+                index_ = new faiss::IndexIDMap(hnsw);
+                trained_ = true;
+                break;
+            }
+            default:
+                // AUTO - will be set later based on data size
+                type_ = FAISSIndexType::FLAT_L2;
+                auto flat = new faiss::IndexFlatL2(config_.dimension);
+                index_ = new faiss::IndexIDMap(flat);
+                trained_ = true;
+                break;
+        }
+#endif
+    }
+    
+    void add(int64_t id, const std::vector<float>& embedding) {
+#ifdef AIPR_HAS_FAISS
+        if (!index_ || !trained_) return;
+        index_->add_with_ids(1, embedding.data(), &id);
+#else
+        (void)id; (void)embedding;
+#endif
+    }
+    
+    void addBatch(const std::vector<int64_t>& ids, const std::vector<float>& embeddings) {
+#ifdef AIPR_HAS_FAISS
+        if (!index_ || !trained_) return;
+        index_->add_with_ids(ids.size(), embeddings.data(), ids.data());
+#else
+        (void)ids; (void)embeddings;
+#endif
+    }
+    
+    std::pair<std::vector<int64_t>, std::vector<float>> search(
+        const std::vector<float>& query,
+        int top_k
+    ) {
+        std::vector<int64_t> ids(top_k, -1);
+        std::vector<float> distances(top_k, std::numeric_limits<float>::max());
+        
+#ifdef AIPR_HAS_FAISS
+        if (!index_ || index_->ntotal == 0) {
+            return {ids, distances};
+        }
+        
+        index_->search(1, query.data(), top_k, distances.data(), ids.data());
+#else
+        (void)query;
+#endif
+        
+        return {ids, distances};
+    }
+    
+    void remove(int64_t id) {
+#ifdef AIPR_HAS_FAISS
+        if (!index_) return;
+        faiss::IDSelectorArray selector(1, &id);
+        index_->remove_ids(selector);
+#else
+        (void)id;
+#endif
+    }
+    
+    void train(const std::vector<float>& training_data, size_t n_vectors) {
+#ifdef AIPR_HAS_FAISS
+        if (!index_) return;
+        
+        // Check if underlying index needs training
+        auto id_map = dynamic_cast<faiss::IndexIDMap*>(index_);
+        if (id_map) {
+            if (!id_map->index->is_trained) {
+                id_map->index->train(n_vectors, training_data.data());
+            }
+        }
+        trained_ = true;
+#else
+        (void)training_data; (void)n_vectors;
+#endif
+    }
+    
+    bool isTrained() const { return trained_; }
+    
+    size_t size() const {
+#ifdef AIPR_HAS_FAISS
+        return index_ ? index_->ntotal : 0;
+#else
+        return 0;
+#endif
+    }
+    
+    void save(const std::string& path) {
+#ifdef AIPR_HAS_FAISS
+        if (index_) {
+            faiss::write_index(index_, (path + "/faiss.index").c_str());
+        }
+#else
+        (void)path;
+#endif
+    }
+    
+    void load(const std::string& path) {
+#ifdef AIPR_HAS_FAISS
+        std::string index_path = path + "/faiss.index";
+        if (std::filesystem::exists(index_path)) {
+            if (index_) {
+                delete index_;
+            }
+            index_ = faiss::read_index(index_path.c_str());
+            trained_ = true;
+        }
+#else
+        (void)path;
+#endif
+    }
+    
+    FAISSIndexType getType() const { return type_; }
+
+private:
+    LTMConfig config_;
+    FAISSIndexType type_ = FAISSIndexType::FLAT_L2;
+    bool trained_ = false;
+    
+#ifdef AIPR_HAS_FAISS
+    faiss::Index* index_ = nullptr;
+#endif
+};
+
+// =============================================================================
+// LTMFaiss Implementation
+// =============================================================================
+
+LTMFaiss::LTMFaiss(const LTMConfig& config)
+    : config_(config)
+    , faiss_impl_(std::make_unique<FAISSIndexImpl>(config))
+    , lexical_index_(std::make_unique<LexicalIndex>()) {
+    
+    // Initialize FAISS index
+    FAISSIndexType type = config.index_type;
+    if (type == FAISSIndexType::AUTO) {
+        type = selectIndexType(0);  // Will adjust when we know data size
+    }
+    faiss_impl_->initialize(type);
+}
+
+LTMFaiss::~LTMFaiss() = default;
+
+// =============================================================================
+// Core Operations
+// =============================================================================
+
+void LTMFaiss::add(const CodeChunk& chunk, const std::vector<float>& embedding) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Assign FAISS ID
+    int64_t faiss_id = next_faiss_id_++;
+    
+    // Store in FAISS
+    faiss_impl_->add(faiss_id, embedding);
+    
+    // Store metadata
+    chunks_[chunk.id] = chunk;
+    
+    MemoryMetadata meta;
+    meta.id = chunk.id;
+    meta.created_at = std::chrono::system_clock::now();
+    meta.last_accessed = meta.created_at;
+    meta.importance_score = chunk.importance_score;
+    metadata_[chunk.id] = meta;
+    
+    // Update indexes
+    chunk_id_to_faiss_id_[chunk.id] = faiss_id;
+    faiss_id_to_chunk_id_[faiss_id] = chunk.id;
+    
+    // Extract repo ID from chunk ID (format: "repo_id:chunk_id")
+    std::string repo_id;
+    size_t colon_pos = chunk.id.find(':');
+    if (colon_pos != std::string::npos) {
+        repo_id = chunk.id.substr(0, colon_pos);
+    }
+    
+    if (!repo_id.empty()) {
+        repo_to_chunks_[repo_id].push_back(chunk.id);
+    }
+    
+    // Add to lexical index
+    lexical_index_->add(chunk.id, chunk.content);
+    
+    // Auto-save check
+    additions_since_save_++;
+    maybeAutoSave();
+}
+
+void LTMFaiss::addBatch(
+    const std::vector<CodeChunk>& chunks,
+    const std::vector<std::vector<float>>& embeddings
+) {
+    if (chunks.size() != embeddings.size()) {
+        throw std::invalid_argument("Chunks and embeddings count mismatch");
+    }
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Flatten embeddings for batch add
+    std::vector<float> flat_embeddings;
+    flat_embeddings.reserve(embeddings.size() * config_.dimension);
+    
+    std::vector<int64_t> faiss_ids;
+    faiss_ids.reserve(chunks.size());
+    
+    for (size_t i = 0; i < chunks.size(); ++i) {
+        int64_t faiss_id = next_faiss_id_++;
+        faiss_ids.push_back(faiss_id);
+        
+        flat_embeddings.insert(flat_embeddings.end(), 
+                               embeddings[i].begin(), embeddings[i].end());
+        
+        // Store metadata
+        const auto& chunk = chunks[i];
+        chunks_[chunk.id] = chunk;
+        
+        MemoryMetadata meta;
+        meta.id = chunk.id;
+        meta.created_at = std::chrono::system_clock::now();
+        meta.last_accessed = meta.created_at;
+        meta.importance_score = chunk.importance_score;
+        metadata_[chunk.id] = meta;
+        
+        // Update indexes
+        chunk_id_to_faiss_id_[chunk.id] = faiss_id;
+        faiss_id_to_chunk_id_[faiss_id] = chunk.id;
+        
+        // Extract repo ID
+        std::string repo_id;
+        size_t colon_pos = chunk.id.find(':');
+        if (colon_pos != std::string::npos) {
+            repo_id = chunk.id.substr(0, colon_pos);
+        }
+        
+        if (!repo_id.empty()) {
+            repo_to_chunks_[repo_id].push_back(chunk.id);
+        }
+        
+        // Lexical index
+        lexical_index_->add(chunk.id, chunk.content);
+    }
+    
+    // Batch add to FAISS
+    faiss_impl_->addBatch(faiss_ids, flat_embeddings);
+    
+    additions_since_save_ += chunks.size();
+    maybeAutoSave();
+}
+
+std::vector<RetrievedChunk> LTMFaiss::search(
+    const std::vector<float>& query_embedding,
+    int top_k,
+    const std::string& repo_filter
+) {
+    if (top_k <= 0) top_k = config_.default_top_k;
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Search FAISS
+    int search_k = top_k;
+    if (!repo_filter.empty()) {
+        // Over-fetch to compensate for filtering
+        search_k = std::min(top_k * 3, static_cast<int>(chunks_.size()));
+    }
+    
+    auto [ids, distances] = faiss_impl_->search(query_embedding, search_k);
+    
+    return convertResults(ids, distances);
+}
+
+std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
+    const std::string& query_text,
+    const std::vector<float>& query_embedding,
+    int top_k,
+    float alpha
+) {
+    if (top_k <= 0) top_k = config_.default_top_k;
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Vector search
+    int vector_k = static_cast<int>(top_k * 2);  // Over-fetch for fusion
+    auto [v_ids, v_distances] = faiss_impl_->search(query_embedding, vector_k);
+    
+    // Lexical search
+    auto lexical_results = lexical_index_->search(query_text, vector_k);
+    
+    // RRF (Reciprocal Rank Fusion)
+    const float k = 60.0f;  // RRF parameter
+    std::unordered_map<std::string, float> combined_scores;
+    
+    // Add vector scores
+    for (size_t rank = 0; rank < v_ids.size(); ++rank) {
+        if (v_ids[rank] < 0) continue;
+        
+        auto it = faiss_id_to_chunk_id_.find(v_ids[rank]);
+        if (it != faiss_id_to_chunk_id_.end()) {
+            float rrf_score = alpha / (k + rank + 1);
+            combined_scores[it->second] += rrf_score;
+        }
+    }
+    
+    // Add lexical scores
+    for (size_t rank = 0; rank < lexical_results.size(); ++rank) {
+        float rrf_score = (1.0f - alpha) / (k + rank + 1);
+        combined_scores[lexical_results[rank].first] += rrf_score;
+    }
+    
+    // Sort by combined score
+    std::vector<std::pair<std::string, float>> ranked(combined_scores.begin(), combined_scores.end());
+    std::partial_sort(
+        ranked.begin(),
+        ranked.begin() + std::min(static_cast<size_t>(top_k), ranked.size()),
+        ranked.end(),
+        [](const auto& a, const auto& b) { return a.second > b.second; }
+    );
+    
+    // Build results
+    std::vector<RetrievedChunk> results;
+    for (size_t i = 0; i < std::min(static_cast<size_t>(top_k), ranked.size()); ++i) {
+        const auto& [chunk_id, score] = ranked[i];
+        
+        auto chunk_it = chunks_.find(chunk_id);
+        if (chunk_it == chunks_.end()) continue;
+        
+        RetrievedChunk result;
+        result.chunk = chunk_it->second;
+        result.combined_score = score;
+        result.memory_source = "LTM";
+        
+        if (metadata_.count(chunk_id)) {
+            result.metadata = metadata_[chunk_id];
+        }
+        
+        results.push_back(result);
+    }
+    
+    return results;
+}
+
+// =============================================================================
+// CRUD Operations
+// =============================================================================
+
+std::optional<CodeChunk> LTMFaiss::get(const std::string& chunk_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    auto it = chunks_.find(chunk_id);
+    if (it != chunks_.end()) {
+        // Update access time
+        if (metadata_.count(chunk_id)) {
+            metadata_[chunk_id].last_accessed = std::chrono::system_clock::now();
+            metadata_[chunk_id].access_count++;
+        }
+        return it->second;
+    }
+    
+    return std::nullopt;
+}
+
+bool LTMFaiss::contains(const std::string& chunk_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return chunks_.count(chunk_id) > 0;
+}
+
+bool LTMFaiss::remove(const std::string& chunk_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    auto faiss_id_it = chunk_id_to_faiss_id_.find(chunk_id);
+    if (faiss_id_it == chunk_id_to_faiss_id_.end()) {
+        return false;
+    }
+    
+    // Remove from FAISS
+    faiss_impl_->remove(faiss_id_it->second);
+    
+    // Remove from lexical index
+    lexical_index_->remove(chunk_id);
+    
+    // Remove from indexes
+    faiss_id_to_chunk_id_.erase(faiss_id_it->second);
+    chunk_id_to_faiss_id_.erase(chunk_id);
+    
+    // Remove from repo index
+    size_t colon_pos = chunk_id.find(':');
+    if (colon_pos != std::string::npos) {
+        std::string repo_id = chunk_id.substr(0, colon_pos);
+        auto& repo_chunks = repo_to_chunks_[repo_id];
+        repo_chunks.erase(std::remove(repo_chunks.begin(), repo_chunks.end(), chunk_id), 
+                          repo_chunks.end());
+    }
+    
+    // Remove metadata
+    chunks_.erase(chunk_id);
+    metadata_.erase(chunk_id);
+    
+    return true;
+}
+
+size_t LTMFaiss::removeByRepo(const std::string& repo_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    auto it = repo_to_chunks_.find(repo_id);
+    if (it == repo_to_chunks_.end()) {
+        return 0;
+    }
+    
+    size_t count = it->second.size();
+    
+    for (const auto& chunk_id : it->second) {
+        auto faiss_id_it = chunk_id_to_faiss_id_.find(chunk_id);
+        if (faiss_id_it != chunk_id_to_faiss_id_.end()) {
+            faiss_impl_->remove(faiss_id_it->second);
+            faiss_id_to_chunk_id_.erase(faiss_id_it->second);
+            chunk_id_to_faiss_id_.erase(chunk_id);
+        }
+        
+        lexical_index_->remove(chunk_id);
+        chunks_.erase(chunk_id);
+        metadata_.erase(chunk_id);
+    }
+    
+    repo_to_chunks_.erase(repo_id);
+    
+    return count;
+}
+
+void LTMFaiss::updateImportance(const std::string& chunk_id, double delta) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    auto it = metadata_.find(chunk_id);
+    if (it != metadata_.end()) {
+        it->second.importance_score = std::clamp(it->second.importance_score + delta, 0.0, 2.0);
+    }
+}
+
+// =============================================================================
+// Memory Management
+// =============================================================================
+
+size_t LTMFaiss::consolidate(double threshold) {
+    if (threshold < 0) threshold = config_.similarity_threshold;
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    std::vector<std::string> to_remove;
+    
+    for (const auto& [chunk_id, meta] : metadata_) {
+        if (meta.importance_score < threshold) {
+            to_remove.push_back(chunk_id);
+        }
+    }
+    
+    // Note: We don't actually remove here to avoid modifying during iteration
+    // In production, queue removals for batch processing
+    
+    return to_remove.size();
+}
+
+void LTMFaiss::train(const std::vector<std::vector<float>>& training_embeddings) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Flatten embeddings
+    std::vector<float> flat;
+    flat.reserve(training_embeddings.size() * config_.dimension);
+    
+    for (const auto& emb : training_embeddings) {
+        flat.insert(flat.end(), emb.begin(), emb.end());
+    }
+    
+    faiss_impl_->train(flat, training_embeddings.size());
+}
+
+bool LTMFaiss::isTrained() const {
+    return faiss_impl_->isTrained();
+}
+
+// =============================================================================
+// Persistence
+// =============================================================================
+
+void LTMFaiss::save() {
+    save(config_.storage_path);
+}
+
+void LTMFaiss::save(const std::string& path) {
+    std::filesystem::create_directories(path);
+    
+    // Save FAISS index
+    faiss_impl_->save(path);
+    
+    // Save metadata (JSON format)
+    std::ofstream meta_file(path + "/metadata.json");
+    if (meta_file.is_open()) {
+        meta_file << "{\n";
+        meta_file << "  \"chunk_count\": " << chunks_.size() << ",\n";
+        meta_file << "  \"next_faiss_id\": " << next_faiss_id_ << ",\n";
+        meta_file << "  \"repos\": [";
+        
+        bool first = true;
+        for (const auto& [repo_id, _] : repo_to_chunks_) {
+            if (!first) meta_file << ", ";
+            meta_file << "\"" << repo_id << "\"";
+            first = false;
+        }
+        meta_file << "]\n";
+        meta_file << "}\n";
+        meta_file.close();
+    }
+    
+    // Save chunks (binary format for efficiency)
+    // TODO: Implement efficient binary serialization
+    
+    additions_since_save_ = 0;
+}
+
+void LTMFaiss::load() {
+    load(config_.storage_path);
+}
+
+void LTMFaiss::load(const std::string& path) {
+    if (!std::filesystem::exists(path)) {
+        return;
+    }
+    
+    // Load FAISS index
+    faiss_impl_->load(path);
+    
+    // Load metadata
+    // TODO: Implement metadata loading
+}
+
+// =============================================================================
+// Statistics
+// =============================================================================
+
+LTMFaiss::Stats LTMFaiss::getStats() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    Stats stats;
+    stats.total_chunks = chunks_.size();
+    stats.total_repos = repo_to_chunks_.size();
+    stats.index_vectors = faiss_impl_->size();
+    stats.is_trained = faiss_impl_->isTrained();
+    stats.index_type = faiss_impl_->getType();
+    
+    // Estimate memory usage
+    stats.memory_bytes = chunks_.size() * (config_.dimension * sizeof(float) + 500);  // Rough estimate
+    
+    for (const auto& [repo_id, chunk_ids] : repo_to_chunks_) {
+        stats.chunks_per_repo[repo_id] = chunk_ids.size();
+    }
+    
+    return stats;
+}
+
+std::vector<std::string> LTMFaiss::getRepositories() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    std::vector<std::string> repos;
+    repos.reserve(repo_to_chunks_.size());
+    
+    for (const auto& [repo_id, _] : repo_to_chunks_) {
+        repos.push_back(repo_id);
+    }
+    
+    return repos;
+}
+
+size_t LTMFaiss::getRepoChunkCount(const std::string& repo_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    auto it = repo_to_chunks_.find(repo_id);
+    return it != repo_to_chunks_.end() ? it->second.size() : 0;
+}
+
+// =============================================================================
+// Helpers
+// =============================================================================
+
+FAISSIndexType LTMFaiss::selectIndexType(size_t expected_size) {
+    if (expected_size < 10000) {
+        return FAISSIndexType::FLAT_L2;
+    } else if (expected_size < 100000) {
+        return FAISSIndexType::HNSW_FLAT;
+    } else if (expected_size < 1000000) {
+        return FAISSIndexType::IVF_FLAT;
+    } else {
+        return FAISSIndexType::IVF_PQ;
+    }
+}
+
+std::vector<RetrievedChunk> LTMFaiss::convertResults(
+    const std::vector<int64_t>& ids,
+    const std::vector<float>& distances
+) {
+    std::vector<RetrievedChunk> results;
+    
+    for (size_t i = 0; i < ids.size(); ++i) {
+        if (ids[i] < 0) continue;
+        
+        auto chunk_id_it = faiss_id_to_chunk_id_.find(ids[i]);
+        if (chunk_id_it == faiss_id_to_chunk_id_.end()) continue;
+        
+        const std::string& chunk_id = chunk_id_it->second;
+        
+        auto chunk_it = chunks_.find(chunk_id);
+        if (chunk_it == chunks_.end()) continue;
+        
+        RetrievedChunk result;
+        result.chunk = chunk_it->second;
+        
+        // Convert L2 distance to similarity score (0-1)
+        // similarity = 1 / (1 + distance)
+        result.similarity_score = 1.0f / (1.0f + std::sqrt(distances[i]));
+        result.combined_score = result.similarity_score;
+        result.memory_source = "LTM";
+        
+        if (metadata_.count(chunk_id)) {
+            result.metadata = metadata_[chunk_id];
+            
+            // Update access time
+            metadata_[chunk_id].last_accessed = std::chrono::system_clock::now();
+            metadata_[chunk_id].access_count++;
+        }
+        
+        results.push_back(result);
+    }
+    
+    return results;
+}
+
+void LTMFaiss::maybeAutoSave() {
+    if (config_.auto_save && additions_since_save_ >= config_.auto_save_interval) {
+        // TODO: Trigger async save
+        // For now, skip to avoid blocking
+    }
+}
+
+} // namespace aipr::tms

@@ -165,11 +165,13 @@ No external Quartz server required — tasks run inside the server process.
 | `session-cleanup` | Every 15 min | Evict expired sessions from cache/DB |
 | `index-job-cleanup` | Every hour | Remove completed index jobs older than 7 days |
 | `inactive-user-cleanup` | Daily 3 AM | Revoke sessions for users inactive >30 days |
+| `llm-health-check` | Every 60s | Check LLM provider health, trigger failover |
 
 **Key Classes:**
 - `BackgroundTaskScheduler` - Discovers and schedules all `IBackgroundTask` beans
 - `IBackgroundTask` - Interface for implementing new tasks
 - `TaskResult` - Status enum: SUCCESS, PARTIAL, SKIPPED, FAILED
+- `LLMHealthCheckBackgroundTask` - Provider health monitoring
 
 Tasks execute with **superuser privileges** (no user session context).
 
@@ -235,14 +237,26 @@ mono/proto/                    ← EDIT HERE (source of truth)
 |-------|-----------|---------|
 | PostgreSQL | **Java only** | Review history, user config, audit logs |
 | Redis | **Java only** | Session cache, rate limiting, job queues |
-| Local files | C++ Engine | Index data (`.aipr/index/`) |
+| Cloud Storage | **C++ Engine** | Index data, embeddings (S3/GCS/Azure/OCI/MinIO) |
+| Local files | C++ Engine | Index data (`.aipr/index/`) for local mode |
+
+**Storage Configuration Flow:**
+```
+rtserverprops.xml (Single Source of Truth)
+         │
+         ▼
+┌──────────────────┐     ConfigureStorage RPC       ┌──────────────────┐
+│   Java Server    │ ─────────────────────────────▶│   C++ Engine     │
+│   (reads XML)    │                                │ (builds backend) │
+└──────────────────┘                                └──────────────────┘
+```
+
+The Java server reads storage configuration from `rtserverprops.xml` and pushes it to the C++ engine via the `ConfigureStorage` gRPC call at startup. This ensures both components use identical settings without environment variable duplication.
 
 **Important:** The C++ Engine has **no database connections**. It's a pure compute service that:
-- Reads repository files from disk
-- Stores index data locally
+- Reads repository files from disk or cloud storage
+- Stores index data via the configured storage backend
 - Responds to gRPC requests
-
-All persistence, queuing, and user management is handled by the Java Server.
 
 ## Deployment Models
 
@@ -300,11 +314,39 @@ ENGINE_HOST=engine.internal.example.com ENGINE_PORT=50051 ./bin/aipr-server
 
 | File | Used By | Purpose |
 |------|---------|---------|
-| `config/default.yml` | Both | Unified config: indexing, retrieval, review, model settings |
-| `config/rtserverprops.xml` | Java only | Server runtime: engine connection, DB, TLS |
+| `config/rtserverprops.xml` | **Both** (via gRPC) | Single source of truth: DB, Redis, LLM, Storage, Engine |
+| `config/vcsplatforms.xml` | Java | Platform OAuth (GitHub, GitLab, Bitbucket, Azure DevOps) |
+| `config/default.yml` | C++ Engine | Indexing, retrieval, review settings |
 | `config/large-repo.yml` | Override | Profile for monorepos |
 | `config/perf-focused.yml` | Override | Profile prioritizing performance checks |
 | `config/strict-security.yml` | Override | Profile for security-sensitive repos |
+
+### Configuration Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      rtserverprops.xml                              │
+│                   (Single Source of Truth)                          │
+└────────────────────────────┬────────────────────────────────────────┘
+                             │
+         ┌───────────────────┴───────────────────┐
+         │                                       │
+         ▼                                       ▼
+┌─────────────────────┐               ┌─────────────────────┐
+│    Java Server      │    gRPC       │    C++ Engine       │
+│                     │──────────────▶│                     │
+│  - LLM config       │  Configure    │  - Storage backend  │
+│  - DB/Redis         │  Storage()    │  - Index paths      │
+│  - Engine client    │               │  - TLS settings     │
+└─────────────────────┘               └─────────────────────┘
+```
+
+**How it works:**
+1. Java server starts and loads `rtserverprops.xml`
+2. Java connects to C++ engine via gRPC
+3. Java calls `ConfigureStorage()` RPC, pushing storage config to engine
+4. Engine builds appropriate `StorageBackend` (Local, S3, GCS, Azure, OCI, MinIO)
+5. Both components now use identical storage settings
 
 ### default.yml Structure
 
@@ -389,3 +431,153 @@ Independent pipelines for faster iteration:
 - **Network isolation**: Engine doesn't need public access
 
 See `SECURITY.md` for vulnerability reporting.
+
+## Phase 3 Features
+
+### Brain-Inspired Memory Architecture
+
+The engine implements a novel memory system inspired by cognitive architectures:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      Memory Coordinator                             │
+│                                                                     │
+│  ┌───────────────┐  ┌───────────────┐  ┌───────────────┐            │
+│  │     LTM       │  │     STM       │  │     MTM       │            │
+│  │ Long-Term     │  │ Short-Term    │  │ Meta-Task     │            │
+│  │ Memory        │  │ Memory        │  │ Memory        │            │
+│  │               │  │               │  │               │            │
+│  │ FAISS Index   │  │ Session Cache │  │ Patterns      │            │
+│  │ Vector Search │  │ Conversation  │  │ Strategies    │            │
+│  │ Hybrid BM25   │  │ Query Cache   │  │ Feedback      │            │
+│  └───────┬───────┘  └───────┬───────┘  └───────┬───────┘            │
+│          │                  │                  │                    │
+│          └──────────────────┼──────────────────┘                    │
+│                             │                                       │
+│                 ┌───────────▼───────────┐                           │
+│                 │ Cross-Memory Attention │                          │
+│                 │                        │                          │
+│                 │ - Adaptive weights     │                          │
+│                 │ - Context-aware fusion │                          │
+│                 │ - Source reliability   │                          │
+│                 └────────────────────────┘                          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Memory Components:**
+
+| Component | Purpose | Persistence |
+|-----------|---------|-------------|
+| LTM (Long-Term Memory) | Persistent repository knowledge with FAISS vector search | Yes (disk) |
+| STM (Short-Term Memory) | Session context, conversation history, query cache | No (in-memory) |
+| MTM (Meta-Task Memory) | Review patterns, strategies, learned behaviors | Yes (JSON) |
+| Cross-Memory Attention | Weighted retrieval across all memories | N/A |
+
+### Vector Search (FAISS)
+
+Production-ready vector search with:
+- **Index types**: IVF-PQ for memory efficiency, Flat for accuracy
+- **BLAS backends**: OpenBLAS, MKL, or Apple Accelerate (auto-detected)
+- **Fallback**: Brute-force cosine similarity when FAISS unavailable
+
+### Storage Backend
+
+Abstract storage interface supporting multiple backends, configured via `rtserverprops.xml`:
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│                     StorageBackend Interface                       │
+│   read(key) → data   |   write(key, data)   |   list(prefix)       │
+└───────────────────────────────┬────────────────────────────────────┘
+                                │
+    ┌───────────┬───────────────┼───────────────┬───────────┐
+    ▼           ▼               ▼               ▼           ▼
+┌────────┐ ┌────────┐    ┌────────────┐    ┌────────┐ ┌────────┐
+│ Local  │ │  AWS   │    │   Azure    │    │  GCP   │ │  OCI   │
+│filesys │ │   S3   │    │   Blob     │    │  GCS   │ │ Object │
+└────────┘ └────────┘    └────────────┘    └────────┘ └────────┘
+                │
+                ▼
+         ┌────────────┐
+         │   MinIO    │
+         │ (S3-compat)│
+         └────────────┘
+```
+
+**Configuration in rtserverprops.xml:**
+```xml
+<storage type="s3">
+    <local base-path="./data"/>
+    <s3 bucket="${S3_BUCKET}" region="${S3_REGION:us-east-1}" 
+        endpoint="${S3_ENDPOINT:}"/>
+    <gcs bucket="${GCS_BUCKET}" project="${GCS_PROJECT}"/>
+    <azure container="${AZURE_CONTAINER}" account="${AZURE_STORAGE_ACCOUNT}"/>
+    <oci namespace="${OCI_NAMESPACE}" bucket="${OCI_BUCKET}" 
+         compartment="${OCI_COMPARTMENT}"/>
+    <minio bucket="${MINIO_BUCKET}" endpoint="${MINIO_ENDPOINT}" 
+           access-key="${MINIO_ACCESS_KEY}" secret-key="${MINIO_SECRET_KEY}"/>
+</storage>
+```
+
+**Cloud Storage Features:**
+- AWS Signature V4 authentication (no SDK dependency)
+- Pre-signed URL generation
+- IRSA/Workload Identity support for Kubernetes
+- Compatible with S3, GCS, Azure Blob, OCI Object Storage, MinIO
+
+### Tree-sitter AST Parsing
+
+Intelligent code chunking using tree-sitter CST:
+- 8 languages: C, C++, Java, Python, JavaScript, TypeScript, Go, Rust
+- Preserves function/class boundaries
+- Extracts docstrings and symbols
+- Falls back to regex-based heuristics for unsupported languages
+
+### Azure DevOps Integration
+
+Full support for Azure DevOps alongside GitHub/GitLab:
+- **Authentication**: PAT and Azure AD OAuth (configurable URLs via XML)
+- **Webhooks**: HMAC-SHA256 verification, `git.pullrequest.*` events
+- **API**: PR diff, files, thread comments with iteration tracking
+- **Configuration**: All URLs externalized (no hardcoded endpoints)
+
+```xml
+<azure-devops enabled="true"
+              vssps-url="https://app.vssps.visualstudio.com"
+              login-url="https://login.microsoftonline.com"
+              webhook-secret="${AZURE_DEVOPS_WEBHOOK_SECRET}"/>
+```
+
+### LLM Provider Management
+
+The `LLMProviderManager` reads all configuration from `rtserverprops.xml` (no `@Value` annotations):
+
+```xml
+<llm primary="openai" fallback="ollama" auto-discover-local="true">
+    <openai api-key="${LLM_OPENAI_API_KEY}" 
+            base-url="https://api.openai.com/v1"
+            model="gpt-4-turbo-preview"/>
+    <anthropic api-key="${LLM_ANTHROPIC_API_KEY}"
+               models="claude-3-opus,claude-3-sonnet,claude-3-5-sonnet"/>
+    <azure-openai endpoint="${LLM_AZURE_OPENAI_ENDPOINT}"
+                  api-key="${LLM_AZURE_OPENAI_API_KEY}"
+                  deployment="gpt-4"/>
+    <ollama discovery-host="localhost" discovery-ports="11434,11435,8080"/>
+    <custom base-url="${LLM_CUSTOM_BASE_URL}" api-key="${LLM_CUSTOM_API_KEY}"/>
+</llm>
+```
+
+**Features:**
+- **Health checks**: Via `LLMHealthCheckBackgroundTask` (IBackgroundTask framework)
+- **Auto-discovery**: Detects Ollama at configured ports
+- **Failover**: Automatic switch to fallback provider
+- **REST API**: `GET /api/v1/llm/providers`, `POST /api/v1/llm/providers/switch`
+
+### Ollama / Local LLM Support
+
+LLMProviderManager with auto-discovery:
+- Detects Ollama at configured ports (default: 11434, 11435, 8080)
+- Health checks via `/api/tags`
+- Automatic fallback to cloud providers
+- REST endpoint: `GET /api/v1/llm/providers`
+

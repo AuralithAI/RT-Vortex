@@ -77,12 +77,12 @@
         The C++ engine now runs as a standalone gRPC server process on port 50051.
         The Java server connects to it as a gRPC client. This replaces the previous
         JNI-based integration.
-        
+
         To start the engine:
           - Linux/Mac: ./bin/aipr-engine-start (or ./bin/aipr-engine directly)
           - Windows:   bin\aipr-engine-start.bat
           - Docker:    Included in docker-compose.yml
-        
+
         The engine must be running before the Java server starts.
     -->
     <engine host="${ENGINE_HOST:localhost}"
@@ -107,15 +107,46 @@
     </engine>
 
     <!-- ===================================================================== -->
-    <!-- LLM Provider                                                          -->
+    <!-- LLM Providers                                                         -->
     <!-- ===================================================================== -->
-    <llm provider="${LLM_PROVIDER:openai-compatible}"
-         base-url="${LLM_BASE_URL:https://api.openai.com/v1}"
-         api-key="${LLM_API_KEY:}"
-         model="${LLM_MODEL:gpt-4-turbo-preview}"
+    <!--
+        Multiple LLM providers can be configured. The server uses the primary
+        provider and automatically fails over to the fallback if it goes down.
+        Health checks run every 60 seconds via the BackgroundTaskScheduler.
+
+        Supported provider types:
+          openai            - OpenAI API (GPT-4, etc.)
+          anthropic         - Anthropic API (Claude)
+          azure-openai      - Azure OpenAI Service
+          ollama            - Local Ollama instance
+          openai-compatible - Any OpenAI-compatible API (vLLM, LMStudio, etc.)
+    -->
+    <llm primary="${LLM_PROVIDER:openai}"
+         fallback="${LLM_FALLBACK_PROVIDER:}"
+         auto-discover-local="${LLM_AUTO_DISCOVER_LOCAL:true}"
          max-tokens="${LLM_MAX_TOKENS:4096}"
          temperature="${LLM_TEMPERATURE:0.1}"
-         timeout-ms="${LLM_TIMEOUT_MS:120000}"/>
+         timeout-ms="${LLM_TIMEOUT_MS:120000}">
+
+        <openai api-key="${LLM_OPENAI_API_KEY:}"
+                base-url="${LLM_OPENAI_BASE_URL:https://api.openai.com/v1}"
+                model="${LLM_OPENAI_MODEL:gpt-4-turbo-preview}"/>
+
+        <anthropic api-key="${LLM_ANTHROPIC_API_KEY:}"
+                   base-url="${LLM_ANTHROPIC_BASE_URL:https://api.anthropic.com/v1}"
+                   models="${LLM_ANTHROPIC_MODELS:claude-3-opus-20240229,claude-3-sonnet-20240229,claude-3-haiku-20240307,claude-3-5-sonnet-20241022}"/>
+
+        <azure-openai endpoint="${LLM_AZURE_OPENAI_ENDPOINT:}"
+                      api-key="${LLM_AZURE_OPENAI_API_KEY:}"
+                      deployment="${LLM_AZURE_OPENAI_DEPLOYMENT:}"/>
+
+        <ollama base-url="${LLM_OLLAMA_BASE_URL:}"
+                discovery-host="${LLM_OLLAMA_DISCOVERY_HOST:localhost}"
+                discovery-ports="${LLM_OLLAMA_DISCOVERY_PORTS:11434,11435,8080}"/>
+
+        <custom base-url="${LLM_CUSTOM_BASE_URL:}"
+                api-key="${LLM_CUSTOM_API_KEY:}"/>
+    </llm>
 
     <!-- ===================================================================== -->
     <!-- Review Settings                                                       -->
@@ -144,9 +175,50 @@
     <!-- ===================================================================== -->
     <!-- Storage                                                               -->
     <!-- ===================================================================== -->
-    <storage type="${STORAGE_TYPE:local}">
+    <!--
+        Storage backend for index data and artifacts.
+        This config is pushed to the C++ engine via gRPC ConfigureStorage at startup.
+        Supported types: local, s3, gcs, azure, oci, minio, custom
+    -->
+    <storage type="${STORAGE_TYPE:local}"
+             timeout-ms="${STORAGE_TIMEOUT_MS:30000}"
+             max-retries="${STORAGE_MAX_RETRIES:3}"
+             use-ssl="${STORAGE_USE_SSL:true}"
+             verify-ssl="${STORAGE_VERIFY_SSL:true}"
+             ca-bundle-path="${STORAGE_CA_BUNDLE:}">
+
         <local base-path="${STORAGE_PATH:./data}"/>
-        <s3 bucket="${S3_BUCKET:}" region="${S3_REGION:us-east-1}"/>
+
+        <s3 bucket="${S3_BUCKET:}"
+            region="${S3_REGION:us-east-1}"
+            endpoint="${S3_ENDPOINT:}"
+            access-key="${AWS_ACCESS_KEY_ID:}"
+            secret-key="${AWS_SECRET_ACCESS_KEY:}"
+            session-token="${AWS_SESSION_TOKEN:}"
+            use-irsa="${S3_USE_IRSA:false}"
+            role-arn="${S3_ROLE_ARN:}"/>
+
+        <gcs bucket="${GCS_BUCKET:}"
+             use-workload-identity="${GCS_USE_WORKLOAD_IDENTITY:true}"/>
+
+        <azure account-name="${AZURE_STORAGE_ACCOUNT:}"
+               account-key="${AZURE_STORAGE_KEY:}"
+               sas-token="${AZURE_STORAGE_SAS_TOKEN:}"
+               container="${AZURE_STORAGE_CONTAINER:}"
+               use-azure-ad="${AZURE_STORAGE_USE_AD:false}"/>
+
+        <oci bucket="${OCI_BUCKET:}"
+             region="${OCI_REGION:}"
+             namespace="${OCI_NAMESPACE:}"
+             tenancy="${OCI_TENANCY:}"
+             user="${OCI_USER:}"
+             fingerprint="${OCI_FINGERPRINT:}"
+             key-file="${OCI_KEY_FILE:}"/>
+
+        <minio bucket="${MINIO_BUCKET:}"
+               endpoint="${MINIO_ENDPOINT:http://localhost:9000}"
+               access-key="${MINIO_ACCESS_KEY:}"
+               secret-key="${MINIO_SECRET_KEY:}"/>
     </storage>
 
     <!-- ===================================================================== -->

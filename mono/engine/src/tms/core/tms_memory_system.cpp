@@ -1,0 +1,652 @@
+/**
+ * TMS Memory System - Main Orchestrator Implementation
+ * 
+ * Coordinates all TMS components for brain-inspired code understanding.
+ */
+
+#include "tms/tms_memory_system.h"
+#include "tms/repo_parser.h"
+#include "tms/embedding_engine.h"
+#include <chrono>
+#include <algorithm>
+#include <sstream>
+#include <filesystem>
+
+namespace aipr::tms {
+
+// =============================================================================
+// Constructor / Destructor
+// =============================================================================
+
+TMSMemorySystem::TMSMemorySystem(const TMSConfig& config)
+    : config_(config) {
+}
+
+TMSMemorySystem::~TMSMemorySystem() {
+    shutdown();
+}
+
+// =============================================================================
+// Initialization & Lifecycle
+// =============================================================================
+
+void TMSMemorySystem::initialize() {
+    if (initialized_.load()) return;
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (initialized_.load()) return;  // Double-check after lock
+    
+    // Initialize LTM (FAISS)
+    LTMConfig ltm_config;
+    ltm_config.dimension = config_.embedding_dimension;
+    ltm_config.max_capacity = config_.ltm_capacity;
+    ltm_config.nlist = config_.ltm_nlist;
+    ltm_config.nprobe = config_.ltm_nprobe;
+    ltm_config.pq_m = config_.ltm_m;
+    ltm_config.pq_bits = config_.ltm_bits;
+    ltm_config.use_gpu = config_.ltm_use_gpu;
+    ltm_config.default_top_k = config_.ltm_default_top_k;
+    ltm_config.storage_path = config_.storage_path + "/ltm";
+    
+    ltm_ = std::make_unique<LTMFaiss>(ltm_config);
+    
+    // Initialize STM
+    STMConfig stm_config;
+    stm_config.capacity = config_.stm_capacity;
+    stm_config.ttl = config_.stm_ttl;
+    stm_config.default_top_k = config_.stm_default_top_k;
+    
+    stm_ = std::make_unique<STM>(stm_config);
+    
+    // Initialize MTM
+    MTMConfig mtm_config;
+    mtm_config.max_patterns = config_.mtm_pattern_capacity;
+    mtm_config.max_strategies = config_.mtm_strategy_capacity;
+    mtm_config.confidence_threshold = config_.mtm_confidence_threshold;
+    mtm_config.embedding_dimension = config_.embedding_dimension;
+    mtm_config.storage_path = config_.storage_path + "/mtm";
+    
+    mtm_ = std::make_unique<MTMGraph>(mtm_config);
+    
+    // Initialize Cross-Memory Attention
+    CrossMemoryAttentionConfig attn_config;
+    attn_config.num_heads = config_.attention_num_heads;
+    attn_config.embed_dim = config_.embedding_dimension;
+    attn_config.head_dim = config_.attention_head_dim;
+    attn_config.dropout = config_.attention_dropout;
+    attn_config.use_rotary_embedding = config_.use_rotary_embedding;
+    attn_config.max_sequence_length = config_.max_sequence_length;
+    
+    attention_ = std::make_unique<CrossMemoryAttention>(attn_config);
+    
+    // Initialize Compute Controller
+    ControllerConfig ctrl_config;
+    ctrl_config.vram_budget_gb = config_.vram_budget_gb;
+    ctrl_config.enable_adaptive = config_.enable_adaptive_strategy;
+    
+    controller_ = std::make_unique<ComputeController>(ctrl_config);
+    
+    // Initialize ingestion components
+    RepoParserConfig parser_config;
+    parser_config.chunking = ChunkingConfig{};
+    repo_parser_ = std::make_unique<RepoParser>(parser_config);
+    
+    EmbeddingConfig embed_config;
+    embed_config.model_name = config_.embedding_model;
+    embed_config.embedding_dimension = config_.embedding_dimension;
+    embed_config.cache_path = config_.storage_path + "/embedding_cache";
+    
+    embedding_engine_ = std::make_unique<EmbeddingEngine>(embed_config);
+    
+    // Load persisted data
+    load();
+    
+    // Start background consolidation thread
+    if (config_.enable_consolidation) {
+        shutdown_requested_.store(false);
+        consolidation_thread_ = std::thread([this]() {
+            consolidationLoop();
+        });
+    }
+    
+    initialized_.store(true);
+}
+
+void TMSMemorySystem::shutdown() {
+    if (!initialized_.load()) return;
+    
+    // Signal shutdown
+    shutdown_requested_.store(true);
+    
+    // Wait for consolidation thread
+    if (consolidation_thread_.joinable()) {
+        consolidation_thread_.join();
+    }
+    
+    // Persist data
+    save();
+    
+    // Clear resources
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ltm_.reset();
+        stm_.reset();
+        mtm_.reset();
+        attention_.reset();
+        controller_.reset();
+        repo_parser_.reset();
+        embedding_engine_.reset();
+    }
+    
+    initialized_.store(false);
+}
+
+// =============================================================================
+// Repository Ingestion
+// =============================================================================
+
+void TMSMemorySystem::ingestRepository(
+    const std::string& repo_path,
+    const std::string& repo_id,
+    std::function<void(float, const std::string&)> progress_callback
+) {
+    if (!initialized_.load()) {
+        throw std::runtime_error("TMSMemorySystem not initialized");
+    }
+    
+    auto start_time = std::chrono::steady_clock::now();
+    
+    // Phase 1: Parse repository
+    if (progress_callback) {
+        progress_callback(0.0f, "Parsing repository...");
+    }
+    
+    std::vector<CodeChunk> chunks;
+    {
+        ParseProgressCallback parser_progress = nullptr;
+        if (progress_callback) {
+            parser_progress = [&](float p, const std::string& file, const std::string& status) {
+                progress_callback(p * 0.3f, "Parsing: " + file);  // 0-30%
+            };
+        }
+        
+        chunks = repo_parser_->parseRepository(repo_path, parser_progress);
+    }
+    
+    if (chunks.empty()) {
+        if (progress_callback) {
+            progress_callback(1.0f, "No chunks extracted");
+        }
+        return;
+    }
+    
+    // Phase 2: Compute embeddings
+    if (progress_callback) {
+        progress_callback(0.3f, "Computing embeddings...");
+    }
+    
+    std::vector<std::vector<float>> embeddings;
+    {
+        EmbeddingProgressCallback embed_progress = nullptr;
+        if (progress_callback) {
+            embed_progress = [&](int completed, int total, const std::string& status) {
+                float p = 0.3f + (static_cast<float>(completed) / total) * 0.5f;  // 30-80%
+                progress_callback(p, "Embedding: " + std::to_string(completed) + "/" + std::to_string(total));
+            };
+        }
+        
+        auto result = embedding_engine_->embedChunks(chunks, embed_progress);
+        embeddings = std::move(result.embeddings);
+    }
+    
+    // Phase 3: Store in LTM
+    if (progress_callback) {
+        progress_callback(0.8f, "Storing in LTM...");
+    }
+    
+    ingestChunksWithEmbeddings(repo_id, chunks, embeddings);
+    
+    // Done
+    auto end_time = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
+    
+    if (progress_callback) {
+        std::ostringstream status;
+        status << "Ingested " << chunks.size() << " chunks in " << duration.count() << "s";
+        progress_callback(1.0f, status.str());
+    }
+}
+
+void TMSMemorySystem::ingestChunks(
+    const std::string& repo_id,
+    const std::vector<CodeChunk>& chunks
+) {
+    if (!initialized_.load()) {
+        throw std::runtime_error("TMSMemorySystem not initialized");
+    }
+    
+    // Compute embeddings
+    auto result = embedding_engine_->embedChunks(chunks);
+    
+    // Store
+    ingestChunksWithEmbeddings(repo_id, chunks, result.embeddings);
+}
+
+void TMSMemorySystem::ingestChunksWithEmbeddings(
+    const std::string& repo_id,
+    const std::vector<CodeChunk>& chunks,
+    const std::vector<std::vector<float>>& embeddings
+) {
+    if (!initialized_.load()) {
+        throw std::runtime_error("TMSMemorySystem not initialized");
+    }
+    
+    if (chunks.size() != embeddings.size()) {
+        throw std::invalid_argument("Chunks and embeddings count mismatch");
+    }
+    
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // Prepare chunks with repo ID
+    std::vector<CodeChunk> prepared_chunks;
+    prepared_chunks.reserve(chunks.size());
+    
+    for (size_t i = 0; i < chunks.size(); ++i) {
+        CodeChunk chunk = chunks[i];
+        
+        // Ensure ID includes repo
+        if (chunk.id.find(repo_id + ":") != 0) {
+            chunk.id = repo_id + ":" + chunk.id;
+        }
+        
+        prepared_chunks.push_back(std::move(chunk));
+    }
+    
+    // Batch add to LTM
+    ltm_->addBatch(prepared_chunks, embeddings);
+    
+    // Update MTM patterns (async in production)
+    // This is simplified - in production, run pattern detection in background
+}
+
+void TMSMemorySystem::removeRepository(const std::string& repo_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ltm_->removeByRepo(repo_id);
+}
+
+void TMSMemorySystem::updateRepository(
+    const std::string& repo_id,
+    const std::vector<std::string>& changed_files,
+    const std::vector<std::string>& deleted_files
+) {
+    if (!initialized_.load()) {
+        throw std::runtime_error("TMSMemorySystem not initialized");
+    }
+    
+    // TODO: Implement incremental update
+    // 1. Remove chunks for deleted files
+    // 2. Remove chunks for changed files
+    // 3. Re-parse and ingest changed files
+}
+
+// =============================================================================
+// Forward Pass (Main Query Interface)
+// =============================================================================
+
+TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
+    if (!initialized_.load()) {
+        throw std::runtime_error("TMSMemorySystem not initialized");
+    }
+    
+    auto start_time = std::chrono::steady_clock::now();
+    TMSResponse response;
+    
+    // Step 1: Compute query embedding if not provided
+    std::vector<float> query_embedding = query.query_embedding;
+    if (query_embedding.empty()) {
+        auto result = embedding_engine_->embed(query.query_text);
+        if (!result.success) {
+            throw std::runtime_error("Failed to compute query embedding: " + result.error);
+        }
+        query_embedding = std::move(result.embedding);
+    }
+    
+    // Step 2: Compute Controller decides strategy
+    ResourceState resource_state;
+    resource_state.available_vram_gb = getCurrentBudget();
+    resource_state.ltm_size = ltm_->getStats().total_chunks;
+    resource_state.active_sessions = stm_->getStats().active_sessions;
+    
+    ComputeDecision decision;
+    if (query.force_strategy.has_value()) {
+        decision = controller_->forceStrategy(query.force_strategy.value());
+    } else {
+        decision = controller_->decide(query_embedding, resource_state);
+    }
+    
+    response.compute_decision = decision;
+    response.reasoning_trace.push_back("Strategy: " + decision.reasoning);
+    
+    // Step 3: Retrieve from LTM
+    std::vector<RetrievedChunk> ltm_results;
+    if (decision.strategy != ComputeStrategy::FAST || decision.ltm_top_k > 0) {
+        ltm_results = ltm_->search(query_embedding, decision.ltm_top_k, query.repo_filter);
+        response.reasoning_trace.push_back("LTM: Retrieved " + std::to_string(ltm_results.size()) + " chunks");
+        response.ltm_items_scanned = ltm_results.size();
+    }
+    
+    // Step 4: Retrieve from STM
+    std::vector<RetrievedChunk> stm_results;
+    if (!query.session_id.empty() && decision.stm_top_k > 0) {
+        stm_results = stm_->search(query.session_id, query_embedding, decision.stm_top_k);
+        response.reasoning_trace.push_back("STM: Retrieved " + std::to_string(stm_results.size()) + " items");
+        response.stm_items_scanned = stm_results.size();
+    }
+    
+    // Step 5: Match patterns and strategies from MTM
+    std::vector<PatternEntry> patterns;
+    std::vector<StrategyEntry> strategies;
+    if (decision.mtm_top_k > 0) {
+        patterns = mtm_->matchPatterns(query_embedding, decision.mtm_top_k);
+        
+        // Get strategies that apply to detected patterns
+        std::vector<std::string> pattern_ids;
+        for (const auto& p : patterns) {
+            pattern_ids.push_back(p.id);
+        }
+        strategies = mtm_->matchStrategies("review", pattern_ids, 5);
+        
+        response.reasoning_trace.push_back("MTM: Matched " + std::to_string(patterns.size()) + " patterns, " 
+                                           + std::to_string(strategies.size()) + " strategies");
+        response.mtm_items_scanned = patterns.size() + strategies.size();
+    }
+    
+    response.matched_patterns = patterns;
+    response.suggested_strategies = strategies;
+    
+    // Step 6: Cross-Memory Attention (if enabled)
+    if (decision.enable_cross_attention) {
+        response.attention_output = runCrossMemoryAttention(
+            query_embedding,
+            ltm_results,
+            stm_results,
+            patterns,
+            strategies,
+            decision
+        );
+        response.reasoning_trace.push_back("Attention: Fused context with " 
+                                           + std::to_string(decision.attention_heads) + " heads");
+    } else {
+        // Simple concatenation fallback
+        CrossMemoryOutput simple_output;
+        simple_output.fused_chunks = ltm_results;
+        
+        std::ostringstream context;
+        context << "## Relevant Code\n\n";
+        for (const auto& chunk : ltm_results) {
+            context << "### " << chunk.chunk.file_path << " (" << chunk.chunk.name << ")\n";
+            context << "```" << chunk.chunk.language << "\n";
+            context << chunk.chunk.content << "\n";
+            context << "```\n\n";
+        }
+        simple_output.fused_context = context.str();
+        simple_output.fused_embedding = query_embedding;
+        
+        response.attention_output = simple_output;
+        response.reasoning_trace.push_back("Attention: Skipped (FAST mode)");
+    }
+    
+    // Step 7: Record in STM
+    if (!query.session_id.empty()) {
+        std::vector<std::string> retrieved_ids;
+        for (const auto& chunk : ltm_results) {
+            retrieved_ids.push_back(chunk.chunk.id);
+        }
+        
+        stm_->storeQuery(
+            query.session_id,
+            query.query_text,
+            query_embedding,
+            retrieved_ids
+        );
+    }
+    
+    // Finalize
+    auto end_time = std::chrono::steady_clock::now();
+    response.total_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+    
+    return response;
+}
+
+TMSResponse TMSMemorySystem::query(const std::string& query_text, const std::string& session_id) {
+    TMSQuery query;
+    query.query_text = query_text;
+    query.session_id = session_id;
+    return forward(query);
+}
+
+// =============================================================================
+// Session Management
+// =============================================================================
+
+void TMSMemorySystem::startSession(const std::string& session_id) {
+    stm_->startSession(session_id);
+}
+
+void TMSMemorySystem::addSessionContext(
+    const std::string& session_id,
+    const std::string& context_type,
+    const std::string& content,
+    const std::vector<float>& embedding
+) {
+    std::vector<float> emb = embedding;
+    if (emb.empty() && !content.empty()) {
+        auto result = embedding_engine_->embed(content);
+        if (result.success) {
+            emb = std::move(result.embedding);
+        }
+    }
+    
+    stm_->storeContext(session_id, context_type, content, emb);
+}
+
+void TMSMemorySystem::endSession(const std::string& session_id) {
+    // Check for items to promote to LTM
+    auto candidates = stm_->getPromotionCandidates(session_id);
+    
+    // TODO: Promote important items
+    
+    stm_->endSession(session_id);
+}
+
+// =============================================================================
+// Learning & Feedback
+// =============================================================================
+
+void TMSMemorySystem::learnFromOutcome(
+    const std::string& session_id,
+    double outcome_score,
+    const std::vector<std::string>& helpful_chunk_ids,
+    const std::vector<std::string>& unhelpful_chunk_ids
+) {
+    // Update LTM importance scores
+    for (const auto& id : helpful_chunk_ids) {
+        ltm_->updateImportance(id, 0.1);  // Increase importance
+    }
+    for (const auto& id : unhelpful_chunk_ids) {
+        ltm_->updateImportance(id, -0.1);  // Decrease importance
+    }
+    
+    // Update MTM patterns and strategies
+    // TODO: Extract used patterns/strategies from session and update
+}
+
+void TMSMemorySystem::registerPattern(const PatternEntry& pattern) {
+    mtm_->storePattern(pattern);
+}
+
+void TMSMemorySystem::registerStrategy(const StrategyEntry& strategy) {
+    mtm_->storeStrategy(strategy);
+}
+
+// =============================================================================
+// Memory Consolidation
+// =============================================================================
+
+void TMSMemorySystem::consolidate() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    
+    // 1. Cleanup STM expired entries
+    stm_->cleanup();
+    stm_->cleanupSessions();
+    
+    // 2. Consolidate MTM patterns
+    mtm_->consolidatePatterns();
+    mtm_->applyDecay();
+    
+    // 3. Consolidate LTM (remove low-importance items)
+    ltm_->consolidate(config_.consolidation_threshold);
+    
+    // 4. Save state
+    save();
+}
+
+void TMSMemorySystem::setConsolidationInterval(std::chrono::hours interval) {
+    config_.consolidation_interval = interval;
+}
+
+void TMSMemorySystem::consolidationLoop() {
+    while (!shutdown_requested_.load()) {
+        // Wait for interval (check shutdown every second)
+        auto interval = config_.consolidation_interval;
+        auto wait_until = std::chrono::steady_clock::now() + interval;
+        
+        while (std::chrono::steady_clock::now() < wait_until) {
+            if (shutdown_requested_.load()) return;
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+        
+        if (shutdown_requested_.load()) return;
+        
+        try {
+            consolidate();
+        } catch (const std::exception& e) {
+            // Log error but continue
+        }
+    }
+}
+
+// =============================================================================
+// Persistence
+// =============================================================================
+
+void TMSMemorySystem::save() {
+    std::filesystem::create_directories(config_.storage_path);
+    
+    ltm_->save();
+    mtm_->save();
+    embedding_engine_->saveCache();
+}
+
+void TMSMemorySystem::load() {
+    if (std::filesystem::exists(config_.storage_path)) {
+        ltm_->load();
+        mtm_->load();
+        embedding_engine_->loadCache();
+    }
+}
+
+// =============================================================================
+// Statistics
+// =============================================================================
+
+TMSMemorySystem::SystemStats TMSMemorySystem::getStats() const {
+    SystemStats stats;
+    
+    if (ltm_) {
+        auto ltm_stats = ltm_->getStats();
+        stats.ltm_total_chunks = ltm_stats.total_chunks;
+        stats.ltm_total_repos = ltm_stats.total_repos;
+        stats.ltm_index_size_mb = ltm_stats.memory_bytes / (1024 * 1024);
+    }
+    
+    if (stm_) {
+        auto stm_stats = stm_->getStats();
+        stats.stm_active_sessions = stm_stats.active_sessions;
+        stats.stm_total_items = stm_stats.total_entries;
+    }
+    
+    if (mtm_) {
+        auto mtm_stats = mtm_->getStats();
+        stats.mtm_patterns = mtm_stats.total_patterns;
+        stats.mtm_strategies = mtm_stats.total_strategies;
+    }
+    
+    if (controller_) {
+        auto ctrl_stats = controller_->getStats();
+        stats.total_queries = ctrl_stats.total_decisions;
+    }
+    
+    return stats;
+}
+
+float TMSMemorySystem::getCurrentBudget() const {
+    // TODO: Query actual available VRAM
+    return config_.vram_budget_gb;
+}
+
+// =============================================================================
+// Internal Helpers
+// =============================================================================
+
+std::vector<float> TMSMemorySystem::computeEmbedding(const std::string& text) {
+    auto result = embedding_engine_->embed(text);
+    if (!result.success) {
+        throw std::runtime_error("Embedding failed: " + result.error);
+    }
+    return result.embedding;
+}
+
+void TMSMemorySystem::updateImportanceScores(const std::vector<std::string>& accessed_ids) {
+    for (const auto& id : accessed_ids) {
+        ltm_->updateImportance(id, 0.05);  // Small boost for access
+    }
+}
+
+CrossMemoryOutput TMSMemorySystem::runCrossMemoryAttention(
+    const std::vector<float>& query_embedding,
+    const std::vector<RetrievedChunk>& ltm_results,
+    const std::vector<RetrievedChunk>& stm_results,
+    const std::vector<PatternEntry>& patterns,
+    const std::vector<StrategyEntry>& strategies,
+    const ComputeDecision& decision
+) {
+    // Adjust attention based on decision
+    if (decision.attention_heads != attention_->getConfig().num_heads) {
+        attention_->setNumHeads(decision.attention_heads);
+    }
+    
+    // Run attention
+    auto output = attention_->attend(
+        query_embedding,
+        ltm_results,
+        stm_results,
+        patterns,
+        strategies
+    );
+    
+    // Convert to CrossMemoryOutput
+    CrossMemoryOutput result;
+    result.fused_chunks = output.attended_ltm;
+    result.fused_context = output.fused_context;
+    result.fused_embedding = output.fused_embedding;
+    result.ltm_attention_weights = output.scores.ltm_aggregated;
+    result.stm_attention_weights = output.scores.stm_aggregated;
+    result.mtm_attention_weights = output.scores.mtm_aggregated;
+    result.confidence_score = output.confidence;
+    result.computation_time = std::chrono::duration_cast<std::chrono::milliseconds>(output.computation_time);
+    
+    return result;
+}
+
+} // namespace aipr::tms

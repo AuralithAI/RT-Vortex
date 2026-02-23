@@ -2,11 +2,15 @@ package ai.aipr.server.api;
 
 import ai.aipr.server.integration.AbstractVcsPlatformClient.PlatformApiException;
 import ai.aipr.server.integration.WebhookPayload;
+import ai.aipr.server.integration.azuredevops.AzureDevOpsWebhookHandler;
 import ai.aipr.server.integration.bitbucket.BitbucketWebhookHandler;
 import ai.aipr.server.integration.github.GitHubWebhookHandler;
 import ai.aipr.server.integration.gitlab.GitLabWebhookHandler;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -18,6 +22,9 @@ import java.util.Map;
 
 /**
  * Webhook endpoints for platform integrations.
+ *
+ * <p>Each platform handler is optional — only enabled when its corresponding
+ * {@code aipr.auth.<platform>.enabled=true} property is set.</p>
  */
 @RestController
 @RequestMapping("/api/v1/webhooks")
@@ -28,15 +35,19 @@ public class WebhookController {
     private final GitHubWebhookHandler gitHubHandler;
     private final GitLabWebhookHandler gitLabHandler;
     private final BitbucketWebhookHandler bitbucketHandler;
+    @Nullable
+    private final AzureDevOpsWebhookHandler azureDevOpsHandler;
 
     public WebhookController(
-            GitHubWebhookHandler gitHubHandler,
-            GitLabWebhookHandler gitLabHandler,
-            BitbucketWebhookHandler bitbucketHandler
+        GitHubWebhookHandler gitHubHandler,
+        GitLabWebhookHandler gitLabHandler,
+        BitbucketWebhookHandler bitbucketHandler,
+        @NotNull ObjectProvider<AzureDevOpsWebhookHandler> azureDevOpsHandlerProvider
     ) {
         this.gitHubHandler = gitHubHandler;
         this.gitLabHandler = gitLabHandler;
         this.bitbucketHandler = bitbucketHandler;
+        this.azureDevOpsHandler = azureDevOpsHandlerProvider.getIfAvailable();
     }
 
     /**
@@ -150,13 +161,46 @@ public class WebhookController {
     }
 
     /**
-     * Azure DevOps webhook endpoint — placeholder for future implementation.
+     * Azure DevOps webhook endpoint.
+     *
+     * <p>Azure DevOps Service Hooks send the event type inside the JSON body
+     * ({@code eventType} field), not as a header. An optional Basic Auth or
+     * custom header carries the HMAC signature.</p>
      */
     @PostMapping("/azure-devops")
     public ResponseEntity<Map<String, Object>> handleAzureDevOps(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody String payload
     ) {
         log.info("Azure DevOps webhook received");
-        return ResponseEntity.ok(Map.of("status", "not_implemented"));
+
+        if (azureDevOpsHandler == null) {
+            return ResponseEntity.ok(Map.of(
+                    "status", "skipped",
+                    "reason", "Azure DevOps integration not enabled"
+            ));
+        }
+
+        WebhookPayload webhookPayload = new WebhookPayload(
+                "azure-devops", "service_hook", payload, authHeader, null
+        );
+
+        try {
+            var result = azureDevOpsHandler.handle(webhookPayload);
+            return ResponseEntity.ok(Map.of(
+                    "status", "accepted",
+                    "action", result.action()
+            ));
+        } catch (SecurityException e) {
+            log.warn("Azure DevOps webhook signature verification failed: {}", e.getMessage());
+            return ResponseEntity.status(401).body(Map.of("error", "Invalid signature"));
+        } catch (PlatformApiException e) {
+            log.error("{} API error during webhook processing: status={}, body={}",
+                    e.getPlatform(), e.getStatusCode(), e.getResponseBody());
+            return ResponseEntity.status(502).body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            log.error("Azure DevOps webhook processing failed", e);
+            return ResponseEntity.internalServerError().body(Map.of("error", e.getMessage()));
+        }
     }
 }

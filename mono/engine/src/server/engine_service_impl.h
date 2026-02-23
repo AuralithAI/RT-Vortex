@@ -9,12 +9,14 @@
 #define AIPR_ENGINE_SERVICE_IMPL_H
 
 #include "engine_api.h"
+#include "storage_backend.h"
 #include "engine.grpc.pb.h"
 
 #include <grpcpp/grpcpp.h>
 #include <memory>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 
 namespace aipr {
 namespace server {
@@ -117,6 +119,21 @@ public:
     ) override;
 
     //-------------------------------------------------------------------------
+    // Configuration
+    //-------------------------------------------------------------------------
+
+    grpc::Status ConfigureStorage(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::StorageConfigRequest* request,
+        aipr::engine::v1::StorageConfigResponse* response
+    ) override;
+
+    /**
+     * Get the active storage backend (may be null if not configured)
+     */
+    StorageBackend* getStorage() const { return storage_.get(); }
+
+    //-------------------------------------------------------------------------
     // Utility
     //-------------------------------------------------------------------------
 
@@ -133,6 +150,13 @@ public:
 private:
     std::unique_ptr<Engine> engine_;
     std::chrono::steady_clock::time_point start_time_;
+
+    // Storage backend — configured via gRPC ConfigureStorage from Java server
+    std::unique_ptr<StorageBackend> storage_;
+    mutable std::mutex storage_mutex_;
+
+    // Convert proto StorageProvider enum to C++ CloudProvider
+    static CloudProvider toCloudProvider(aipr::engine::v1::StorageProvider provider);
 
     //-------------------------------------------------------------------------
     // Proto <-> C++ Struct Mapping Helpers

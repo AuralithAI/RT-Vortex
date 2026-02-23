@@ -25,6 +25,9 @@ service EngineService {
     rpc BuildReviewContext(ReviewContextRequest) returns (ReviewContextResponse);
     rpc RunHeuristics(HeuristicsRequest) returns (HeuristicsResponse);
 
+    // Configuration — Java server pushes config to engine at startup
+    rpc ConfigureStorage(StorageConfigRequest) returns (StorageConfigResponse);
+
     // Health & Diagnostics
     rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
     rpc GetDiagnostics(DiagnosticsRequest) returns (DiagnosticsResponse);
@@ -262,3 +265,69 @@ message IndexInfo {
     string last_updated = 3;
     bool is_loaded = 4;
 }
+
+// ============================================================================
+// Storage Configuration — pushed from Java server to C++ engine at startup
+// ============================================================================
+
+// Cloud provider type
+enum StorageProvider {
+    STORAGE_PROVIDER_LOCAL = 0;
+    STORAGE_PROVIDER_AWS = 1;
+    STORAGE_PROVIDER_GCP = 2;
+    STORAGE_PROVIDER_AZURE = 3;
+    STORAGE_PROVIDER_OCI = 4;
+    STORAGE_PROVIDER_MINIO = 5;
+    STORAGE_PROVIDER_CUSTOM = 6;
+}
+
+// Request to configure storage backend on the C++ engine.
+// Java reads rtserverprops.xml and pushes this to the engine once at startup.
+message StorageConfigRequest {
+    StorageProvider provider = 1;
+
+    // Common fields
+    string base_path = 2;              // For local storage
+    string bucket = 3;
+    string region = 4;
+    string endpoint_url = 5;           // Custom S3-compatible endpoint
+
+    // Authentication
+    string access_key = 6;
+    string secret_key = 7;
+    string session_token = 8;
+
+    // AWS specific
+    bool use_irsa = 9;                 // AWS IAM Roles for Service Accounts
+    string role_arn = 10;
+
+    // GCP specific
+    bool use_workload_identity = 11;
+
+    // Azure specific
+    string azure_account_name = 12;
+    string azure_account_key = 13;
+    string azure_sas_token = 14;
+    bool use_azure_ad = 15;
+
+    // OCI specific
+    string oci_tenancy = 16;
+    string oci_user = 17;
+    string oci_fingerprint = 18;
+    string oci_key_file = 19;
+    string oci_namespace = 20;
+
+    // Connection settings
+    int32 timeout_ms = 21;
+    int32 max_retries = 22;
+    bool use_ssl = 23;
+    bool verify_ssl = 24;
+    string ca_bundle_path = 25;
+}
+
+message StorageConfigResponse {
+    bool success = 1;
+    string message = 2;
+    string active_provider = 3;        // Echoes back the provider now in use
+}
+

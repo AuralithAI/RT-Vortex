@@ -84,4 +84,47 @@
                  path="/api/v1/webhooks/bitbucket"/>
     </bitbucket>
 
+    <!-- ===================================================================== -->
+    <!-- Azure DevOps                                                          -->
+    <!-- ===================================================================== -->
+    <!--
+      Azure DevOps supports two authentication methods:
+      1. PAT (Personal Access Token) - Simple, recommended for most use cases
+      2. Azure AD (Entra ID) - For enterprise SSO with service principals
+      
+      For Service Hooks configuration:
+      1. Go to Project Settings > Service Hooks
+      2. Create a new Web Hook subscription
+      3. Select "Pull request created" and "Pull request updated" events
+      4. Set the URL to: https://your-domain/api/v1/webhooks/azure-devops
+      5. Use HMAC-SHA256 authentication with the webhook secret below
+    -->
+    <azure-devops enabled="${AZURE_DEVOPS_ENABLED:false}"
+                  organization="${AZURE_DEVOPS_ORGANIZATION:}"
+                  base-url="${AZURE_DEVOPS_BASE_URL:https://dev.azure.com}">
+
+        <!-- Personal Access Token — create at: User Settings > Personal access tokens -->
+        <!-- Required scopes: Code (Read & Write), Pull Request Threads (Read & Write) -->
+        <pat token="${AZURE_DEVOPS_PAT:}"/>
+
+        <!-- Azure AD / Entra ID authentication (alternative to PAT) -->
+        <!-- For service principal authentication in enterprise environments -->
+        <azure-ad enabled="${AZURE_DEVOPS_USE_AZURE_AD:false}"
+                  tenant-id="${AZURE_DEVOPS_TENANT_ID:}"
+                  client-id="${AZURE_DEVOPS_CLIENT_ID:}"
+                  client-secret="${AZURE_DEVOPS_CLIENT_SECRET:}"/>
+
+        <!-- Webhook — Azure DevOps sends HMAC-SHA256 signed payloads -->
+        <webhook enabled="true"
+                 secret="${AZURE_DEVOPS_WEBHOOK_SECRET:}"
+                 path="/api/v1/webhooks/azure-devops"/>
+
+        <!-- Supported events -->
+        <events>
+            <event name="git.pullrequest.created" enabled="true"/>
+            <event name="git.pullrequest.updated" enabled="true"/>
+            <event name="git.pullrequest.merged" enabled="false"/>
+        </events>
+    </azure-devops>
+
 </platforms>

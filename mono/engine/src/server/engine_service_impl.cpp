@@ -8,6 +8,7 @@
 #include "engine_service_impl.h"
 
 #include <sstream>
+#include <mutex>
 
 namespace aipr {
 namespace server {
@@ -41,7 +42,7 @@ grpc::Status EngineServiceImpl::IndexRepository(
         IndexConfig config;
         if (request->has_config()) {
             const auto& req_config = request->config();
-            
+
             if (req_config.max_file_size_kb() > 0) {
                 config.max_file_size_kb = req_config.max_file_size_kb();
             }
@@ -52,17 +53,17 @@ grpc::Status EngineServiceImpl::IndexRepository(
                 config.chunk_overlap = req_config.chunk_overlap();
             }
             config.enable_ast_chunking = req_config.enable_ast_chunking();
-            
+
             // Exclude patterns
             for (const auto& pattern : req_config.exclude_patterns()) {
                 config.exclude_patterns.push_back(pattern);
             }
-            
+
             // Include languages
             for (const auto& lang : req_config.include_languages()) {
                 config.include_languages.push_back(lang);
             }
-            
+
             // Embedding settings
             if (!req_config.embedding_endpoint().empty()) {
                 config.embedding_endpoint = req_config.embedding_endpoint();
@@ -494,6 +495,120 @@ aipr::engine::v1::CheckCategory EngineServiceImpl::toProtoCategory(CheckCategory
             return aipr::engine::v1::CATEGORY_DOCUMENTATION;
         default:
             return aipr::engine::v1::CATEGORY_UNSPECIFIED;
+    }
+}
+
+//=============================================================================
+// Configuration — storage config pushed from Java server
+//=============================================================================
+
+CloudProvider EngineServiceImpl::toCloudProvider(aipr::engine::v1::StorageProvider provider) {
+    switch (provider) {
+        case aipr::engine::v1::STORAGE_PROVIDER_AWS:
+            return CloudProvider::AWS;
+        case aipr::engine::v1::STORAGE_PROVIDER_GCP:
+            return CloudProvider::GCP;
+        case aipr::engine::v1::STORAGE_PROVIDER_AZURE:
+            return CloudProvider::Azure;
+        case aipr::engine::v1::STORAGE_PROVIDER_OCI:
+            return CloudProvider::OCI;
+        case aipr::engine::v1::STORAGE_PROVIDER_MINIO:
+            return CloudProvider::MinIO;
+        case aipr::engine::v1::STORAGE_PROVIDER_CUSTOM:
+            return CloudProvider::Custom;
+        case aipr::engine::v1::STORAGE_PROVIDER_LOCAL:
+        default:
+            return CloudProvider::Local;
+    }
+}
+
+grpc::Status EngineServiceImpl::ConfigureStorage(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::StorageConfigRequest* request,
+    aipr::engine::v1::StorageConfigResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    try {
+        StorageConfig config;
+        config.provider = toCloudProvider(request->provider());
+
+        // Common fields
+        config.base_path = request->base_path();
+        config.bucket = request->bucket();
+        config.region = request->region();
+        config.endpoint_url = request->endpoint_url();
+
+        // Authentication
+        config.access_key = request->access_key();
+        config.secret_key = request->secret_key();
+        config.session_token = request->session_token();
+
+        // AWS specific
+        config.use_irsa = request->use_irsa();
+        config.role_arn = request->role_arn();
+
+        // GCP specific
+        config.use_workload_identity = request->use_workload_identity();
+
+        // Azure specific
+        config.azure_account_name = request->azure_account_name();
+        config.azure_account_key = request->azure_account_key();
+        config.azure_sas_token = request->azure_sas_token();
+        config.use_azure_ad = request->use_azure_ad();
+
+        // OCI specific
+        config.oci_tenancy = request->oci_tenancy();
+        config.oci_user = request->oci_user();
+        config.oci_fingerprint = request->oci_fingerprint();
+        config.oci_key_file = request->oci_key_file();
+        config.oci_namespace = request->oci_namespace();
+
+        // Connection settings
+        if (request->timeout_ms() > 0) {
+            config.timeout_ms = request->timeout_ms();
+        }
+        if (request->max_retries() > 0) {
+            config.max_retries = request->max_retries();
+        }
+        config.use_ssl = request->use_ssl();
+        config.verify_ssl = request->verify_ssl();
+        config.ca_bundle_path = request->ca_bundle_path();
+
+        // Create storage backend
+        auto storage = StorageBackend::create(config);
+
+        // Swap atomically
+        {
+            std::lock_guard<std::mutex> lock(storage_mutex_);
+            storage_ = std::move(storage);
+        }
+
+        // Map provider to human-readable name
+        std::string providerName;
+        switch (config.provider) {
+            case CloudProvider::Local:  providerName = "local"; break;
+            case CloudProvider::AWS:    providerName = "s3"; break;
+            case CloudProvider::GCP:    providerName = "gcs"; break;
+            case CloudProvider::Azure:  providerName = "azure"; break;
+            case CloudProvider::OCI:    providerName = "oci"; break;
+            case CloudProvider::MinIO:  providerName = "minio"; break;
+            case CloudProvider::Custom: providerName = "custom"; break;
+            default:                    providerName = "unknown"; break;
+        }
+
+        response->set_success(true);
+        response->set_message("Storage backend configured successfully");
+        response->set_active_provider(providerName);
+
+        return grpc::Status::OK;
+
+    } catch (const std::exception& e) {
+        response->set_success(false);
+        response->set_message(std::string("Failed to configure storage: ") + e.what());
+        return grpc::Status::OK;  // Return OK with error in response body
     }
 }
 
