@@ -3,50 +3,28 @@
 ## Quick Reference
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              EXTERNAL LAYER                                 │
-│                                                                             │
-│   GitHub/GitLab           CLI/SDKs            Web UI                        │
-│   Webhooks                                                                  │
-│       │                      │                  │                           │
-│       │ (HTTP POST)          │ (gRPC)          │ (HTTP)                     │
-│       ▼                      ▼                  ▼                           │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                     JAVA SERVER                                     │    │
-│  │  ┌────────────────┐  ┌────────────────┐  ┌────────────────┐         │    │
-│  │  │   REST API     │  │   gRPC API     │  │  Orchestrator  │         │    │
-│  │  │   Port 8080    │  │   Port 9090    │  │                │         │    │
-│  │  └────────┬───────┘  └────────┬───────┘  └───────┬────────┘         │    │
-│  │           └───────────────────┴──────────────────┘                  │    │
-│  │                          │                                          │    │
-│  │           ┌──────────────┼──────────────┐                           │    │
-│  │           │              │              │                           │    │
-│  │           ▼              ▼              ▼                           │    │
-│  │   ┌────────────┐  ┌────────────┐  ┌────────────┐                    │    │
-│  │   │ PostgreSQL │  │   Redis    │  │ Engine     │                    │    │
-│  │   │ Port 5432  │  │ Port 6379  │  │ Client     │                    │    │
-│  │   └────────────┘  └────────────┘  └─────┬──────┘                    │    │
-│  └─────────────────────────────────────────┼───────────────────────────┘    │
-│                                            │                                │
-│                                            │ gRPC (engine.proto)            │
-│                                            │ Port 50051                     │
-│                                            ▼                                │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                     C++ ENGINE (gRPC Server)                        │    │
-│  │                                                                     │    │
-│  │   ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐    │    │
-│  │   │  Indexer   │  │  Retriever │  │ Heuristics │  │  Symbols   │    │    │
-│  │   │  - AST     │  │  - Lexical │  │  - Rules   │  │  - Graph   │    │    │
-│  │   │  - Chunks  │  │  - Vector  │  │  - Fast    │  │  - Refs    │    │    │
-│  │   └────────────┘  └────────────┘  └────────────┘  └────────────┘    │    │
-│  │                         │                                           │    │
-│  │                         ▼                                           │    │
-│  │                  ┌────────────────┐                                 │    │
-│  │                  │ Local Storage  │  (No DB connection!)            │    │
-│  │                  │ .aipr/index/   │                                 │    │
-│  │                  └────────────────┘                                 │    │
-│  └─────────────────────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────┘
+External Clients (SDKs, CLI, Web)
+         │
+         │  gRPC (port 9090)          REST (port 8080)
+         ▼                            ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                   Java Server (aipr-server.jar)                     │
+│                                                                     │
+│  gRPC Server ◄── GrpcDataServiceImpl                                │
+│  REST API    ◄── Controllers (5)                                    │
+│  Background  ◄── BackgroundTaskScheduler (3 cron tasks)             │
+│  DB Layer    ◄── Persister → PostgreSQL                             │
+│  Cache       ◄── Redis (optional)                                   │
+│                                                                     │
+│  gRPC Client ──► EngineClient                                       │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ gRPC (port 50051)
+                               ▼
+                      ┌────────────────┐
+                      │  C++ Engine    │
+                      │  (aipr-engine) │
+                      │  gRPC Server   │
+                      └────────────────┘
 ```
 
 **Port Summary:**
@@ -177,15 +155,55 @@ Both APIs are served by the same Java server and share the same orchestration lo
           negotiation-type="${ENGINE_NEGOTIATION:TLS}"/>
   ```
 
+#### Background Tasks (`mono/server/src/.../task/`)
+
+The Java server includes a built-in cron scheduler for maintenance operations.
+No external Quartz server required — tasks run inside the server process.
+
+| Task | Cron | Purpose |
+|------|------|---------|
+| `session-cleanup` | Every 15 min | Evict expired sessions from cache/DB |
+| `index-job-cleanup` | Every hour | Remove completed index jobs older than 7 days |
+| `inactive-user-cleanup` | Daily 3 AM | Revoke sessions for users inactive >30 days |
+
+**Key Classes:**
+- `BackgroundTaskScheduler` - Discovers and schedules all `IBackgroundTask` beans
+- `IBackgroundTask` - Interface for implementing new tasks
+- `TaskResult` - Status enum: SUCCESS, PARTIAL, SKIPPED, FAILED
+
+Tasks execute with **superuser privileges** (no user session context).
+
 ### Proto Definitions (`mono/proto/`)
 
-gRPC service definitions:
+**Source of Truth:** All `.proto` files live in `mono/proto/`. This is the **only** location to edit.
 
-| Proto File | Purpose | Who Uses It | Direction |
-|------------|---------|-------------|-----------|
-| `engine.proto` | Engine service | Java → C++ | **Internal** |
-| `api.proto` | External API | SDKs/CLI → Java | **External** |
-| `session.proto` | Auth/sessions | Shared types | Both |
+```
+mono/proto/                    ← EDIT HERE (source of truth)
+├── api.proto                  │
+├── engine.proto               │
+└── session.proto              │
+                               ▼
+         ┌─────────────────────┴─────────────────────┐
+         │                                           │
+         ▼                                           ▼
+    C++ Engine                              mono/proto-java/
+    (CMake reads directly)                  (Gradle copies & generates)
+                                                     │
+                                                     ▼
+                                            Java gRPC stubs
+                                            (build/generated/)
+```
+
+**Important:** `mono/proto-java/src/main/proto/` contains **auto-copied** files. They are:
+- Copied by Gradle `copyProtos` task before compilation
+- Deleted on `./gradlew clean`
+- Ignored by `.gitignore` — **never committed**
+
+| Proto File | Purpose | Direction |
+|------------|---------|-----------|
+| `engine.proto` | Engine service | Java → C++ (Internal) |
+| `api.proto` | External API | SDKs/CLI → Java (External) |
+| `session.proto` | Auth/sessions | Shared types |
 
 **Data Flow:**
 ```
