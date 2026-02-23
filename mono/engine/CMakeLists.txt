@@ -1,9 +1,14 @@
 cmake_minimum_required(VERSION 3.20)
 
+# Set CMP0135 policy for FetchContent timestamp handling
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+
 project(aipr-engine
     VERSION 0.1.0
     DESCRIPTION "AI PR Reviewer - Core Engine"
-    LANGUAGES CXX
+    LANGUAGES C CXX
 )
 
 # C++ Standard
@@ -42,6 +47,13 @@ include(FetchContent)
 # =============================================================================
 # libcurl for HTTP embedding API calls
 # =============================================================================
+if(WIN32)
+    # On Windows, CURL may come from vcpkg - set hints
+    if(DEFINED ENV{VCPKG_ROOT})
+        set(CURL_DIR "$ENV{VCPKG_ROOT}/installed/x64-windows/share/curl")
+    endif()
+endif()
+
 find_package(CURL REQUIRED)
 if(CURL_FOUND)
     message(STATUS "Found libcurl: ${CURL_VERSION_STRING}")
@@ -50,7 +62,7 @@ else()
     message(FATAL_ERROR "libcurl is required for HTTP embedding API calls. Install with:\n"
                         "  Ubuntu/Debian: sudo apt-get install libcurl4-openssl-dev\n"
                         "  macOS: brew install curl (or use system curl)\n"
-                        "  Windows: vcpkg install curl")
+                        "  Windows: vcpkg install curl:x64-windows")
 endif()
 
 # =============================================================================
@@ -576,8 +588,9 @@ if(TREE_SITTER_LIBRARIES)
 endif()
 
 if(AIPR_USE_ONNX AND ONNX_LIBRARIES)
-    target_include_directories(aipr-engine PUBLIC ${ONNX_INCLUDE_DIR})
-    target_link_libraries(aipr-engine PUBLIC ${ONNX_LIBRARIES})
+    # Use PRIVATE to avoid exporting build-tree paths
+    target_include_directories(aipr-engine PRIVATE ${ONNX_INCLUDE_DIR})
+    target_link_libraries(aipr-engine PRIVATE ${ONNX_LIBRARIES})
 endif()
 
 # Shared library version
@@ -604,8 +617,9 @@ if(FAISS_LIBRARIES)
 endif()
 
 if(AIPR_USE_ONNX AND ONNX_LIBRARIES)
-    target_include_directories(aipr-engine-shared PUBLIC ${ONNX_INCLUDE_DIR})
-    target_link_libraries(aipr-engine-shared PUBLIC ${ONNX_LIBRARIES})
+    # Use PRIVATE to avoid exporting build-tree paths
+    target_include_directories(aipr-engine-shared PRIVATE ${ONNX_INCLUDE_DIR})
+    target_link_libraries(aipr-engine-shared PRIVATE ${ONNX_LIBRARIES})
 endif()
 
 set_target_properties(aipr-engine-shared PROPERTIES
@@ -685,23 +699,21 @@ if(AIPR_BUILD_TESTS)
 endif()
 
 # Installation
+# Note: We only install the server executable and skip library installation
+# to avoid export set issues with FetchContent dependencies (nlohmann_json, tree_sitter)
 include(GNUInstallDirs)
 
-install(TARGETS aipr-engine aipr-engine-shared
-    EXPORT aipr-engine-targets
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+# Install server executable
+if(AIPR_BUILD_SERVER)
+    install(TARGETS aipr-engine-server
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
 
+# Install headers (for development)
 install(DIRECTORY include/
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-)
-
-install(EXPORT aipr-engine-targets
-    FILE aipr-engine-targets.cmake
-    NAMESPACE aipr::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/aipr-engine
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/aipr-engine
+    FILES_MATCHING PATTERN "*.h"
 )
 
 # Package configuration

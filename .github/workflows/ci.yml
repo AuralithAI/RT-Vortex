@@ -301,7 +301,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libomp-dev libopenblas-dev liblapack-dev libfaiss-dev
+          sudo apt-get install -y libcurl4-openssl-dev libomp-dev libopenblas-dev liblapack-dev
       
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
@@ -314,7 +314,9 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           # Use vcpkg for Windows dependencies (FAISS build from source via CMake FetchContent)
-          vcpkg install openblas:x64-windows
+          vcpkg install curl:x64-windows openblas:x64-windows
+        env:
+          VCPKG_DEFAULT_TRIPLET: x64-windows
       
       - name: Setup CMake
         uses: lukka/get-cmake@latest
@@ -335,7 +337,7 @@ jobs:
       - name: Configure & Build (Windows)
         if: runner.os == 'Windows'
         run: |
-          cmake -B build -S ${{ env.MONO_DIR }}/engine -DCMAKE_BUILD_TYPE=Release -DAIPR_BUILD_TESTS=ON -DAIPR_BUILD_SERVER=ON -DAIPR_USE_FAISS=ON -DAIPR_USE_TREE_SITTER=ON
+          cmake -B build -S ${{ env.MONO_DIR }}/engine -DCMAKE_BUILD_TYPE=Release -DAIPR_BUILD_TESTS=ON -DAIPR_BUILD_SERVER=ON -DAIPR_USE_FAISS=ON -DAIPR_USE_TREE_SITTER=ON -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           cmake --build build --config Release --parallel 4
       
       - name: Run Tests

@@ -99,7 +99,6 @@ jobs:
             libomp-dev \
             libopenblas-dev \
             liblapack-dev \
-            libfaiss-dev \
             protobuf-compiler \
             libprotobuf-dev
 
@@ -114,14 +113,17 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           # Use vcpkg for dependencies
-          vcpkg install grpc:x64-windows protobuf:x64-windows faiss:x64-windows openblas:x64-windows
+          vcpkg install curl:x64-windows grpc:x64-windows protobuf:x64-windows openblas:x64-windows
+        env:
+          VCPKG_DEFAULT_TRIPLET: x64-windows
 
       - name: Setup CMake
         uses: lukka/get-cmake@latest
         with:
           cmakeVersion: ${{ env.CMAKE_VERSION }}
 
-      - name: Configure
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           BUILD_TYPE="${{ github.event.inputs.build_type || 'Release' }}"
@@ -132,6 +134,19 @@ jobs:
             -DAIPR_USE_FAISS=ON \
             -DAIPR_USE_TREE_SITTER=ON \
             ${{ matrix.cmake_extra }}
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $BUILD_TYPE = if ("${{ github.event.inputs.build_type }}") { "${{ github.event.inputs.build_type }}" } else { "Release" }
+          cmake -B build -S ${{ env.MONO_DIR }}/engine `
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE `
+            -DAIPR_BUILD_TESTS=ON `
+            -DAIPR_BUILD_SERVER=ON `
+            -DAIPR_USE_FAISS=ON `
+            -DAIPR_USE_TREE_SITTER=ON `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
 
       - name: Build
         run: cmake --build build --config ${{ github.event.inputs.build_type || 'Release' }} --parallel 4
