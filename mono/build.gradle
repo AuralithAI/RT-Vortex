@@ -181,7 +181,7 @@ tasks.register('copyEngineLib', Copy) {
     group = 'Distribution'
     description = '[DEPRECATED] Copies C++ engine library to distribution. Engine is now a standalone gRPC server.'
     dependsOn 'prepareDist'
-    
+
     // No longer copies .so/.dll — engine runs as separate process on port 50051
     // This task is now a no-op but kept for compatibility
     doLast {
@@ -202,7 +202,7 @@ tasks.register('copyEngineBinary', Copy) {
         include "aipr-engine.exe"
     }
     into "${distDir}/bin"
-    
+
     // Make executable on Unix
     doLast {
         if (!System.getProperty('os.name').toLowerCase().contains('windows')) {
@@ -629,9 +629,9 @@ QUICK START
 
 5. Access: http://localhost:8080
 
-NOTE: V1__initial_schema.sql and V2__user_sessions.sql are in data/sql/ for
-reference. You do NOT run them manually — Flyway runs them automatically at
-startup. Only create_aipr_user.sql needs a manual one-time run.
+NOTE: V1__schema.sql is in data/sql/ for reference. You do NOT run it
+manually — Flyway runs it automatically at startup. Only create_aipr_user.sql
+needs a manual one-time run.
 
 ENVIRONMENT VARIABLES
 ---------------------
@@ -790,20 +790,20 @@ def winswCachedExe = file("${winswCacheDir}/WinSW-x64-${winswVersion}.exe")
 tasks.register('downloadWinSW') {
     group = 'Distribution'
     description = 'Downloads WinSW executable for Windows service wrapper'
-    
+
     outputs.file(winswCachedExe)
-    
+
     doLast {
         if (!winswCachedExe.exists()) {
             println "[INFO] Downloading WinSW v${winswVersion}..."
             winswCacheDir.mkdirs()
-            
+
             ant.get(
                 src: winswUrl,
                 dest: winswCachedExe,
                 verbose: true
             )
-            
+
             println "[OK] WinSW downloaded to: ${winswCachedExe}"
         } else {
             println "[INFO] Using cached WinSW: ${winswCachedExe}"

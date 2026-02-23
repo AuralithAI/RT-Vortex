@@ -36,6 +36,87 @@ endif()
 # Find dependencies
 find_package(Threads REQUIRED)
 
+# =============================================================================
+# libcurl for HTTP embedding API calls
+# =============================================================================
+find_package(CURL REQUIRED)
+if(CURL_FOUND)
+    message(STATUS "Found libcurl: ${CURL_VERSION_STRING}")
+else()
+    message(FATAL_ERROR "libcurl is required for embedding API calls. Install with:\n"
+                        "  Ubuntu/Debian: sudo apt-get install libcurl4-openssl-dev\n"
+                        "  macOS: brew install curl\n"
+                        "  Windows: vcpkg install curl")
+endif()
+
+# =============================================================================
+# nlohmann/json for JSON parsing
+# =============================================================================
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG v3.11.3
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(nlohmann_json)
+message(STATUS "nlohmann/json downloaded")
+
+# =============================================================================
+# ONNX Runtime for local embeddings (optional fallback)
+# =============================================================================
+option(AIPR_USE_ONNX "Use ONNX Runtime for local embeddings" ON)
+
+if(AIPR_USE_ONNX)
+    # Try to find system ONNX Runtime first
+    find_package(onnxruntime QUIET)
+    
+    if(onnxruntime_FOUND)
+        message(STATUS "Found system ONNX Runtime")
+        set(ONNX_LIBRARIES onnxruntime::onnxruntime)
+        add_definitions(-DAIPR_HAS_ONNX)
+    else()
+        message(STATUS "ONNX Runtime not found, downloading via FetchContent...")
+        
+        # Download pre-built ONNX Runtime
+        set(ONNXRUNTIME_VERSION "1.16.3")
+        
+        if(WIN32)
+            set(ONNX_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-win-x64-${ONNXRUNTIME_VERSION}.zip")
+        elseif(APPLE)
+            if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64")
+                set(ONNX_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-osx-arm64-${ONNXRUNTIME_VERSION}.tgz")
+            else()
+                set(ONNX_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-osx-x86_64-${ONNXRUNTIME_VERSION}.tgz")
+            endif()
+        else()
+            set(ONNX_URL "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz")
+        endif()
+        
+        FetchContent_Declare(
+            onnxruntime
+            URL ${ONNX_URL}
+        )
+        FetchContent_MakeAvailable(onnxruntime)
+        
+        set(ONNX_INCLUDE_DIR "${onnxruntime_SOURCE_DIR}/include")
+        
+        if(WIN32)
+            set(ONNX_LIBRARIES "${onnxruntime_SOURCE_DIR}/lib/onnxruntime.lib")
+            set(ONNX_DLL "${onnxruntime_SOURCE_DIR}/lib/onnxruntime.dll")
+        elseif(APPLE)
+            set(ONNX_LIBRARIES "${onnxruntime_SOURCE_DIR}/lib/libonnxruntime.dylib")
+        else()
+            set(ONNX_LIBRARIES "${onnxruntime_SOURCE_DIR}/lib/libonnxruntime.so")
+        endif()
+        
+        add_definitions(-DAIPR_HAS_ONNX)
+        message(STATUS "ONNX Runtime downloaded: ${onnxruntime_SOURCE_DIR}")
+    endif()
+else()
+    message(STATUS "ONNX Runtime disabled, local embeddings not available")
+    set(ONNX_LIBRARIES "")
+endif()
+
 # FetchContent for downloading dependencies
 include(FetchContent)
 
@@ -240,10 +321,17 @@ target_include_directories(aipr-engine PUBLIC
 
 target_link_libraries(aipr-engine PUBLIC
     Threads::Threads
+    CURL::libcurl
+    nlohmann_json::nlohmann_json
 )
 
 if(FAISS_LIBRARIES)
     target_link_libraries(aipr-engine PUBLIC ${FAISS_LIBRARIES})
+endif()
+
+if(AIPR_USE_ONNX AND ONNX_LIBRARIES)
+    target_include_directories(aipr-engine PUBLIC ${ONNX_INCLUDE_DIR})
+    target_link_libraries(aipr-engine PUBLIC ${ONNX_LIBRARIES})
 endif()
 
 # Shared library version
@@ -261,10 +349,17 @@ target_include_directories(aipr-engine-shared PUBLIC
 
 target_link_libraries(aipr-engine-shared PUBLIC
     Threads::Threads
+    CURL::libcurl
+    nlohmann_json::nlohmann_json
 )
 
 if(FAISS_LIBRARIES)
     target_link_libraries(aipr-engine-shared PUBLIC ${FAISS_LIBRARIES})
+endif()
+
+if(AIPR_USE_ONNX AND ONNX_LIBRARIES)
+    target_include_directories(aipr-engine-shared PUBLIC ${ONNX_INCLUDE_DIR})
+    target_link_libraries(aipr-engine-shared PUBLIC ${ONNX_LIBRARIES})
 endif()
 
 set_target_properties(aipr-engine-shared PROPERTIES

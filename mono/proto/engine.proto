@@ -223,6 +223,7 @@ message HeuristicFinding {
     string evidence = 9;
     string rule_id = 10;
     uint32 end_line = 11;  // End line of the finding (0 = same as line)
+    string rule_name = 12; // Human-readable name of the rule
 }
 
 // ============================================================================

@@ -6,9 +6,8 @@ import ai.aipr.server.dto.ReviewResponse;
 import ai.aipr.server.model.PageRequest;
 import ai.aipr.server.model.PagedResult;
 import ai.aipr.server.model.ReviewFilter;
+import ai.aipr.server.persistence.Persister;
 import org.jetbrains.annotations.NotNull;
-import org.springframework.dao.EmptyResultDataAccessException;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
@@ -18,18 +17,15 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Repository for review data backed by PostgreSQL via {@link JdbcTemplate}.
- *
- * <p>Maps to the {@code reviews}, {@code review_comments}, and
- * {@code review_metrics} tables created by {@code V1__initial_schema.sql}.</p>
+ * Repository for review data backed by PostgreSQL via {@link Persister}.
  */
 @Repository
 public class ReviewRepository {
 
-    private final JdbcTemplate jdbc;
+    private final Persister db;
 
-    public ReviewRepository(JdbcTemplate jdbc) {
-        this.jdbc = jdbc;
+    public ReviewRepository(Persister db) {
+        this.db = db;
     }
 
     // =====================================================================
@@ -39,7 +35,7 @@ public class ReviewRepository {
     public void save(@NotNull ReviewResponse review) {
         String id = review.reviewId() != null ? review.reviewId() : UUID.randomUUID().toString();
 
-        jdbc.update("""
+        db.update("""
             INSERT INTO reviews (id, repository_id, pr_number, status, summary, created_at)
             VALUES (?::uuid, ?::uuid, ?, ?, ?, NOW())
             ON CONFLICT (id) DO UPDATE
@@ -49,10 +45,9 @@ public class ReviewRepository {
             id, review.repoId(), review.prNumber(), review.status(), review.summary()
         );
 
-        // Comments
         if (review.comments() != null) {
             for (ReviewComment c : review.comments()) {
-                jdbc.update("""
+                db.update("""
                     INSERT INTO review_comments
                       (id, review_id, file_path, line_number, end_line_number, severity, category, source, message, suggestion, confidence)
                     VALUES (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -67,10 +62,9 @@ public class ReviewRepository {
             }
         }
 
-        // Metrics
         if (review.metrics() != null) {
             ReviewMetrics m = review.metrics();
-            jdbc.update("""
+            db.update("""
                 INSERT INTO review_metrics
                   (id, review_id, total_files, lines_added, lines_deleted,
                    tokens_prompt, tokens_completion, llm_latency_ms, total_latency_ms,
@@ -85,8 +79,10 @@ public class ReviewRepository {
                 """,
                 UUID.randomUUID().toString(), id,
                 m.filesAnalyzed(), m.linesAdded(), m.linesRemoved(),
-                m.tokensUsed(), m.tokensUsed(),   // prompt ≈ completion when not split
-                m.latencyMs(), m.latencyMs(),     // llm ≈ total when not split
+                m.promptTokens() != null ? m.promptTokens() : m.tokensUsed(),
+                m.completionTokens() != null ? m.completionTokens() : 0,
+                m.llmLatencyMs() != null ? m.llmLatencyMs() : m.latencyMs(),
+                m.latencyMs(),
                 m.totalFindings(), m.totalFindings()
             );
         }
@@ -97,37 +93,26 @@ public class ReviewRepository {
     // =====================================================================
 
     public Optional<ReviewResponse> findById(String reviewId) {
-        try {
-            ReviewResponse r = jdbc.queryForObject(
-                "SELECT * FROM reviews WHERE id = ?::uuid", REVIEW_ROW_MAPPER, reviewId);
-            if (r != null) {
-                return Optional.of(hydrate(r));
-            }
-            return Optional.empty();
-        } catch (EmptyResultDataAccessException e) {
-            return Optional.empty();
-        }
+        return db.queryForOptional("SELECT * FROM reviews WHERE id = ?::uuid", REVIEW_ROW_MAPPER, reviewId)
+                .map(this::hydrate);
     }
 
     public List<ReviewResponse> findByRepoId(String repoId) {
-        List<ReviewResponse> rows = jdbc.query(
+        return db.query(
             "SELECT * FROM reviews WHERE repository_id = ?::uuid ORDER BY created_at DESC",
-            REVIEW_ROW_MAPPER, repoId);
-        return rows.stream().map(this::hydrate).toList();
+            REVIEW_ROW_MAPPER, repoId).stream().map(this::hydrate).toList();
     }
 
     public List<ReviewResponse> findByRepoId(String repoId, int page, int size) {
-        List<ReviewResponse> rows = jdbc.query(
+        return db.query(
             "SELECT * FROM reviews WHERE repository_id = ?::uuid ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            REVIEW_ROW_MAPPER, repoId, size, (long) page * size);
-        return rows.stream().map(this::hydrate).toList();
+            REVIEW_ROW_MAPPER, repoId, size, (long) page * size).stream().map(this::hydrate).toList();
     }
 
     public List<ReviewResponse> findByRepoIdAndPrNumber(String repoId, int prNumber) {
-        List<ReviewResponse> rows = jdbc.query(
+        return db.query(
             "SELECT * FROM reviews WHERE repository_id = ?::uuid AND pr_number = ? ORDER BY created_at DESC",
-            REVIEW_ROW_MAPPER, repoId, prNumber);
-        return rows.stream().map(this::hydrate).toList();
+            REVIEW_ROW_MAPPER, repoId, prNumber).stream().map(this::hydrate).toList();
     }
 
     public PagedResult<ReviewResponse> findByFilter(@NotNull ReviewFilter filter, PageRequest pageRequest) {
@@ -151,14 +136,14 @@ public class ReviewRepository {
             params.add(filter.status());
         }
 
-        int total = jdbc.queryForObject(countSql.toString(), Integer.class, params.toArray());
+        int total = db.queryScalar(countSql.toString(), Integer.class, 0, params.toArray());
 
         sql.append(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
         params.add(pageRequest.size());
         params.add((long) pageRequest.page() * pageRequest.size());
 
-        List<ReviewResponse> rows = jdbc.query(sql.toString(), REVIEW_ROW_MAPPER, params.toArray());
-        List<ReviewResponse> page = rows.stream().map(this::hydrate).toList();
+        List<ReviewResponse> page = db.jdbc().query(sql.toString(), REVIEW_ROW_MAPPER, params.toArray())
+                .stream().map(this::hydrate).toList();
 
         return new PagedResult<>(page, total, pageRequest.page(), pageRequest.size());
     }
@@ -168,11 +153,11 @@ public class ReviewRepository {
     // =====================================================================
 
     public void deleteById(String reviewId) {
-        jdbc.update("DELETE FROM reviews WHERE id = ?::uuid", reviewId);
+        db.update("DELETE FROM reviews WHERE id = ?::uuid", reviewId);
     }
 
     public int deleteByRepoId(String repoId) {
-        return jdbc.update("DELETE FROM reviews WHERE repository_id = ?::uuid", repoId);
+        return db.update("DELETE FROM reviews WHERE repository_id = ?::uuid", repoId);
     }
 
     // =====================================================================
@@ -180,9 +165,8 @@ public class ReviewRepository {
     // =====================================================================
 
     public long countByRepoId(String repoId) {
-        Long count = jdbc.queryForObject(
-            "SELECT COUNT(*) FROM reviews WHERE repository_id = ?::uuid", Long.class, repoId);
-        return count != null ? count : 0;
+        return db.queryScalar("SELECT COUNT(*) FROM reviews WHERE repository_id = ?::uuid",
+                Long.class, 0L, repoId);
     }
 
     // =====================================================================
@@ -190,18 +174,13 @@ public class ReviewRepository {
     // =====================================================================
 
     private ReviewResponse hydrate(@NotNull ReviewResponse base) {
-        // Load comments
-        List<ReviewComment> comments = jdbc.query(
+        List<ReviewComment> comments = db.query(
             "SELECT * FROM review_comments WHERE review_id = ?::uuid ORDER BY file_path, line_number",
             COMMENT_ROW_MAPPER, base.reviewId());
 
-        // Load metrics
-        ReviewMetrics metrics = null;
-        try {
-            metrics = jdbc.queryForObject(
-                "SELECT * FROM review_metrics WHERE review_id = ?::uuid",
-                METRICS_ROW_MAPPER, base.reviewId());
-        } catch (EmptyResultDataAccessException ignored) {}
+        ReviewMetrics metrics = db.queryForOptional(
+            "SELECT * FROM review_metrics WHERE review_id = ?::uuid",
+            METRICS_ROW_MAPPER, base.reviewId()).orElse(null);
 
         return ReviewResponse.builder()
                 .reviewId(base.reviewId())
@@ -245,7 +224,10 @@ public class ReviewRepository {
             .linesAdded(rs.getInt("lines_added"))
             .linesRemoved(rs.getInt("lines_deleted"))
             .tokensUsed(rs.getInt("tokens_prompt") + rs.getInt("tokens_completion"))
+            .promptTokens(rs.getInt("tokens_prompt"))
+            .completionTokens(rs.getInt("tokens_completion"))
             .latencyMs(rs.getInt("total_latency_ms"))
+            .llmLatencyMs(rs.getInt("llm_latency_ms"))
             .totalFindings(rs.getInt("heuristic_findings") + rs.getInt("llm_findings"))
             .build();
 }

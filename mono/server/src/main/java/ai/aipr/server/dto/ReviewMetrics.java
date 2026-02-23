@@ -20,21 +20,11 @@ public record ReviewMetrics(
         Integer linesRemoved,
         Integer totalFindings,
         Integer tokensUsed,
-        Integer latencyMs
+        Integer promptTokens,
+        Integer completionTokens,
+        Integer latencyMs,
+        Integer llmLatencyMs
 ) {
-    // Constructor for score-based metrics only
-    public ReviewMetrics(Double securityScore, Double reliabilityScore, Double performanceScore,
-                         Double testingScore, Double documentationScore, Double overallScore) {
-        this(securityScore, reliabilityScore, performanceScore, testingScore,
-             documentationScore, overallScore, null, null, null, null, null, null);
-    }
-
-    // Constructor for quantitative metrics only
-    public ReviewMetrics(int filesAnalyzed, int linesAdded, int linesRemoved,
-                         int totalFindings, int tokensUsed, int latencyMs) {
-        this(null, null, null, null, null, null,
-             filesAnalyzed, linesAdded, linesRemoved, totalFindings, tokensUsed, latencyMs);
-    }
 
     @NotNull public static Builder builder() {
         return new Builder();
@@ -52,7 +42,10 @@ public record ReviewMetrics(
         private Integer linesRemoved;
         private Integer totalFindings;
         private Integer tokensUsed;
+        private Integer promptTokens;
+        private Integer completionTokens;
         private Integer latencyMs;
+        private Integer llmLatencyMs;
 
         public Builder securityScore(Double v) { this.securityScore = v; return this; }
         public Builder reliabilityScore(Double v) { this.reliabilityScore = v; return this; }
@@ -65,12 +58,16 @@ public record ReviewMetrics(
         public Builder linesRemoved(Integer v) { this.linesRemoved = v; return this; }
         public Builder totalFindings(Integer v) { this.totalFindings = v; return this; }
         public Builder tokensUsed(Integer v) { this.tokensUsed = v; return this; }
+        public Builder promptTokens(Integer v) { this.promptTokens = v; return this; }
+        public Builder completionTokens(Integer v) { this.completionTokens = v; return this; }
         public Builder latencyMs(Integer v) { this.latencyMs = v; return this; }
+        public Builder llmLatencyMs(Integer v) { this.llmLatencyMs = v; return this; }
 
         public ReviewMetrics build() {
             return new ReviewMetrics(securityScore, reliabilityScore, performanceScore,
                     testingScore, documentationScore, overallScore,
-                    filesAnalyzed, linesAdded, linesRemoved, totalFindings, tokensUsed, latencyMs);
+                    filesAnalyzed, linesAdded, linesRemoved, totalFindings,
+                    tokensUsed, promptTokens, completionTokens, latencyMs, llmLatencyMs);
         }
     }
 }

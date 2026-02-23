@@ -1,7 +1,6 @@
 package ai.aipr.server.repository;
 
-import org.springframework.dao.EmptyResultDataAccessException;
-import org.springframework.jdbc.core.JdbcTemplate;
+import ai.aipr.server.persistence.Persister;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
@@ -11,16 +10,15 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Repository for user sessions backed by PostgreSQL via {@link JdbcTemplate}.
- * Maps to the {@code user_sessions} table created by {@code V2__user_sessions.sql}.
+ * Repository for user sessions backed by PostgreSQL via {@link Persister}.
  */
 @Repository
 public class UserSessionRepository {
 
-    private final JdbcTemplate jdbc;
+    private final Persister db;
 
-    public UserSessionRepository(JdbcTemplate jdbc) {
-        this.jdbc = jdbc;
+    public UserSessionRepository(Persister db) {
+        this.db = db;
     }
 
     public record UserSession(
@@ -39,7 +37,7 @@ public class UserSessionRepository {
         Timestamp createdTs = Timestamp.from(Instant.ofEpochMilli(now));
         Timestamp expiresTs = Timestamp.from(Instant.ofEpochMilli(now + ttlMs));
 
-        jdbc.update("""
+        db.update("""
             INSERT INTO user_sessions (id, user_id, session_token, status, created_at, expires_at, last_activity_at)
             VALUES (?::uuid, ?::uuid, ?, 'active', ?, ?, ?)
             """,
@@ -50,35 +48,27 @@ public class UserSessionRepository {
     }
 
     public Optional<UserSession> findById(String sessionToken) {
-        try {
-            UserSession session = jdbc.queryForObject(
-                "SELECT * FROM user_sessions WHERE session_token = ? AND status = 'active'",
-                SESSION_ROW_MAPPER, sessionToken);
-            if (session == null) return Optional.empty();
+        Optional<UserSession> opt = db.queryForOptional(
+            "SELECT * FROM user_sessions WHERE session_token = ? AND status = 'active'",
+            SESSION_ROW_MAPPER, sessionToken);
 
-            // Check expiration
-            if (System.currentTimeMillis() > session.expiresAt()) {
-                invalidate(sessionToken);
-                return Optional.empty();
-            }
-            return Optional.of(session);
-        } catch (EmptyResultDataAccessException e) {
+        if (opt.isPresent() && System.currentTimeMillis() > opt.get().expiresAt()) {
+            invalidate(sessionToken);
             return Optional.empty();
         }
+        return opt;
     }
 
     public void touch(String sessionToken) {
-        jdbc.update(
+        db.update(
             "UPDATE user_sessions SET last_activity_at = NOW() WHERE session_token = ? AND status = 'active'",
-            sessionToken
-        );
+            sessionToken);
     }
 
     public void invalidate(String sessionToken) {
-        jdbc.update(
+        db.update(
             "UPDATE user_sessions SET status = 'revoked', revoked_at = NOW() WHERE session_token = ?",
-            sessionToken
-        );
+            sessionToken);
     }
 
     public void revokeSession(String sessionToken) {
@@ -94,16 +84,14 @@ public class UserSessionRepository {
     }
 
     public int invalidateAllForUser(String userId) {
-        return jdbc.update(
+        return db.update(
             "UPDATE user_sessions SET status = 'revoked', revoked_at = NOW() WHERE user_id = ?::uuid AND status = 'active'",
-            userId
-        );
+            userId);
     }
 
     public int cleanupExpired() {
-        return jdbc.update(
-            "UPDATE user_sessions SET status = 'expired' WHERE status = 'active' AND expires_at < NOW()"
-        );
+        return db.update(
+            "UPDATE user_sessions SET status = 'expired' WHERE status = 'active' AND expires_at < NOW()");
     }
 
     private static final RowMapper<UserSession> SESSION_ROW_MAPPER = (rs, rowNum) -> {

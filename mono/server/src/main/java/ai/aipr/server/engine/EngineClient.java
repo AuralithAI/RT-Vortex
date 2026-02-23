@@ -596,7 +596,7 @@ public class EngineClient {
                 : startLine;  // fall back to startLine (maybe null)
         return HeuristicFinding.builder()
                 .ruleId(grpc.getRuleId())
-                .ruleName(grpc.getId())
+                .ruleName(grpc.getRuleName())
                 .severity(convertSeverity(grpc.getSeverity()))
                 .filePath(grpc.getFilePath())
                 .startLine(startLine)

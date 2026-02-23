@@ -111,7 +111,7 @@ public class GrpcDataServiceImpl extends UserSessionRemoteGrpc.UserSessionRemote
             }
 
             log.info("Processing review request from user={}, repo={}, pr={}",
-                    session.getUserId(), request.getRepositoryId(), request.getPrNumber());
+                    session.userId(), request.getRepositoryId(), request.getPrNumber());
 
             // Build review request with all available fields
             ReviewRequest.Builder reqBuilder = ReviewRequest.builder()
@@ -358,7 +358,7 @@ public class GrpcDataServiceImpl extends UserSessionRemoteGrpc.UserSessionRemote
             }
 
             String reviewId = request.getReviewId();
-            log.info("Cancelling review: reviewId={}, user={}", reviewId, session.getUserId());
+            log.info("Cancelling review: reviewId={}, user={}", reviewId, session.userId());
 
             boolean cancelled = reviewService.cancelReview(reviewId);
 
@@ -488,7 +488,7 @@ public class GrpcDataServiceImpl extends UserSessionRemoteGrpc.UserSessionRemote
                 return;
             }
 
-            var repos = repositoryService.listRepositories(session.getUserId());
+            var repos = repositoryService.listRepositories(session.userId());
 
             SessionListReposResponse.Builder responseBuilder = SessionListReposResponse.newBuilder();
             for (var repo : repos) {
@@ -622,10 +622,10 @@ public class GrpcDataServiceImpl extends UserSessionRemoteGrpc.UserSessionRemote
             }
 
             String providerId = request.getProviderId();
-            log.info("Testing LLM connection: provider={}, user={}", providerId, session.getUserId());
+            log.info("Testing LLM connection: provider={}, user={}", providerId, session.userId());
 
             // Get user-specific config if available, otherwise test with defaults
-            var providerConfig = llmService.getProviderConfig(session.getUserId(), providerId);
+            var providerConfig = llmService.getProviderConfig(session.userId(), providerId);
             var testResult = llmService.testConfiguration(
                     providerConfig != null ? providerConfig
                             : LLMProviderConfig.builder().providerId(providerId).build());
@@ -660,7 +660,7 @@ public class GrpcDataServiceImpl extends UserSessionRemoteGrpc.UserSessionRemote
                 return;
             }
 
-            log.info("Configuring LLM provider: name={}, user={}", request.getConfigName(), session.getUserId());
+            log.info("Configuring LLM provider: name={}, user={}", request.getConfigName(), session.userId());
 
             // Build provider config from gRPC request
             LLMProviderConfig.Builder configBuilder = LLMProviderConfig.builder()
@@ -683,7 +683,7 @@ public class GrpcDataServiceImpl extends UserSessionRemoteGrpc.UserSessionRemote
             }
 
             LLMProviderConfig config = configBuilder.build();
-            llmService.configureProvider(session.getUserId(), config);
+            llmService.configureProvider(session.userId(), config);
 
             var response = SessionConfigureLLMResponse.newBuilder()
                     .setSuccess(true)
@@ -717,7 +717,7 @@ public class GrpcDataServiceImpl extends UserSessionRemoteGrpc.UserSessionRemote
                 return;
             }
 
-            log.info("Deleting index: repo={}, user={}", request.getRepositoryId(), session.getUserId());
+            log.info("Deleting index: repo={}, user={}", request.getRepositoryId(), session.userId());
 
             engineClient.deleteIndex(request.getRepositoryId());
 
@@ -753,7 +753,7 @@ public class GrpcDataServiceImpl extends UserSessionRemoteGrpc.UserSessionRemote
             }
 
             log.info("Searching code: repo={}, query='{}', user={}",
-                    request.getRepositoryId(), request.getQuery(), session.getUserId());
+                    request.getRepositoryId(), request.getQuery(), session.userId());
 
             int topK = request.getTopK() > 0 ? request.getTopK() : 10;
             var chunks = engineClient.search(
