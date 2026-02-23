@@ -90,6 +90,36 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache vcpkg packages (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+          key: vcpkg-windows-x64-grpc-${{ hashFiles('.github/workflows/engine.yml') }}
+          restore-keys: |
+            vcpkg-windows-x64-grpc-
+            vcpkg-windows-x64-
+
+      - name: Cache FAISS build (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:\faiss-install
+          key: faiss-windows-x64-v1.7.4-${{ hashFiles('.github/workflows/engine.yml') }}
+          restore-keys: |
+            faiss-windows-x64-v1.7.4-
+
+      - name: Cache FAISS build (Ubuntu)
+        if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/libfaiss*
+          key: faiss-ubuntu-v1.7.4-${{ hashFiles('.github/workflows/engine.yml') }}
+          restore-keys: |
+            faiss-ubuntu-v1.7.4-
+
       - name: Install Dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -107,6 +137,12 @@ jobs:
       - name: Build FAISS from source (Ubuntu)
         if: runner.os == 'Linux'
         run: |
+          # Check if FAISS is already installed (from cache or previous build)
+          if ldconfig -p | grep -q libfaiss; then
+            echo "FAISS already installed, skipping build"
+            exit 0
+          fi
+          
           git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git /tmp/faiss
           cd /tmp/faiss
           mkdir build && cd build
@@ -140,6 +176,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # Check if FAISS is already installed (from cache)
+          if (Test-Path "C:\faiss-install\lib\faiss.lib") {
+            Write-Host "FAISS already installed, skipping build"
+            exit 0
+          }
+          
           git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git C:\faiss
           cd C:\faiss
           mkdir build
@@ -154,8 +196,6 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           cmake --build . --config Release --parallel 4
           cmake --install . --config Release --prefix C:\faiss-install
-          echo "faiss_DIR=C:\faiss-install" >> $env:GITHUB_ENV
-          echo "CMAKE_PREFIX_PATH=C:\faiss-install;$env:CMAKE_PREFIX_PATH" >> $env:GITHUB_ENV
 
       - name: Setup CMake
         uses: lukka/get-cmake@latest

@@ -296,6 +296,26 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
+
+      - name: Cache vcpkg packages (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+          key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            vcpkg-windows-x64-
+
+      - name: Cache FAISS build (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:\faiss-install
+          key: faiss-windows-x64-v1.7.4
+          restore-keys: |
+            faiss-windows-x64-v1.7.4
       
       - name: Install Dependencies (Ubuntu)
         if: runner.os == 'Linux'
@@ -306,6 +326,12 @@ jobs:
       - name: Build FAISS from source (Ubuntu)
         if: runner.os == 'Linux'
         run: |
+          # Check if FAISS is already installed
+          if ldconfig -p | grep -q libfaiss; then
+            echo "FAISS already installed, skipping build"
+            exit 0
+          fi
+          
           git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git /tmp/faiss
           cd /tmp/faiss
           mkdir build && cd build
@@ -339,6 +365,12 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # Check if FAISS is already installed (from cache)
+          if (Test-Path "C:\faiss-install\lib\faiss.lib") {
+            Write-Host "FAISS already installed, skipping build"
+            exit 0
+          }
+          
           git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git C:\faiss
           cd C:\faiss
           mkdir build
