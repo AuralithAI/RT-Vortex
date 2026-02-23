@@ -110,13 +110,16 @@ public class AdminController {
     @GetMapping("/users/{userId}/rate-limit")
     public ResponseEntity<Map<String, Object>> getRemainingTokens(
             @PathVariable String userId,
-            @RequestParam(defaultValue = "FREE") String tier) {
+            @RequestParam(required = false) String tier) {
         if (rateLimiterService == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "Redis not configured"));
         }
+        if (tier != null && tier.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Invalid tier"));
+        }
         RateLimiterService.Tier t;
         try {
-            t = RateLimiterService.Tier.valueOf(tier.toUpperCase());
+            t = RateLimiterService.Tier.valueOf((tier == null ? "FREE" : tier).toUpperCase());
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("error", "Invalid tier"));
         }

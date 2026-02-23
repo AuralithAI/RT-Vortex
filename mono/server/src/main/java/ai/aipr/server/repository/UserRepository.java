@@ -83,8 +83,7 @@ public class UserRepository {
      * Update a user's subscription tier (logs change in subscription_history).
      */
     public void updateTier(String userId, String newTier, String changedBy, String reason) {
-        db.update("SELECT update_subscription_tier(?::uuid, ?, ?, ?)",
-            userId, newTier, changedBy, reason);
+        db.call("update_subscription_tier", userId, newTier, changedBy, reason);
     }
 
     /**
