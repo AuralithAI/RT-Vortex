@@ -10,7 +10,6 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -34,7 +33,7 @@ class EnvironmentTest {
     void setUp() throws IOException {
         configDir = tempDir.resolve("config");
         Files.createDirectories(configDir);
-        
+
         // Set RT_HOME to temp directory for tests
         System.setProperty("rt.home", tempDir.toString());
         Environment.reload();
@@ -63,16 +62,16 @@ class EnvironmentTest {
                     </database>
                 </configuration>
                 """;
-            
+
             Path xmlFile = configDir.resolve(TEST_XML_FILE);
             Files.writeString(xmlFile, xml);
-            
+
             Environment.ConfigReader reader = new Environment.ConfigReader(xmlFile.toFile());
-            
+
             Optional<String> host = reader.getOptional("database.host");
             assertTrue(host.isPresent());
             assertEquals("localhost", host.get());
-            
+
             Optional<String> name = reader.getOptional("database.name");
             assertTrue(name.isPresent());
             assertEquals("testdb", name.get());
@@ -90,15 +89,15 @@ class EnvironmentTest {
                     </server>
                 </configuration>
                 """;
-            
+
             Path xmlFile = configDir.resolve(TEST_XML_FILE);
             Files.writeString(xmlFile, xml);
-            
+
             Environment.ConfigReader reader = new Environment.ConfigReader(xmlFile.toFile());
-            
+
             int port = reader.getInt("server.port", 0);
             assertEquals(8080, port);
-            
+
             int maxConnections = reader.getInt("server.maxConnections", 0);
             assertEquals(100, maxConnections);
         }
@@ -114,12 +113,12 @@ class EnvironmentTest {
                     </server>
                 </configuration>
                 """;
-            
+
             Path xmlFile = configDir.resolve(TEST_XML_FILE);
             Files.writeString(xmlFile, xml);
-            
+
             Environment.ConfigReader reader = new Environment.ConfigReader(xmlFile.toFile());
-            
+
             int timeout = reader.getInt("server.timeout", 30000);
             assertEquals(30000, timeout);
         }
@@ -136,15 +135,15 @@ class EnvironmentTest {
                     </features>
                 </configuration>
                 """;
-            
+
             Path xmlFile = configDir.resolve(TEST_XML_FILE);
             Files.writeString(xmlFile, xml);
-            
+
             Environment.ConfigReader reader = new Environment.ConfigReader(xmlFile.toFile());
-            
+
             boolean enabled = reader.getBoolean("features.enabled", false);
             assertTrue(enabled);
-            
+
             boolean debug = reader.getBoolean("features.debug", true);
             assertFalse(debug);
         }
@@ -162,12 +161,12 @@ class EnvironmentTest {
                     </hosts>
                 </configuration>
                 """;
-            
+
             Path xmlFile = configDir.resolve(TEST_XML_FILE);
             Files.writeString(xmlFile, xml);
-            
+
             Environment.ConfigReader reader = new Environment.ConfigReader(xmlFile.toFile());
-            
+
             // Note: Current ConfigReader implementation doesn't support lists.
             // This test verifies the last value is stored (due to same key)
             String host = reader.get("hosts.host");
@@ -187,12 +186,12 @@ class EnvironmentTest {
                     </server>
                 </configuration>
                 """;
-            
+
             Path xmlFile = configDir.resolve(TEST_XML_FILE);
             Files.writeString(xmlFile, xml);
-            
+
             Environment.ConfigReader reader = new Environment.ConfigReader(xmlFile.toFile());
-            
+
             Optional<String> missing = reader.getOptional("database.host");
             assertFalse(missing.isPresent());
         }
@@ -211,15 +210,15 @@ class EnvironmentTest {
                     </database>
                 </configuration>
                 """;
-            
+
             Path xmlFile = configDir.resolve(TEST_XML_FILE);
             Files.writeString(xmlFile, xml);
-            
+
             Environment.ConfigReader reader = new Environment.ConfigReader(xmlFile.toFile());
-            
+
             int maxSize = reader.getInt("database.pool.maxSize", 0);
             assertEquals(20, maxSize);
-            
+
             int minIdle = reader.getInt("database.pool.minIdle", 0);
             assertEquals(5, minIdle);
         }

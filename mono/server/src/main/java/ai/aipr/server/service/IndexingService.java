@@ -198,7 +198,11 @@ public class IndexingService {
      * Delete repository index.
      */
     public void deleteIndex(String repoId) {
-        engineClient.deleteIndex(repoId);
+        try {
+            engineClient.deleteIndex(repoId);
+        } catch (Exception e) {
+            log.warn("Engine deleteIndex failed for repo={}, continuing with local cleanup: {}", repoId, e.getMessage());
+        }
         indexRepository.deleteByRepoId(repoId);
         log.info("Index deleted: repo={}", repoId);
     }

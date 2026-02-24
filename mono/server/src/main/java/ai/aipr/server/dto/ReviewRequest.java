@@ -1,7 +1,8 @@
 package ai.aipr.server.dto;
 
 
-import org.jetbrains.annotations.NotNull;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 
 import java.util.List;
 
@@ -9,9 +10,9 @@ import java.util.List;
  * Request to review a PR.
  */
 public record ReviewRequest(
-        @NotNull String repoId,
+        @NotBlank String repoId,
         @NotNull Integer prNumber,
-        @NotNull String diff,
+        @NotBlank String diff,
         String prTitle,
         String prDescription,
         String baseBranch,
@@ -20,7 +21,6 @@ public record ReviewRequest(
         List<String> changedFiles,
         ReviewConfig config
 ) {
-    @NotNull
     public static Builder builder() {
         return new Builder();
     }

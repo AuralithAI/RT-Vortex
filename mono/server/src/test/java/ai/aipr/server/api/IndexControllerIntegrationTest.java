@@ -94,7 +94,7 @@ class IndexControllerIntegrationTest {
         @Test
         @DisplayName("should return 404 for non-existent job")
         void shouldReturn404ForNonExistentJob() throws Exception {
-            mockMvc.perform(get("/api/v1/index/status/{jobId}", "non-existent-job"))
+            mockMvc.perform(get("/api/v1/index/status/{jobId}", "00000000-0000-0000-0000-000000000000"))
                     .andExpect(status().isNotFound());
         }
     }
@@ -106,7 +106,7 @@ class IndexControllerIntegrationTest {
         @Test
         @DisplayName("should return 404 for non-indexed repo")
         void shouldReturn404ForNonIndexedRepo() throws Exception {
-            mockMvc.perform(get("/api/v1/index/info/{repoId}", "unknown-repo"))
+                        mockMvc.perform(get("/api/v1/index/info/{repoId}", "00000000-0000-0000-0000-000000000001"))
                     .andExpect(status().isNotFound());
         }
     }
@@ -118,7 +118,7 @@ class IndexControllerIntegrationTest {
         @Test
         @DisplayName("should return 204 on delete")
         void shouldReturn204OnDelete() throws Exception {
-            mockMvc.perform(delete("/api/v1/index/{repoId}", "some-repo"))
+                        mockMvc.perform(delete("/api/v1/index/{repoId}", "00000000-0000-0000-0000-000000000002"))
                     .andExpect(status().isNoContent());
         }
     }

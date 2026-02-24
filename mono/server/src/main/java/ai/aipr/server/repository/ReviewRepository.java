@@ -36,11 +36,9 @@ public class ReviewRepository {
         String id = review.reviewId() != null ? review.reviewId() : UUID.randomUUID().toString();
 
         db.update("""
-            INSERT INTO reviews (id, repository_id, pr_number, status, summary, created_at)
-            VALUES (?::uuid, ?::uuid, ?, ?, ?, NOW())
-            ON CONFLICT (id) DO UPDATE
-              SET status  = EXCLUDED.status,
-                  summary = EXCLUDED.summary
+            MERGE INTO reviews (id, repository_id, pr_number, status, summary, created_at)
+            KEY (id)
+            VALUES (CAST(? AS UUID), CAST(? AS UUID), ?, ?, ?, NOW())
             """,
             id, review.repoId(), review.prNumber(), review.status(), review.summary()
         );
@@ -48,9 +46,10 @@ public class ReviewRepository {
         if (review.comments() != null) {
             for (ReviewComment c : review.comments()) {
                 db.update("""
-                    INSERT INTO review_comments
+                    MERGE INTO review_comments
                       (id, review_id, file_path, line_number, end_line_number, severity, category, source, message, suggestion, confidence)
-                    VALUES (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    KEY (id)
+                    VALUES (CAST(? AS UUID), CAST(? AS UUID), ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     UUID.randomUUID().toString(), id,
                     c.filePath(), c.line(), c.endLine(),
@@ -65,17 +64,12 @@ public class ReviewRepository {
         if (review.metrics() != null) {
             ReviewMetrics m = review.metrics();
             db.update("""
-                INSERT INTO review_metrics
+                MERGE INTO review_metrics
                   (id, review_id, total_files, lines_added, lines_deleted,
                    tokens_prompt, tokens_completion, llm_latency_ms, total_latency_ms,
                    heuristic_findings, llm_findings)
-                VALUES (?::uuid, ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT (review_id) DO UPDATE
-                  SET total_files       = EXCLUDED.total_files,
-                      tokens_prompt     = EXCLUDED.tokens_prompt,
-                      tokens_completion = EXCLUDED.tokens_completion,
-                      llm_latency_ms    = EXCLUDED.llm_latency_ms,
-                      total_latency_ms  = EXCLUDED.total_latency_ms
+                KEY (review_id)
+                VALUES (CAST(? AS UUID), CAST(? AS UUID), ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 UUID.randomUUID().toString(), id,
                 m.filesAnalyzed(), m.linesAdded(), m.linesRemoved(),
@@ -93,25 +87,25 @@ public class ReviewRepository {
     // =====================================================================
 
     public Optional<ReviewResponse> findById(String reviewId) {
-        return db.queryForOptional("SELECT * FROM reviews WHERE id = ?::uuid", REVIEW_ROW_MAPPER, reviewId)
+        return db.queryForOptional("SELECT * FROM reviews WHERE id = CAST(? AS UUID)", REVIEW_ROW_MAPPER, reviewId)
                 .map(this::hydrate);
     }
 
     public List<ReviewResponse> findByRepoId(String repoId) {
         return db.query(
-            "SELECT * FROM reviews WHERE repository_id = ?::uuid ORDER BY created_at DESC",
+            "SELECT * FROM reviews WHERE repository_id = CAST(? AS UUID) ORDER BY created_at DESC",
             REVIEW_ROW_MAPPER, repoId).stream().map(this::hydrate).toList();
     }
 
     public List<ReviewResponse> findByRepoId(String repoId, int page, int size) {
         return db.query(
-            "SELECT * FROM reviews WHERE repository_id = ?::uuid ORDER BY created_at DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM reviews WHERE repository_id = CAST(? AS UUID) ORDER BY created_at DESC LIMIT ? OFFSET ?",
             REVIEW_ROW_MAPPER, repoId, size, (long) page * size).stream().map(this::hydrate).toList();
     }
 
     public List<ReviewResponse> findByRepoIdAndPrNumber(String repoId, int prNumber) {
         return db.query(
-            "SELECT * FROM reviews WHERE repository_id = ?::uuid AND pr_number = ? ORDER BY created_at DESC",
+            "SELECT * FROM reviews WHERE repository_id = CAST(? AS UUID) AND pr_number = ? ORDER BY created_at DESC",
             REVIEW_ROW_MAPPER, repoId, prNumber).stream().map(this::hydrate).toList();
     }
 
@@ -121,8 +115,8 @@ public class ReviewRepository {
         List<Object> params = new ArrayList<>();
 
         if (filter.repoId() != null) {
-            sql.append(" AND repository_id = ?::uuid");
-            countSql.append(" AND repository_id = ?::uuid");
+            sql.append(" AND repository_id = CAST(? AS UUID)");
+            countSql.append(" AND repository_id = CAST(? AS UUID)");
             params.add(filter.repoId());
         }
         if (filter.prNumber() != null) {
@@ -153,11 +147,11 @@ public class ReviewRepository {
     // =====================================================================
 
     public void deleteById(String reviewId) {
-        db.update("DELETE FROM reviews WHERE id = ?::uuid", reviewId);
+        db.update("DELETE FROM reviews WHERE id = CAST(? AS UUID)", reviewId);
     }
 
     public int deleteByRepoId(String repoId) {
-        return db.update("DELETE FROM reviews WHERE repository_id = ?::uuid", repoId);
+        return db.update("DELETE FROM reviews WHERE repository_id = CAST(? AS UUID)", repoId);
     }
 
     // =====================================================================
@@ -165,7 +159,7 @@ public class ReviewRepository {
     // =====================================================================
 
     public long countByRepoId(String repoId) {
-        return db.queryScalar("SELECT COUNT(*) FROM reviews WHERE repository_id = ?::uuid",
+        return db.queryScalar("SELECT COUNT(*) FROM reviews WHERE repository_id = CAST(? AS UUID)",
                 Long.class, 0L, repoId);
     }
 
@@ -175,11 +169,11 @@ public class ReviewRepository {
 
     private ReviewResponse hydrate(@NotNull ReviewResponse base) {
         List<ReviewComment> comments = db.query(
-            "SELECT * FROM review_comments WHERE review_id = ?::uuid ORDER BY file_path, line_number",
+            "SELECT * FROM review_comments WHERE review_id = CAST(? AS UUID) ORDER BY file_path, line_number",
             COMMENT_ROW_MAPPER, base.reviewId());
 
         ReviewMetrics metrics = db.queryForOptional(
-            "SELECT * FROM review_metrics WHERE review_id = ?::uuid",
+            "SELECT * FROM review_metrics WHERE review_id = CAST(? AS UUID)",
             METRICS_ROW_MAPPER, base.reviewId()).orElse(null);
 
         return ReviewResponse.builder()

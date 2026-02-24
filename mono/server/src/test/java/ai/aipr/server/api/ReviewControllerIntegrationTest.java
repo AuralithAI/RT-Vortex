@@ -79,17 +79,20 @@ class ReviewControllerIntegrationTest {
         @Test
         @DisplayName("should return 404 for non-existent review")
         void shouldReturn404ForNonExistentReview() throws Exception {
-            mockMvc.perform(get("/api/v1/reviews/{reviewId}", "non-existent-id"))
+            mockMvc.perform(get("/api/v1/reviews/{reviewId}", "00000000-0000-0000-0000-000000000099"))
                     .andExpect(status().isNotFound());
         }
+
 
         @Test
         @DisplayName("should return review when found")
         void shouldReturnReviewWhenFound() throws Exception {
             // Seed a review into the repository
+            String reviewId = "11111111-1111-1111-1111-111111111111";
+            String repoId = "22222222-2222-2222-2222-222222222222";
             ReviewResponse review = ReviewResponse.builder()
-                    .reviewId("test-review-001")
-                    .repoId("org/repo")
+                    .reviewId(reviewId)
+                    .repoId(repoId)
                     .prNumber(99)
                     .status("COMPLETED")
                     .summary("All good")
@@ -97,10 +100,10 @@ class ReviewControllerIntegrationTest {
                     .build();
             reviewRepository.save(review);
 
-            mockMvc.perform(get("/api/v1/reviews/{reviewId}", "test-review-001"))
+            mockMvc.perform(get("/api/v1/reviews/{reviewId}", reviewId))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.reviewId").value("test-review-001"))
-                    .andExpect(jsonPath("$.repoId").value("org/repo"))
+                    .andExpect(jsonPath("$.reviewId").value(reviewId))
+                    .andExpect(jsonPath("$.repoId").value(repoId))
                     .andExpect(jsonPath("$.prNumber").value(99))
                     .andExpect(jsonPath("$.status").value("COMPLETED"))
                     .andExpect(jsonPath("$.summary").value("All good"));
@@ -115,7 +118,7 @@ class ReviewControllerIntegrationTest {
         @DisplayName("should return empty list for unknown repo")
         void shouldReturnEmptyListForUnknownRepo() throws Exception {
             mockMvc.perform(get("/api/v1/reviews")
-                    .param("repoId", "unknown/repo"))
+                    .param("repoId", "99999999-9999-9999-9999-999999999999"))
                     .andExpect(status().isOk());
         }
 
@@ -130,7 +133,7 @@ class ReviewControllerIntegrationTest {
         @DisplayName("should support pagination parameters")
         void shouldSupportPagination() throws Exception {
             mockMvc.perform(get("/api/v1/reviews")
-                    .param("repoId", "org/repo")
+                    .param("repoId", "99999999-9999-9999-9999-999999999999")
                     .param("page", "0")
                     .param("size", "5"))
                     .andExpect(status().isOk());
@@ -139,11 +142,12 @@ class ReviewControllerIntegrationTest {
         @Test
         @DisplayName("should return seeded reviews")
         void shouldReturnSeededReviews() throws Exception {
+            String repoId = "33333333-3333-3333-3333-333333333333";
             // Seed reviews
             for (int i = 1; i <= 3; i++) {
                 reviewRepository.save(ReviewResponse.builder()
-                        .reviewId("list-review-" + i)
-                        .repoId("list-test/repo")
+                        .reviewId("44444444-4444-4444-4444-44444444444" + i)
+                        .repoId(repoId)
                         .prNumber(i)
                         .status("COMPLETED")
                         .comments(List.of())
@@ -151,7 +155,7 @@ class ReviewControllerIntegrationTest {
             }
 
             mockMvc.perform(get("/api/v1/reviews")
-                    .param("repoId", "list-test/repo")
+                    .param("repoId", repoId)
                     .param("page", "0")
                     .param("size", "10"))
                     .andExpect(status().isOk());

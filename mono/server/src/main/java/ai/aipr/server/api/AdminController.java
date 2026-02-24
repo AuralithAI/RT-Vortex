@@ -114,7 +114,7 @@ public class AdminController {
         if (rateLimiterService == null) {
             return ResponseEntity.badRequest().body(Map.of("error", "Redis not configured"));
         }
-        if (tier != null && tier.isBlank()) {
+        if (tier != null && (tier.isBlank())) {
             return ResponseEntity.badRequest().body(Map.of("error", "Invalid tier"));
         }
         RateLimiterService.Tier t;

@@ -5,6 +5,7 @@ import ai.aipr.server.dto.IndexState;
 import ai.aipr.server.dto.IndexStatus;
 import ai.aipr.server.persistence.Persister;
 import org.jetbrains.annotations.NotNull;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.RowMapper;
 import org.springframework.stereotype.Repository;
 
@@ -61,7 +62,11 @@ public class IndexRepository {
     }
 
     public Optional<IndexStatus> findStatusByJobId(String jobId) {
-        return db.queryForOptional("SELECT * FROM index_jobs WHERE id = ?::uuid", STATUS_ROW_MAPPER, jobId);
+        try {
+            return db.queryForOptional("SELECT * FROM index_jobs WHERE id = ?::uuid", STATUS_ROW_MAPPER, jobId);
+        } catch (DataAccessException e) {
+            return Optional.empty();
+        }
     }
 
     public Optional<IndexStatus> findStatusById(String jobId) {
@@ -106,7 +111,11 @@ public class IndexRepository {
     }
 
     public Optional<IndexInfo> findInfoByRepoId(String repoId) {
-        return db.queryForOptional("SELECT * FROM index_stats WHERE repository_id = ?::uuid", INFO_ROW_MAPPER, repoId);
+        try {
+            return db.queryForOptional("SELECT * FROM index_stats WHERE repository_id = ?::uuid", INFO_ROW_MAPPER, repoId);
+        } catch (DataAccessException e) {
+            return Optional.empty();
+        }
     }
 
     public boolean isIndexed(String repoId) {
@@ -119,8 +128,16 @@ public class IndexRepository {
     }
 
     public void deleteByRepoId(String repoId) {
-        db.update("DELETE FROM index_stats WHERE repository_id = ?::uuid", repoId);
-        db.update("DELETE FROM index_jobs WHERE repository_id = ?::uuid", repoId);
+        try {
+            db.update("DELETE FROM index_stats WHERE repository_id = ?::uuid", repoId);
+        } catch (DataAccessException e) {
+            // ignore if table doesn't exist or UUID cast fails
+        }
+        try {
+            db.update("DELETE FROM index_jobs WHERE repository_id = ?::uuid", repoId);
+        } catch (DataAccessException e) {
+            // ignore if UUID cast fails
+        }
     }
 
     public List<IndexInfo> listAllIndexes() {
