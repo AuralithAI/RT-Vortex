@@ -158,9 +158,11 @@ jobs:
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install libomp openblas faiss protobuf grpc
+          brew install libomp openblas faiss protobuf grpc abseil
           echo "OpenBLAS_HOME=$(brew --prefix openblas)" >> $GITHUB_ENV
           echo "OpenMP_ROOT=$(brew --prefix libomp)" >> $GITHUB_ENV
+          # Set CMAKE_PREFIX_PATH so CMake can find brew packages
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix)/lib/cmake:$(brew --prefix grpc)/lib/cmake:$(brew --prefix protobuf)/lib/cmake:$(brew --prefix abseil)/lib/cmake" >> $GITHUB_ENV
       
       - name: Install Dependencies (Windows)
         if: runner.os == 'Windows'
@@ -202,12 +204,19 @@ jobs:
       - name: Configure (Unix)
         if: runner.os != 'Windows'
         run: |
+          # Pass CMAKE_PREFIX_PATH if set (for macOS brew packages)
+          CMAKE_EXTRA_ARGS=""
+          if [ -n "$CMAKE_PREFIX_PATH" ]; then
+            CMAKE_EXTRA_ARGS="-DCMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
+          fi
+          
           cmake -B build -S ${{ env.MONO_DIR }}/engine \
             -DCMAKE_BUILD_TYPE=Release \
             -DAIPR_BUILD_TESTS=OFF \
             -DAIPR_BUILD_SERVER=ON \
             -DAIPR_USE_FAISS=ON \
-            -DAIPR_USE_TREE_SITTER=ON
+            -DAIPR_USE_TREE_SITTER=ON \
+            $CMAKE_EXTRA_ARGS
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'

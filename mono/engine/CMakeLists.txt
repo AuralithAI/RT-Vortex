@@ -622,6 +622,10 @@ if(FAISS_LIBRARIES)
     target_link_libraries(aipr-engine-shared PUBLIC ${FAISS_LIBRARIES})
 endif()
 
+if(TREE_SITTER_LIBRARIES)
+    target_link_libraries(aipr-engine-shared PUBLIC ${TREE_SITTER_LIBRARIES})
+endif()
+
 if(AIPR_USE_ONNX AND ONNX_LIBRARIES)
     # Use PRIVATE to avoid exporting build-tree paths
     target_include_directories(aipr-engine-shared PRIVATE ${ONNX_INCLUDE_DIR})
