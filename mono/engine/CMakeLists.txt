@@ -388,11 +388,13 @@ if(AIPR_USE_TREE_SITTER)
     
     add_definitions(-DAIPR_HAS_TREE_SITTER)
     set(TREE_SITTER_LIBRARIES tree_sitter_grammars tree-sitter)
+    set(TREE_SITTER_INCLUDE_DIRS ${tree_sitter_SOURCE_DIR}/lib/include)
     
     message(STATUS "Tree-sitter configured with grammars: C, C++, Java, Python, JavaScript, TypeScript, Go, Rust")
 else()
     message(STATUS "Tree-sitter disabled (regex fallback enabled)")
     set(TREE_SITTER_LIBRARIES "")
+    set(TREE_SITTER_INCLUDE_DIRS "")
 endif()
 
 # =============================================================================
@@ -590,6 +592,7 @@ if(FAISS_LIBRARIES)
 endif()
 
 if(TREE_SITTER_LIBRARIES)
+    target_include_directories(aipr-engine PUBLIC ${TREE_SITTER_INCLUDE_DIRS})
     target_link_libraries(aipr-engine PUBLIC ${TREE_SITTER_LIBRARIES})
 endif()
 
@@ -623,6 +626,7 @@ if(FAISS_LIBRARIES)
 endif()
 
 if(TREE_SITTER_LIBRARIES)
+    target_include_directories(aipr-engine-shared PUBLIC ${TREE_SITTER_INCLUDE_DIRS})
     target_link_libraries(aipr-engine-shared PUBLIC ${TREE_SITTER_LIBRARIES})
 endif()
 
