@@ -12,6 +12,7 @@
 #include <sstream>
 #include <regex>
 #include <functional>
+#include <cstring>
 
 #ifdef AIPR_HAS_TREE_SITTER
 #include <tree_sitter/api.h>
@@ -83,11 +84,11 @@ std::string joinLines(const std::vector<std::string>& lines, size_t start, size_
 struct CodeBlock {
     size_t start_line;
     size_t end_line;
-    size_t start_byte = 0;
-    size_t end_byte = 0;
     std::string type;  // "function", "class", "method", "block"
     std::string name;
     int indent_level;
+    size_t start_byte = 0;
+    size_t end_byte = 0;
     std::string docstring;
     std::vector<std::string> symbols;  // Symbols defined in this block
 };
