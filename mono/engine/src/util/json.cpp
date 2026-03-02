@@ -11,6 +11,8 @@
 #include <sstream>
 #include <stdexcept>
 #include <cctype>
+#include <memory>
+#include <map>
 
 namespace aipr {
 namespace json {
@@ -23,16 +25,26 @@ using JsonBool = bool;
 using JsonNumber = double;
 using JsonString = std::string;
 
+// Forward declare - we use std::map instead of unordered_map to avoid
+// incomplete-type issues with GCC 11's std::variant implementation.
 class JsonValue;
 using JsonArray = std::vector<JsonValue>;
-using JsonObject = std::unordered_map<std::string, JsonValue>;
+using JsonObject = std::map<std::string, JsonValue>;
 
 /**
  * Variant-based JSON value
+ * 
+ * Uses a two-phase approach: the variant holds a std::unique_ptr for
+ * recursive container types (array/object) to avoid incomplete-type
+ * issues across different compiler versions.
  */
 class JsonValue {
 public:
-    using Value = std::variant<JsonNull, JsonBool, JsonNumber, JsonString, JsonArray, JsonObject>;
+    using Value = std::variant<
+        JsonNull, JsonBool, JsonNumber, JsonString,
+        std::unique_ptr<JsonArray>,
+        std::unique_ptr<JsonObject>
+    >;
     
     JsonValue() : value_(nullptr) {}
     JsonValue(std::nullptr_t) : value_(nullptr) {}
@@ -42,64 +54,82 @@ public:
     JsonValue(const char* v) : value_(std::string(v)) {}
     JsonValue(const std::string& v) : value_(v) {}
     JsonValue(std::string&& v) : value_(std::move(v)) {}
-    JsonValue(const JsonArray& v) : value_(v) {}
-    JsonValue(JsonArray&& v) : value_(std::move(v)) {}
-    JsonValue(const JsonObject& v) : value_(v) {}
-    JsonValue(JsonObject&& v) : value_(std::move(v)) {}
+    JsonValue(const JsonArray& v) : value_(std::make_unique<JsonArray>(v)) {}
+    JsonValue(JsonArray&& v) : value_(std::make_unique<JsonArray>(std::move(v))) {}
+    JsonValue(const JsonObject& v) : value_(std::make_unique<JsonObject>(v)) {}
+    JsonValue(JsonObject&& v) : value_(std::make_unique<JsonObject>(std::move(v))) {}
+    
+    // Copy constructor/assignment (deep copy)
+    JsonValue(const JsonValue& other) { copyFrom(other); }
+    JsonValue& operator=(const JsonValue& other) {
+        if (this != &other) copyFrom(other);
+        return *this;
+    }
+    JsonValue(JsonValue&&) = default;
+    JsonValue& operator=(JsonValue&&) = default;
     
     bool isNull() const { return std::holds_alternative<JsonNull>(value_); }
     bool isBool() const { return std::holds_alternative<JsonBool>(value_); }
     bool isNumber() const { return std::holds_alternative<JsonNumber>(value_); }
     bool isString() const { return std::holds_alternative<JsonString>(value_); }
-    bool isArray() const { return std::holds_alternative<JsonArray>(value_); }
-    bool isObject() const { return std::holds_alternative<JsonObject>(value_); }
+    bool isArray() const { return std::holds_alternative<std::unique_ptr<JsonArray>>(value_); }
+    bool isObject() const { return std::holds_alternative<std::unique_ptr<JsonObject>>(value_); }
     
     bool asBool() const { return std::get<JsonBool>(value_); }
     double asNumber() const { return std::get<JsonNumber>(value_); }
     const std::string& asString() const { return std::get<JsonString>(value_); }
-    const JsonArray& asArray() const { return std::get<JsonArray>(value_); }
-    JsonArray& asArray() { return std::get<JsonArray>(value_); }
-    const JsonObject& asObject() const { return std::get<JsonObject>(value_); }
-    JsonObject& asObject() { return std::get<JsonObject>(value_); }
+    const JsonArray& asArray() const { return *std::get<std::unique_ptr<JsonArray>>(value_); }
+    JsonArray& asArray() { return *std::get<std::unique_ptr<JsonArray>>(value_); }
+    const JsonObject& asObject() const { return *std::get<std::unique_ptr<JsonObject>>(value_); }
+    JsonObject& asObject() { return *std::get<std::unique_ptr<JsonObject>>(value_); }
     
     // Object access
     JsonValue& operator[](const std::string& key) {
         if (!isObject()) {
-            value_ = JsonObject{};
+            value_ = std::make_unique<JsonObject>();
         }
-        return std::get<JsonObject>(value_)[key];
+        return (*std::get<std::unique_ptr<JsonObject>>(value_))[key];
     }
     
     const JsonValue& operator[](const std::string& key) const {
         static JsonValue null_value;
         if (!isObject()) return null_value;
-        const auto& obj = std::get<JsonObject>(value_);
+        const auto& obj = *std::get<std::unique_ptr<JsonObject>>(value_);
         auto it = obj.find(key);
         return it != obj.end() ? it->second : null_value;
     }
     
     // Array access
     JsonValue& operator[](size_t index) {
-        return std::get<JsonArray>(value_)[index];
+        return (*std::get<std::unique_ptr<JsonArray>>(value_))[index];
     }
     
     const JsonValue& operator[](size_t index) const {
-        return std::get<JsonArray>(value_)[index];
+        return (*std::get<std::unique_ptr<JsonArray>>(value_))[index];
     }
     
     bool contains(const std::string& key) const {
         if (!isObject()) return false;
-        return std::get<JsonObject>(value_).count(key) > 0;
+        return std::get<std::unique_ptr<JsonObject>>(value_)->count(key) > 0;
     }
     
     size_t size() const {
-        if (isArray()) return std::get<JsonArray>(value_).size();
-        if (isObject()) return std::get<JsonObject>(value_).size();
+        if (isArray()) return std::get<std::unique_ptr<JsonArray>>(value_)->size();
+        if (isObject()) return std::get<std::unique_ptr<JsonObject>>(value_)->size();
         return 0;
     }
     
 private:
     Value value_;
+    
+    void copyFrom(const JsonValue& other) {
+        if (other.isNull()) { value_ = nullptr; }
+        else if (other.isBool()) { value_ = other.asBool(); }
+        else if (other.isNumber()) { value_ = other.asNumber(); }
+        else if (other.isString()) { value_ = other.asString(); }
+        else if (other.isArray()) { value_ = std::make_unique<JsonArray>(other.asArray()); }
+        else if (other.isObject()) { value_ = std::make_unique<JsonObject>(other.asObject()); }
+    }
 };
 
 /**
