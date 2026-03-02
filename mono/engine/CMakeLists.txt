@@ -277,12 +277,14 @@ if(AIPR_USE_TREE_SITTER)
     message(STATUS "Configuring tree-sitter for AST parsing...")
     
     # Fetch tree-sitter core library
+    # Note: We don't use SOURCE_SUBDIR or the upstream CMakeLists.txt because
+    # tree-sitter's CMakeLists.txt uses file(GLOB) with relative paths that break
+    # under FetchContent. Instead we build the amalgamated lib/src/lib.c ourselves.
     FetchContent_Declare(
         tree_sitter
         GIT_REPOSITORY https://github.com/tree-sitter/tree-sitter.git
         GIT_TAG v0.22.6
         GIT_SHALLOW TRUE
-        SOURCE_SUBDIR lib
     )
     
     # Fetch language grammars
@@ -342,9 +344,15 @@ if(AIPR_USE_TREE_SITTER)
         GIT_SHALLOW TRUE
     )
     
-    # Make available
-    FetchContent_MakeAvailable(tree_sitter)
-    FetchContent_MakeAvailable(
+    # Make available - populate source dirs without running upstream CMakeLists.txt
+    # We use FetchContent_Populate since these repos don't have CMakeLists.txt
+    # at the tags we use, and we build them manually anyway.
+    FetchContent_GetProperties(tree_sitter)
+    if(NOT tree_sitter_POPULATED)
+        FetchContent_Populate(tree_sitter)
+    endif()
+
+    set(_TS_GRAMMARS
         tree_sitter_c
         tree_sitter_cpp
         tree_sitter_java
@@ -353,6 +361,32 @@ if(AIPR_USE_TREE_SITTER)
         tree_sitter_typescript
         tree_sitter_go
         tree_sitter_rust
+    )
+    foreach(_grammar ${_TS_GRAMMARS})
+        FetchContent_GetProperties(${_grammar})
+        if(NOT ${_grammar}_POPULATED)
+            FetchContent_Populate(${_grammar})
+        endif()
+    endforeach()
+
+    # Build tree-sitter core as a static library from the amalgamated source
+    add_library(tree-sitter STATIC
+        ${tree_sitter_SOURCE_DIR}/lib/src/lib.c
+    )
+    target_include_directories(tree-sitter
+        PUBLIC  ${tree_sitter_SOURCE_DIR}/lib/include
+        PRIVATE ${tree_sitter_SOURCE_DIR}/lib/src
+    )
+    set_target_properties(tree-sitter PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        POSITION_INDEPENDENT_CODE ON
+    )
+    target_compile_definitions(tree-sitter PRIVATE
+        _POSIX_C_SOURCE=200112L
+        _DEFAULT_SOURCE
+        _BSD_SOURCE
+        _DARWIN_C_SOURCE
     )
     
     # Build tree-sitter grammars as a static library
