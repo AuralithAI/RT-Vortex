@@ -6,6 +6,9 @@
  */
 
 #include "tms/embedding_engine.h"
+#include "tms/repo_parser.h"
+#include "tms/ltm_faiss.h"
+#include "tms/mtm_graph.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -156,6 +159,62 @@ public:
     size_t size() const { return cache_.size(); }
     size_t hits() const { return hits_; }
     size_t misses() const { return misses_; }
+
+    bool saveToDisk(const std::string& path) const {
+        std::ofstream out(path, std::ios::binary);
+        if (!out) return false;
+        // Header: magic + version
+        const uint32_t magic = 0x45434348; // "ECCH"
+        const uint32_t version = 1;
+        out.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+        out.write(reinterpret_cast<const char*>(&version), sizeof(version));
+        // Entry count
+        uint64_t count = cache_.size();
+        out.write(reinterpret_cast<const char*>(&count), sizeof(count));
+        for (const auto& [key, vec] : cache_) {
+            // Key: length + data
+            uint32_t key_len = static_cast<uint32_t>(key.size());
+            out.write(reinterpret_cast<const char*>(&key_len), sizeof(key_len));
+            out.write(key.data(), key_len);
+            // Embedding: dimension + floats
+            uint32_t dim = static_cast<uint32_t>(vec.size());
+            out.write(reinterpret_cast<const char*>(&dim), sizeof(dim));
+            out.write(reinterpret_cast<const char*>(vec.data()), dim * sizeof(float));
+        }
+        return out.good();
+    }
+
+    bool loadFromDisk(const std::string& path) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return false;
+        // Header
+        uint32_t magic = 0, version = 0;
+        in.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+        in.read(reinterpret_cast<char*>(&version), sizeof(version));
+        if (magic != 0x45434348 || version != 1) return false;
+        // Entry count
+        uint64_t count = 0;
+        in.read(reinterpret_cast<char*>(&count), sizeof(count));
+        cache_.clear();
+        for (uint64_t i = 0; i < count && in.good(); ++i) {
+            uint32_t key_len = 0;
+            in.read(reinterpret_cast<char*>(&key_len), sizeof(key_len));
+            if (key_len > 1'000'000) return false; // sanity check
+            std::string key(key_len, '\0');
+            in.read(key.data(), key_len);
+            uint32_t dim = 0;
+            in.read(reinterpret_cast<char*>(&dim), sizeof(dim));
+            if (dim > 100'000) return false; // sanity check
+            std::vector<float> vec(dim);
+            in.read(reinterpret_cast<char*>(vec.data()), dim * sizeof(float));
+            if (cache_.size() < max_size_) {
+                cache_[std::move(key)] = std::move(vec);
+            }
+        }
+        hits_ = 0;
+        misses_ = 0;
+        return in.good() || in.eof();
+    }
 
 private:
     std::unordered_map<std::string, std::vector<float>> cache_;
@@ -328,8 +387,14 @@ std::optional<std::vector<float>> EmbeddingEngine::getCached(const std::string& 
 }
 
 void EmbeddingEngine::clearCache() { cache_->clear(); }
-void EmbeddingEngine::saveCache() { /* TODO: persist cache to disk */ }
-void EmbeddingEngine::loadCache() { /* TODO: load cache from disk */ }
+void EmbeddingEngine::saveCache() {
+    if (config_.cache_path.empty()) return;
+    cache_->saveToDisk(config_.cache_path);
+}
+void EmbeddingEngine::loadCache() {
+    if (config_.cache_path.empty()) return;
+    cache_->loadFromDisk(config_.cache_path);
+}
 
 EmbeddingEngine::CacheStats EmbeddingEngine::getCacheStats() const {
     CacheStats cs;
@@ -442,11 +507,38 @@ EmbeddingIngestor::IngestResult EmbeddingIngestor::ingestRepository(
     const std::string& repo_id,
     EmbeddingProgressCallback progress)
 {
-    (void)repo_path;
-    (void)repo_id;
-    (void)progress;
-    // TODO: Implement full ingestion pipeline
-    return IngestResult{};
+    auto start = std::chrono::steady_clock::now();
+    IngestResult result;
+
+    // Step 1: Parse repository into code chunks
+    RepoParserConfig parser_config;
+    RepoParser parser(parser_config);
+
+    std::vector<CodeChunk> chunks;
+    try {
+        chunks = parser.parseRepository(repo_path);
+    } catch (const std::exception& e) {
+        result.errors.push_back(std::string("Parse error: ") + e.what());
+        auto end_t = std::chrono::steady_clock::now();
+        result.total_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_t - start);
+        return result;
+    }
+
+    // Stamp every chunk with repo tag
+    for (auto& chunk : chunks) {
+        chunk.tags.push_back("repo:" + repo_id);
+    }
+
+    if (progress) {
+        progress(0, static_cast<int>(chunks.size()), "Parsed " + std::to_string(chunks.size()) + " chunks");
+    }
+
+    // Step 2 & 3: Embed and store via ingestChunks
+    result = ingestChunks(repo_id, chunks, progress);
+
+    auto end_t = std::chrono::steady_clock::now();
+    result.total_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_t - start);
+    return result;
 }
 
 EmbeddingIngestor::IngestResult EmbeddingIngestor::ingestChunks(
@@ -454,11 +546,82 @@ EmbeddingIngestor::IngestResult EmbeddingIngestor::ingestChunks(
     const std::vector<CodeChunk>& chunks,
     EmbeddingProgressCallback progress)
 {
-    (void)repo_id;
-    (void)chunks;
-    (void)progress;
-    // TODO: Implement chunk ingestion
-    return IngestResult{};
+    auto start = std::chrono::steady_clock::now();
+    IngestResult result;
+
+    size_t batch_size = static_cast<size_t>(config_.embedding_batch_size);
+    int error_count = 0;
+
+    for (size_t offset = 0; offset < chunks.size(); offset += batch_size) {
+        size_t end_idx = std::min(offset + batch_size, chunks.size());
+        std::vector<CodeChunk> batch(chunks.begin() + static_cast<ptrdiff_t>(offset),
+                                     chunks.begin() + static_cast<ptrdiff_t>(end_idx));
+
+        // Stamp repo tag on each chunk
+        for (auto& chunk : batch) {
+            chunk.tags.push_back("repo:" + repo_id);
+        }
+
+        // Compute embeddings for this batch
+        BatchEmbeddingResult emb_result = embedding_engine_.embedChunks(batch, nullptr);
+
+        // Collect successfully embedded chunks and their embeddings
+        std::vector<CodeChunk> good_chunks;
+        std::vector<std::vector<float>> good_embeddings;
+        good_chunks.reserve(batch.size());
+        good_embeddings.reserve(batch.size());
+
+        for (size_t j = 0; j < batch.size(); ++j) {
+            if (j < emb_result.embeddings.size() && !emb_result.embeddings[j].empty()
+                && (j >= emb_result.errors.size() || emb_result.errors[j].empty())) {
+                good_chunks.push_back(batch[j]);
+                good_embeddings.push_back(emb_result.embeddings[j]);
+            } else {
+                result.chunks_failed++;
+                error_count++;
+                if (j < emb_result.errors.size() && !emb_result.errors[j].empty()) {
+                    result.errors.push_back(emb_result.errors[j]);
+                }
+            }
+        }
+
+        // Store in LTM
+        if (!good_chunks.empty()) {
+            try {
+                ltm_.addBatch(good_chunks, good_embeddings);
+                result.chunks_stored += good_chunks.size();
+            } catch (const std::exception& e) {
+                result.errors.push_back(std::string("LTM addBatch error: ") + e.what());
+                result.chunks_failed += good_chunks.size();
+                error_count += static_cast<int>(good_chunks.size());
+            }
+        }
+
+        result.chunks_processed += batch.size();
+
+        if (progress) {
+            progress(static_cast<int>(result.chunks_processed),
+                     static_cast<int>(chunks.size()),
+                     "Embedding & storing...");
+        }
+
+        // Abort if too many errors
+        if (!config_.continue_on_error && error_count > 0) break;
+        if (error_count >= config_.max_errors) {
+            result.errors.push_back("Aborted: max error count reached (" +
+                                    std::to_string(config_.max_errors) + ")");
+            break;
+        }
+    }
+
+    // Step 4: Detect patterns via MTM
+    if (config_.detect_patterns && config_.update_mtm && mtm_ != nullptr) {
+        detectAndStorePatterns(chunks);
+    }
+
+    auto end_t = std::chrono::steady_clock::now();
+    result.total_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_t - start);
+    return result;
 }
 
 EmbeddingIngestor::IngestResult EmbeddingIngestor::ingestChunksWithEmbeddings(
@@ -466,11 +629,117 @@ EmbeddingIngestor::IngestResult EmbeddingIngestor::ingestChunksWithEmbeddings(
     const std::vector<CodeChunk>& chunks,
     const std::vector<std::vector<float>>& embeddings)
 {
-    (void)repo_id;
-    (void)chunks;
-    (void)embeddings;
-    // TODO: Implement pre-embedded chunk ingestion
-    return IngestResult{};
+    auto start = std::chrono::steady_clock::now();
+    IngestResult result;
+
+    if (chunks.size() != embeddings.size()) {
+        result.errors.push_back("Chunk/embedding count mismatch: " +
+                                std::to_string(chunks.size()) + " chunks vs " +
+                                std::to_string(embeddings.size()) + " embeddings");
+        auto end_t = std::chrono::steady_clock::now();
+        result.total_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_t - start);
+        return result;
+    }
+
+    // Stamp repo tag and store in LTM
+    std::vector<CodeChunk> stamped_chunks = chunks;
+    for (auto& chunk : stamped_chunks) {
+        chunk.tags.push_back("repo:" + repo_id);
+    }
+
+    size_t batch_size = static_cast<size_t>(config_.chunk_batch_size);
+    for (size_t offset = 0; offset < stamped_chunks.size(); offset += batch_size) {
+        size_t end_idx = std::min(offset + batch_size, stamped_chunks.size());
+        std::vector<CodeChunk> chunk_batch(stamped_chunks.begin() + static_cast<ptrdiff_t>(offset),
+                                           stamped_chunks.begin() + static_cast<ptrdiff_t>(end_idx));
+        std::vector<std::vector<float>> emb_batch(embeddings.begin() + static_cast<ptrdiff_t>(offset),
+                                                   embeddings.begin() + static_cast<ptrdiff_t>(end_idx));
+
+        try {
+            ltm_.addBatch(chunk_batch, emb_batch);
+            result.chunks_stored += chunk_batch.size();
+        } catch (const std::exception& e) {
+            result.errors.push_back(std::string("LTM addBatch error: ") + e.what());
+            result.chunks_failed += chunk_batch.size();
+            if (!config_.continue_on_error) break;
+        }
+        result.chunks_processed += chunk_batch.size();
+    }
+
+    // Detect patterns via MTM
+    if (config_.detect_patterns && config_.update_mtm && mtm_ != nullptr) {
+        detectAndStorePatterns(stamped_chunks);
+    }
+
+    auto end_t = std::chrono::steady_clock::now();
+    result.total_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_t - start);
+    return result;
+}
+
+// =============================================================================
+// detectAndStorePatterns
+// =============================================================================
+
+void EmbeddingIngestor::detectAndStorePatterns(const std::vector<CodeChunk>& chunks) {
+    if (!mtm_) return;
+
+    // Group chunks by language to detect language-specific patterns
+    std::unordered_map<std::string, std::vector<const CodeChunk*>> by_language;
+    for (const auto& chunk : chunks) {
+        if (!chunk.language.empty()) {
+            by_language[chunk.language].push_back(&chunk);
+        }
+    }
+
+    for (const auto& [language, lang_chunks] : by_language) {
+        // Create a summary pattern entry for each language in this ingestion
+        PatternEntry pattern;
+        pattern.id = "auto_" + language + "_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count());
+        pattern.name = language + " code pattern";
+        pattern.description = "Auto-detected pattern from " +
+                              std::to_string(lang_chunks.size()) + " " + language + " chunks";
+        pattern.pattern_type = "architecture";
+        pattern.applicable_languages.push_back(language);
+        pattern.occurrence_count = static_cast<int>(lang_chunks.size());
+        pattern.confidence = 0.5;
+
+        // Collect example snippets (up to 5)
+        for (size_t i = 0; i < std::min<size_t>(5, lang_chunks.size()); ++i) {
+            pattern.example_chunk_ids.push_back(lang_chunks[i]->id);
+            std::string snippet = lang_chunks[i]->content.substr(
+                0, std::min<size_t>(200, lang_chunks[i]->content.size()));
+            pattern.example_snippets.push_back(snippet);
+        }
+
+        // Compute average embedding for the pattern
+        if (!lang_chunks.empty()) {
+            // Embed a representative sample
+            std::vector<std::string> sample_texts;
+            for (size_t i = 0; i < std::min<size_t>(10, lang_chunks.size()); ++i) {
+                sample_texts.push_back(lang_chunks[i]->content);
+            }
+            auto batch_result = embedding_engine_.embedBatch(sample_texts);
+            if (batch_result.successful_count > 0) {
+                size_t dim = batch_result.embeddings[0].size();
+                pattern.embedding.resize(dim, 0.0f);
+                int count = 0;
+                for (const auto& emb : batch_result.embeddings) {
+                    if (!emb.empty()) {
+                        for (size_t d = 0; d < dim; ++d) {
+                            pattern.embedding[d] += emb[d];
+                        }
+                        count++;
+                    }
+                }
+                if (count > 0) {
+                    for (float& v : pattern.embedding) v /= static_cast<float>(count);
+                }
+            }
+        }
+
+        mtm_->storePattern(pattern);
+    }
 }
 
 } // namespace aipr::tms
