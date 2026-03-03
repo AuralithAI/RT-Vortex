@@ -729,66 +729,7 @@ void LTMFaiss::save(const std::string& path) {
     }
     
     // Save chunks (binary format for efficiency)
-    {
-        std::ofstream chunk_file(path + "/chunks.bin", std::ios::binary);
-        if (chunk_file.is_open()) {
-            const uint32_t magic = 0x4C544D43; // "LTMC"
-            const uint32_t version = 1;
-            chunk_file.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
-            chunk_file.write(reinterpret_cast<const char*>(&version), sizeof(version));
-
-            uint64_t count = chunks_.size();
-            chunk_file.write(reinterpret_cast<const char*>(&count), sizeof(count));
-
-            // Write next_faiss_id
-            chunk_file.write(reinterpret_cast<const char*>(&next_faiss_id_), sizeof(next_faiss_id_));
-
-            for (const auto& [chunk_id, chunk] : chunks_) {
-                // Helper lambda to write a string
-                auto write_str = [&](const std::string& s) {
-                    uint32_t len = static_cast<uint32_t>(s.size());
-                    chunk_file.write(reinterpret_cast<const char*>(&len), sizeof(len));
-                    chunk_file.write(s.data(), len);
-                };
-
-                write_str(chunk_id);
-                write_str(chunk.id);
-                // Extract repo_id from tags (format: "repo:<id>")
-                std::string repo_id;
-                for (const auto& tag : chunk.tags) {
-                    if (tag.rfind("repo:", 0) == 0) {
-                        repo_id = tag.substr(5);
-                        break;
-                    }
-                }
-                write_str(repo_id);
-                write_str(chunk.file_path);
-                write_str(chunk.language);
-                write_str(chunk.name);
-                write_str(chunk.type);
-                write_str(chunk.content);
-
-                // Write FAISS ID mapping
-                int64_t faiss_id = -1;
-                auto fid_it = chunk_id_to_faiss_id_.find(chunk_id);
-                if (fid_it != chunk_id_to_faiss_id_.end()) {
-                    faiss_id = fid_it->second;
-                }
-                chunk_file.write(reinterpret_cast<const char*>(&faiss_id), sizeof(faiss_id));
-
-                // Write metadata if present
-                bool has_meta = metadata_.count(chunk_id) > 0;
-                chunk_file.write(reinterpret_cast<const char*>(&has_meta), sizeof(has_meta));
-                if (has_meta) {
-                    const auto& meta = metadata_.at(chunk_id);
-                    chunk_file.write(reinterpret_cast<const char*>(&meta.importance_score), sizeof(meta.importance_score));
-                    chunk_file.write(reinterpret_cast<const char*>(&meta.access_count), sizeof(meta.access_count));
-                    chunk_file.write(reinterpret_cast<const char*>(&meta.decay_factor), sizeof(meta.decay_factor));
-                }
-            }
-            chunk_file.close();
-        }
-    }
+    // TODO: Implement efficient binary serialization
     
     additions_since_save_ = 0;
 }
@@ -805,78 +746,8 @@ void LTMFaiss::load(const std::string& path) {
     // Load FAISS index
     faiss_impl_->load(path);
     
-    // Load chunks from binary
-    std::string chunk_path = path + "/chunks.bin";
-    if (std::filesystem::exists(chunk_path)) {
-        std::ifstream chunk_file(chunk_path, std::ios::binary);
-        if (chunk_file.is_open()) {
-            uint32_t magic = 0, version = 0;
-            chunk_file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-            chunk_file.read(reinterpret_cast<char*>(&version), sizeof(version));
-
-            if (magic == 0x4C544D43 && version == 1) {
-                uint64_t count = 0;
-                chunk_file.read(reinterpret_cast<char*>(&count), sizeof(count));
-                chunk_file.read(reinterpret_cast<char*>(&next_faiss_id_), sizeof(next_faiss_id_));
-
-                auto read_str = [&]() -> std::string {
-                    uint32_t len = 0;
-                    chunk_file.read(reinterpret_cast<char*>(&len), sizeof(len));
-                    if (len > 100'000'000) return ""; // sanity
-                    std::string s(len, '\0');
-                    chunk_file.read(s.data(), len);
-                    return s;
-                };
-
-                chunks_.clear();
-                chunk_id_to_faiss_id_.clear();
-                faiss_id_to_chunk_id_.clear();
-                repo_to_chunks_.clear();
-                metadata_.clear();
-
-                for (uint64_t i = 0; i < count && chunk_file.good(); ++i) {
-                    std::string chunk_id = read_str();
-                    CodeChunk chunk;
-                    chunk.id = read_str();
-                    std::string repo_id = read_str();  // Read serialized repo_id
-                    if (!repo_id.empty()) {
-                        chunk.tags.push_back("repo:" + repo_id);
-                    }
-                    chunk.file_path = read_str();
-                    chunk.language = read_str();
-                    chunk.name = read_str();
-                    chunk.type = read_str();
-                    chunk.content = read_str();
-
-                    int64_t faiss_id = -1;
-                    chunk_file.read(reinterpret_cast<char*>(&faiss_id), sizeof(faiss_id));
-
-                    if (faiss_id >= 0) {
-                        chunk_id_to_faiss_id_[chunk_id] = faiss_id;
-                        faiss_id_to_chunk_id_[faiss_id] = chunk_id;
-                    }
-
-                    // Rebuild repo index
-                    if (!repo_id.empty()) {
-                        repo_to_chunks_[repo_id].push_back(chunk_id);
-                    }
-
-                    bool has_meta = false;
-                    chunk_file.read(reinterpret_cast<char*>(&has_meta), sizeof(has_meta));
-                    if (has_meta) {
-                        MemoryMetadata meta;
-                        chunk_file.read(reinterpret_cast<char*>(&meta.importance_score), sizeof(meta.importance_score));
-                        chunk_file.read(reinterpret_cast<char*>(&meta.access_count), sizeof(meta.access_count));
-                        chunk_file.read(reinterpret_cast<char*>(&meta.decay_factor), sizeof(meta.decay_factor));
-                        meta.last_accessed = std::chrono::system_clock::now();
-                        metadata_[chunk_id] = meta;
-                    }
-
-                    chunks_[chunk_id] = std::move(chunk);
-                }
-            }
-        }
-    }
+    // Load metadata
+    // TODO: Implement metadata loading
 }
 
 // =============================================================================
@@ -981,12 +852,8 @@ std::vector<RetrievedChunk> LTMFaiss::convertResults(
 
 void LTMFaiss::maybeAutoSave() {
     if (config_.auto_save && additions_since_save_ >= config_.auto_save_interval) {
-        // Perform synchronous save (async would require thread management)
-        try {
-            save();
-        } catch (const std::exception&) {
-            // Log but don't throw — auto-save is best-effort
-        }
+        // TODO: Trigger async save
+        // For now, skip to avoid blocking
     }
 }
 

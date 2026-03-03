@@ -20,12 +20,6 @@
 #include <fstream>
 #include <mutex>
 #include <cmath>
-#include <array>
-#include <unordered_map>
-#include <algorithm>
-#include <cctype>
-#include <codecvt>
-#include <locale>
 
 #ifdef AIPR_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
@@ -62,242 +56,6 @@ public:
 static CurlGlobalInit s_curlInit;
 
 } // anonymous namespace
-
-//=============================================================================
-// BERT WordPiece Tokenizer
-//=============================================================================
-
-/**
- * Production BERT WordPiece tokenizer.
- * 
- * Loads vocabulary from a HuggingFace tokenizer.json or plain vocab.txt file.
- * Implements the standard BERT tokenization pipeline:
- *   1. Lowercase (for uncased models like all-MiniLM-L6-v2)
- *   2. Unicode normalization / accent stripping
- *   3. Whitespace + punctuation splitting
- *   4. WordPiece subword decomposition using the loaded vocabulary
- *   5. [CLS] / [SEP] framing with truncation to max_seq_len
- *
- * This replaces the hash-based pseudo-tokenizer so the ONNX model
- * receives proper token IDs that match its trained vocabulary.
- */
-class BertTokenizer {
-public:
-    // Well-known BERT special token IDs
-    static constexpr int64_t PAD_TOKEN_ID   = 0;
-    static constexpr int64_t UNK_TOKEN_ID   = 100;
-    static constexpr int64_t CLS_TOKEN_ID   = 101;
-    static constexpr int64_t SEP_TOKEN_ID   = 102;
-    static constexpr int64_t MASK_TOKEN_ID  = 103;
-
-    BertTokenizer() = default;
-
-    /**
-     * Load vocabulary.
-     * Accepts either:
-     *   - HuggingFace tokenizer.json  (has "model" -> "vocab" dict)
-     *   - Plain vocab.txt             (one token per line, id = line number)
-     * Returns true on success.
-     */
-    bool load(const std::string& path) {
-        std::ifstream f(path);
-        if (!f.good()) return false;
-
-        // Peek first non-whitespace char to decide format
-        char first = 0;
-        while (f.get(first) && std::isspace(static_cast<unsigned char>(first))) {}
-        f.seekg(0);
-
-        if (first == '{') {
-            return loadTokenizerJson(f);
-        } else {
-            return loadVocabTxt(f);
-        }
-    }
-
-    bool isLoaded() const { return !token_to_id_.empty(); }
-
-    /**
-     * Tokenize a single text into token IDs, framed as [CLS] ... [SEP].
-     * Truncates to max_seq_len and pads.
-     * Also fills attention_mask and token_type_ids.
-     */
-    void encode(
-        const std::string& text,
-        int64_t max_seq_len,
-        std::vector<int64_t>& input_ids,
-        std::vector<int64_t>& attention_mask,
-        std::vector<int64_t>& token_type_ids
-    ) const {
-        // 1. Pre-tokenize: lowercase, split on whitespace + punctuation
-        auto words = pretokenize(text);
-
-        // 2. WordPiece each word
-        std::vector<int64_t> tokens;
-        tokens.push_back(CLS_TOKEN_ID);
-
-        for (const auto& word : words) {
-            auto wp_ids = wordpiece(word);
-            for (int64_t id : wp_ids) {
-                if (static_cast<int64_t>(tokens.size()) >= max_seq_len - 1) break;
-                tokens.push_back(id);
-            }
-            if (static_cast<int64_t>(tokens.size()) >= max_seq_len - 1) break;
-        }
-        tokens.push_back(SEP_TOKEN_ID);
-
-        int64_t actual_len = static_cast<int64_t>(tokens.size());
-
-        // 3. Pad to max_seq_len
-        input_ids.resize(static_cast<size_t>(max_seq_len), PAD_TOKEN_ID);
-        attention_mask.resize(static_cast<size_t>(max_seq_len), 0);
-        token_type_ids.resize(static_cast<size_t>(max_seq_len), 0);
-
-        for (int64_t i = 0; i < actual_len; ++i) {
-            input_ids[static_cast<size_t>(i)] = tokens[static_cast<size_t>(i)];
-            attention_mask[static_cast<size_t>(i)] = 1;
-        }
-    }
-
-    /** Return the number of real (non-pad) tokens the last encode() produced. */
-    int64_t lastTokenCount(const std::vector<int64_t>& attention_mask) const {
-        int64_t n = 0;
-        for (auto v : attention_mask) n += v;
-        return n;
-    }
-
-private:
-    std::unordered_map<std::string, int64_t> token_to_id_;
-    bool do_lower_case_ = true;
-    static constexpr size_t MAX_WORD_CHARS = 200;
-
-    // ---- Vocabulary loaders ------------------------------------------------
-
-    bool loadTokenizerJson(std::ifstream& f) {
-        try {
-            json j = json::parse(f);
-
-            // HuggingFace tokenizer.json: model.vocab is { token: id, ... }
-            if (j.contains("model") && j["model"].contains("vocab")) {
-                for (auto& [token, id_val] : j["model"]["vocab"].items()) {
-                    token_to_id_[token] = id_val.get<int64_t>();
-                }
-            }
-            // Also check for added_tokens
-            if (j.contains("added_tokens")) {
-                for (auto& entry : j["added_tokens"]) {
-                    if (entry.contains("content") && entry.contains("id")) {
-                        token_to_id_[entry["content"].get<std::string>()] =
-                            entry["id"].get<int64_t>();
-                    }
-                }
-            }
-
-            // Check normalizer for lowercase
-            if (j.contains("normalizer") && j["normalizer"].contains("lowercase")) {
-                do_lower_case_ = j["normalizer"]["lowercase"].get<bool>();
-            }
-
-            std::cout << "[INFO] BERT tokenizer loaded: " << token_to_id_.size()
-                      << " tokens from tokenizer.json\n";
-            return !token_to_id_.empty();
-
-        } catch (const json::exception& e) {
-            std::cerr << "[ERROR] Failed to parse tokenizer.json: " << e.what() << "\n";
-            return false;
-        }
-    }
-
-    bool loadVocabTxt(std::ifstream& f) {
-        std::string line;
-        int64_t id = 0;
-        while (std::getline(f, line)) {
-            // Strip trailing \r if present
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            token_to_id_[line] = id++;
-        }
-        std::cout << "[INFO] BERT tokenizer loaded: " << token_to_id_.size()
-                  << " tokens from vocab.txt\n";
-        return !token_to_id_.empty();
-    }
-
-    // ---- Pre-tokenization (BERT-style) ------------------------------------
-
-    std::vector<std::string> pretokenize(const std::string& text) const {
-        std::vector<std::string> words;
-        std::string current;
-
-        for (size_t i = 0; i < text.size(); ++i) {
-            unsigned char c = static_cast<unsigned char>(text[i]);
-
-            if (std::isspace(c)) {
-                if (!current.empty()) { words.push_back(current); current.clear(); }
-            } else if (isPunctuation(c)) {
-                if (!current.empty()) { words.push_back(current); current.clear(); }
-                words.push_back(std::string(1, static_cast<char>(c)));
-            } else {
-                if (do_lower_case_) {
-                    current += static_cast<char>(std::tolower(c));
-                } else {
-                    current += static_cast<char>(c);
-                }
-            }
-        }
-        if (!current.empty()) words.push_back(current);
-        return words;
-    }
-
-    static bool isPunctuation(unsigned char c) {
-        // ASCII punctuation ranges matching BERT's definition
-        if ((c >= 33 && c <= 47) || (c >= 58 && c <= 64) ||
-            (c >= 91 && c <= 96) || (c >= 123 && c <= 126)) {
-            return true;
-        }
-        return false;
-    }
-
-    // ---- WordPiece subword tokenization -----------------------------------
-
-    std::vector<int64_t> wordpiece(const std::string& word) const {
-        if (word.size() > MAX_WORD_CHARS) {
-            return { UNK_TOKEN_ID };
-        }
-
-        std::vector<int64_t> output;
-        size_t start = 0;
-
-        while (start < word.size()) {
-            size_t end = word.size();
-            int64_t found_id = -1;
-
-            while (start < end) {
-                std::string substr = word.substr(start, end - start);
-                if (start > 0) {
-                    substr = "##" + substr;  // continuation prefix
-                }
-
-                auto it = token_to_id_.find(substr);
-                if (it != token_to_id_.end()) {
-                    found_id = it->second;
-                    break;
-                }
-                --end;
-            }
-
-            if (found_id < 0) {
-                // No subword found — entire word is unknown
-                output.clear();
-                output.push_back(UNK_TOKEN_ID);
-                return output;
-            }
-
-            output.push_back(found_id);
-            start = end;
-        }
-
-        return output;
-    }
-};
 
 //=============================================================================
 // Embedding Client Implementation
@@ -430,7 +188,6 @@ private:
     std::unique_ptr<Ort::Session> onnx_session_;
     std::unique_ptr<Ort::Env> onnx_env_;
     std::mutex onnx_mutex_;
-    BertTokenizer tokenizer_;
 #endif
 
     //-------------------------------------------------------------------------
@@ -550,32 +307,6 @@ private:
             onnx_session_ = std::make_unique<Ort::Session>(*onnx_env_, model_path.c_str(), session_options);
             dimensions_ = 384;  // MiniLM outputs 384 dimensions
             
-            // Load BERT WordPiece tokenizer
-            // Try configured path first, then common alternatives
-            std::string tok_path = config_.onnx_tokenizer_path;
-            if (!tokenizer_.load(tok_path)) {
-                // Try vocab.txt next to the model
-                std::string model_dir = model_path.substr(0, model_path.find_last_of('/'));
-                if (model_dir.empty()) model_dir = ".";
-                std::vector<std::string> fallbacks = {
-                    model_dir + "/vocab.txt",
-                    model_dir + "/tokenizer.json",
-                    "models/vocab.txt",
-                    "models/tokenizer.json"
-                };
-                for (const auto& fb : fallbacks) {
-                    if (tokenizer_.load(fb)) break;
-                }
-            }
-            
-            if (!tokenizer_.isLoaded()) {
-                std::cerr << "[WARN] BERT tokenizer not found. Looked for:\n"
-                          << "  - " << tok_path << "\n"
-                          << "  Download vocab.txt or tokenizer.json from HuggingFace "
-                          << "sentence-transformers/all-MiniLM-L6-v2\n"
-                          << "  Falling back to hash-based tokenization (reduced quality)\n";
-            }
-            
             std::cout << "[INFO] ONNX embedding model loaded: " << model_path << "\n";
             
         } catch (const Ort::Exception& e) {
@@ -599,139 +330,26 @@ private:
         
         std::lock_guard<std::mutex> lock(onnx_mutex_);
         
-        Ort::AllocatorWithDefaultOptions allocator;
-        constexpr int64_t MAX_SEQ_LEN = 128;
-        
+        // Simplified: hash-based pseudo-embedding for demonstration
+        // TODO: Implement proper BERT tokenization with tokenizers-cpp
         for (const auto& text : texts) {
-            std::vector<int64_t> input_ids;
-            std::vector<int64_t> attention_mask;
-            std::vector<int64_t> token_type_ids;
+            std::vector<float> embedding(dimensions_);
             
-            if (tokenizer_.isLoaded()) {
-                // ---- Production path: real BERT WordPiece tokenizer ----
-                tokenizer_.encode(text, MAX_SEQ_LEN, input_ids, attention_mask, token_type_ids);
-            } else {
-                // ---- Fallback: hash-based pseudo-tokenizer ----
-                // This produces valid-shaped input but poor quality embeddings
-                // because token IDs don't match the model's trained vocabulary.
-                constexpr int64_t CLS_TOKEN = 101;
-                constexpr int64_t SEP_TOKEN = 102;
-                constexpr int64_t VOCAB_SIZE = 30522;
-                
-                input_ids.push_back(CLS_TOKEN);
-                std::istringstream iss(text);
-                std::string word;
-                while (iss >> word && static_cast<int64_t>(input_ids.size()) < MAX_SEQ_LEN - 1) {
-                    size_t h = std::hash<std::string>{}(word);
-                    int64_t token_id = static_cast<int64_t>(h % (VOCAB_SIZE - 200)) + 200;
-                    input_ids.push_back(token_id);
-                }
-                input_ids.push_back(SEP_TOKEN);
-                
-                int64_t seq_len = static_cast<int64_t>(input_ids.size());
-                while (static_cast<int64_t>(input_ids.size()) < MAX_SEQ_LEN) {
-                    input_ids.push_back(0);
-                }
-                attention_mask.resize(static_cast<size_t>(MAX_SEQ_LEN), 0);
-                for (int64_t i = 0; i < seq_len; ++i) attention_mask[static_cast<size_t>(i)] = 1;
-                token_type_ids.resize(static_cast<size_t>(MAX_SEQ_LEN), 0);
+            size_t hash = std::hash<std::string>{}(text);
+            for (size_t i = 0; i < dimensions_; ++i) {
+                hash = hash * 6364136223846793005ULL + 1442695040888963407ULL;
+                embedding[i] = static_cast<float>(hash % 1000) / 1000.0f - 0.5f;
             }
             
-            int64_t seq_len = 0;
-            for (auto v : attention_mask) seq_len += v;
-            
-            // Create tensors
-            std::array<int64_t, 2> shape = {1, MAX_SEQ_LEN};
-            auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
-            
-            auto ids_tensor = Ort::Value::CreateTensor<int64_t>(
-                memory_info, input_ids.data(), input_ids.size(), shape.data(), shape.size());
-            auto mask_tensor = Ort::Value::CreateTensor<int64_t>(
-                memory_info, attention_mask.data(), attention_mask.size(), shape.data(), shape.size());
-            auto type_tensor = Ort::Value::CreateTensor<int64_t>(
-                memory_info, token_type_ids.data(), token_type_ids.size(), shape.data(), shape.size());
-            
-            // Get input/output names
-            size_t num_inputs = onnx_session_->GetInputCount();
-            std::vector<std::string> input_names_str;
-            std::vector<const char*> input_names;
-            for (size_t i = 0; i < num_inputs; ++i) {
-                auto name = onnx_session_->GetInputNameAllocated(i, allocator);
-                input_names_str.push_back(name.get());
-                input_names.push_back(input_names_str.back().c_str());
+            // L2 normalize
+            float norm = 0.0f;
+            for (float v : embedding) norm += v * v;
+            norm = std::sqrt(norm);
+            if (norm > 0) {
+                for (float& v : embedding) v /= norm;
             }
             
-            size_t num_outputs = onnx_session_->GetOutputCount();
-            std::vector<std::string> output_names_str;
-            std::vector<const char*> output_names;
-            for (size_t i = 0; i < num_outputs; ++i) {
-                auto name = onnx_session_->GetOutputNameAllocated(i, allocator);
-                output_names_str.push_back(name.get());
-                output_names.push_back(output_names_str.back().c_str());
-            }
-            
-            std::vector<Ort::Value> ort_inputs;
-            ort_inputs.push_back(std::move(ids_tensor));
-            ort_inputs.push_back(std::move(mask_tensor));
-            if (num_inputs >= 3) {
-                ort_inputs.push_back(std::move(type_tensor));
-            }
-            
-            try {
-                auto output_tensors = onnx_session_->Run(
-                    Ort::RunOptions{nullptr},
-                    input_names.data(), ort_inputs.data(), ort_inputs.size(),
-                    output_names.data(), output_names.size());
-                
-                // Extract embedding via attention-masked mean pooling
-                auto& output = output_tensors[0];
-                auto output_shape = output.GetTensorTypeAndShapeInfo().GetShape();
-                const float* output_data = output.GetTensorData<float>();
-                
-                std::vector<float> embedding(dimensions_, 0.0f);
-                
-                if (output_shape.size() == 3) {
-                    // Shape: [1, seq_len, hidden_dim]
-                    // Proper mean pooling: only average over non-padding tokens
-                    int64_t out_seq = output_shape[1];
-                    int64_t hidden = output_shape[2];
-                    int actual_dim = std::min(static_cast<int>(hidden), static_cast<int>(dimensions_));
-                    
-                    float token_count = 0.0f;
-                    for (int64_t t = 0; t < std::min(seq_len, out_seq); ++t) {
-                        float mask_val = static_cast<float>(attention_mask[static_cast<size_t>(t)]);
-                        for (int d = 0; d < actual_dim; ++d) {
-                            embedding[static_cast<size_t>(d)] += output_data[t * hidden + d] * mask_val;
-                        }
-                        token_count += mask_val;
-                    }
-                    if (token_count > 0.0f) {
-                        for (size_t d = 0; d < dimensions_; ++d) {
-                            embedding[d] /= token_count;
-                        }
-                    }
-                } else if (output_shape.size() == 2) {
-                    // Shape: [1, hidden_dim] — already pooled (e.g., CLS output)
-                    int actual_dim = std::min(static_cast<int>(output_shape[1]), static_cast<int>(dimensions_));
-                    for (int d = 0; d < actual_dim; ++d) {
-                        embedding[static_cast<size_t>(d)] = output_data[d];
-                    }
-                }
-                
-                // L2 normalize for cosine similarity
-                float norm = 0.0f;
-                for (float v : embedding) norm += v * v;
-                norm = std::sqrt(norm);
-                if (norm > 1e-12f) {
-                    for (float& v : embedding) v /= norm;
-                }
-                
-                response.embeddings.push_back(std::move(embedding));
-                response.total_tokens += static_cast<size_t>(seq_len);
-            } catch (const Ort::Exception& e) {
-                std::cerr << "[WARN] ONNX inference failed: " << e.what() << "\n";
-                response.embeddings.push_back(std::vector<float>(dimensions_, 0.0f));
-            }
+            response.embeddings.push_back(std::move(embedding));
         }
         
 #else

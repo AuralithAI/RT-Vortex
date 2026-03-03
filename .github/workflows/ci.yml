@@ -321,14 +321,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            libcurl4-openssl-dev \
-            libssl-dev \
-            libomp-dev \
-            libopenblas-dev \
-            liblapack-dev \
-            libgflags-dev
+          sudo apt-get install -y libcurl4-openssl-dev libomp-dev libopenblas-dev liblapack-dev libgflags-dev
 
       - name: Build FAISS from source (Ubuntu)
         if: runner.os == 'Linux'
@@ -350,7 +343,7 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DBLA_VENDOR=OpenBLAS
-          cmake --build . --config Release --parallel $(nproc)
+          cmake --build . --config Release --parallel 4
           sudo cmake --install . --config Release
           sudo ldconfig
       
@@ -417,7 +410,7 @@ jobs:
             -DAIPR_USE_FAISS=ON \
             -DAIPR_USE_TREE_SITTER=ON \
             $CMAKE_EXTRA_ARGS
-          cmake --build build --config Release --parallel
+          cmake --build build --config Release --parallel 4
       
       - name: Configure & Build (Windows)
         if: runner.os == 'Windows'

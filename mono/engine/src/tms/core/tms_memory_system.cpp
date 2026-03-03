@@ -10,9 +10,7 @@
 #include <chrono>
 #include <algorithm>
 #include <sstream>
-#include <fstream>
 #include <filesystem>
-#include <unordered_set>
 
 namespace aipr::tms {
 
@@ -285,39 +283,10 @@ void TMSMemorySystem::updateRepository(
         throw std::runtime_error("TMSMemorySystem not initialized");
     }
     
-    // 1 & 2. Remove chunks for deleted and changed files
-    // Build a set of file paths to remove
-    std::unordered_set<std::string> files_to_remove(deleted_files.begin(), deleted_files.end());
-    files_to_remove.insert(changed_files.begin(), changed_files.end());
-
-    // We can't iterate all chunks by file_path directly, so we search
-    // for each file. Use a dummy embedding search with repo filter to find chunks,
-    // or just remove the entire repo and re-ingest. For correctness with incremental,
-    // we remove all chunks for affected files by checking each chunk.
-    // Since repo_to_chunks_ is private, we use the getRepoChunkCount + search approach.
-    // However, the simplest correct approach: if we have changed/deleted files,
-    // remove entire repo and re-ingest only the files that remain.
-    if (!files_to_remove.empty()) {
-        // Remove the whole repo from LTM and re-ingest everything
-        ltm_->removeByRepo(repo_id);
-    }
-
-    // 3. Re-ingest remaining changed files
-    if (!changed_files.empty() && ingestor_) {
-        RepoParserConfig parser_config;
-        RepoParser parser(parser_config);
-
-        // Use repo_id as repo path (caller should ensure repo_id is the actual path
-        // or provide a mapping — in practice, repo_id is typically the repo root)
-        auto chunks = parser.parseFiles(repo_id, changed_files);
-        for (auto& chunk : chunks) {
-            chunk.tags.push_back("repo:" + repo_id);
-        }
-
-        if (!chunks.empty()) {
-            ingestor_->ingestChunks(repo_id, chunks, nullptr);
-        }
-    }
+    // TODO: Implement incremental update
+    // 1. Remove chunks for deleted files
+    // 2. Remove chunks for changed files
+    // 3. Re-parse and ingest changed files
 }
 
 // =============================================================================
@@ -485,20 +454,7 @@ void TMSMemorySystem::endSession(const std::string& session_id) {
     // Check for items to promote to LTM
     auto candidates = stm_->getPromotionCandidates(session_id);
     
-    // Promote high-relevance session items to long-term memory
-    for (const auto& entry : candidates) {
-        if (!entry.content.empty() && !entry.embedding.empty()) {
-            CodeChunk chunk;
-            chunk.id = "promoted_" + entry.id;
-            chunk.content = entry.content;
-            chunk.type = entry.context_type.empty() ? "session_context" : entry.context_type;
-            chunk.tags.push_back("source:stm_promotion");
-            chunk.tags.push_back("session:" + session_id);
-            chunk.tags.push_back("relevance:" + std::to_string(entry.relevance_score));
-            
-            ltm_->add(chunk, entry.embedding);
-        }
-    }
+    // TODO: Promote important items
     
     stm_->endSession(session_id);
 }
@@ -521,28 +477,8 @@ void TMSMemorySystem::learnFromOutcome(
         ltm_->updateImportance(id, -0.1);  // Decrease importance
     }
     
-    // Update MTM patterns and strategies based on outcome
-    if (mtm_) {
-        // Get session history to find which patterns/strategies were used
-        auto session_entries = stm_->getRecent(session_id, -1);
-        
-        // Collect chunk IDs that were retrieved during this session
-        std::vector<std::string> used_pattern_ids;
-        std::vector<std::string> used_strategy_ids;
-        
-        for (const auto& entry : session_entries) {
-            // If the entry was a retrieval, the retrieved chunks may have matched patterns
-            if (!entry.embedding.empty()) {
-                auto patterns = mtm_->matchPatterns(entry.embedding, 3);
-                for (const auto& p : patterns) {
-                    used_pattern_ids.push_back(p.id);
-                }
-            }
-        }
-        
-        // Learn from the outcome via MTM
-        mtm_->learnFromOutcome(used_pattern_ids, used_strategy_ids, outcome_score);
-    }
+    // Update MTM patterns and strategies
+    // TODO: Extract used patterns/strategies from session and update
 }
 
 void TMSMemorySystem::registerPattern(const PatternEntry& pattern) {
@@ -655,29 +591,8 @@ TMSMemorySystem::SystemStats TMSMemorySystem::getStats() const {
 }
 
 float TMSMemorySystem::getCurrentBudget() const {
-    // Query actual available memory on Linux via /proc/meminfo
-    float available_gb = config_.vram_budget_gb;  // fallback
-
-#ifdef __linux__
-    std::ifstream meminfo("/proc/meminfo");
-    if (meminfo.is_open()) {
-        std::string line;
-        while (std::getline(meminfo, line)) {
-            if (line.find("MemAvailable:") == 0) {
-                // Format: "MemAvailable:   XXXXXXX kB"
-                std::istringstream iss(line);
-                std::string label;
-                unsigned long kb = 0;
-                iss >> label >> kb;
-                available_gb = static_cast<float>(kb) / (1024.0f * 1024.0f);
-                break;
-            }
-        }
-    }
-#endif
-
-    // Return the minimum of configured budget and actually available memory
-    return std::min(available_gb, config_.vram_budget_gb);
+    // TODO: Query actual available VRAM
+    return config_.vram_budget_gb;
 }
 
 // =============================================================================

@@ -113,14 +113,9 @@ jobs:
 
       - name: Cache FAISS build (Ubuntu)
         if: runner.os == 'Linux'
-        id: cache-faiss-linux
         uses: actions/cache@v4
         with:
-          path: |
-            /usr/local/lib/libfaiss*
-            /usr/local/lib/cmake/faiss
-            /usr/local/include/faiss
-            /usr/local/share/faiss
+          path: /usr/local/lib/libfaiss*
           key: faiss-ubuntu-v1.7.4-${{ hashFiles('.github/workflows/engine.yml') }}
           restore-keys: |
             faiss-ubuntu-v1.7.4-
@@ -130,17 +125,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            build-essential \
             libcurl4-openssl-dev \
-            libssl-dev \
             libomp-dev \
             libopenblas-dev \
             liblapack-dev \
-            libgflags-dev
+            protobuf-compiler \
+            libprotobuf-dev \
+            libgflags-dev \
+            libspdlog-dev
 
       - name: Build FAISS from source (Ubuntu)
-        if: runner.os == 'Linux' && steps.cache-faiss-linux.outputs.cache-hit != 'true'
+        if: runner.os == 'Linux'
         run: |
+          # Check if FAISS is already installed (from cache or previous build)
+          if ldconfig -p | grep -q libfaiss; then
+            echo "FAISS already installed, skipping build"
+            exit 0
+          fi
+          
           git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git /tmp/faiss
           cd /tmp/faiss
           mkdir build && cd build
@@ -152,13 +154,9 @@ jobs:
             -DBUILD_SHARED_LIBS=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DBLA_VENDOR=OpenBLAS
-          cmake --build . --config Release --parallel $(nproc)
+          cmake --build . --config Release --parallel 4
           sudo cmake --install . --config Release
           sudo ldconfig
-
-      - name: Refresh ldconfig for cached FAISS (Ubuntu)
-        if: runner.os == 'Linux' && steps.cache-faiss-linux.outputs.cache-hit == 'true'
-        run: sudo ldconfig
 
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
@@ -260,7 +258,7 @@ jobs:
             -DCMAKE_PREFIX_PATH="C:\faiss-install"
 
       - name: Build
-        run: cmake --build build --config ${{ github.event.inputs.build_type || 'Release' }} --parallel
+        run: cmake --build build --config ${{ github.event.inputs.build_type || 'Release' }} --parallel 4
 
       - name: Run Unit Tests
         run: ctest --test-dir build --output-on-failure -C ${{ github.event.inputs.build_type || 'Release' }}

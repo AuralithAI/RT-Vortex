@@ -262,13 +262,12 @@ private:
  * 3. Store in LTM
  * 4. Update MTM patterns
  */
-
-// Forward declarations (defined in ltm_faiss.h and mtm_graph.h)
-class LTMFaiss;
-class MTMGraph;
-
 class EmbeddingIngestor {
 public:
+    // Forward declare to avoid circular includes
+    class LTMFaiss;
+    class MTMGraph;
+    
     struct Config {
         // Batch processing
         int chunk_batch_size = 500;
