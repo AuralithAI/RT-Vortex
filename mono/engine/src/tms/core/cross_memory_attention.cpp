@@ -10,6 +10,7 @@
 #include <numeric>
 #include <sstream>
 #include <random>
+#include <iomanip>
 
 namespace aipr::tms {
 

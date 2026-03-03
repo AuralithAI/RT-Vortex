@@ -601,6 +601,7 @@ set(UTIL_SOURCES
 
 # Main engine library
 add_library(aipr-engine STATIC
+    src/engine.cpp
     ${INDEXING_SOURCES}
     ${RETRIEVAL_SOURCES}
     ${REVIEW_SOURCES}

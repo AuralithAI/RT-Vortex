@@ -5,405 +5,299 @@
  */
 
 #include "memory_system.h"
+#include "faiss_index.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <sstream>
-#include <nlohmann/json.hpp>
 
 namespace aipr {
 
-using json = nlohmann::json;
+// =============================================================================
+// Constructor / Destructor
+// =============================================================================
 
-class MetaTaskMemoryImpl : public MetaTaskMemory {
-public:
-    explicit MetaTaskMemoryImpl(const MemoryConfig& config)
-        : config_(config) {
-    }
-    
-    ~MetaTaskMemoryImpl() override = default;
-    
-    void storePattern(const ReviewPattern& pattern) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        patterns_[pattern.id] = pattern;
-    }
-    
-    void storeStrategy(const ReviewStrategy& strategy) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        strategies_[strategy.id] = strategy;
-    }
-    
-    std::vector<ReviewPattern> matchPatterns(
-        const std::string& code_context,
-        const std::string& file_type,
-        int top_k
-    ) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        if (top_k < 0) top_k = config_.mtm_top_k;
-        
-        std::vector<std::pair<std::string, double>> scored;
-        
-        for (const auto& [id, pattern] : patterns_) {
-            double score = 0;
-            
-            // Language match
-            if (!file_type.empty() && 
-                std::find(pattern.languages.begin(), pattern.languages.end(), file_type) 
-                != pattern.languages.end()) {
+MetaTaskMemory::MetaTaskMemory(const MemoryConfig& config)
+    : config_(config) {
+}
+
+MetaTaskMemory::~MetaTaskMemory() = default;
+
+// =============================================================================
+// Pattern Management
+// =============================================================================
+
+void MetaTaskMemory::storePattern(const PatternMemory& pattern) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    patterns_[pattern.id] = pattern;
+}
+
+void MetaTaskMemory::updatePatternConfidence(const std::string& pattern_id, bool positive_feedback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = patterns_.find(pattern_id);
+    if (it == patterns_.end()) return;
+
+    auto& pattern = it->second;
+    double alpha = 0.1;
+    double outcome = positive_feedback ? 1.0 : 0.0;
+    pattern.confidence = alpha * outcome + (1 - alpha) * pattern.confidence;
+    pattern.occurrence_count++;
+}
+
+std::vector<PatternMemory> MetaTaskMemory::matchPatterns(
+    const std::vector<float>& code_embedding,
+    const std::string& language,
+    int top_k
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<std::pair<std::string, double>> scored;
+
+    for (const auto& [id, pattern] : patterns_) {
+        double score = 0;
+
+        // Language match (check metadata)
+        if (!language.empty()) {
+            auto lang_it = pattern.metadata.find("language");
+            if (lang_it != pattern.metadata.end() && lang_it->second == language) {
                 score += 0.3;
             }
-            
-            // Context keyword matching (simple TF-IDF approximation)
-            for (const auto& indicator : pattern.indicators) {
-                if (code_context.find(indicator) != std::string::npos) {
+        }
+
+        // Embedding similarity (simple dot product if embeddings available)
+        if (!code_embedding.empty() && !pattern.embedding.empty() &&
+            code_embedding.size() == pattern.embedding.size()) {
+            float dot = 0.0f;
+            for (size_t i = 0; i < code_embedding.size(); ++i) {
+                dot += code_embedding[i] * pattern.embedding[i];
+            }
+            score += 0.5 * std::max(0.0f, dot);
+        }
+
+        // Confidence boost
+        score *= (0.5 + 0.5 * pattern.confidence);
+
+        // Occurrence boost (log scale)
+        if (pattern.occurrence_count > 0) {
+            score *= (1.0 + 0.1 * std::log(pattern.occurrence_count));
+        }
+
+        scored.emplace_back(id, score);
+    }
+
+    // Sort by score descending
+    std::sort(scored.begin(), scored.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+
+    std::vector<PatternMemory> results;
+    for (int i = 0; i < top_k && i < static_cast<int>(scored.size()); ++i) {
+        if (scored[i].second > 0.1) {
+            results.push_back(patterns_[scored[i].first]);
+        }
+    }
+    return results;
+}
+
+std::vector<PatternMemory> MetaTaskMemory::getPatternsByType(const std::string& pattern_type) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<PatternMemory> results;
+    for (const auto& [id, pattern] : patterns_) {
+        if (pattern.pattern_type == pattern_type) {
+            results.push_back(pattern);
+        }
+    }
+    return results;
+}
+
+// =============================================================================
+// Strategy Management
+// =============================================================================
+
+void MetaTaskMemory::storeStrategy(const StrategyMemory& strategy) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    strategies_[strategy.id] = strategy;
+}
+
+void MetaTaskMemory::updateStrategyEffectiveness(const std::string& strategy_id, double effectiveness) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = strategies_.find(strategy_id);
+    if (it == strategies_.end()) return;
+
+    auto& strategy = it->second;
+    double alpha = 0.1;
+    strategy.effectiveness_score = alpha * effectiveness + (1 - alpha) * strategy.effectiveness_score;
+    strategy.use_count++;
+}
+
+std::vector<StrategyMemory> MetaTaskMemory::matchStrategies(
+    const std::string& context_type,
+    const std::vector<std::string>& detected_patterns,
+    int top_k
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<std::pair<std::string, double>> scored;
+
+    for (const auto& [id, strategy] : strategies_) {
+        double score = 0;
+
+        // Context type match
+        if (!context_type.empty() && strategy.context_type == context_type) {
+            score += 0.4;
+        }
+
+        // Pattern overlap
+        for (const auto& pat_id : detected_patterns) {
+            for (const auto& applicable : strategy.applicable_patterns) {
+                if (applicable == pat_id) {
                     score += 0.15;
-                }
-            }
-            
-            // Effectiveness boost
-            score *= (0.5 + 0.5 * pattern.effectiveness_score);
-            
-            // Usage count boost (log scale)
-            if (pattern.usage_count > 0) {
-                score *= (1.0 + 0.1 * std::log(pattern.usage_count));
-            }
-            
-            scored.emplace_back(id, score);
-        }
-        
-        // Sort by score
-        std::sort(scored.begin(), scored.end(),
-                  [](const auto& a, const auto& b) { return a.second > b.second; });
-        
-        // Build result
-        std::vector<ReviewPattern> results;
-        for (int i = 0; i < top_k && i < static_cast<int>(scored.size()); ++i) {
-            if (scored[i].second > 0.1) {  // Minimum threshold
-                results.push_back(patterns_[scored[i].first]);
-            }
-        }
-        
-        return results;
-    }
-    
-    std::optional<ReviewStrategy> getStrategy(
-        const std::string& review_type,
-        const std::string& repository_type
-    ) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        ReviewStrategy* best = nullptr;
-        double best_score = 0;
-        
-        for (auto& [id, strategy] : strategies_) {
-            // Skip inactive strategies
-            if (!strategy.active) continue;
-            
-            double score = 0;
-            
-            // Conditions matching
-            auto review_it = strategy.conditions.find("review_type");
-            if (review_it != strategy.conditions.end() && 
-                review_it->second == review_type) {
-                score += 0.4;
-            }
-            
-            auto repo_it = strategy.conditions.find("repository_type");
-            if (repo_it != strategy.conditions.end() && 
-                repo_it->second == repository_type) {
-                score += 0.3;
-            }
-            
-            // Effectiveness boost
-            score *= (0.5 + 0.5 * strategy.success_rate);
-            
-            if (score > best_score) {
-                best_score = score;
-                best = &strategy;
-            }
-        }
-        
-        if (best && best_score > 0.2) {
-            return *best;
-        }
-        
-        return std::nullopt;
-    }
-    
-    void recordOutcome(
-        const std::string& pattern_or_strategy_id,
-        bool success,
-        double confidence
-    ) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        // Update pattern if found
-        auto pat_it = patterns_.find(pattern_or_strategy_id);
-        if (pat_it != patterns_.end()) {
-            auto& pattern = pat_it->second;
-            pattern.usage_count++;
-            
-            // Exponential moving average
-            double alpha = 0.1;
-            double outcome = success ? confidence : 0;
-            pattern.effectiveness_score = 
-                alpha * outcome + (1 - alpha) * pattern.effectiveness_score;
-            
-            pattern.last_used = std::chrono::system_clock::now();
-            return;
-        }
-        
-        // Update strategy if found
-        auto strat_it = strategies_.find(pattern_or_strategy_id);
-        if (strat_it != strategies_.end()) {
-            auto& strategy = strat_it->second;
-            strategy.usage_count++;
-            
-            // Update success rate
-            double alpha = 0.1;
-            strategy.success_rate = 
-                alpha * (success ? 1.0 : 0.0) + (1 - alpha) * strategy.success_rate;
-            
-            strategy.last_used = std::chrono::system_clock::now();
-        }
-    }
-    
-    void learnFromFeedback(
-        const std::string& feedback_type,
-        const std::map<std::string, std::string>& context,
-        bool positive
-    ) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        FeedbackEntry entry;
-        entry.feedback_type = feedback_type;
-        entry.context = context;
-        entry.positive = positive;
-        entry.timestamp = std::chrono::system_clock::now();
-        
-        feedback_history_.push_back(entry);
-        
-        // Limit history
-        while (feedback_history_.size() > 1000) {
-            feedback_history_.erase(feedback_history_.begin());
-        }
-        
-        // Analyze feedback patterns
-        analyzeFeeback();
-    }
-    
-    bool save(const std::string& path) const override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        try {
-            json j;
-            
-            // Serialize patterns
-            j["patterns"] = json::array();
-            for (const auto& [id, p] : patterns_) {
-                json jp;
-                jp["id"] = p.id;
-                jp["name"] = p.name;
-                jp["description"] = p.description;
-                jp["category"] = p.category;
-                jp["languages"] = p.languages;
-                jp["indicators"] = p.indicators;
-                jp["suggested_checks"] = p.suggested_checks;
-                jp["effectiveness_score"] = p.effectiveness_score;
-                jp["usage_count"] = p.usage_count;
-                jp["last_used"] = std::chrono::system_clock::to_time_t(p.last_used);
-                j["patterns"].push_back(jp);
-            }
-            
-            // Serialize strategies
-            j["strategies"] = json::array();
-            for (const auto& [id, s] : strategies_) {
-                json js;
-                js["id"] = s.id;
-                js["name"] = s.name;
-                js["conditions"] = s.conditions;
-                js["steps"] = s.steps;
-                js["focus_areas"] = s.focus_areas;
-                js["success_rate"] = s.success_rate;
-                js["usage_count"] = s.usage_count;
-                js["active"] = s.active;
-                js["last_used"] = std::chrono::system_clock::to_time_t(s.last_used);
-                j["strategies"].push_back(js);
-            }
-            
-            // Write file
-            std::ofstream out(path);
-            out << j.dump(2);
-            return true;
-        } catch (...) {
-            return false;
-        }
-    }
-    
-    bool load(const std::string& path) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        try {
-            std::ifstream in(path);
-            if (!in.is_open()) return false;
-            
-            json j;
-            in >> j;
-            
-            // Load patterns
-            patterns_.clear();
-            for (const auto& jp : j["patterns"]) {
-                ReviewPattern p;
-                p.id = jp["id"];
-                p.name = jp["name"];
-                p.description = jp["description"];
-                p.category = jp["category"];
-                p.languages = jp["languages"].get<std::vector<std::string>>();
-                p.indicators = jp["indicators"].get<std::vector<std::string>>();
-                p.suggested_checks = jp["suggested_checks"].get<std::vector<std::string>>();
-                p.effectiveness_score = jp["effectiveness_score"];
-                p.usage_count = jp["usage_count"];
-                p.last_used = std::chrono::system_clock::from_time_t(jp["last_used"]);
-                patterns_[p.id] = p;
-            }
-            
-            // Load strategies
-            strategies_.clear();
-            for (const auto& js : j["strategies"]) {
-                ReviewStrategy s;
-                s.id = js["id"];
-                s.name = js["name"];
-                s.conditions = js["conditions"].get<std::map<std::string, std::string>>();
-                s.steps = js["steps"].get<std::vector<std::string>>();
-                s.focus_areas = js["focus_areas"].get<std::vector<std::string>>();
-                s.success_rate = js["success_rate"];
-                s.usage_count = js["usage_count"];
-                s.active = js["active"];
-                s.last_used = std::chrono::system_clock::from_time_t(js["last_used"]);
-                strategies_[s.id] = s;
-            }
-            
-            return true;
-        } catch (...) {
-            return false;
-        }
-    }
-    
-    std::vector<std::string> suggestImprovements(
-        const std::string& review_type
-    ) const override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        std::vector<std::string> suggestions;
-        
-        // Analyze feedback for improvement opportunities
-        std::map<std::string, int> negative_counts;
-        std::map<std::string, int> total_counts;
-        
-        for (const auto& entry : feedback_history_) {
-            auto type_it = entry.context.find("check_type");
-            if (type_it != entry.context.end()) {
-                total_counts[type_it->second]++;
-                if (!entry.positive) {
-                    negative_counts[type_it->second]++;
+                    break;
                 }
             }
         }
-        
-        // Find checks with high negative rates
-        for (const auto& [check, total] : total_counts) {
-            if (total >= 5) {
-                double negative_rate = static_cast<double>(negative_counts[check]) / total;
-                if (negative_rate > 0.3) {
-                    suggestions.push_back(
-                        "Consider adjusting '" + check + "' check - " +
-                        std::to_string(static_cast<int>(negative_rate * 100)) + 
-                        "% negative feedback"
-                    );
-                }
-            }
-        }
-        
-        // Find underused effective patterns
-        for (const auto& [id, pattern] : patterns_) {
-            if (pattern.effectiveness_score > 0.8 && pattern.usage_count < 5) {
-                suggestions.push_back(
-                    "Pattern '" + pattern.name + "' has high effectiveness but low usage"
-                );
-            }
-        }
-        
-        return suggestions;
-    }
-    
-private:
-    struct FeedbackEntry {
-        std::string feedback_type;
-        std::map<std::string, std::string> context;
-        bool positive;
-        std::chrono::system_clock::time_point timestamp;
-    };
-    
-    void analyzeFeeback() {
-        // Count recent positive/negative by pattern
-        auto now = std::chrono::system_clock::now();
-        auto threshold = now - std::chrono::hours(24);
-        
-        std::map<std::string, int> positive_counts;
-        std::map<std::string, int> negative_counts;
-        
-        for (const auto& entry : feedback_history_) {
-            if (entry.timestamp < threshold) continue;
-            
-            auto pattern_it = entry.context.find("pattern_id");
-            if (pattern_it != entry.context.end()) {
-                if (entry.positive) {
-                    positive_counts[pattern_it->second]++;
-                } else {
-                    negative_counts[pattern_it->second]++;
-                }
-            }
-        }
-        
-        // Update pattern effectiveness based on recent feedback
-        for (const auto& [pattern_id, pos_count] : positive_counts) {
-            auto it = patterns_.find(pattern_id);
-            if (it == patterns_.end()) continue;
-            
-            int neg_count = negative_counts[pattern_id];
-            int total = pos_count + neg_count;
-            
-            if (total >= 3) {
-                double recent_rate = static_cast<double>(pos_count) / total;
-                
-                // Blend recent rate with historical
-                auto& pattern = it->second;
-                pattern.effectiveness_score = 
-                    0.3 * recent_rate + 0.7 * pattern.effectiveness_score;
-            }
-        }
-        
-        // Deactivate consistently failing strategies
-        for (auto& [id, strategy] : strategies_) {
-            if (strategy.usage_count >= 10 && strategy.success_rate < 0.2) {
-                strategy.active = false;
-            }
-        }
-    }
-    
-    MemoryConfig config_;
-    mutable std::mutex mutex_;
-    
-    std::unordered_map<std::string, ReviewPattern> patterns_;
-    std::unordered_map<std::string, ReviewStrategy> strategies_;
-    std::vector<FeedbackEntry> feedback_history_;
-};
 
-std::unique_ptr<MetaTaskMemory> createMetaTaskMemory(const MemoryConfig& config) {
-    return std::make_unique<MetaTaskMemoryImpl>(config);
+        // Effectiveness boost
+        score *= (0.5 + 0.5 * strategy.effectiveness_score);
+
+        scored.emplace_back(id, score);
+    }
+
+    std::sort(scored.begin(), scored.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+
+    std::vector<StrategyMemory> results;
+    for (int i = 0; i < top_k && i < static_cast<int>(scored.size()); ++i) {
+        if (scored[i].second > 0.1) {
+            results.push_back(strategies_[scored[i].first]);
+        }
+    }
+    return results;
+}
+
+std::vector<StrategyMemory> MetaTaskMemory::getTopStrategies(int limit) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    std::vector<StrategyMemory> all;
+    all.reserve(strategies_.size());
+    for (const auto& [id, strategy] : strategies_) {
+        all.push_back(strategy);
+    }
+
+    std::sort(all.begin(), all.end(),
+              [](const auto& a, const auto& b) {
+                  return a.effectiveness_score > b.effectiveness_score;
+              });
+
+    if (static_cast<int>(all.size()) > limit) {
+        all.resize(limit);
+    }
+    return all;
+}
+
+// =============================================================================
+// Meta-learning
+// =============================================================================
+
+void MetaTaskMemory::learnFromOutcome(
+    const std::string& /*session_id*/,
+    const std::vector<std::string>& used_pattern_ids,
+    const std::vector<std::string>& used_strategy_ids,
+    double outcome_score
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    for (const auto& pid : used_pattern_ids) {
+        auto it = patterns_.find(pid);
+        if (it != patterns_.end()) {
+            auto& pattern = it->second;
+            pattern.occurrence_count++;
+            double alpha = 0.1;
+            pattern.confidence = alpha * outcome_score + (1 - alpha) * pattern.confidence;
+        }
+    }
+
+    for (const auto& sid : used_strategy_ids) {
+        auto it = strategies_.find(sid);
+        if (it != strategies_.end()) {
+            auto& strategy = it->second;
+            strategy.use_count++;
+            double alpha = 0.1;
+            strategy.effectiveness_score = alpha * outcome_score + (1 - alpha) * strategy.effectiveness_score;
+        }
+    }
+}
+
+size_t MetaTaskMemory::consolidatePatterns() {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    size_t removed = 0;
+    auto it = patterns_.begin();
+    while (it != patterns_.end()) {
+        // Remove patterns with very low confidence and enough data
+        if (it->second.occurrence_count >= 10 && it->second.confidence < 0.1) {
+            it = patterns_.erase(it);
+            removed++;
+        } else {
+            ++it;
+        }
+    }
+    return removed;
+}
+
+// =============================================================================
+// Persistence
+// =============================================================================
+
+void MetaTaskMemory::persist() {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (config_.storage_path.empty()) return;
+
+    try {
+        std::string path = config_.storage_path + "/mtm_data.bin";
+        std::ofstream out(path, std::ios::binary);
+        if (!out.is_open()) return;
+
+        // Simple serialization: pattern count + strategies count
+        size_t pattern_count = patterns_.size();
+        size_t strategy_count = strategies_.size();
+        out.write(reinterpret_cast<const char*>(&pattern_count), sizeof(pattern_count));
+        out.write(reinterpret_cast<const char*>(&strategy_count), sizeof(strategy_count));
+
+        for (const auto& [id, p] : patterns_) {
+            size_t len = id.size();
+            out.write(reinterpret_cast<const char*>(&len), sizeof(len));
+            out.write(id.data(), len);
+            out.write(reinterpret_cast<const char*>(&p.confidence), sizeof(p.confidence));
+            out.write(reinterpret_cast<const char*>(&p.occurrence_count), sizeof(p.occurrence_count));
+        }
+
+        for (const auto& [id, s] : strategies_) {
+            size_t len = id.size();
+            out.write(reinterpret_cast<const char*>(&len), sizeof(len));
+            out.write(id.data(), len);
+            out.write(reinterpret_cast<const char*>(&s.effectiveness_score), sizeof(s.effectiveness_score));
+            out.write(reinterpret_cast<const char*>(&s.use_count), sizeof(s.use_count));
+        }
+    } catch (...) {
+        // Ignore persistence errors
+    }
+}
+
+void MetaTaskMemory::load() {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    if (config_.storage_path.empty()) return;
+
+    // TODO: implement deserialization matching persist()
+}
+
+// =============================================================================
+// Private Helpers
+// =============================================================================
+
+void MetaTaskMemory::rebuildPatternIndex() {
+    // TODO: rebuild FAISS index for pattern embeddings
 }
 
 } // namespace aipr

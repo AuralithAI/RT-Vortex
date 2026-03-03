@@ -7,10 +7,12 @@
 #include "tms/compute_controller.h"
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <numeric>
 #include <random>
 #include <sstream>
 #include <regex>
+#include <unordered_set>
 
 namespace aipr::tms {
 
@@ -372,7 +374,7 @@ ComputeController::LearnedAdjustments ComputeController::getLearnedAdjustments()
     LearnedAdjustments adj;
     adj.fast_threshold_adjustment = learned_fast_threshold_;
     adj.balanced_threshold_adjustment = learned_balanced_threshold_;
-    adj.intent_to_strategy_bias = intent_bias_;
+    adj.intent_to_strategy_bias.insert(intent_bias_.begin(), intent_bias_.end());
     return adj;
 }
 

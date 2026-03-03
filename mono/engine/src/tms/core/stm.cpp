@@ -10,6 +10,7 @@
 #include <functional>
 #include <sstream>
 #include <iomanip>
+#include <cmath>
 
 namespace aipr::tms {
 

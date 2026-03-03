@@ -115,7 +115,7 @@ struct StorageConfig {
 /**
  * Progress callback for upload/download operations
  */
-using ProgressCallback = std::function<void(size_t bytes_transferred, size_t total_bytes)>;
+using StorageProgressCallback = std::function<void(size_t bytes_transferred, size_t total_bytes)>;
 
 /**
  * Abstract storage backend interface
@@ -262,7 +262,7 @@ public:
     virtual StorageResult writeWithProgress(
         const std::string& key,
         const std::string& content,
-        ProgressCallback progress,
+        StorageProgressCallback progress,
         const std::string& content_type = "application/octet-stream"
     ) = 0;
     
@@ -271,7 +271,7 @@ public:
      */
     virtual std::optional<std::string> readWithProgress(
         const std::string& key,
-        ProgressCallback progress
+        StorageProgressCallback progress
     ) = 0;
     
     // =========================================================================
@@ -353,13 +353,13 @@ public:
     StorageResult writeWithProgress(
         const std::string& key,
         const std::string& content,
-        ProgressCallback progress,
+        StorageProgressCallback progress,
         const std::string& content_type
     ) override;
     
     std::optional<std::string> readWithProgress(
         const std::string& key,
-        ProgressCallback progress
+        StorageProgressCallback progress
     ) override;
 
 private:
@@ -427,13 +427,13 @@ public:
     StorageResult writeWithProgress(
         const std::string& key,
         const std::string& content,
-        ProgressCallback progress,
+        StorageProgressCallback progress,
         const std::string& content_type
     ) override;
     
     std::optional<std::string> readWithProgress(
         const std::string& key,
-        ProgressCallback progress
+        StorageProgressCallback progress
     ) override;
     
     /**

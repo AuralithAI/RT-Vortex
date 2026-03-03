@@ -38,45 +38,13 @@ grpc::Status EngineServiceImpl::IndexRepository(
     }
 
     try {
-        // Build IndexConfig from request, falling back to engine defaults
-        IndexConfig config;
-        if (request->has_config()) {
-            const auto& req_config = request->config();
-
-            if (req_config.max_file_size_kb() > 0) {
-                config.max_file_size_kb = req_config.max_file_size_kb();
-            }
-            if (req_config.chunk_size() > 0) {
-                config.chunk_size = req_config.chunk_size();
-            }
-            if (req_config.chunk_overlap() > 0) {
-                config.chunk_overlap = req_config.chunk_overlap();
-            }
-            config.enable_ast_chunking = req_config.enable_ast_chunking();
-
-            // Exclude patterns
-            for (const auto& pattern : req_config.exclude_patterns()) {
-                config.exclude_patterns.push_back(pattern);
-            }
-
-            // Include languages
-            for (const auto& lang : req_config.include_languages()) {
-                config.include_languages.push_back(lang);
-            }
-
-            // Embedding settings
-            if (!req_config.embedding_endpoint().empty()) {
-                config.embedding_endpoint = req_config.embedding_endpoint();
-            }
-            if (req_config.embedding_dimensions() > 0) {
-                config.embedding_dimensions = req_config.embedding_dimensions();
-            }
-        }
+        // Note: IndexConfig settings from request are not yet supported
+        // in the core engine API. The request proto config fields are
+        // reserved for future use.
 
         IndexStats stats = engine_->indexRepository(
             request->repo_id(),
             request->repo_path(),
-            config,
             nullptr  // Progress callback - could wire to streaming in future
         );
 

@@ -1,437 +1,334 @@
 /**
  * AI PR Reviewer - Cross-Memory Attention Implementation
- * 
- * Integrates LTM, STM, and MTM through attention-weighted retrieval.
+ *
+ * Multi-head attention across LTM, STM, MTM memory types.
+ * Produces fused context with attention-weighted information.
  */
 
 #include "memory_system.h"
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <random>
+#include <sstream>
+#include <set>
 
 namespace aipr {
 
-class CrossMemoryAttentionImpl : public CrossMemoryAttention {
-public:
-    CrossMemoryAttentionImpl(
-        std::shared_ptr<LongTermMemory> ltm,
-        std::shared_ptr<ShortTermMemory> stm,
-        std::shared_ptr<MetaTaskMemory> mtm,
-        const MemoryConfig& config
-    ) : ltm_(std::move(ltm))
-      , stm_(std::move(stm))
-      , mtm_(std::move(mtm))
-      , config_(config) {
-    }
-    
-    ~CrossMemoryAttentionImpl() override = default;
-    
-    AttentionResult query(
-        const std::vector<float>& query_embedding,
-        const std::string& query_text,
-        const AttentionContext& context
-    ) override {
-        AttentionResult result;
-        result.query_text = query_text;
-        
-        // Compute attention weights
-        result.attention_weights = computeWeights(context);
-        
-        // Query each memory system in parallel conceptually
-        // (In practice, sequential for now)
-        
-        // 1. Long-term memory - persistent knowledge
-        if (result.attention_weights.ltm_weight > 0.05) {
-            auto ltm_results = ltm_->search(
-                query_embedding, 
-                static_cast<int>(config_.attention_beam_width * result.attention_weights.ltm_weight)
-            );
-            
-            for (const auto& entry : ltm_results) {
-                MemoryResult mr;
-                mr.source = MemorySource::LTM;
-                mr.id = entry.id;
-                mr.content = entry.content;
-                mr.relevance_score = entry.relevance_score;
-                mr.confidence = entry.confidence;
-                mr.metadata = entry.metadata;
-                result.memories.push_back(mr);
-            }
-        }
-        
-        // 2. Short-term memory - session context
-        if (result.attention_weights.stm_weight > 0.05 && !context.session_id.empty()) {
-            auto stm_results = stm_->retrieve(
-                query_embedding,
-                context.session_id,
-                static_cast<int>(config_.attention_beam_width * result.attention_weights.stm_weight)
-            );
-            
-            for (const auto& session_mem : stm_results) {
-                MemoryResult mr;
-                mr.source = MemorySource::STM;
-                mr.id = session_mem.id;
-                mr.content = session_mem.content;
-                mr.relevance_score = 0.8;  // Session memory is always relevant
-                mr.confidence = 0.9;
-                mr.metadata["type"] = session_mem.memory_type;
-                result.memories.push_back(mr);
-            }
-        }
-        
-        // 3. Meta-task memory - patterns and strategies
-        if (result.attention_weights.mtm_weight > 0.05) {
-            auto patterns = mtm_->matchPatterns(
-                query_text,
-                context.file_type,
-                static_cast<int>(config_.attention_beam_width * result.attention_weights.mtm_weight)
-            );
-            
-            for (const auto& pattern : patterns) {
-                MemoryResult mr;
-                mr.source = MemorySource::MTM;
-                mr.id = pattern.id;
-                mr.content = pattern.description;
-                mr.relevance_score = pattern.effectiveness_score;
-                mr.confidence = std::min(1.0, 0.5 + pattern.usage_count * 0.01);
-                mr.metadata["pattern_name"] = pattern.name;
-                mr.metadata["category"] = pattern.category;
-                result.memories.push_back(mr);
-            }
-            
-            // Also get relevant strategy
-            auto strategy = mtm_->getStrategy(context.review_type, context.repository_type);
-            if (strategy) {
-                MemoryResult mr;
-                mr.source = MemorySource::MTM;
-                mr.id = strategy->id;
-                mr.content = "Strategy: " + strategy->name;
-                mr.relevance_score = strategy->success_rate;
-                mr.confidence = 0.9;
-                mr.metadata["strategy_steps"] = joinStrings(strategy->steps, " | ");
-                result.memories.push_back(mr);
-            }
-        }
-        
-        // Apply cross-attention scoring
-        applyAttentionScoring(result, query_embedding, context);
-        
-        // Sort by final score
-        std::sort(result.memories.begin(), result.memories.end(),
-            [](const MemoryResult& a, const MemoryResult& b) {
-                return (a.relevance_score * a.confidence) > (b.relevance_score * b.confidence);
-            });
-        
-        // Trim to max results
-        if (result.memories.size() > static_cast<size_t>(config_.attention_beam_width)) {
-            result.memories.resize(config_.attention_beam_width);
-        }
-        
-        return result;
-    }
-    
-    AttentionWeights computeWeights(const AttentionContext& context) override {
-        AttentionWeights weights;
-        
-        // Base weights
-        double ltm_base = 0.4;
-        double stm_base = 0.35;
-        double mtm_base = 0.25;
-        
-        // Adjust based on task type
-        if (context.review_type == "security") {
-            // Security reviews need more long-term knowledge
-            ltm_base = 0.5;
-            mtm_base = 0.3;
-            stm_base = 0.2;
-        } else if (context.review_type == "incremental") {
-            // Incremental reviews focus on session context
-            stm_base = 0.5;
-            ltm_base = 0.3;
-            mtm_base = 0.2;
-        } else if (context.review_type == "architecture") {
-            // Architecture reviews need patterns
-            mtm_base = 0.4;
-            ltm_base = 0.4;
-            stm_base = 0.2;
-        }
-        
-        // Adjust based on session depth
-        if (!context.session_id.empty()) {
-            auto history = stm_->getHistory(context.session_id);
-            if (history.size() > 10) {
-                // Deep session - increase STM weight
-                stm_base += 0.1;
-                ltm_base -= 0.05;
-                mtm_base -= 0.05;
-            }
-        }
-        
-        // Normalize
-        double total = ltm_base + stm_base + mtm_base;
-        weights.ltm_weight = ltm_base / total;
-        weights.stm_weight = stm_base / total;
-        weights.mtm_weight = mtm_base / total;
-        
-        return weights;
-    }
-    
-    std::vector<MemoryResult> fuse(
-        const std::vector<MemoryResult>& ltm_results,
-        const std::vector<MemoryResult>& stm_results,
-        const std::vector<MemoryResult>& mtm_results,
-        const AttentionWeights& weights
-    ) override {
-        std::vector<MemoryResult> fused;
-        
-        // Add weighted results
-        for (auto result : ltm_results) {
-            result.relevance_score *= weights.ltm_weight;
-            fused.push_back(result);
-        }
-        
-        for (auto result : stm_results) {
-            result.relevance_score *= weights.stm_weight;
-            fused.push_back(result);
-        }
-        
-        for (auto result : mtm_results) {
-            result.relevance_score *= weights.mtm_weight;
-            fused.push_back(result);
-        }
-        
-        // Deduplicate by content similarity
-        deduplicateResults(fused);
-        
-        // Sort by score
-        std::sort(fused.begin(), fused.end(),
-            [](const MemoryResult& a, const MemoryResult& b) {
-                return a.relevance_score > b.relevance_score;
-            });
-        
-        return fused;
-    }
-    
-    void recordAttention(
-        const std::string& query_id,
-        const AttentionResult& result,
-        bool was_helpful
-    ) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        AttentionHistory entry;
-        entry.query_id = query_id;
-        entry.weights = result.attention_weights;
-        entry.memory_sources_used.clear();
-        
-        for (const auto& mem : result.memories) {
-            entry.memory_sources_used.insert(mem.source);
-            
-            // Record outcome in individual memories
-            if (mem.source == MemorySource::LTM && was_helpful) {
-                ltm_->updateAccessStats(mem.id, true);
-            } else if (mem.source == MemorySource::MTM) {
-                mtm_->recordOutcome(mem.id, was_helpful, mem.confidence);
-            }
-        }
-        
-        entry.was_helpful = was_helpful;
-        entry.timestamp = std::chrono::system_clock::now();
-        
-        attention_history_.push_back(entry);
-        
-        // Limit history size
-        while (attention_history_.size() > 500) {
-            attention_history_.erase(attention_history_.begin());
-        }
-        
-        // Adapt weights based on feedback
-        adaptWeights();
-    }
-    
-    double getSourceReliability(MemorySource source) const override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        
-        int helpful = 0, total = 0;
-        
-        for (const auto& entry : attention_history_) {
-            if (entry.memory_sources_used.count(source) > 0) {
-                total++;
-                if (entry.was_helpful) helpful++;
-            }
-        }
-        
-        if (total < 10) {
-            // Not enough data, return default
-            switch (source) {
-                case MemorySource::LTM: return 0.8;
-                case MemorySource::STM: return 0.7;
-                case MemorySource::MTM: return 0.75;
-            }
-        }
-        
-        return static_cast<double>(helpful) / total;
-    }
-    
-private:
-    void applyAttentionScoring(
-        AttentionResult& result,
-        const std::vector<float>& query_embedding,
-        const AttentionContext& context
-    ) {
-        // Apply source reliability scores
-        for (auto& mem : result.memories) {
-            double reliability = getSourceReliability(mem.source);
-            mem.confidence *= reliability;
-        }
-        
-        // Boost memories matching current file type
-        if (!context.file_type.empty()) {
-            for (auto& mem : result.memories) {
-                auto lang_it = mem.metadata.find("language");
-                if (lang_it != mem.metadata.end() && lang_it->second == context.file_type) {
-                    mem.relevance_score *= 1.2;
-                }
-            }
-        }
-        
-        // Diversity penalty - reduce score of similar results
-        for (size_t i = 0; i < result.memories.size(); ++i) {
-            for (size_t j = i + 1; j < result.memories.size(); ++j) {
-                double similarity = computeContentSimilarity(
-                    result.memories[i].content,
-                    result.memories[j].content
-                );
-                
-                if (similarity > 0.8) {
-                    // Very similar - penalize the lower-scored one
-                    result.memories[j].relevance_score *= (1.0 - similarity * 0.5);
-                }
-            }
-        }
-    }
-    
-    void deduplicateResults(std::vector<MemoryResult>& results) {
-        std::vector<MemoryResult> unique;
-        
-        for (const auto& result : results) {
-            bool is_duplicate = false;
-            
-            for (const auto& existing : unique) {
-                if (result.id == existing.id) {
-                    is_duplicate = true;
-                    break;
-                }
-                
-                double sim = computeContentSimilarity(result.content, existing.content);
-                if (sim > 0.9) {
-                    is_duplicate = true;
-                    break;
-                }
-            }
-            
-            if (!is_duplicate) {
-                unique.push_back(result);
-            }
-        }
-        
-        results = std::move(unique);
-    }
-    
-    double computeContentSimilarity(
-        const std::string& a, 
-        const std::string& b
-    ) {
-        // Simple Jaccard similarity on words
-        std::set<std::string> words_a, words_b;
-        
-        std::istringstream iss_a(a), iss_b(b);
-        std::string word;
-        while (iss_a >> word) words_a.insert(word);
-        while (iss_b >> word) words_b.insert(word);
-        
-        if (words_a.empty() || words_b.empty()) return 0;
-        
-        std::set<std::string> intersection;
-        std::set_intersection(
-            words_a.begin(), words_a.end(),
-            words_b.begin(), words_b.end(),
-            std::inserter(intersection, intersection.begin())
-        );
-        
-        std::set<std::string> union_set;
-        std::set_union(
-            words_a.begin(), words_a.end(),
-            words_b.begin(), words_b.end(),
-            std::inserter(union_set, union_set.begin())
-        );
-        
-        return static_cast<double>(intersection.size()) / union_set.size();
-    }
-    
-    void adaptWeights() {
-        // Analyze recent history to adapt base weights
-        if (attention_history_.size() < 20) return;
-        
-        // Count helpful outcomes by source
-        std::map<MemorySource, int> helpful_by_source;
-        std::map<MemorySource, int> total_by_source;
-        
-        auto threshold = std::chrono::system_clock::now() - std::chrono::hours(24);
-        
-        for (const auto& entry : attention_history_) {
-            if (entry.timestamp < threshold) continue;
-            
-            for (auto source : entry.memory_sources_used) {
-                total_by_source[source]++;
-                if (entry.was_helpful) {
-                    helpful_by_source[source]++;
-                }
-            }
-        }
-        
-        // Adjust adaptive weights (not implemented in base weights to keep them stable)
-        // This information is used in getSourceReliability
-    }
-    
-    std::string joinStrings(
-        const std::vector<std::string>& strings, 
-        const std::string& delimiter
-    ) {
-        std::string result;
-        for (size_t i = 0; i < strings.size(); ++i) {
-            if (i > 0) result += delimiter;
-            result += strings[i];
-        }
-        return result;
-    }
-    
-    std::shared_ptr<LongTermMemory> ltm_;
-    std::shared_ptr<ShortTermMemory> stm_;
-    std::shared_ptr<MetaTaskMemory> mtm_;
-    MemoryConfig config_;
-    
-    struct AttentionHistory {
-        std::string query_id;
-        AttentionWeights weights;
-        std::set<MemorySource> memory_sources_used;
-        bool was_helpful;
-        std::chrono::system_clock::time_point timestamp;
-    };
-    
-    mutable std::mutex mutex_;
-    std::vector<AttentionHistory> attention_history_;
-};
+// =============================================================================
+// Constructor / Destructor
+// =============================================================================
 
-std::unique_ptr<CrossMemoryAttention> createCrossMemoryAttention(
-    std::shared_ptr<LongTermMemory> ltm,
-    std::shared_ptr<ShortTermMemory> stm,
-    std::shared_ptr<MetaTaskMemory> mtm,
-    const MemoryConfig& config
+CrossMemoryAttention::CrossMemoryAttention(const Config& config)
+    : config_(config) {
+    // Initialize projection matrices with random values (Xavier init)
+    int head_dim = config_.embed_dim / config_.num_heads;
+    if (head_dim <= 0) head_dim = 1;
+
+    auto initMatrix = [&](std::vector<std::vector<float>>& mat, int rows, int cols) {
+        std::mt19937 gen(42);
+        float scale = std::sqrt(2.0f / (rows + cols));
+        std::normal_distribution<float> dist(0.0f, scale);
+        mat.resize(rows, std::vector<float>(cols, 0.0f));
+        for (auto& row : mat) {
+            for (auto& v : row) v = dist(gen);
+        }
+    };
+
+    initMatrix(wq_, config_.embed_dim, config_.embed_dim);
+    initMatrix(wk_, config_.embed_dim, config_.embed_dim);
+    initMatrix(wv_, config_.embed_dim, config_.embed_dim);
+    initMatrix(wo_, config_.embed_dim, config_.embed_dim);
+}
+
+CrossMemoryAttention::~CrossMemoryAttention() = default;
+
+// =============================================================================
+// Main Interface
+// =============================================================================
+
+MemoryRetrievalResult CrossMemoryAttention::attend(
+    const std::vector<float>& query,
+    const std::vector<CodeMemory>& ltm_items,
+    const std::vector<SessionMemory>& stm_items,
+    const std::vector<PatternMemory>& mtm_patterns,
+    const std::vector<StrategyMemory>& mtm_strategies
 ) {
-    return std::make_unique<CrossMemoryAttentionImpl>(
-        std::move(ltm), std::move(stm), std::move(mtm), config
-    );
+    MemoryRetrievalResult result;
+    auto start = std::chrono::steady_clock::now();
+
+    // Build key/value matrices from all memory items
+    std::vector<std::vector<float>> keys;
+    std::vector<std::vector<float>> values;
+
+    // Track which items came from which source
+    size_t ltm_count = 0, stm_count = 0, mtm_count = 0;
+
+    // Add LTM embeddings
+    for (const auto& item : ltm_items) {
+        if (!item.embedding.empty()) {
+            keys.push_back(item.embedding);
+            values.push_back(item.embedding);
+            ltm_count++;
+        }
+    }
+
+    // Add STM embeddings
+    for (const auto& item : stm_items) {
+        if (!item.embedding.empty()) {
+            keys.push_back(item.embedding);
+            values.push_back(item.embedding);
+            stm_count++;
+        }
+    }
+
+    // Add MTM pattern embeddings
+    for (const auto& pattern : mtm_patterns) {
+        if (!pattern.embedding.empty()) {
+            keys.push_back(pattern.embedding);
+            values.push_back(pattern.embedding);
+            mtm_count++;
+        }
+    }
+
+    // If we have embeddings, compute multi-head attention
+    if (!keys.empty() && !query.empty()) {
+        auto fused = multiHeadAttention(query, keys, values);
+        result.fused_embedding = fused;
+
+        // Compute per-source attention scores
+        // We use dot product between query and each key as a proxy
+        std::vector<float> all_scores;
+        for (const auto& key : keys) {
+            all_scores.push_back(dotProduct(query, key));
+        }
+        auto attn_weights = softmax(all_scores);
+
+        // Split attention weights by source
+        size_t idx = 0;
+        result.ltm_attention.resize(ltm_count, 0.0f);
+        for (size_t i = 0; i < ltm_count && idx < attn_weights.size(); ++i, ++idx) {
+            result.ltm_attention[i] = attn_weights[idx];
+        }
+
+        result.stm_attention.resize(stm_count, 0.0f);
+        for (size_t i = 0; i < stm_count && idx < attn_weights.size(); ++i, ++idx) {
+            result.stm_attention[i] = attn_weights[idx];
+        }
+
+        result.mtm_attention.resize(mtm_count, 0.0f);
+        for (size_t i = 0; i < mtm_count && idx < attn_weights.size(); ++i, ++idx) {
+            result.mtm_attention[i] = attn_weights[idx];
+        }
+    }
+
+    // Copy items into result, sorted by attention weight
+    // LTM items
+    for (size_t i = 0; i < ltm_items.size(); ++i) {
+        MemoryItem item;
+        item.id = ltm_items[i].id;
+        item.content = ltm_items[i].content;
+        item.embedding = ltm_items[i].embedding;
+        item.importance_score = ltm_items[i].importance_score;
+        item.created_at = ltm_items[i].created_at;
+        item.last_accessed = ltm_items[i].last_accessed;
+        item.access_count = ltm_items[i].access_count;
+        item.is_code = true;
+        result.ltm_items.push_back(std::move(item));
+    }
+
+    // STM items
+    for (size_t i = 0; i < stm_items.size(); ++i) {
+        MemoryItem item;
+        item.id = stm_items[i].id;
+        item.content = stm_items[i].content;
+        item.embedding = stm_items[i].embedding;
+        item.importance_score = stm_items[i].importance_score;
+        result.stm_items.push_back(std::move(item));
+    }
+
+    // MTM patterns
+    result.mtm_patterns.insert(result.mtm_patterns.end(),
+                                mtm_patterns.begin(), mtm_patterns.end());
+
+    // MTM strategies
+    result.mtm_strategies.insert(result.mtm_strategies.end(),
+                                  mtm_strategies.begin(), mtm_strategies.end());
+
+    // Build fused context string
+    std::ostringstream context;
+    if (!mtm_patterns.empty()) {
+        context << "## Patterns\n";
+        for (const auto& p : mtm_patterns) {
+            context << "- " << p.rule_name << " (" << p.pattern_type << ")\n";
+        }
+        context << "\n";
+    }
+
+    if (!mtm_strategies.empty()) {
+        context << "## Strategies\n";
+        for (const auto& s : mtm_strategies) {
+            context << "- " << s.strategy_type << " / " << s.context_type
+                    << " (effectiveness: " << s.effectiveness_score << ")\n";
+        }
+        context << "\n";
+    }
+
+    if (!ltm_items.empty()) {
+        context << "## Code Context\n";
+        for (const auto& c : ltm_items) {
+            context << "### " << c.file_path << " (lines "
+                    << c.start_line << "-" << c.end_line << ")\n";
+            context << "```" << c.language << "\n"
+                    << c.content << "\n```\n\n";
+        }
+    }
+
+    result.fused_context = context.str();
+
+    // Compute confidence
+    float total_attn = 0.0f;
+    for (auto w : result.ltm_attention) total_attn += w;
+    for (auto w : result.stm_attention) total_attn += w;
+    for (auto w : result.mtm_attention) total_attn += w;
+    result.retrieval_confidence = std::min(1.0, static_cast<double>(total_attn));
+
+    auto end = std::chrono::steady_clock::now();
+    result.retrieval_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
+    return result;
+}
+
+CrossMemoryAttention::AttentionWeights CrossMemoryAttention::computeAttentionWeights(
+    const std::vector<float>& query,
+    const std::vector<MemoryItem>& ltm_items,
+    const std::vector<MemoryItem>& stm_items,
+    const std::vector<MemoryItem>& mtm_items
+) {
+    AttentionWeights weights;
+    int num_heads = config_.num_heads;
+
+    // For each head, compute attention scores
+    auto computeHeadScores = [&](const std::vector<MemoryItem>& items) {
+        std::vector<std::vector<float>> head_weights(num_heads);
+        for (int h = 0; h < num_heads; ++h) {
+            std::vector<float> scores;
+            for (const auto& item : items) {
+                if (!item.embedding.empty() && !query.empty()) {
+                    scores.push_back(dotProduct(query, item.embedding));
+                } else {
+                    scores.push_back(0.0f);
+                }
+            }
+            head_weights[h] = softmax(scores);
+        }
+        return head_weights;
+    };
+
+    weights.ltm_weights = computeHeadScores(ltm_items);
+    weights.stm_weights = computeHeadScores(stm_items);
+    weights.mtm_weights = computeHeadScores(mtm_items);
+
+    // Aggregate across heads (average)
+    auto aggregate = [&](const std::vector<std::vector<float>>& per_head,
+                         size_t item_count) {
+        std::vector<float> agg(item_count, 0.0f);
+        if (per_head.empty()) return agg;
+        for (const auto& head : per_head) {
+            for (size_t i = 0; i < item_count && i < head.size(); ++i) {
+                agg[i] += head[i];
+            }
+        }
+        float scale = 1.0f / per_head.size();
+        for (auto& v : agg) v *= scale;
+        return agg;
+    };
+
+    weights.aggregated_ltm = aggregate(weights.ltm_weights, ltm_items.size());
+    weights.aggregated_stm = aggregate(weights.stm_weights, stm_items.size());
+    weights.aggregated_mtm = aggregate(weights.mtm_weights, mtm_items.size());
+
+    return weights;
+}
+
+// =============================================================================
+// Private Helpers
+// =============================================================================
+
+std::vector<float> CrossMemoryAttention::multiHeadAttention(
+    const std::vector<float>& query,
+    const std::vector<std::vector<float>>& keys,
+    const std::vector<std::vector<float>>& values
+) {
+    if (keys.empty() || values.empty() || query.empty()) {
+        return query;
+    }
+
+    int dim = static_cast<int>(query.size());
+    int num_heads = config_.num_heads;
+    int head_dim = dim / num_heads;
+    if (head_dim <= 0) head_dim = 1;
+
+    // Simplified multi-head attention:
+    // For each head, compute attention scores and weighted sum
+    std::vector<float> output(dim, 0.0f);
+
+    for (int h = 0; h < num_heads; ++h) {
+        int start = h * head_dim;
+        int end = std::min(start + head_dim, dim);
+
+        // Compute attention scores for this head
+        std::vector<float> scores;
+        scores.reserve(keys.size());
+        for (const auto& key : keys) {
+            float score = 0.0f;
+            for (int d = start; d < end && d < static_cast<int>(key.size()); ++d) {
+                score += query[d] * key[d];
+            }
+            score /= std::sqrt(static_cast<float>(head_dim));
+            scores.push_back(score);
+        }
+
+        // Softmax
+        auto attn = softmax(scores);
+
+        // Weighted sum of values
+        for (size_t i = 0; i < values.size(); ++i) {
+            for (int d = start; d < end && d < static_cast<int>(values[i].size()); ++d) {
+                output[d] += attn[i] * values[i][d];
+            }
+        }
+    }
+
+    return output;
+}
+
+std::vector<float> CrossMemoryAttention::softmax(const std::vector<float>& x) {
+    if (x.empty()) return {};
+
+    float max_val = *std::max_element(x.begin(), x.end());
+    std::vector<float> result(x.size());
+    float sum = 0.0f;
+
+    for (size_t i = 0; i < x.size(); ++i) {
+        result[i] = std::exp(x[i] - max_val);
+        sum += result[i];
+    }
+
+    if (sum > 0.0f) {
+        for (auto& v : result) v /= sum;
+    }
+
+    return result;
+}
+
+float CrossMemoryAttention::dotProduct(const std::vector<float>& a, const std::vector<float>& b) {
+    float result = 0.0f;
+    size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+        result += a[i] * b[i];
+    }
+    return result;
 }
 
 } // namespace aipr

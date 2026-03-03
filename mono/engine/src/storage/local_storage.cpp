@@ -11,6 +11,7 @@
 #include <chrono>
 #include <algorithm>
 #include <cstring>
+#include <set>
 
 namespace fs = std::filesystem;
 
@@ -304,7 +305,7 @@ std::optional<std::string> LocalStorageBackend::getPresignedUrl(
 StorageResult LocalStorageBackend::writeWithProgress(
     const std::string& key,
     const std::string& content,
-    ProgressCallback progress,
+    StorageProgressCallback progress,
     const std::string& content_type
 ) {
     std::string path = resolvePath(key);
@@ -339,7 +340,7 @@ StorageResult LocalStorageBackend::writeWithProgress(
 
 std::optional<std::string> LocalStorageBackend::readWithProgress(
     const std::string& key,
-    ProgressCallback progress
+    StorageProgressCallback progress
 ) {
     std::string path = resolvePath(key);
     

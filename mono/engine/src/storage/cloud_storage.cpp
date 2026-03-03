@@ -139,7 +139,7 @@ static size_t curlHeaderCallback(char* buffer, size_t size, size_t nitems, void*
 }
 
 struct CurlProgressData {
-    ProgressCallback callback;
+    StorageProgressCallback callback;
     size_t total_size;
 };
 
@@ -1073,7 +1073,7 @@ std::optional<std::string> CloudStorageBackend::getPresignedUrl(
 StorageResult CloudStorageBackend::writeWithProgress(
     const std::string& key,
     const std::string& content,
-    ProgressCallback progress,
+    StorageProgressCallback progress,
     const std::string& content_type
 ) {
     // For now, just call write - progress tracking would need multipart upload
@@ -1092,7 +1092,7 @@ StorageResult CloudStorageBackend::writeWithProgress(
 
 std::optional<std::string> CloudStorageBackend::readWithProgress(
     const std::string& key,
-    ProgressCallback progress
+    StorageProgressCallback progress
 ) {
     // For now, just call read - progress tracking would need range requests
     auto info = head(key);

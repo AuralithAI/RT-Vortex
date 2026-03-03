@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <mutex>
 #include <functional>
 #include <chrono>
 
@@ -282,13 +283,20 @@ public:
         // MTM updates
         bool update_mtm = true;
         bool detect_patterns = true;
+
+        Config() = default;
     };
     
     EmbeddingIngestor(
         EmbeddingEngine& embedding_engine,
         LTMFaiss& ltm,
-        MTMGraph* mtm = nullptr,
-        const Config& config = Config{}
+        MTMGraph* mtm = nullptr
+    );
+    EmbeddingIngestor(
+        EmbeddingEngine& embedding_engine,
+        LTMFaiss& ltm,
+        MTMGraph* mtm,
+        const Config& config
     );
     ~EmbeddingIngestor();
     

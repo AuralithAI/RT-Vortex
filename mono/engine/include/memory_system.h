@@ -31,11 +31,13 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <map>
 #include <unordered_map>
 #include <chrono>
 #include <functional>
 #include <optional>
 #include <mutex>
+#include <thread>
 #include <queue>
 #include <atomic>
 
