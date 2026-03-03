@@ -13,8 +13,10 @@
 #include <iomanip>
 #include <unordered_map>
 #include <unordered_set>
+#include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
+using json = nlohmann::json;
 
 namespace aipr {
 
@@ -54,50 +56,77 @@ public:
             return manifest;
         }
         
-        // Simple line-based format for now
-        // TODO: Use proper JSON serialization
-        std::string line;
-        
-        // Header
-        if (std::getline(file, line)) manifest.version = line;
-        if (std::getline(file, line)) manifest.commit_sha = line;
-        if (std::getline(file, line)) manifest.created_at = line;
-        if (std::getline(file, line)) manifest.updated_at = line;
-        
-        // Entries
-        while (std::getline(file, line)) {
-            ManifestEntry entry;
-            std::istringstream ss(line);
-            std::string chunk_ids_str;
+        try {
+            json j = json::parse(file);
             
-            std::getline(ss, entry.file_path, '\t');
-            std::getline(ss, entry.blob_sha, '\t');
-            std::getline(ss, entry.language, '\t');
+            manifest.version = j.value("version", "");
+            manifest.commit_sha = j.value("commit_sha", "");
+            manifest.created_at = j.value("created_at", "");
+            manifest.updated_at = j.value("updated_at", "");
             
-            std::string size_str;
-            std::getline(ss, size_str, '\t');
-            entry.size_bytes = std::stoull(size_str);
-            
-            std::getline(ss, entry.last_indexed, '\t');
-            std::getline(ss, chunk_ids_str, '\t');
-            
-            // Parse chunk IDs
-            std::istringstream chunk_ss(chunk_ids_str);
-            std::string chunk_id;
-            while (std::getline(chunk_ss, chunk_id, ',')) {
-                if (!chunk_id.empty()) {
-                    entry.chunk_ids.push_back(chunk_id);
+            if (j.contains("entries") && j["entries"].is_array()) {
+                for (const auto& je : j["entries"]) {
+                    ManifestEntry entry;
+                    entry.file_path = je.value("file_path", "");
+                    entry.blob_sha = je.value("blob_sha", "");
+                    entry.language = je.value("language", "");
+                    entry.size_bytes = je.value("size_bytes", static_cast<size_t>(0));
+                    entry.last_indexed = je.value("last_indexed", "");
+                    
+                    if (je.contains("chunk_ids") && je["chunk_ids"].is_array()) {
+                        for (const auto& cid : je["chunk_ids"]) {
+                            entry.chunk_ids.push_back(cid.get<std::string>());
+                        }
+                    }
+                    
+                    manifest.entries.push_back(std::move(entry));
                 }
             }
+        } catch (const json::exception&) {
+            // If JSON parsing fails, try legacy line-based format for backwards compatibility
+            file.clear();
+            file.seekg(0);
             
-            manifest.entries.push_back(entry);
+            std::string line;
+            if (std::getline(file, line)) manifest.version = line;
+            if (std::getline(file, line)) manifest.commit_sha = line;
+            if (std::getline(file, line)) manifest.created_at = line;
+            if (std::getline(file, line)) manifest.updated_at = line;
+            
+            while (std::getline(file, line)) {
+                ManifestEntry entry;
+                std::istringstream ss(line);
+                std::string chunk_ids_str;
+                
+                std::getline(ss, entry.file_path, '\t');
+                std::getline(ss, entry.blob_sha, '\t');
+                std::getline(ss, entry.language, '\t');
+                
+                std::string size_str;
+                std::getline(ss, size_str, '\t');
+                try { entry.size_bytes = std::stoull(size_str); }
+                catch (...) { entry.size_bytes = 0; }
+                
+                std::getline(ss, entry.last_indexed, '\t');
+                std::getline(ss, chunk_ids_str, '\t');
+                
+                std::istringstream chunk_ss(chunk_ids_str);
+                std::string chunk_id;
+                while (std::getline(chunk_ss, chunk_id, ',')) {
+                    if (!chunk_id.empty()) {
+                        entry.chunk_ids.push_back(chunk_id);
+                    }
+                }
+                
+                manifest.entries.push_back(std::move(entry));
+            }
         }
         
         return manifest;
     }
     
     /**
-     * Save manifest
+     * Save manifest (JSON format)
      */
     void save(const IndexManifest& manifest) {
         auto path = getManifestPath(manifest.repo_id);
@@ -105,32 +134,31 @@ public:
         // Ensure directory exists
         fs::create_directories(path.parent_path());
         
+        json j;
+        j["version"] = manifest.version;
+        j["repo_id"] = manifest.repo_id;
+        j["commit_sha"] = manifest.commit_sha;
+        j["created_at"] = manifest.created_at;
+        j["updated_at"] = manifest.updated_at;
+        
+        json entries_json = json::array();
+        for (const auto& entry : manifest.entries) {
+            json je;
+            je["file_path"] = entry.file_path;
+            je["blob_sha"] = entry.blob_sha;
+            je["language"] = entry.language;
+            je["size_bytes"] = entry.size_bytes;
+            je["last_indexed"] = entry.last_indexed;
+            je["chunk_ids"] = entry.chunk_ids;
+            entries_json.push_back(je);
+        }
+        j["entries"] = entries_json;
+        
         std::ofstream file(path);
         if (!file) {
             throw std::runtime_error("Failed to write manifest: " + path.string());
         }
-        
-        // Header
-        file << manifest.version << '\n';
-        file << manifest.commit_sha << '\n';
-        file << manifest.created_at << '\n';
-        file << manifest.updated_at << '\n';
-        
-        // Entries
-        for (const auto& entry : manifest.entries) {
-            file << entry.file_path << '\t'
-                 << entry.blob_sha << '\t'
-                 << entry.language << '\t'
-                 << entry.size_bytes << '\t'
-                 << entry.last_indexed << '\t';
-            
-            // Chunk IDs
-            for (size_t i = 0; i < entry.chunk_ids.size(); ++i) {
-                if (i > 0) file << ',';
-                file << entry.chunk_ids[i];
-            }
-            file << '\n';
-        }
+        file << j.dump(2);
     }
     
     /**

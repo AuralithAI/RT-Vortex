@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <queue>
 #include <numeric>
+#include <nlohmann/json.hpp>
 
 namespace aipr::tms {
 
@@ -696,8 +697,51 @@ size_t MTMGraph::consolidatePatterns() {
     
     // Merge similar patterns (if enabled)
     if (config_.enable_auto_merge) {
-        auto similar = findSimilarPatterns(PatternEntry{});  // Would need implementation
-        // TODO: Implement merging logic
+        // Find pairs of patterns that are very similar and merge them
+        std::vector<std::pair<std::string, std::string>> merge_pairs;
+        std::vector<std::string> pattern_ids;
+        for (const auto& [id, _] : patterns_) {
+            pattern_ids.push_back(id);
+        }
+
+        for (size_t i = 0; i < pattern_ids.size(); ++i) {
+            for (size_t j = i + 1; j < pattern_ids.size(); ++j) {
+                const auto& p1 = patterns_[pattern_ids[i]];
+                const auto& p2 = patterns_[pattern_ids[j]];
+
+                // Check if patterns are similar enough to merge:
+                // Same pattern_type, and if both have embeddings, high cosine similarity
+                if (p1.pattern_type == p2.pattern_type &&
+                    !p1.embedding.empty() && !p2.embedding.empty() &&
+                    p1.embedding.size() == p2.embedding.size()) {
+                    // Compute cosine similarity
+                    float dot = 0, n1 = 0, n2 = 0;
+                    for (size_t d = 0; d < p1.embedding.size(); ++d) {
+                        dot += p1.embedding[d] * p2.embedding[d];
+                        n1 += p1.embedding[d] * p1.embedding[d];
+                        n2 += p2.embedding[d] * p2.embedding[d];
+                    }
+                    float denom = std::sqrt(n1) * std::sqrt(n2);
+                    float similarity = (denom > 1e-8f) ? (dot / denom) : 0.0f;
+
+                    if (similarity > 0.95f) {
+                        // Keep the one with higher confidence
+                        if (p1.confidence >= p2.confidence) {
+                            merge_pairs.push_back({pattern_ids[i], pattern_ids[j]});
+                        } else {
+                            merge_pairs.push_back({pattern_ids[j], pattern_ids[i]});
+                        }
+                    }
+                }
+            }
+        }
+
+        for (const auto& [keep_id, merge_id] : merge_pairs) {
+            if (patterns_.count(keep_id) && patterns_.count(merge_id)) {
+                mergePatterns(keep_id, merge_id);
+                affected++;
+            }
+        }
     }
     
     return affected;
@@ -790,7 +834,75 @@ void MTMGraph::load() {
 }
 
 void MTMGraph::load(const std::string& path) {
-    // TODO: Implement JSON loading
+    if (!std::filesystem::exists(path)) return;
+
+    using json = nlohmann::json;
+
+    // Load patterns
+    std::string patterns_path = path + "/patterns.json";
+    if (std::filesystem::exists(patterns_path)) {
+        std::ifstream pf(patterns_path);
+        if (pf.is_open()) {
+            try {
+                json j = json::parse(pf);
+                if (j.contains("patterns") && j["patterns"].is_array()) {
+                    for (const auto& jp : j["patterns"]) {
+                        PatternEntry pattern;
+                        pattern.id = jp.value("id", "");
+                        pattern.name = jp.value("name", "");
+                        pattern.description = jp.value("description", "");
+                        pattern.pattern_type = jp.value("pattern_type", "");
+                        pattern.confidence = jp.value("confidence", 0.5);
+                        pattern.occurrence_count = jp.value("occurrence_count", 0);
+                        pattern.true_positive_count = jp.value("true_positive_count", 0);
+                        pattern.false_positive_count = jp.value("false_positive_count", 0);
+
+                        if (jp.contains("applicable_languages") && jp["applicable_languages"].is_array()) {
+                            for (const auto& lang : jp["applicable_languages"]) {
+                                pattern.applicable_languages.push_back(lang.get<std::string>());
+                            }
+                        }
+
+                        if (!pattern.id.empty()) {
+                            storePattern(pattern);
+                        }
+                    }
+                }
+            } catch (const json::exception&) {
+                // Ignore malformed JSON — start fresh
+            }
+        }
+    }
+
+    // Load strategies
+    std::string strategies_path = path + "/strategies.json";
+    if (std::filesystem::exists(strategies_path)) {
+        std::ifstream sf(strategies_path);
+        if (sf.is_open()) {
+            try {
+                json j = json::parse(sf);
+                if (j.contains("strategies") && j["strategies"].is_array()) {
+                    for (const auto& js : j["strategies"]) {
+                        StrategyEntry strategy;
+                        strategy.id = js.value("id", "");
+                        strategy.name = js.value("name", "");
+                        strategy.description = js.value("description", "");
+                        strategy.strategy_type = js.value("strategy_type", "");
+                        strategy.context_type = js.value("context_type", "");
+                        strategy.effectiveness_score = js.value("effectiveness", 0.5);
+                        strategy.use_count = js.value("use_count", 0);
+                        strategy.success_count = js.value("success_count", 0);
+
+                        if (!strategy.id.empty()) {
+                            storeStrategy(strategy);
+                        }
+                    }
+                }
+            } catch (const json::exception&) {
+                // Ignore malformed JSON — start fresh
+            }
+        }
+    }
 }
 
 // =============================================================================
@@ -853,12 +965,76 @@ void MTMGraph::rebuildPatternIndex() {
 }
 
 std::vector<PatternEntry> MTMGraph::findSimilarPatterns(const PatternEntry& pattern) {
-    // TODO: Implement similarity search for pattern merging
-    return {};
+    std::vector<PatternEntry> results;
+
+    if (pattern.embedding.empty()) return results;
+
+    // Use the pattern index for fast similarity search if available
+    auto matches = pattern_index_->search(pattern.embedding, 10);
+    for (const auto& [id, score] : matches) {
+        if (id != pattern.id) {
+            auto it = patterns_.find(id);
+            if (it != patterns_.end()) {
+                results.push_back(it->second);
+            }
+        }
+    }
+
+    return results;
 }
 
 void MTMGraph::mergePatterns(const std::string& keep_id, const std::string& merge_id) {
-    // TODO: Implement pattern merging
+    auto keep_it = patterns_.find(keep_id);
+    auto merge_it = patterns_.find(merge_id);
+    if (keep_it == patterns_.end() || merge_it == patterns_.end()) return;
+
+    auto& keep = keep_it->second;
+    const auto& merge = merge_it->second;
+
+    // Combine statistics
+    keep.occurrence_count += merge.occurrence_count;
+    keep.true_positive_count += merge.true_positive_count;
+    keep.false_positive_count += merge.false_positive_count;
+
+    // Weighted average of confidence
+    int total_occ = keep.occurrence_count + merge.occurrence_count;
+    if (total_occ > 0) {
+        keep.confidence = (keep.confidence * keep.occurrence_count +
+                           merge.confidence * merge.occurrence_count) / total_occ;
+    }
+
+    // Merge example chunk IDs (limit to 20)
+    for (const auto& id : merge.example_chunk_ids) {
+        if (keep.example_chunk_ids.size() < 20) {
+            keep.example_chunk_ids.push_back(id);
+        }
+    }
+
+    // Merge example snippets (limit to 20)
+    for (const auto& snippet : merge.example_snippets) {
+        if (keep.example_snippets.size() < 20) {
+            keep.example_snippets.push_back(snippet);
+        }
+    }
+
+    // Merge applicable languages (deduplicate)
+    for (const auto& lang : merge.applicable_languages) {
+        if (std::find(keep.applicable_languages.begin(), keep.applicable_languages.end(), lang) ==
+            keep.applicable_languages.end()) {
+            keep.applicable_languages.push_back(lang);
+        }
+    }
+
+    // Average embeddings if both have them
+    if (!keep.embedding.empty() && !merge.embedding.empty() &&
+        keep.embedding.size() == merge.embedding.size()) {
+        for (size_t i = 0; i < keep.embedding.size(); ++i) {
+            keep.embedding[i] = (keep.embedding[i] + merge.embedding[i]) / 2.0f;
+        }
+    }
+
+    // Remove the merged pattern
+    deletePattern(merge_id);
 }
 
 std::string MTMGraph::categoryToString(PatternCategory cat) {

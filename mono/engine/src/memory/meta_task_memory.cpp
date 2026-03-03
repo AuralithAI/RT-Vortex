@@ -289,7 +289,60 @@ void MetaTaskMemory::load() {
 
     if (config_.storage_path.empty()) return;
 
-    // TODO: implement deserialization matching persist()
+    try {
+        std::string path = config_.storage_path + "/mtm_data.bin";
+        std::ifstream in(path, std::ios::binary);
+        if (!in.is_open()) return;
+
+        // Deserialize matching persist() format
+        size_t pattern_count = 0;
+        size_t strategy_count = 0;
+        in.read(reinterpret_cast<char*>(&pattern_count), sizeof(pattern_count));
+        in.read(reinterpret_cast<char*>(&strategy_count), sizeof(strategy_count));
+
+        if (!in.good()) return;
+
+        // Sanity bounds
+        if (pattern_count > 10'000'000 || strategy_count > 10'000'000) return;
+
+        patterns_.clear();
+        for (size_t i = 0; i < pattern_count && in.good(); ++i) {
+            size_t len = 0;
+            in.read(reinterpret_cast<char*>(&len), sizeof(len));
+            if (len > 10'000'000) return; // sanity
+            std::string id(len, '\0');
+            in.read(id.data(), static_cast<std::streamsize>(len));
+
+            PatternMemory p;
+            p.id = id;
+            in.read(reinterpret_cast<char*>(&p.confidence), sizeof(p.confidence));
+            in.read(reinterpret_cast<char*>(&p.occurrence_count), sizeof(p.occurrence_count));
+            p.is_pattern = true;
+
+            patterns_[id] = std::move(p);
+        }
+
+        strategies_.clear();
+        for (size_t i = 0; i < strategy_count && in.good(); ++i) {
+            size_t len = 0;
+            in.read(reinterpret_cast<char*>(&len), sizeof(len));
+            if (len > 10'000'000) return; // sanity
+            std::string id(len, '\0');
+            in.read(id.data(), static_cast<std::streamsize>(len));
+
+            StrategyMemory s;
+            s.id = id;
+            in.read(reinterpret_cast<char*>(&s.effectiveness_score), sizeof(s.effectiveness_score));
+            in.read(reinterpret_cast<char*>(&s.use_count), sizeof(s.use_count));
+            s.is_strategy = true;
+
+            strategies_[id] = std::move(s);
+        }
+    } catch (...) {
+        // Ignore load errors — we start fresh
+    }
+
+    rebuildPatternIndex();
 }
 
 // =============================================================================
@@ -297,7 +350,30 @@ void MetaTaskMemory::load() {
 // =============================================================================
 
 void MetaTaskMemory::rebuildPatternIndex() {
-    // TODO: rebuild FAISS index for pattern embeddings
+    // Determine dimension from first pattern that has an embedding
+    size_t dimension = 0;
+    for (const auto& [id, pattern] : patterns_) {
+        if (!pattern.embedding.empty()) {
+            dimension = pattern.embedding.size();
+            break;
+        }
+    }
+
+    if (dimension == 0) {
+        // No patterns with embeddings — use a default dimension
+        dimension = 384;
+    }
+
+    // Rebuild the FAISS index from all pattern embeddings
+    pattern_index_ = std::make_unique<FAISSIndex>(dimension);
+
+    int64_t idx = 0;
+    for (const auto& [id, pattern] : patterns_) {
+        if (!pattern.embedding.empty() && pattern.embedding.size() == dimension) {
+            pattern_index_->add(idx, pattern.embedding);
+        }
+        idx++;
+    }
 }
 
 } // namespace aipr

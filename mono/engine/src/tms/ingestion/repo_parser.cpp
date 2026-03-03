@@ -531,10 +531,71 @@ std::vector<std::string> RepoParser::extractImports(const ParsedFile& file) {
 }
 
 std::vector<RepoParser::CallGraphNode> RepoParser::buildCallGraph(
-    const std::vector<ParsedFile>& /*files*/
+    const std::vector<ParsedFile>& files
 ) {
-    // TODO: Implement call graph analysis
-    return {};
+    // Build call graph by analyzing function definitions and call sites
+    // across parsed files using symbol references from chunks
+
+    // Step 1: Collect all defined symbols and their file locations
+    std::unordered_map<std::string, CallGraphNode> nodes;
+    
+    for (const auto& file : files) {
+        for (const auto& chunk : file.chunks) {
+            if (chunk.type == "function" || chunk.type == "method" || chunk.type == "class") {
+                if (!chunk.name.empty()) {
+                    auto& node = nodes[chunk.name];
+                    node.symbol_name = chunk.name;
+                    node.file_path = file.path;
+                }
+            }
+        }
+    }
+
+    // Step 2: Scan chunk contents for references to known symbols
+    for (const auto& file : files) {
+        for (const auto& chunk : file.chunks) {
+            if (chunk.name.empty()) continue;
+
+            // For each known symbol, check if this chunk's content references it
+            for (auto& [sym_name, sym_node] : nodes) {
+                if (sym_name == chunk.name) continue; // skip self-reference
+
+                // Simple heuristic: check if the symbol name appears in the content
+                // followed by '(' (function call) or '.' (method access)
+                std::string call_pattern1 = sym_name + "(";
+                std::string call_pattern2 = "." + sym_name + "(";
+                std::string call_pattern3 = "::" + sym_name + "(";
+
+                if (chunk.content.find(call_pattern1) != std::string::npos ||
+                    chunk.content.find(call_pattern2) != std::string::npos ||
+                    chunk.content.find(call_pattern3) != std::string::npos) {
+                    // chunk.name calls sym_name
+                    auto caller_it = nodes.find(chunk.name);
+                    if (caller_it != nodes.end()) {
+                        auto& caller_callees = caller_it->second.callees;
+                        if (std::find(caller_callees.begin(), caller_callees.end(), sym_name)
+                            == caller_callees.end()) {
+                            caller_callees.push_back(sym_name);
+                        }
+
+                        auto& callee_callers = sym_node.callers;
+                        if (std::find(callee_callers.begin(), callee_callers.end(), chunk.name)
+                            == callee_callers.end()) {
+                            callee_callers.push_back(chunk.name);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 3: Convert to result vector
+    std::vector<CallGraphNode> result;
+    result.reserve(nodes.size());
+    for (auto& [_, node] : nodes) {
+        result.push_back(std::move(node));
+    }
+    return result;
 }
 
 // =============================================================================
@@ -831,11 +892,61 @@ std::vector<CodeChunk> ChunkStrategy::createDependencyChunks(const ParsedFile& f
 }
 
 std::vector<CodeChunk> ChunkStrategy::createCrossFileChunks(
-    const ParsedFile& /*file*/,
-    const std::vector<ParsedFile>& /*related_files*/
+    const ParsedFile& file,
+    const std::vector<ParsedFile>& related_files
 ) {
-    // TODO: implement cross-file context chunks
-    return {};
+    std::vector<CodeChunk> result;
+
+    // Cross-file chunks capture the relationship between a file's imports
+    // and the symbols exported by related files.
+    // This gives the embedding engine context about how files connect.
+
+    if (file.imports.empty() || related_files.empty()) return result;
+
+    // Build an export map from related files
+    std::unordered_map<std::string, const ParsedFile*> export_map;
+    for (const auto& rf : related_files) {
+        for (const auto& exp : rf.exports) {
+            export_map[exp] = &rf;
+        }
+    }
+
+    // For each import in the file, check if a related file exports it
+    std::ostringstream oss;
+    oss << "Cross-file context for " << file.path << ":\n";
+    int match_count = 0;
+
+    for (const auto& imp : file.imports) {
+        auto it = export_map.find(imp);
+        if (it != export_map.end()) {
+            oss << "  imports '" << imp << "' from " << it->second->path << "\n";
+            // Include a snippet from the related file's matching chunk
+            for (const auto& chunk : it->second->chunks) {
+                if (chunk.name == imp) {
+                    std::string snippet = chunk.content.substr(
+                        0, std::min<size_t>(200, chunk.content.size()));
+                    oss << "    definition: " << snippet << "\n";
+                    break;
+                }
+            }
+            match_count++;
+        }
+    }
+
+    if (match_count > 0) {
+        CodeChunk chunk;
+        chunk.id = generateChunkId(file.path, "cross_file", 0);
+        chunk.file_path = file.path;
+        chunk.language = file.language.id;
+        chunk.type = "cross_file_context";
+        chunk.name = "cross_file:" + file.path;
+        chunk.content = oss.str();
+        chunk.start_line = 0;
+        chunk.end_line = 0;
+        result.push_back(std::move(chunk));
+    }
+
+    return result;
 }
 
 std::string ChunkStrategy::generateChunkId(const std::string& file_path, const std::string& name, int index) {

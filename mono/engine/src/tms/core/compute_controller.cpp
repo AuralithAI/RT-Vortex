@@ -54,9 +54,24 @@ ComputeDecision ComputeController::decide(
     double resource_score = computeResourceScore(resource_state);
     double historical_score = computeHistoricalScore(features);
     
-    // Session context score
-    double session_score = 0.5;  // Default
-    // TODO: Look up actual session context
+    // Session context score — aggregate from all active sessions
+    double session_score = 0.5;  // Default when no sessions registered
+    if (!session_contexts_.empty()) {
+        double total_richness = 0.0;
+        double total_queries = 0.0;
+        for (const auto& [sid, ctx] : session_contexts_) {
+            total_richness += static_cast<double>(ctx.context_richness);
+            total_queries += static_cast<double>(ctx.recent_query_count);
+        }
+        double avg_richness = total_richness / static_cast<double>(session_contexts_.size());
+        double avg_queries = total_queries / static_cast<double>(session_contexts_.size());
+        // Higher context richness suggests more thorough analysis needed
+        // More recent queries suggest an active session needing faster responses
+        double richness_factor = std::min(avg_richness / 100.0, 1.0);
+        double recency_factor = std::min(avg_queries / 20.0, 1.0);
+        // Balance: rich context pushes towards thorough, high query rate pushes towards fast
+        session_score = 0.3 * richness_factor + 0.7 * (1.0 - recency_factor * 0.5);
+    }
     
     // Repo size score
     double repo_score = 0.5;
