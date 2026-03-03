@@ -1,95 +1,84 @@
-# AI PR Reviewer - Default Configuration
-# This is the base configuration profile
+# =============================================================================
+# AI PR Reviewer — C++ Engine Configuration
+# =============================================================================
+#
+# This file is read ONLY by the C++ engine (aipr-engine).
+# The Java server reads rtserverprops.xml and vcsplatforms.xml instead.
+#
+# Usage:
+#   ./bin/aipr-engine --config config/default.yml
+#
+# Format: flat key:value pairs. The C++ config loader does NOT parse nested
+# YAML — it reads each "key: value" line independently. Do not nest keys.
+#
+# All settings below have sensible defaults in engine_api.h. You only need
+# to override values that differ from the defaults.
+# =============================================================================
 
-version: "1"
+# --- Storage -----------------------------------------------------------------
+# Where the engine stores FAISS indexes, code chunks, and manifests.
+# This is the LOCAL path used when running standalone or as a fallback.
+# In production, the Java server pushes cloud storage config (S3/GCS/etc.)
+# via the ConfigureStorage gRPC call — overriding this path.
+storage_path: .aipr/index
 
-repo:
-  # Override per repository
-  id: ""
-  default_branch: "main"
+# --- Indexing ----------------------------------------------------------------
+# Maximum file size to index (larger files are skipped)
+max_file_size_kb: 1024
 
-indexing:
-  profile: "default"
-  exclude:
-    - "**/node_modules/**"
-    - "**/vendor/**"
-    - "**/build/**"
-    - "**/dist/**"
-    - "**/target/**"
-    - "**/.git/**"
-    - "**/__pycache__/**"
-    - "**/*.min.js"
-    - "**/*.min.css"
-    - "**/package-lock.json"
-    - "**/yarn.lock"
-    - "**/*.lock"
-    - "**/generated/**"
-  include: []
-  max_file_size_kb: 1024
-  languages: []  # Empty = auto-detect all
-  tiers:
-    enabled: false
+# Code chunk size in tokens (for FAISS vector entries)
+chunk_size: 512
 
-retrieval:
-  top_k: 20
-  lexical_weight: 0.3
-  vector_weight: 0.7
-  graph_expand_depth: 2
-  reranking_enabled: true
+# Overlap between adjacent chunks (for context continuity)
+chunk_overlap: 64
 
-review:
-  max_comments: 20
-  severity_threshold: "warning"
-  confidence_threshold: 0.7
-  enabled_checks:
-    - security
-    - performance
-    - reliability
-    - style
-  require_reasoning: true
+# Use tree-sitter AST parsing for intelligent chunking.
+# When false, falls back to regex-based line splitting.
+enable_ast_chunking: true
 
-storage:
-  backend: "local"
-  path: ".aipr/index"
+# --- Retrieval ---------------------------------------------------------------
+# Number of top results returned from hybrid search
+top_k: 20
 
-model:
-  embeddings:
-    provider: "openai"
-    model: "text-embedding-3-small"
-    dimensions: 1536
-  llm:
-    provider: "openai"
-    model: "gpt-4o"
-    max_tokens: 4096
-    temperature: 0.1
-  allow_network: true
-  timeout_seconds: 120
+# Weight for BM25 lexical search (text matching)
+lexical_weight: 0.3
 
-security:
-  redaction:
-    enabled: true
-    patterns:
-      - "(?i)(api[_-]?key|apikey)\\s*[:=]\\s*['\"]?[a-zA-Z0-9_-]{20,}['\"]?"
-      - "(?i)(secret|password|passwd|pwd)\\s*[:=]\\s*['\"]?[^\\s'\"]{8,}['\"]?"
-      - "(?i)(bearer|authorization)\\s*[:=]\\s*['\"]?[a-zA-Z0-9_.-]{20,}['\"]?"
-      - "-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"
-      - "ghp_[a-zA-Z0-9]{36}"
-      - "gho_[a-zA-Z0-9]{36}"
-      - "sk-[a-zA-Z0-9]{48}"
-  secrets_detection: true
-  audit_logging: true
-  encryption_at_rest: false
+# Weight for FAISS vector search (semantic similarity)
+# lexical_weight + vector_weight should equal 1.0
+vector_weight: 0.7
 
-integrations:
-  github:
-    enabled: true
-    token_env: "GITHUB_TOKEN"
-  gitlab:
-    enabled: false
-    token_env: "GITLAB_TOKEN"
-  slack:
-    enabled: false
+# How many hops to traverse in the symbol graph
+graph_expand_depth: 2
 
-logging:
-  level: "info"
-  format: "text"
+# --- Embedding Provider ------------------------------------------------------
+# "HTTP"        — Call an OpenAI-compatible embedding API (default)
+# "LOCAL_ONNX"  — Run all-MiniLM-L6-v2 locally via ONNX Runtime (no API cost)
+# "CUSTOM"      — Custom provider
+embed_provider: LOCAL_ONNX
+
+# --- HTTP Embedding (when embed_provider = HTTP) -----------------------------
+# API endpoint for embeddings (any OpenAI-compatible API)
+embed_endpoint: https://api.openai.com/v1/embeddings
+
+# Name of the environment variable that holds the API key
+# (the engine reads the key from this env var — not stored in config)
+embed_api_key_env: OPENAI_API_KEY
+
+# Model name sent in the API request
+embed_model: text-embedding-3-small
+
+# Vector dimensions (must match the model's output)
+embed_dimensions: 1536
+
+# Number of texts to embed in a single API call
+embed_batch_size: 100
+
+# HTTP timeout for embedding API calls (seconds)
+embed_timeout_seconds: 60
+
+# --- Local ONNX Embedding (when embed_provider = LOCAL_ONNX) -----------------
+# Path to the ONNX model file (relative to engine binary or absolute)
+onnx_model_path: models/all-MiniLM-L6-v2.onnx
+
+# Path to the ONNX tokenizer file
+onnx_tokenizer_path: models/tokenizer.json

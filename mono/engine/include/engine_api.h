@@ -41,7 +41,7 @@ enum class EmbedProvider {
  * Engine configuration
  */
 struct AIPR_API EngineConfig {
-    std::string storage_path = ".aipr/index";
+    std::string storage_path = ".rtvortex/index";
     std::string config_profile = "default";
     
     // Indexing settings

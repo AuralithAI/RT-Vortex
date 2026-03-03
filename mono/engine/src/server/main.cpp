@@ -1,8 +1,8 @@
 /**
- * AI PR Reviewer - Engine gRPC Server Entry Point
+ * RTVortex - Code Intelligence & Review Engine
  *
- * This is the main entry point for the standalone C++ engine gRPC server.
- * It handles:
+ * gRPC server entry point for the C++ semantic engine.
+ * Handles:
  *   - CLI argument parsing (--host, --port, --config)
  *   - YAML config loading
  *   - TLS credential loading
@@ -10,16 +10,17 @@
  *   - Windows service control (install/uninstall/start/stop/run)
  *
  * Windows Service Commands:
- *   aipr-engine.exe install   - Install as Windows service
- *   aipr-engine.exe uninstall - Remove Windows service
- *   aipr-engine.exe start     - Start the service
- *   aipr-engine.exe stop      - Stop the service
- *   aipr-engine.exe run       - Run in foreground (default)
+ *   rtvortex.exe install   - Install as Windows service
+ *   rtvortex.exe uninstall - Remove Windows service
+ *   rtvortex.exe start     - Start the service
+ *   rtvortex.exe stop      - Stop the service
+ *   rtvortex.exe run       - Run in foreground (default)
  */
 
 #include "engine_service_impl.h"
 #include "engine_api.h"
 #include "version.h"
+#include "splash_screen.h"
 
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/health_check_service_interface.h>
@@ -34,6 +35,9 @@
 #include <csignal>
 #include <thread>
 #include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <filesystem>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -43,14 +47,161 @@
 #include <unistd.h>
 #endif
 
+namespace fs = std::filesystem;
+
 // Service constants
 #ifdef _WIN32
-#define SERVICE_NAME        TEXT("AIPREngine")
-#define SERVICE_DISPLAY     TEXT("AIPR Indexing & Retrieval Engine")
-#define SERVICE_DESCRIPTION TEXT("High-performance code indexing and retrieval engine for AI PR Reviewer")
+#define SERVICE_NAME        TEXT("RTVortex")
+#define SERVICE_DISPLAY     TEXT("RTVortex - Code Intelligence & Review Engine")
+#define SERVICE_DESCRIPTION TEXT("High-performance code indexing, semantic retrieval, and review engine")
 #endif
 
 namespace {
+
+//=============================================================================
+// RTVortex Environment 
+//=============================================================================
+
+struct RtVortexEnvironment {
+    std::string home;        // RTVORTEX_HOME — root directory
+    std::string config_dir;  // RTVORTEX_HOME/config
+    std::string data_dir;    // RTVORTEX_HOME/data
+    std::string logs_dir;    // RTVORTEX_HOME/logs
+    std::string temp_dir;    // RTVORTEX_HOME/tmp
+    std::string models_dir;  // RTVORTEX_HOME/models
+    std::string hostname;    // machine hostname
+};
+
+static RtVortexEnvironment g_env;
+static std::ofstream g_log_file;
+
+/**
+ * Resolve RTVORTEX_HOME:
+ *   1. RTVORTEX_HOME env var
+ *   2. AIPR_HOME env var (backward compat)
+ *   3. RT_HOME env var (shared with Java server)
+ *   4. Executable's parent directory
+ *   5. Current working directory (dev fallback)
+ */
+std::string resolveHome() {
+    if (const char* v = std::getenv("RTVORTEX_HOME")) return v;
+    if (const char* v = std::getenv("AIPR_HOME"))     return v;  // backward compat
+    if (const char* v = std::getenv("RT_HOME"))       return v;
+
+    // Try executable's parent dir (e.g., /opt/rtvortex/bin/rtvortex → /opt/rtvortex)
+    try {
+#ifdef _WIN32
+        char buf[MAX_PATH];
+        GetModuleFileNameA(NULL, buf, MAX_PATH);
+        fs::path exe_dir = fs::path(buf).parent_path();
+#else
+        fs::path exe_dir = fs::canonical("/proc/self/exe").parent_path();
+#endif
+        // If binary is in bin/, go up one level
+        if (exe_dir.filename() == "bin") {
+            return exe_dir.parent_path().string();
+        }
+        return exe_dir.string();
+    } catch (...) {}
+
+    return fs::current_path().string();
+}
+
+std::string getHostname() {
+#ifdef _WIN32
+    char buf[256];
+    DWORD size = sizeof(buf);
+    if (GetComputerNameA(buf, &size)) return buf;
+    return "unknown";
+#else
+    char buf[256];
+    if (gethostname(buf, sizeof(buf)) == 0) return buf;
+    return "unknown";
+#endif
+}
+
+std::string currentTimestampForLog() {
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+    std::ostringstream ss;
+    ss << std::put_time(std::gmtime(&time), "%Y-%m-%d %H:%M:%S")
+       << '.' << std::setfill('0') << std::setw(3) << ms.count();
+    return ss.str();
+}
+
+std::string currentDateStamp() {
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    char buf[16];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%d", std::gmtime(&time));
+    return buf;
+}
+
+/**
+ * Initialize the RTVortex environment: resolve directories, create them,
+ * and open a timestamped log file.
+ */
+void initEnvironment() {
+    g_env.home       = resolveHome();
+    g_env.config_dir = (fs::path(g_env.home) / "config").string();
+    g_env.data_dir   = (fs::path(g_env.home) / "data").string();
+    g_env.logs_dir   = (fs::path(g_env.home) / "logs").string();
+    g_env.temp_dir   = (fs::path(g_env.home) / "tmp").string();
+    g_env.models_dir = (fs::path(g_env.home) / "models").string();
+    g_env.hostname   = getHostname();
+
+    // Create directories if they don't exist
+    for (const auto& dir : {g_env.data_dir, g_env.logs_dir, g_env.temp_dir}) {
+        std::error_code ec;
+        fs::create_directories(dir, ec);
+    }
+
+    // Open log file: logs/rtvortex_<hostname>_<date>.log
+    std::string log_filename = "rtvortex_" + g_env.hostname + "_" + currentDateStamp() + ".log";
+    std::string log_path = (fs::path(g_env.logs_dir) / log_filename).string();
+
+    g_log_file.open(log_path, std::ios::app);
+    if (!g_log_file.is_open()) {
+        std::cerr << "[WARN] Cannot open log file: " << log_path << "\n";
+    }
+}
+
+enum class LogLevel { DEBUG, INFO, WARN, ERROR, FATAL };
+
+void logMessage(LogLevel level, const std::string& msg) {
+    static const char* labels[] = {"DEBUG", "INFO ", "WARN ", "ERROR", "FATAL"};
+    int idx = static_cast<int>(level);
+
+    std::ostringstream line;
+    line << currentTimestampForLog()
+         << " [" << labels[idx] << "] "
+         << "[" << g_env.hostname << "] "
+         << msg;
+
+    std::string out = line.str();
+
+    // Always write to console
+    if (level >= LogLevel::ERROR) {
+        std::cerr << out << "\n";
+    } else {
+        std::cout << out << "\n";
+    }
+
+    // Write to log file
+    if (g_log_file.is_open()) {
+        g_log_file << out << "\n";
+        g_log_file.flush();
+    }
+}
+
+// Convenience macros
+#define LOG_DEBUG(msg) logMessage(LogLevel::DEBUG, msg)
+#define LOG_INFO(msg)  logMessage(LogLevel::INFO,  msg)
+#define LOG_WARN(msg)  logMessage(LogLevel::WARN,  msg)
+#define LOG_ERROR(msg) logMessage(LogLevel::ERROR, msg)
+#define LOG_FATAL(msg) logMessage(LogLevel::FATAL, msg)
 
 //=============================================================================
 // Global State for Signal Handling
@@ -88,10 +239,13 @@ struct ServerConfig {
     
     // Debug/verbose mode
     bool verbose = false;
+    
+    // Splash screen (Windows/macOS only, skipped on Linux)
+    bool no_splash = false;
 };
 
 void printUsage(const char* program_name) {
-    std::cout << "AI PR Reviewer - Engine gRPC Server\n"
+    std::cout << "RTVortex - Code Intelligence & Review Engine\n"
               << "\n"
               << "Usage: " << program_name << " [COMMAND] [OPTIONS]\n"
               << "\n"
@@ -109,10 +263,12 @@ void printUsage(const char* program_name) {
               << "  --port <port>       Bind port (default: 50051)\n"
               << "  --config <path>     Config file path (default: config/default.yml)\n"
               << "  --verbose           Enable verbose logging\n"
+              << "  -noSplashScreen     Disable the GUI splash screen\n"
               << "  --version           Print version and exit\n"
               << "  --help              Print this help and exit\n"
               << "\n"
               << "Environment variables:\n"
+              << "  RTVORTEX_HOME       Engine root directory (auto-detected if not set)\n"
               << "  ENGINE_HOST         Override --host\n"
               << "  ENGINE_PORT         Override --port\n"
               << "  ENGINE_CONFIG       Override --config\n"
@@ -120,6 +276,13 @@ void printUsage(const char* program_name) {
               << "  ENGINE_TLS_CERT     Path to server certificate\n"
               << "  ENGINE_TLS_KEY      Path to server private key\n"
               << "  ENGINE_TLS_CA       Path to CA certificate (for mTLS)\n"
+              << "\n"
+              << "Directory layout (relative to RTVORTEX_HOME):\n"
+              << "  config/             Configuration files\n"
+              << "  data/               Persistent data (indexes, caches)\n"
+              << "  logs/               Timestamped log files\n"
+              << "  temp/               Temporary working files\n"
+              << "  models/             ONNX embedding models\n"
               << "\n"
 #ifdef _WIN32
               << "Examples:\n"
@@ -166,11 +329,14 @@ ServerConfig parseArgs(int argc, char* argv[]) {
             std::exit(0);
         }
         else if (arg == "--version" || arg == "-v") {
-            std::cout << "aipr-engine version " << AIPR_VERSION_FULL << "\n";
+            std::cout << "rtvortex " << AIPR_VERSION_FULL << "\n";
             std::exit(0);
         }
         else if (arg == "--verbose") {
             config.verbose = true;
+        }
+        else if (arg == "-noSplashScreen") {
+            config.no_splash = true;
         }
 #ifdef _WIN32
         // Windows service commands
@@ -237,11 +403,11 @@ bool fileExists(const std::string& path) {
 
 std::shared_ptr<grpc::ServerCredentials> buildCredentials(const ServerConfig& config) {
     if (!config.tls_enabled) {
-        std::cout << "[INFO] TLS disabled, using insecure credentials\n";
+        LOG_INFO("TLS disabled, using insecure credentials");
         return grpc::InsecureServerCredentials();
     }
     
-    std::cout << "[INFO] TLS enabled, loading certificates...\n";
+    LOG_INFO("TLS enabled, loading certificates...");
     
     // Read certificate and key files
     if (config.tls_cert_chain.empty() || config.tls_private_key.empty()) {
@@ -272,15 +438,15 @@ std::shared_ptr<grpc::ServerCredentials> buildCredentials(const ServerConfig& co
         if (config.tls_require_client_auth) {
             ssl_opts.client_certificate_request = 
                 GRPC_SSL_REQUEST_AND_REQUIRE_CLIENT_CERTIFICATE_AND_VERIFY;
-            std::cout << "[INFO] mTLS enabled (client certificate required)\n";
+            LOG_INFO("mTLS enabled (client certificate required)");
         } else {
             ssl_opts.client_certificate_request = 
                 GRPC_SSL_REQUEST_CLIENT_CERTIFICATE_BUT_DONT_VERIFY;
-            std::cout << "[INFO] TLS with optional client certificate\n";
+            LOG_INFO("TLS with optional client certificate");
         }
     } else {
         ssl_opts.client_certificate_request = GRPC_SSL_DONT_REQUEST_CLIENT_CERTIFICATE;
-        std::cout << "[INFO] TLS enabled (server-side only)\n";
+        LOG_INFO("TLS enabled (server-side only)");
     }
     
     return grpc::SslServerCredentials(ssl_opts);
@@ -291,14 +457,19 @@ std::shared_ptr<grpc::ServerCredentials> buildCredentials(const ServerConfig& co
 //=============================================================================
 
 void signalHandler(int signal) {
-    std::cout << "\n[INFO] Received signal " << signal << ", initiating graceful shutdown...\n";
+    // Signal handlers must be async-signal-safe.
+    // Only set the flag here — do NOT call g_server->Shutdown() from the
+    // signal handler, as it causes a mutex deadlock with server->Wait().
     g_shutdown_requested = true;
     
-    if (g_server) {
-        // Graceful shutdown with deadline
-        auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(30);
-        g_server->Shutdown(deadline);
-    }
+    // This is safe: Shutdown() from a different context unblocks Wait().
+    // We use a detached thread so the signal handler returns immediately.
+    std::thread([]() {
+        if (g_server) {
+            auto deadline = std::chrono::system_clock::now() + std::chrono::seconds(30);
+            g_server->Shutdown(deadline);
+        }
+    }).detach();
 }
 
 void setupSignalHandlers() {
@@ -344,7 +515,7 @@ std::string getExecutablePath() {
 bool installService() {
     SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CREATE_SERVICE);
     if (!scm) {
-        std::cerr << "[ERROR] Cannot open Service Control Manager. Run as Administrator.\n";
+        LOG_ERROR("Cannot open Service Control Manager. Run as Administrator.");
         return false;
     }
     
@@ -353,8 +524,8 @@ bool installService() {
     
     SC_HANDLE service = CreateServiceA(
         scm,
-        "AIPREngine",                      // Service name
-        "AIPR Indexing & Retrieval Engine", // Display name
+        "RTVortex",                            // Service name
+        "RTVortex - Code Intelligence Engine", // Display name
         SERVICE_ALL_ACCESS,
         SERVICE_WIN32_OWN_PROCESS,
         SERVICE_AUTO_START,                // Start automatically
@@ -370,9 +541,9 @@ bool installService() {
     if (!service) {
         DWORD error = GetLastError();
         if (error == ERROR_SERVICE_EXISTS) {
-            std::cout << "[INFO] Service already exists.\n";
+            LOG_INFO("Service already exists.");
         } else {
-            std::cerr << "[ERROR] CreateService failed: " << error << "\n";
+            LOG_ERROR("CreateService failed: " + std::to_string(error));
         }
         CloseServiceHandle(scm);
         return error == ERROR_SERVICE_EXISTS;
@@ -381,7 +552,7 @@ bool installService() {
     // Set service description
     SERVICE_DESCRIPTIONA desc;
     desc.lpDescription = const_cast<LPSTR>(
-        "High-performance code indexing and retrieval engine for AI PR Reviewer. "
+        "RTVortex Code Intelligence & Review Engine. "
         "Provides gRPC API on port 50051 for the Java server."
     );
     ChangeServiceConfig2A(service, SERVICE_CONFIG_DESCRIPTION, &desc);
@@ -400,9 +571,9 @@ bool installService() {
     sfa.lpsaActions = actions;
     ChangeServiceConfig2A(service, SERVICE_CONFIG_FAILURE_ACTIONS, &sfa);
     
-    std::cout << "[OK] Service 'AIPREngine' installed successfully.\n";
-    std::cout << "     Start with: aipr-engine start\n";
-    std::cout << "     Or: sc start AIPREngine\n";
+    LOG_INFO("Service 'RTVortex' installed successfully.");
+    LOG_INFO("  Start with: rtvortex start");
+    LOG_INFO("  Or: sc start RTVortex");
     
     CloseServiceHandle(service);
     CloseServiceHandle(scm);
@@ -415,17 +586,17 @@ bool installService() {
 bool uninstallService() {
     SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
     if (!scm) {
-        std::cerr << "[ERROR] Cannot open Service Control Manager. Run as Administrator.\n";
+        LOG_ERROR("Cannot open Service Control Manager. Run as Administrator.");
         return false;
     }
     
-    SC_HANDLE service = OpenServiceA(scm, "AIPREngine", SERVICE_STOP | DELETE | SERVICE_QUERY_STATUS);
+    SC_HANDLE service = OpenServiceA(scm, "RTVortex", SERVICE_STOP | DELETE | SERVICE_QUERY_STATUS);
     if (!service) {
         DWORD error = GetLastError();
         if (error == ERROR_SERVICE_DOES_NOT_EXIST) {
-            std::cout << "[INFO] Service does not exist.\n";
+            LOG_INFO("Service does not exist.");
         } else {
-            std::cerr << "[ERROR] OpenService failed: " << error << "\n";
+            LOG_ERROR("OpenService failed: " + std::to_string(error));
         }
         CloseServiceHandle(scm);
         return error == ERROR_SERVICE_DOES_NOT_EXIST;
@@ -434,7 +605,7 @@ bool uninstallService() {
     // Stop service if running
     SERVICE_STATUS status;
     if (QueryServiceStatus(service, &status) && status.dwCurrentState != SERVICE_STOPPED) {
-        std::cout << "[INFO] Stopping service...\n";
+        LOG_INFO("Stopping service...");
         ControlService(service, SERVICE_CONTROL_STOP, &status);
         
         // Wait for stop
@@ -446,13 +617,13 @@ bool uninstallService() {
     }
     
     if (!DeleteService(service)) {
-        std::cerr << "[ERROR] DeleteService failed: " << GetLastError() << "\n";
+        LOG_ERROR("DeleteService failed: " + std::to_string(GetLastError()));
         CloseServiceHandle(service);
         CloseServiceHandle(scm);
         return false;
     }
     
-    std::cout << "[OK] Service 'AIPREngine' uninstalled successfully.\n";
+    LOG_INFO("Service 'RTVortex' uninstalled successfully.");
     
     CloseServiceHandle(service);
     CloseServiceHandle(scm);
@@ -465,17 +636,17 @@ bool uninstallService() {
 bool startService() {
     SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
     if (!scm) {
-        std::cerr << "[ERROR] Cannot open Service Control Manager.\n";
+        LOG_ERROR("Cannot open Service Control Manager.");
         return false;
     }
     
-    SC_HANDLE service = OpenServiceA(scm, "AIPREngine", SERVICE_START | SERVICE_QUERY_STATUS);
+    SC_HANDLE service = OpenServiceA(scm, "RTVortex", SERVICE_START | SERVICE_QUERY_STATUS);
     if (!service) {
         DWORD error = GetLastError();
         if (error == ERROR_SERVICE_DOES_NOT_EXIST) {
-            std::cerr << "[ERROR] Service not installed. Run: aipr-engine install\n";
+            LOG_ERROR("Service not installed. Run: rtvortex install");
         } else {
-            std::cerr << "[ERROR] OpenService failed: " << error << "\n";
+            LOG_ERROR("OpenService failed: " + std::to_string(error));
         }
         CloseServiceHandle(scm);
         return false;
@@ -485,7 +656,7 @@ bool startService() {
     QueryServiceStatus(service, &status);
     
     if (status.dwCurrentState == SERVICE_RUNNING) {
-        std::cout << "[INFO] Service is already running.\n";
+        LOG_INFO("Service is already running.");
         CloseServiceHandle(service);
         CloseServiceHandle(scm);
         return true;
@@ -494,16 +665,16 @@ bool startService() {
     if (!StartServiceA(service, 0, NULL)) {
         DWORD error = GetLastError();
         if (error == ERROR_SERVICE_ALREADY_RUNNING) {
-            std::cout << "[INFO] Service is already running.\n";
+            LOG_INFO("Service is already running.");
         } else {
-            std::cerr << "[ERROR] StartService failed: " << error << "\n";
+            LOG_ERROR("StartService failed: " + std::to_string(error));
             CloseServiceHandle(service);
             CloseServiceHandle(scm);
             return false;
         }
     }
     
-    std::cout << "[OK] Service 'AIPREngine' started.\n";
+    LOG_INFO("Service 'RTVortex' started.");
     
     CloseServiceHandle(service);
     CloseServiceHandle(scm);
@@ -516,17 +687,17 @@ bool startService() {
 bool stopService() {
     SC_HANDLE scm = OpenSCManager(NULL, NULL, SC_MANAGER_CONNECT);
     if (!scm) {
-        std::cerr << "[ERROR] Cannot open Service Control Manager.\n";
+        LOG_ERROR("Cannot open Service Control Manager.");
         return false;
     }
     
-    SC_HANDLE service = OpenServiceA(scm, "AIPREngine", SERVICE_STOP | SERVICE_QUERY_STATUS);
+    SC_HANDLE service = OpenServiceA(scm, "RTVortex", SERVICE_STOP | SERVICE_QUERY_STATUS);
     if (!service) {
         DWORD error = GetLastError();
         if (error == ERROR_SERVICE_DOES_NOT_EXIST) {
-            std::cerr << "[ERROR] Service not installed.\n";
+            LOG_ERROR("Service not installed.");
         } else {
-            std::cerr << "[ERROR] OpenService failed: " << error << "\n";
+            LOG_ERROR("OpenService failed: " + std::to_string(error));
         }
         CloseServiceHandle(scm);
         return false;
@@ -536,33 +707,31 @@ bool stopService() {
     QueryServiceStatus(service, &status);
     
     if (status.dwCurrentState == SERVICE_STOPPED) {
-        std::cout << "[INFO] Service is already stopped.\n";
+        LOG_INFO("Service is already stopped.");
         CloseServiceHandle(service);
         CloseServiceHandle(scm);
         return true;
     }
     
     if (!ControlService(service, SERVICE_CONTROL_STOP, &status)) {
-        std::cerr << "[ERROR] ControlService(STOP) failed: " << GetLastError() << "\n";
+        LOG_ERROR("ControlService(STOP) failed: " + std::to_string(GetLastError()));
         CloseServiceHandle(service);
         CloseServiceHandle(scm);
         return false;
     }
     
     // Wait for stop
-    std::cout << "[INFO] Stopping service...\n";
+    LOG_INFO("Stopping service...");
     int tries = 0;
     while (status.dwCurrentState != SERVICE_STOPPED && tries++ < 30) {
         Sleep(1000);
         QueryServiceStatus(service, &status);
-        std::cout << "." << std::flush;
     }
-    std::cout << "\n";
     
     if (status.dwCurrentState == SERVICE_STOPPED) {
-        std::cout << "[OK] Service 'AIPREngine' stopped.\n";
+        LOG_INFO("Service 'RTVortex' stopped.");
     } else {
-        std::cerr << "[WARN] Service may not have stopped cleanly.\n";
+        LOG_WARN("Service may not have stopped cleanly.");
     }
     
     CloseServiceHandle(service);
@@ -605,7 +774,7 @@ void WINAPI ServiceMain(DWORD argc, LPSTR* argv) {
     (void)argv;
     
     g_service_status_handle = RegisterServiceCtrlHandler(
-        "AIPREngine",
+        "RTVortex",
         ServiceCtrlHandler
     );
     
@@ -653,7 +822,7 @@ void WINAPI ServiceMain(DWORD argc, LPSTR* argv) {
 
 bool runAsService() {
     SERVICE_TABLE_ENTRY service_table[] = {
-        { const_cast<LPSTR>("AIPREngine"), ServiceMain },
+        { const_cast<LPSTR>("RTVortex"), ServiceMain },
         { nullptr, nullptr }
     };
     
@@ -670,32 +839,105 @@ void runServer(const ServerConfig& config) {
     // Build server address
     std::string server_address = config.host + ":" + std::to_string(config.port);
     
-    std::cout << "=========================================\n";
-    std::cout << " AI PR Reviewer - Engine gRPC Server\n";
-    std::cout << "=========================================\n";
-    std::cout << "[INFO] Loading config from: " << config.config_path << "\n";
+    // ── Splash Screen (Windows/macOS only) ───────────────────────────
+    // On Windows/macOS: shows a native GUI splash with rv_splash.jpg
+    // On Linux: headless — just prints the terminal banner below
+    if (!config.no_splash) {
+        std::string splash_image = (fs::path(g_env.home) / "images" / "rv_splash.jpg").string();
+        rtvortex::SplashScreen::show(splash_image);
+    }
+    
+    // ── Terminal Banner (always, all platforms) ──────────────────────
+    const char* banner = R"(
+    ╔═════════════════════════════════════════════════════════════╗
+    ║                                                             ║
+    ║   ██████╗ ████████╗                  _                      ║
+    ║   ██╔══██╗╚══██╔══╝__   _____  _ __| |_ _____  __           ║
+    ║   ██████╔╝   ██║   \ \ / / _ \| '__| __/ _ \ \/ /           ║
+    ║   ██╔══██╗   ██║    \ V / (_) | |  | ||  __/>  <            ║
+    ║   ██║  ██║   ██║     \_/ \___/|_|   \__\___/_/\_\           ║
+    ║   ╚═╝  ╚═╝   ╚═╝                                            ║
+    ║                                                             ║
+    ║         Code Intelligence & Review Engine                   ║
+    ║         Indexing · Retrieval · Semantic Analysis            ║
+    ║                                                             ║
+    ╚═════════════════════════════════════════════════════════════╝
+)";
+    std::cout << banner << std::flush;
+
+    LOG_INFO("RTVortex starting up...");
+    LOG_INFO("  Version:    " + std::string(AIPR_VERSION_FULL));
+    LOG_INFO("  Build date: " + std::string(AIPR_BUILD_DATE));
+    LOG_INFO("  Hostname:   " + g_env.hostname);
+    LOG_INFO("  PID:        " + std::to_string(
+#ifdef _WIN32
+        GetCurrentProcessId()
+#else
+        getpid()
+#endif
+    ));
+    LOG_INFO("  ───────────────────────────────────");
+    LOG_INFO("  Home:       " + g_env.home);
+    LOG_INFO("  Config dir: " + g_env.config_dir);
+    LOG_INFO("  Data dir:   " + g_env.data_dir);
+    LOG_INFO("  Logs dir:   " + g_env.logs_dir);
+    LOG_INFO("  Temp dir:   " + g_env.temp_dir);
+    LOG_INFO("  Models dir: " + g_env.models_dir);
+    LOG_INFO("  ───────────────────────────────────");
+    LOG_INFO("  Config:     " + config.config_path);
     
     // Load engine config
     aipr::EngineConfig engine_config;
     if (fileExists(config.config_path)) {
         try {
             engine_config = aipr::EngineConfig::load(config.config_path);
-            std::cout << "[INFO] Config loaded successfully\n";
+            LOG_INFO("Config loaded successfully");
         } catch (const std::exception& e) {
-            std::cout << "[WARN] Failed to load config: " << e.what() << "\n";
-            std::cout << "[INFO] Using default configuration\n";
+            LOG_WARN("Failed to load config: " + std::string(e.what()));
+            LOG_INFO("Using default configuration");
         }
     } else {
-        std::cout << "[INFO] Config file not found, using defaults\n";
+        // Try RTVORTEX_HOME/config/default.yml as fallback
+        std::string fallback = (fs::path(g_env.config_dir) / "default.yml").string();
+        if (fileExists(fallback)) {
+            try {
+                engine_config = aipr::EngineConfig::load(fallback);
+                LOG_INFO("Config loaded from: " + fallback);
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to load fallback config: " + std::string(e.what()));
+                LOG_INFO("Using default configuration");
+            }
+        } else {
+            LOG_INFO("No config file found, using defaults");
+        }
     }
     
+    // Resolve model path relative to RTVORTEX_HOME if not absolute
+    if (!engine_config.onnx_model_path.empty() &&
+        !fs::path(engine_config.onnx_model_path).is_absolute()) {
+        std::string resolved = (fs::path(g_env.models_dir) / 
+            fs::path(engine_config.onnx_model_path).filename()).string();
+        if (fileExists(resolved)) {
+            engine_config.onnx_model_path = resolved;
+            LOG_INFO("ONNX model: " + resolved);
+        } else {
+            LOG_WARN("ONNX model not found: " + resolved);
+            LOG_WARN("Download from: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2");
+        }
+    }
+    
+    // Point storage_path into RTVORTEX_HOME/data so the engine writes
+    // index/TMS data inside the managed directory tree, not a relative ".rtvortex/" folder.
+    engine_config.storage_path = (fs::path(g_env.data_dir) / "index").string();
+    LOG_INFO("Storage path: " + engine_config.storage_path);
+
     // Create engine instance
-    std::cout << "[INFO] Initializing engine...\n";
+    LOG_INFO("Initializing engine...");
     auto engine = aipr::Engine::create(engine_config);
     if (!engine) {
         throw std::runtime_error("Failed to create engine instance");
     }
-    std::cout << "[INFO] Engine initialized (version: " << engine->getVersion() << ")\n";
+    LOG_INFO("Engine initialized (version: " + engine->getVersion() + ")");
     
     // Create service implementation
     aipr::server::EngineServiceImpl service(std::move(engine));
@@ -726,15 +968,18 @@ void runServer(const ServerConfig& config) {
         throw std::runtime_error("Failed to start gRPC server");
     }
     
-    std::cout << "[INFO] Server listening on " << server_address << "\n";
-    std::cout << "[INFO] TLS: " << (config.tls_enabled ? "enabled" : "disabled") << "\n";
-    std::cout << "[INFO] Press Ctrl+C to shutdown\n";
-    std::cout << "=========================================\n";
+    LOG_INFO("Server listening on " + server_address);
+    LOG_INFO("TLS: " + std::string(config.tls_enabled ? "enabled" : "disabled"));
+    LOG_INFO("Press Ctrl+C to shutdown");
+    LOG_INFO("=========================================");
+    
+    // Dismiss splash screen now that we're fully initialized
+    rtvortex::SplashScreen::dismiss();
     
     // Wait for shutdown
     g_server->Wait();
     
-    std::cout << "[INFO] Server shutdown complete\n";
+    LOG_INFO("Server shutdown complete");
 }
 
 }  // namespace
@@ -746,6 +991,9 @@ void runServer(const ServerConfig& config) {
 int main(int argc, char* argv[]) {
     try {
         ServerConfig config = parseArgs(argc, argv);
+        
+        // Initialize environment directories and logging FIRST
+        initEnvironment();
         
 #ifdef _WIN32
         // Handle Windows service commands
@@ -768,9 +1016,9 @@ int main(int argc, char* argv[]) {
                     DWORD error = GetLastError();
                     if (error == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT) {
                         // Not running from SCM, run as console app
-                        std::cout << "[INFO] Not started by SCM, running in console mode...\n";
+                        LOG_INFO("Not started by SCM, running in console mode...");
                     } else {
-                        std::cerr << "[ERROR] Failed to start as service: " << error << "\n";
+                        LOG_ERROR("Failed to start as service: " + std::to_string(error));
                         return 1;
                     }
                 } else {
@@ -791,10 +1039,11 @@ int main(int argc, char* argv[]) {
         // Run the server in foreground
         runServer(config);
         
+        LOG_INFO("Engine process exiting normally");
         return 0;
         
     } catch (const std::exception& e) {
-        std::cerr << "[FATAL] " << e.what() << "\n";
+        LOG_FATAL(std::string("Unhandled exception: ") + e.what());
         return 1;
     }
 }

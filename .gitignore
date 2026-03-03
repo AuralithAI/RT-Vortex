@@ -166,3 +166,10 @@ evals/*.json
 # Docker
 *.tar
 docker-compose.override.yml
+
+# ONNX model weights (download separately — too large for git)
+*.onnx
+
+# Runtime index data
+.aipr/
+.rtvortex/

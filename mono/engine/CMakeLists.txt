@@ -747,9 +747,11 @@ set_target_properties(aipr-engine-shared PROPERTIES
 if(AIPR_BUILD_TOOLS)
     add_executable(aipr-engine-bench tools/aipr-engine-bench.cpp)
     target_link_libraries(aipr-engine-bench PRIVATE aipr-engine)
+    set_target_properties(aipr-engine-bench PROPERTIES OUTPUT_NAME rtvortex-bench)
     
     add_executable(aipr-engine-doctor tools/aipr-engine-doctor.cpp)
     target_link_libraries(aipr-engine-doctor PRIVATE aipr-engine)
+    set_target_properties(aipr-engine-doctor PROPERTIES OUTPUT_NAME rtvortex-doctor)
     
     # TMS Demo - Brain-Inspired RAG System
     add_executable(tms-demo examples/tms_demo.cpp)
@@ -771,12 +773,17 @@ if(AIPR_BUILD_SERVER)
         ${PROTO_GENERATED_SRCS}
     )
     
+    # Windows: embed application icon and version info via .rc resource file
+    if(WIN32 AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/rtvortex.rc")
+        list(APPEND SERVER_SOURCES rtvortex.rc)
+    endif()
+    
     # Create the server executable
     add_executable(aipr-engine-server ${SERVER_SOURCES})
     
-    # Set output name (without -server suffix for cleaner binary name)
+    # Set output name
     set_target_properties(aipr-engine-server PROPERTIES
-        OUTPUT_NAME aipr-engine
+        OUTPUT_NAME rtvortex
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
     )
     
@@ -804,7 +811,82 @@ if(AIPR_BUILD_SERVER)
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
     
-    message(STATUS "Server executable will be: ${CMAKE_BINARY_DIR}/bin/aipr-engine${CMAKE_EXECUTABLE_SUFFIX}")
+    message(STATUS "Server executable will be: ${CMAKE_BINARY_DIR}/bin/rtvortex${CMAKE_EXECUTABLE_SUFFIX}")
+
+    # ---------------------------------------------------------------------------
+    # Local-dev convenience: symlink models/, config/, logs/ into the build tree
+    # so the binary can find them without setting RTVORTEX_HOME.
+    # On Windows cmake -E create_symlink may need developer mode; fall back to copy.
+    # ---------------------------------------------------------------------------
+    set(_ENGINE_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+    set(_MODELS_SRC_DIR "${_ENGINE_SRC_DIR}/models")
+    set(_ONNX_MODEL_FILE "all-MiniLM-L6-v2.onnx")
+    set(_ONNX_MODEL_PATH "${_MODELS_SRC_DIR}/${_ONNX_MODEL_FILE}")
+
+    # ── Auto-download ONNX embedding model if not present ──────────────────
+    # The .onnx file is ~87 MB and excluded from git via .gitignore.
+    # On first cmake run we download it from Hugging Face so the developer
+    # doesn't have to do it manually.
+    if(NOT EXISTS "${_ONNX_MODEL_PATH}")
+        set(_HF_BASE "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main")
+
+        file(MAKE_DIRECTORY "${_MODELS_SRC_DIR}")
+
+        message(STATUS "Downloading ONNX embedding model (all-MiniLM-L6-v2, ~87 MB)...")
+        file(DOWNLOAD
+            "${_HF_BASE}/onnx/model.onnx"
+            "${_ONNX_MODEL_PATH}"
+            SHOW_PROGRESS
+            STATUS _dl_status
+        )
+        list(GET _dl_status 0 _dl_code)
+        if(NOT _dl_code EQUAL 0)
+            message(WARNING "Failed to download ONNX model (status: ${_dl_status}). "
+                            "Server will start but local embeddings will be unavailable. "
+                            "Download manually from: ${_HF_BASE}/onnx/model.onnx")
+            file(REMOVE "${_ONNX_MODEL_PATH}")  # clean up partial download
+        else()
+            message(STATUS "ONNX model downloaded: ${_ONNX_MODEL_PATH}")
+        endif()
+
+        # Also grab tokenizer.json and vocab.txt if missing
+        foreach(_f tokenizer.json vocab.txt)
+            if(NOT EXISTS "${_MODELS_SRC_DIR}/${_f}")
+                message(STATUS "Downloading ${_f}...")
+                file(DOWNLOAD
+                    "${_HF_BASE}/${_f}"
+                    "${_MODELS_SRC_DIR}/${_f}"
+                    STATUS _dl2_status
+                )
+            endif()
+        endforeach()
+    endif()
+
+    # models/ → mono/engine/models  (symlink to avoid duplicating ~90 MB ONNX file)
+    if(EXISTS "${_ENGINE_SRC_DIR}/models" AND NOT EXISTS "${CMAKE_BINARY_DIR}/models")
+        file(CREATE_LINK
+            "${_ENGINE_SRC_DIR}/models"
+            "${CMAKE_BINARY_DIR}/models"
+            COPY_ON_ERROR
+            SYMBOLIC
+        )
+        message(STATUS "Linked build/models → ${_ENGINE_SRC_DIR}/models")
+    endif()
+
+    # config/ → mono/config  (so default.yml is found)
+    if(EXISTS "${_ENGINE_SRC_DIR}/../config" AND NOT EXISTS "${CMAKE_BINARY_DIR}/config")
+        file(CREATE_LINK
+            "${_ENGINE_SRC_DIR}/../config"
+            "${CMAKE_BINARY_DIR}/config"
+            COPY_ON_ERROR
+            SYMBOLIC
+        )
+        message(STATUS "Linked build/config → ${_ENGINE_SRC_DIR}/../config")
+    endif()
+
+    # logs/ and data/ — just create the directories (no source to link)
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/logs")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/data")
 endif()
 
 # Tests

@@ -266,18 +266,30 @@ jobs:
         run: ctest --test-dir build --output-on-failure -C ${{ github.event.inputs.build_type || 'Release' }}
         continue-on-error: true
 
+      - name: Download Embedding Model
+        shell: bash
+        run: |
+          mkdir -p mono/engine/models
+          curl -fSL -o mono/engine/models/all-MiniLM-L6-v2.onnx \
+            "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"
+          curl -fSL -o mono/engine/models/tokenizer.json \
+            "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json"
+          curl -fSL -o mono/engine/models/vocab.txt \
+            "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt"
+          ls -lh mono/engine/models/
+
       - name: Package Artifacts
         shell: bash
         run: |
-          mkdir -p dist/bin dist/lib
+          mkdir -p dist/bin dist/lib dist/models dist/config
           
           # Copy server executable
-          if [ -f "build/bin/aipr-engine" ]; then
-            cp build/bin/aipr-engine dist/bin/
-          elif [ -f "build/bin/Release/aipr-engine.exe" ]; then
-            cp build/bin/Release/aipr-engine.exe dist/bin/
-          elif [ -f "build/bin/aipr-engine.exe" ]; then
-            cp build/bin/aipr-engine.exe dist/bin/
+          if [ -f "build/bin/rtvortex" ]; then
+            cp build/bin/rtvortex dist/bin/
+          elif [ -f "build/bin/Release/rtvortex.exe" ]; then
+            cp build/bin/Release/rtvortex.exe dist/bin/
+          elif [ -f "build/bin/rtvortex.exe" ]; then
+            cp build/bin/rtvortex.exe dist/bin/
           fi
           
           # Copy libraries (for backward compat during transition)
@@ -286,14 +298,22 @@ jobs:
           cp build/lib/*.dylib dist/lib/ 2>/dev/null || true
           cp build/lib/Release/*.dll dist/lib/ 2>/dev/null || true
           
+          # Bundle ONNX embedding model (required for LOCAL_ONNX provider)
+          cp mono/engine/models/all-MiniLM-L6-v2.onnx dist/models/
+          cp mono/engine/models/tokenizer.json dist/models/
+          cp mono/engine/models/vocab.txt dist/models/
+          
+          # Bundle default config
+          cp mono/config/default.yml dist/config/
+          
           # Create archive
-          tar -czvf aipr-engine-${{ matrix.target }}.tar.gz -C dist .
+          tar -czvf rtvortex-${{ matrix.target }}.tar.gz -C dist .
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: engine-${{ matrix.target }}
-          path: aipr-engine-${{ matrix.target }}.tar.gz
+          path: rtvortex-${{ matrix.target }}.tar.gz
           retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
 
   # ===========================================================================
@@ -316,11 +336,11 @@ jobs:
       - name: Extract and Run Engine
         run: |
           mkdir -p engine-dist
-          tar -xzf artifacts/aipr-engine-linux-x64.tar.gz -C engine-dist
-          chmod +x engine-dist/bin/aipr-engine
+          tar -xzf artifacts/rtvortex-linux-x64.tar.gz -C engine-dist
+          chmod +x engine-dist/bin/rtvortex
           
           # Start engine in background
-          ./engine-dist/bin/aipr-engine --port 50051 &
+          ./engine-dist/bin/rtvortex --port 50051 &
           ENGINE_PID=$!
           echo "ENGINE_PID=$ENGINE_PID" >> $GITHUB_ENV
           
