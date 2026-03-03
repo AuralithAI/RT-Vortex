@@ -8,6 +8,7 @@
 
 #include "engine_api.h"
 #include "review_signals.h"
+#include "version.h"
 #include "tms/tms_memory_system.h"
 #include "tms/tms_types.h"
 #include "tms/repo_parser.h"
@@ -21,8 +22,19 @@
 #include <chrono>
 #include <algorithm>
 #include <mutex>
-#include <sys/sysinfo.h>
-#include <sys/statvfs.h>
+
+// Platform-specific headers for system diagnostics
+#ifdef __linux__
+  #include <sys/sysinfo.h>
+  #include <sys/statvfs.h>
+#elif defined(__APPLE__)
+  #include <mach/mach.h>
+  #include <sys/mount.h>
+  #include <sys/param.h>
+#elif defined(_WIN32)
+  #define WIN32_LEAN_AND_MEAN
+  #include <windows.h>
+#endif
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -470,12 +482,12 @@ public:
     // =========================================================================
 
     std::string getVersion() const override {
-        return "0.1.0";
+        return AIPR_VERSION_FULL;
     }
 
     DiagnosticResult runDiagnostics() override {
         DiagnosticResult result;
-        result.engine_version = "0.1.0";
+        result.engine_version = AIPR_VERSION_FULL;
 
         // Check TMS subsystem
         try {
@@ -500,7 +512,7 @@ public:
             }
         }
 
-        // System resources
+        // System resources — cross-platform
 #ifdef __linux__
         struct sysinfo si;
         if (sysinfo(&si) == 0) {
@@ -512,8 +524,56 @@ public:
                 result.available_disk_mb = (sv.f_bavail * sv.f_frsize) / (1024 * 1024);
             }
         }
-#endif
+  #if defined(__aarch64__) || defined(__ARM_ARCH)
+        result.platform = "linux-arm64";
+  #else
         result.platform = "linux-x86_64";
+  #endif
+
+#elif defined(__APPLE__)
+        // macOS: use Mach APIs for memory, statfs for disk
+        mach_port_t host = mach_host_self();
+        vm_statistics64_data_t vm_stats;
+        mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+        if (host_statistics64(host, HOST_VM_INFO64,
+                              reinterpret_cast<host_info64_t>(&vm_stats), &count) == KERN_SUCCESS) {
+            uint64_t free_bytes = (static_cast<uint64_t>(vm_stats.free_count)
+                                 + static_cast<uint64_t>(vm_stats.inactive_count))
+                                 * vm_page_size;
+            result.available_memory_mb = free_bytes / (1024 * 1024);
+        }
+        if (!config_.storage_path.empty() && fs::exists(config_.storage_path)) {
+            struct statfs sf;
+            if (statfs(config_.storage_path.c_str(), &sf) == 0) {
+                result.available_disk_mb =
+                    (static_cast<uint64_t>(sf.f_bavail) * sf.f_bsize) / (1024 * 1024);
+            }
+        }
+  #if defined(__aarch64__) || defined(__arm64__)
+        result.platform = "darwin-arm64";
+  #else
+        result.platform = "darwin-x64";
+  #endif
+
+#elif defined(_WIN32)
+        // Windows: GlobalMemoryStatusEx for memory
+        MEMORYSTATUSEX memstat;
+        memstat.dwLength = sizeof(memstat);
+        if (GlobalMemoryStatusEx(&memstat)) {
+            result.available_memory_mb =
+                static_cast<size_t>(memstat.ullAvailPhys / (1024 * 1024));
+        }
+        if (!config_.storage_path.empty() && fs::exists(config_.storage_path)) {
+            ULARGE_INTEGER free_bytes;
+            // GetDiskFreeSpaceExA works on paths
+            if (GetDiskFreeSpaceExA(config_.storage_path.c_str(),
+                                    &free_bytes, nullptr, nullptr)) {
+                result.available_disk_mb =
+                    static_cast<size_t>(free_bytes.QuadPart / (1024 * 1024));
+            }
+        }
+        result.platform = "windows-x64";
+#endif
 
         // Review signals
         auto check_ids = review_signals_->getRegisteredChecks();

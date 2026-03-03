@@ -5,10 +5,75 @@ if(POLICY CMP0135)
     cmake_policy(SET CMP0135 NEW)
 endif()
 
+# =============================================================================
+# Version detection: git tag > mono/VERSION > fallback 0.0.0
+# =============================================================================
+# In CI/release, git describe finds the tag (e.g., v0.2.3 → "0.2.3").
+# For local dev without tags, reads mono/VERSION.
+# This means version bumps happen automatically via release.yml — no manual
+# edits needed.
+
+execute_process(
+    COMMAND git describe --tags --match "v*" --abbrev=0
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_TAG_VERSION
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE GIT_TAG_RESULT
+)
+
+if(GIT_TAG_RESULT EQUAL 0 AND GIT_TAG_VERSION MATCHES "^v([0-9]+\\.[0-9]+\\.[0-9]+)")
+    # Strip leading 'v' from tag
+    string(REGEX REPLACE "^v" "" DETECTED_VERSION "${GIT_TAG_VERSION}")
+    message(STATUS "Version from git tag: ${DETECTED_VERSION}")
+elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
+    file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION" DETECTED_VERSION)
+    string(STRIP "${DETECTED_VERSION}" DETECTED_VERSION)
+    message(STATUS "Version from mono/VERSION: ${DETECTED_VERSION}")
+else()
+    set(DETECTED_VERSION "0.0.0")
+    message(STATUS "Version fallback: ${DETECTED_VERSION}")
+endif()
+
 project(aipr-engine
-    VERSION 0.1.0
+    VERSION ${DETECTED_VERSION}
     DESCRIPTION "AI PR Reviewer - Core Engine"
     LANGUAGES C CXX
+)
+
+# =============================================================================
+# Version header generation (from project VERSION + git describe)
+# =============================================================================
+# AIPR_GIT_HASH: short commit hash for identifying exact build
+# AIPR_GIT_DESCRIBE: full describe string (e.g., "v0.1.0-5-g3d29406")
+#   — useful for dev builds to see distance from last release
+execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE AIPR_GIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT AIPR_GIT_HASH)
+    set(AIPR_GIT_HASH "unknown")
+endif()
+
+execute_process(
+    COMMAND git describe --tags --always --match "v*"
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE AIPR_GIT_DESCRIBE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT AIPR_GIT_DESCRIBE)
+    set(AIPR_GIT_DESCRIBE "${PROJECT_VERSION}")
+endif()
+
+string(TIMESTAMP AIPR_BUILD_DATE "%Y-%m-%d")
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include/version.h.in
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/version.h
+    @ONLY
 )
 
 # C++ Standard
@@ -613,6 +678,7 @@ add_library(aipr-engine STATIC
 
 target_include_directories(aipr-engine PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>
     $<INSTALL_INTERFACE:include>
 )
 

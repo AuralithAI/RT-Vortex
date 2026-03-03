@@ -19,6 +19,7 @@
 
 #include "engine_service_impl.h"
 #include "engine_api.h"
+#include "version.h"
 
 #include <grpcpp/grpcpp.h>
 #include <grpcpp/health_check_service_interface.h>
@@ -165,7 +166,7 @@ ServerConfig parseArgs(int argc, char* argv[]) {
             std::exit(0);
         }
         else if (arg == "--version" || arg == "-v") {
-            std::cout << "aipr-engine version 0.1.0\n";
+            std::cout << "aipr-engine version " << AIPR_VERSION_FULL << "\n";
             std::exit(0);
         }
         else if (arg == "--verbose") {
