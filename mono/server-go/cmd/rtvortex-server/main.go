@@ -10,10 +10,10 @@
 //	│   (Go, chi router)    │
 //	└───────┬───────────────┘
 //	        │  gRPC
-//	┌───────▼───────────────┐
-//	│  RTVortex C++ Engine  │
+//	┌───────▼────────────────┐
+//	│  RTVortex C++ Engine   │
 //	│  (indexing, retrieval) │
-//	└───────────────────────┘
+//	└────────────────────────┘
 package main
 
 import (
@@ -120,6 +120,9 @@ func main() {
 	// Export RTVORTEX_HOME so child processes (C++ engine, scripts) inherit it.
 	_ = os.Setenv("RTVORTEX_HOME", env.Home)
 
+	// ── Print startup banner ────────────────────────────────────────────
+	printBanner(env, cfg)
+
 	slog.Info("RTVortexGo API Server starting",
 		"version", version,
 		"commit", commit,
@@ -173,7 +176,10 @@ func main() {
 	defer enginePool.Close()
 	slog.Info("Engine gRPC pool connected",
 		"target", fmt.Sprintf("%s:%d", cfg.Engine.Host, cfg.Engine.Port),
-		"max_channels", cfg.Engine.MaxChannels,
+		"channels", cfg.Engine.MaxChannels,
+		"tls", cfg.Engine.TLS,
+		"client_cert", cfg.Engine.CertFile,
+		"ca", cfg.Engine.CAFile,
 	)
 
 	// ── Build dependencies (manual DI — no magic) ───────────────────────
@@ -389,8 +395,12 @@ func main() {
 	// ── Start server in background ──────────────────────────────────────
 	errCh := make(chan error, 1)
 	go func() {
-		slog.Info("HTTP server listening",
-			"port", cfg.Server.Port,
+		scheme := "http"
+		if cfg.Server.TLS.Enabled {
+			scheme = "https"
+		}
+		slog.Info("RTVortex API server ready",
+			"url", fmt.Sprintf("%s://0.0.0.0:%d", scheme, cfg.Server.Port),
 			"tls", cfg.Server.TLS.Enabled,
 		)
 		if cfg.Server.TLS.Enabled {

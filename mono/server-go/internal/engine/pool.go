@@ -3,8 +3,11 @@ package engine
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -127,9 +130,9 @@ func (p *Pool) buildDialOptions() []grpc.DialOption {
 	}
 
 	if p.cfg.TLS {
-		creds, err := credentials.NewClientTLSFromFile(p.cfg.CAFile, "")
+		creds, err := p.buildTLSCredentials()
 		if err != nil {
-			slog.Warn("failed to load TLS creds, falling back to insecure", "error", err)
+			slog.Warn("failed to build TLS credentials, falling back to insecure", "error", err)
 			opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		} else {
 			opts = append(opts, grpc.WithTransportCredentials(creds))
@@ -139,6 +142,56 @@ func (p *Pool) buildDialOptions() []grpc.DialOption {
 	}
 
 	return opts
+}
+
+// buildTLSCredentials constructs gRPC transport credentials with full mTLS
+// support. When the engine config provides a client certificate and key the
+// Go server will present them during the TLS handshake so the C++ engine can
+// verify the caller. The CA file is used to verify the engine's server
+// certificate.
+func (p *Pool) buildTLSCredentials() (credentials.TransportCredentials, error) {
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+
+	// ------------------------------------------------------------------
+	// Load CA certificate to verify the C++ engine's server certificate.
+	// ------------------------------------------------------------------
+	if p.cfg.CAFile != "" {
+		caPEM, err := os.ReadFile(p.cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read CA file %s: %w", p.cfg.CAFile, err)
+		}
+		certPool := x509.NewCertPool()
+		if !certPool.AppendCertsFromPEM(caPEM) {
+			return nil, fmt.Errorf("failed to parse CA certificate from %s", p.cfg.CAFile)
+		}
+		tlsCfg.RootCAs = certPool
+		slog.Info("engine TLS: loaded CA certificate", "ca", p.cfg.CAFile)
+	}
+
+	// ------------------------------------------------------------------
+	// Load client certificate + key for mTLS (Go → C++ engine).
+	// If the C++ engine has tls_require_client_auth = true it will reject
+	// connections that do not present a valid client certificate signed
+	// by the trusted CA.
+	// ------------------------------------------------------------------
+	if p.cfg.CertFile != "" && p.cfg.KeyFile != "" {
+		clientCert, err := tls.LoadX509KeyPair(p.cfg.CertFile, p.cfg.KeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("load client cert/key (%s, %s): %w",
+				p.cfg.CertFile, p.cfg.KeyFile, err)
+		}
+		tlsCfg.Certificates = []tls.Certificate{clientCert}
+		slog.Info("engine TLS: loaded client certificate for mTLS",
+			"cert", p.cfg.CertFile,
+			"key", p.cfg.KeyFile,
+		)
+	} else {
+		slog.Info("engine TLS: no client certificate configured (server-verify only)")
+	}
+
+	return credentials.NewTLS(tlsCfg), nil
 }
 
 func (p *Pool) healthCheckLoop() {
