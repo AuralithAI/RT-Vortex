@@ -1,71 +1,110 @@
-# AI-PR-Reviewer
+# RTVortex — AI-Powered Code Review Platform
 
 <div align="center">
 
 **Production-Grade AI-Powered Code Review System**
 
-[![Java 21+](https://img.shields.io/badge/Java-21+-orange.svg)](https://openjdk.org/)
-[![Gradle 8.5+](https://img.shields.io/badge/Gradle-8.5+-02303A.svg)](https://gradle.org/)
+[![Go 1.24+](https://img.shields.io/badge/Go-1.24+-00ADD8.svg)](https://go.dev/)
 [![C++17](https://img.shields.io/badge/C++-17-00599C.svg)](https://isocpp.org/)
-[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2+-6DB33F.svg)](https://spring.io/projects/spring-boot)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 [![CI](https://github.com/AuralithAI/RT-AI-PR-Reviewer/actions/workflows/ci.yml/badge.svg)](https://github.com/AuralithAI/RT-AI-PR-Reviewer/actions/workflows/ci.yml)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://hub.docker.com/)
 [![gRPC](https://img.shields.io/badge/gRPC-TLS-4285F4.svg)](https://grpc.io/)
+[![Prometheus](https://img.shields.io/badge/Prometheus-metrics-E6522C.svg)](https://prometheus.io/)
+[![OpenAPI](https://img.shields.io/badge/OpenAPI-3.0-85EA2D.svg)](https://www.openapis.org/)
 
 A platform-neutral PR review engine with connectors for GitHub, GitLab, Bitbucket, and Azure DevOps.
 
-[Setup Guide](docs/setup.md) | [Architecture](docs/architecture.md)
+[Setup Guide](docs/setup.md) · [Architecture](docs/architecture.md) · [Go Server Architecture](docs/go-server-architecture.md)
 
 </div>
 
 ---
 
+## Overview
+
+RTVortex is a two-component system that uses LLMs and static analysis to automatically review pull requests:
+
+```
+Clients (Webhooks, CLI, Web UI, SDKs)
+         │
+         ▼  REST / WebSocket (port 8080)
+┌────────────────────────────┐
+│  RTVortexGo API Server     │  Go 1.24, chi router, 32+ endpoints
+│  (auth, orchestration,     │  OAuth2, JWT, rate limiting, audit
+│   LLM, webhooks)           │  Prometheus, WebSocket, SSE streaming
+└────────┬───────────────────┘
+         │  gRPC (port 50051)
+┌────────▼───────────────────┐
+│  RTVortex C++ Engine       │  C++17, 16K+ lines
+│  (indexing, retrieval,     │  FAISS, tree-sitter, ONNX
+│   heuristics, TMS)         │  Hybrid search, AST parsing
+└────────────────────────────┘
+```
+
 ## Features
 
-- **Platform Agnostic**: Works with GitHub, GitLab, Bitbucket, and Azure DevOps (cloud & self-hosted)
+- **Platform Agnostic**: GitHub, GitLab, Bitbucket, and Azure DevOps (cloud & self-hosted)
 - **CI/CD Integration**: GitHub Actions, GitLab CI, Jenkins, Bitbucket Pipelines, Azure Pipelines
 - **High Performance**: C++ engine for code indexing and analysis via gRPC
-- **LLM Powered**: Supports OpenAI, Anthropic, Azure OpenAI, Ollama, and compatible APIs
+- **LLM Powered**: OpenAI, Anthropic, and Ollama with SSE streaming support
 - **Multi-Cloud Storage**: Local, AWS S3, GCS, Azure Blob, OCI Object Storage, MinIO
+- **Real-Time Updates**: WebSocket progress streaming for review status
+- **Observability**: Prometheus metrics, structured logging, health checks
+- **Security**: AES-256-GCM token encryption, JWT auth, OAuth2 (6 providers), rate limiting
 - **Self-Hostable**: Deploy on your infrastructure with full control
 - **TLS/mTLS Support**: Secure gRPC communication with included dev certificates
-- **Unified Configuration**: Single XML config (`rtserverprops.xml`) drives both Java and C++ components
+- **API Documentation**: Full OpenAPI 3.0 spec at `/api/v1/docs/openapi.yaml`
+- **Unified Configuration**: XML configs (`rtserverprops.xml` + `vcsplatforms.xml`) drive both components
 
 ## Prerequisites
 
 | Tool | Version | Purpose |
 |------|---------|---------|
-| JDK | 21+ | Server runtime |
-| Gradle | 8.5+ | Build system |
+| Go | 1.24+ | API server |
 | CMake | 3.20+ | C++ engine build |
+| g++ | 11+ | C++ compiler |
 | PostgreSQL | 15+ | Database (runtime) |
-| Redis | 7+ | Cache (runtime) |
+| Redis | 7+ | Session cache, rate limiting (runtime) |
+| Make | Any | Unified build controller |
 
 ## Quick Start
 
 ```bash
 # Clone
 git clone https://github.com/AuralithAI/RT-AI-PR-Reviewer.git
-cd RT-AI-PR-Reviewer/mono
+cd RT-AI-PR-Reviewer
 
-# Check prerequisites
-./gradlew checkPrereqs
+# Build everything into rt_home/
+make
 
-# Build distribution
-./gradlew distZip
+# Configure
+nano rt_home/config/rtserverprops.xml   # Database, LLM, engine settings
+nano rt_home/config/vcsplatforms.xml    # GitHub/GitLab/Bitbucket/Azure OAuth
 
-# Extract and run
-unzip build/distributions/aipr-*.zip -d /opt/
-cd /opt/aipr-*
-./setup.sh                    # Configure environment
-nano config/rtserverprops.xml # Edit configuration
-./run.sh                      # Start server
+# Initialize database
+make db-install
+
+# Run both components
+make run
+```
+
+The `make` command builds both the C++ engine and Go server into the `rt_home/` output directory:
+
+```
+rt_home/
+├── bin/
+│   ├── rtvortex          ← C++ engine (gRPC, indexing, retrieval)
+│   └── RTVortexGo        ← Go API server (REST, webhooks, auth)
+├── config/               ← XML configuration files + TLS certs
+├── data/sql/             ← PostgreSQL schema scripts
+├── models/               ← ONNX model weights
+└── temp/                 ← Logs + ephemeral scratch
 ```
 
 ## Building the C++ Engine
 
-The C++ engine is an independent CMake project that can be built separately from the Java server.
+The C++ engine is an independent CMake project.
 
 ### Prerequisites (Linux / Ubuntu)
 
@@ -105,9 +144,7 @@ sudo ldconfig
 brew install libomp openblas faiss protobuf grpc abseil
 ```
 
-### Configure & Build
-
-From the repository root:
+### Building (Standalone)
 
 ```bash
 # Configure (fetches gRPC, abseil, nlohmann/json, tree-sitter, ONNX Runtime automatically)
@@ -118,7 +155,7 @@ cmake -B build -S mono/engine \
   -DAIPR_USE_FAISS=ON \
   -DAIPR_USE_TREE_SITTER=ON
 
-# Build (all targets)
+# Build
 cmake --build build --parallel $(nproc)
 ```
 
@@ -127,94 +164,114 @@ cmake --build build --parallel $(nproc)
 | Option | Default | Description |
 |--------|---------|-------------|
 | `AIPR_BUILD_TESTS` | `ON` | Build unit tests (`aipr-engine-tests`) |
-| `AIPR_BUILD_SERVER` | `ON` | Build the gRPC server (`aipr-engine-server`) |
+| `AIPR_BUILD_SERVER` | `ON` | Build the gRPC server (`rtvortex`) |
 | `AIPR_BUILD_TOOLS` | `ON` | Build utility tools |
 | `AIPR_USE_FAISS` | `ON` | Enable FAISS vector search |
 | `AIPR_USE_TREE_SITTER` | `ON` | Enable tree-sitter AST parsing |
 | `AIPR_USE_ONNX` | `ON` | Enable ONNX Runtime local embeddings |
 
-### Build Targets
-
-| Target | Description |
-|--------|-------------|
-| `aipr-engine` | Core static library |
-| `aipr-engine-server` | gRPC server executable |
-| `aipr-engine-doctor` | Diagnostics tool |
-| `aipr-engine-bench` | Benchmarking tool |
-| `aipr-engine-tests` | Unit test suite (Google Test) |
-| `tms-demo` | TMS demo application |
-
-### Running Tests
+## Building the Go Server
 
 ```bash
-ctest --test-dir build --output-on-failure -C Release
+cd mono/server-go
+go build -trimpath -o RTVortexGo ./cmd/rtvortex-server/
 ```
+
+Or use the unified Makefile:
+
+```bash
+make server    # builds into rt_home/bin/RTVortexGo
+```
+
+### Go Dependencies
+
+| Dependency | Purpose |
+|------------|---------|
+| `chi/v5` | HTTP router |
+| `pgx/v5` | PostgreSQL driver (connection pooling) |
+| `go-redis/v9` | Redis client |
+| `grpc` | Engine communication |
+| `golang-jwt/v5` | JWT authentication |
+| `oauth2` | OAuth2 flows |
+| `coder/websocket` | WebSocket support |
+| `prometheus/client_golang` | Metrics export |
 
 ## Repository Structure
 
 ```
 RT-AI-PR-Reviewer/
-├── mono/                       # Monorepo source code
-│   ├── engine/                 # C++ indexing/retrieval engine
-│   ├── server/                 # Java Spring Boot API server
+├── Makefile                    # Unified build controller
+├── mono/
+│   ├── engine/                 # C++ indexing/retrieval engine (gRPC server)
+│   ├── server-go/              # Go API server (RTVortexGo)
+│   │   ├── cmd/rtvortex-server/  # Entry point (main.go)
+│   │   ├── internal/
+│   │   │   ├── api/            # HTTP handlers (32+ endpoints)
+│   │   │   ├── auth/           # JWT + OAuth2 (6 providers)
+│   │   │   ├── audit/          # Security audit logging
+│   │   │   ├── config/         # XML config parser
+│   │   │   ├── crypto/         # AES-256-GCM token encryption
+│   │   │   ├── engine/         # gRPC client + connection pool
+│   │   │   ├── llm/            # OpenAI, Anthropic, Ollama + SSE streaming
+│   │   │   ├── metrics/        # Prometheus counters/histograms/gauges
+│   │   │   ├── review/         # 12-step review pipeline
+│   │   │   ├── server/         # Chi router + middleware wiring
+│   │   │   ├── session/        # Redis sessions + rate limiting
+│   │   │   ├── store/          # PostgreSQL repositories
+│   │   │   ├── vcs/            # GitHub, GitLab, Bitbucket, Azure DevOps
+│   │   │   └── ws/             # WebSocket hub + handler
+│   │   ├── api/                # OpenAPI 3.0 spec (embedded)
+│   │   └── db/sql/             # PostgreSQL schema scripts
 │   ├── cli/                    # Command-line interface
-│   ├── sdks/                   # Client SDKs (Java, Python, Node)
-│   ├── integrations/           # Platform integrations
-│   ├── config/                 # Configuration files
+│   ├── sdks/                   # Client SDKs
+│   ├── config/                 # Configuration templates
 │   │   ├── rtserverprops.xml   # Server configuration
 │   │   ├── vcsplatforms.xml    # Platform OAuth config
 │   │   └── certificates/       # TLS certificates (dev)
-│   ├── proto/                  # gRPC protocol definitions
-│   ├── build.gradle            # Gradle build
-│   └── settings.gradle         # Gradle settings
+│   └── proto/                  # gRPC protocol definitions
 │
-├── docs/                       # Documentation
-│   ├── setup.md                # Setup, CI/CD, distribution
-│   └── architecture.md         # System architecture
+├── rt_home/                    # Build output (created by make)
+├── docs/
+│   ├── architecture.md         # System architecture
+│   ├── go-server-architecture.md # Go server internals
+│   └── setup.md                # Setup, CI/CD, distribution
 │
 ├── .github/workflows/          # CI/CD workflows
 ├── LICENSE                     # Apache 2.0
 └── README.md                   # This file
 ```
 
-## Distribution Package
+## Make Targets
 
-Run `./gradlew distZip` to create a production-ready package:
-
-```
-aipr-<version>.zip
-├── setup.sh / setup.bat        # Environment setup (run first)
-├── run.sh / run.bat            # Start server
-├── bin/
-│   └── aipr-server             # Direct startup script
-├── lib/
-│   ├── aipr-server.jar         # Server (thin JAR)
-│   ├── *.jar                   # Runtime dependencies
-│   └── aipr-engine.so/dll      # C++ engine native library
-├── config/
-│   ├── rtserverprops.xml       # Server config (database, redis, grpc, llm)
-│   └── vcsplatforms.xml        # Platform OAuth config
-├── certificates/               # TLS certs (dev only, regenerate for prod)
-├── data/sql/                   # Database migrations
-└── docs/                       # Documentation
-```
+| Target | Description |
+|--------|-------------|
+| `make` | Build everything (C++ engine + Go server + config + models) |
+| `make engine` | Build only the C++ engine |
+| `make server` | Build only the Go API server |
+| `make run` | Build and run both components |
+| `make run-engine` | Build and run only the engine |
+| `make run-server` | Build and run only the Go server |
+| `make test` | Run all tests (C++ + Go) |
+| `make db-install` | Create database + initialize schema |
+| `make clean` | Remove `rt_home/` |
+| `make status` | Show what's in `rt_home/` |
+| `make help` | Show all targets |
 
 ## Configuration
 
-All configuration is centralized in `config/rtserverprops.xml`. The Java server reads this file and pushes relevant settings (storage, LLM, etc.) to the C++ engine via gRPC at startup.
+All configuration is centralized in two XML files. The Go server reads both files and pushes relevant settings (storage, LLM, etc.) to the C++ engine via gRPC at startup.
 
-**`config/rtserverprops.xml`** - Server settings:
+**`config/rtserverprops.xml`** — Server settings:
 ```xml
 <!-- Database -->
-<database url="jdbc:postgresql://localhost:5432/aipr"
-          username="aipr" password="your_password"/>
+<database host="localhost" port="5432" name="rtvortex"
+          username="rtvortex" password="your_password"/>
 
 <!-- LLM Providers (multiple supported with failover) -->
 <llm primary="openai" fallback="ollama">
     <openai api-key="${LLM_OPENAI_API_KEY}" model="gpt-4-turbo-preview"/>
-    <anthropic api-key="${LLM_ANTHROPIC_API_KEY}"/>
-    <azure-openai endpoint="${LLM_AZURE_OPENAI_ENDPOINT}" deployment="gpt-4"/>
-    <ollama base-url="http://localhost:11434"/>
+    <anthropic api-key="${LLM_ANTHROPIC_API_KEY}" model="claude-3-5-sonnet"/>
+    <ollama base-url="http://localhost:11434" model="codellama"/>
 </llm>
 
 <!-- Storage (pushed to C++ engine via gRPC) -->
@@ -223,35 +280,34 @@ All configuration is centralized in `config/rtserverprops.xml`. The Java server 
 </storage>
 ```
 
-**`config/vcsplatforms.xml`** - Platform OAuth:
+**`config/vcsplatforms.xml`** — Platform OAuth:
 ```xml
 <github enabled="true" client-id="your_id" client-secret="your_secret"/>
-<azure-devops enabled="true" 
-              client-id="your_id" 
-              tenant-id="your_tenant"
-              webhook-secret="your_hmac_secret"/>
+<gitlab enabled="true" application-id="your_id" application-secret="your_secret"/>
+<bitbucket enabled="true" client-id="your_id" client-secret="your_secret"/>
+<azure-devops enabled="true" client-id="your_id" tenant-id="your_tenant"/>
 ```
 
-## Platform Authentication
+## REST API Highlights
 
-Configure which platforms to enable in `config/vcsplatforms.xml`, then authenticate via:
-- `http://localhost:8080/api/v1/auth/github/login`
-- `http://localhost:8080/api/v1/auth/gitlab/login`
-- `http://localhost:8080/api/v1/auth/bitbucket/login`
-- `http://localhost:8080/api/v1/auth/azure-devops/login`
+The Go server exposes 32+ endpoints at port 8080. Full OpenAPI spec at `/api/v1/docs/openapi.yaml`.
 
-## LLM Provider Management
-
-The server auto-discovers local Ollama instances and provides a REST API for provider management:
-
-```bash
-# List all providers with health status
-curl http://localhost:8080/api/v1/llm/providers
-
-# Switch active provider
-curl -X POST http://localhost:8080/api/v1/llm/providers/switch \
-  -d '{"provider": "ollama-local"}'
-```
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/health` | GET | Health check |
+| `/ready` | GET | Readiness probe |
+| `/metrics` | GET | Prometheus metrics |
+| `/api/v1/auth/login/{provider}` | GET | OAuth2 login (GitHub, GitLab, etc.) |
+| `/api/v1/reviews` | POST | Submit a PR for review |
+| `/api/v1/reviews/{id}` | GET | Get review result |
+| `/api/v1/reviews/{id}/ws` | GET | WebSocket review progress |
+| `/api/v1/repos/{id}/index` | POST | Trigger repository indexing |
+| `/api/v1/webhooks/github` | POST | GitHub webhook receiver |
+| `/api/v1/webhooks/gitlab` | POST | GitLab webhook receiver |
+| `/api/v1/webhooks/bitbucket` | POST | Bitbucket webhook receiver |
+| `/api/v1/webhooks/azure-devops` | POST | Azure DevOps webhook receiver |
+| `/api/v1/llm/providers` | GET | List LLM providers + health |
+| `/api/v1/llm/stream` | POST | SSE streaming LLM completion |
 
 ## CI/CD Integration
 
@@ -285,9 +341,10 @@ See [docs/setup.md](docs/setup.md) for complete integration guides.
 
 | Document | Description |
 |----------|-------------|
-| [Setup Guide](docs/setup.md) | Local setup, CI/CD, TLS certificates, distribution |
-| [Architecture](docs/architecture.md) | System design, authentication, gRPC communication |
+| [Setup Guide](docs/setup.md) | Prerequisites, building, configuration, TLS, distribution |
+| [Architecture](docs/architecture.md) | System design, C++ engine, deployment models, scaling |
+| [Go Server Architecture](docs/go-server-architecture.md) | Go server internals, packages, data flow, middleware |
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details.
+Apache 2.0 — See [LICENSE](LICENSE) for details.

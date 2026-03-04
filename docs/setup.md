@@ -6,24 +6,75 @@ Complete guide for local development, CI/CD integration, and distribution.
 
 1. [Prerequisites](#prerequisites)
 2. [Quick Start](#quick-start)
-3. [Platform Authentication](#platform-authentication)
-4. [CI/CD Integration](#cicd-integration)
-5. [Distribution Package](#distribution-package)
-6. [TLS Certificates](#tls-certificates)
-7. [Troubleshooting](#troubleshooting)
+3. [Building](#building)
+4. [Configuration](#configuration)
+5. [Platform Authentication](#platform-authentication)
+6. [CI/CD Integration](#cicd-integration)
+7. [Distribution Package](#distribution-package)
+8. [TLS Certificates](#tls-certificates)
+9. [Docker Deployment](#docker-deployment)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
 ## Prerequisites
 
-| Tool | Version | Required |
-|------|---------|----------|
-| JDK | 21+ | Yes |
-| Gradle | 8.5+ | Yes |
-| CMake | 3.20+ | Yes |
-| Docker | Latest | Optional |
-| PostgreSQL | 15+ | For runtime |
-| Redis | 7+ | For runtime |
+| Tool | Version | Required | Purpose |
+|------|---------|----------|---------|
+| Go | 1.24+ | Yes | API server |
+| CMake | 3.20+ | Yes | C++ engine build |
+| g++ | 11+ | Yes | C++ compiler |
+| Make | Any | Yes | Unified build controller |
+| PostgreSQL | 15+ | Runtime | Database |
+| Redis | 7+ | Runtime | Sessions, rate limiting, cache |
+| Docker | Latest | Optional | Containerized deployment |
+
+### System Dependencies (Linux / Ubuntu)
+
+```bash
+# Go
+wget https://go.dev/dl/go1.24.0.linux-amd64.tar.gz
+sudo tar -C /usr/local -xzf go1.24.0.linux-amd64.tar.gz
+export PATH=$PATH:/usr/local/go/bin
+
+# C++ build tools
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential cmake g++ \
+  libcurl4-openssl-dev \
+  libssl-dev \
+  libomp-dev \
+  libopenblas-dev \
+  liblapack-dev \
+  libgflags-dev
+
+# PostgreSQL + Redis
+sudo apt-get install -y postgresql redis-server
+```
+
+### System Dependencies (macOS)
+
+```bash
+brew install go cmake libomp openblas faiss protobuf grpc abseil postgresql redis
+```
+
+### FAISS (Linux only — must be installed separately)
+
+```bash
+git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git /tmp/faiss
+cd /tmp/faiss && mkdir build && cd build
+cmake .. \
+  -DFAISS_ENABLE_GPU=OFF \
+  -DFAISS_ENABLE_PYTHON=OFF \
+  -DFAISS_ENABLE_C_API=ON \
+  -DBUILD_TESTING=OFF \
+  -DBUILD_SHARED_LIBS=ON \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBLA_VENDOR=OpenBLAS
+cmake --build . --config Release --parallel $(nproc)
+sudo cmake --install . --config Release
+sudo ldconfig
+```
 
 ---
 
@@ -32,16 +83,215 @@ Complete guide for local development, CI/CD integration, and distribution.
 ```bash
 # Clone
 git clone https://github.com/AuralithAI/RT-AI-PR-Reviewer.git
-cd RT-AI-PR-Reviewer/mono
+cd RT-AI-PR-Reviewer
 
-# Check prerequisites
-./gradlew checkPrereqs
+# Build everything (C++ engine + Go server + config + ONNX model)
+make
 
-# Build distribution package
-./gradlew distZip
+# Edit configuration
+nano rt_home/config/rtserverprops.xml   # Database, LLM, engine settings
+nano rt_home/config/vcsplatforms.xml    # GitHub/GitLab/Bitbucket/Azure OAuth
 
-# Output: build/distributions/aipr-<version>.zip
+# Setup database
+make db-install
+
+# Run both components
+make run
 ```
+
+After `make run`:
+- Go API server is at `http://localhost:8080`
+- C++ engine is at `localhost:50051` (gRPC, internal)
+- Prometheus metrics at `http://localhost:8080/metrics`
+- OpenAPI spec at `http://localhost:8080/api/v1/docs/openapi.yaml`
+- Health check at `http://localhost:8080/health`
+
+---
+
+## Building
+
+### Unified Build (Recommended)
+
+```bash
+# Build everything into rt_home/
+make
+
+# Build individual components
+make engine     # C++ engine only
+make server     # Go server only
+make config     # Copy config files
+make models     # Download ONNX model
+```
+
+### Build Output
+
+```
+rt_home/
+├── bin/
+│   ├── rtvortex          ← C++ engine binary (~64 MB)
+│   └── RTVortexGo        ← Go server binary (~20 MB)
+├── config/
+│   ├── rtserverprops.xml  # Server config
+│   ├── vcsplatforms.xml   # Platform OAuth config
+│   ├── *.yml              # Engine profiles (default, large-repo, etc.)
+│   ├── certificates/      # TLS certificates (dev)
+│   └── model-providers/   # LLM provider config templates
+├── data/sql/
+│   └── initData.sql       # PostgreSQL schema
+├── models/
+│   ├── all-MiniLM-L6-v2.onnx  # Embedding model (~87 MB)
+│   ├── tokenizer.json
+│   └── vocab.txt
+└── temp/                   # Logs + ephemeral scratch (RT_TEMP)
+```
+
+### Go Server (Standalone)
+
+```bash
+cd mono/server-go
+
+# Build
+go build -trimpath -o RTVortexGo ./cmd/rtvortex-server/
+
+# Build with version injection
+go build -trimpath \
+  -ldflags "-s -w \
+    -X main.version=$(git describe --tags --always) \
+    -X main.commit=$(git rev-parse --short HEAD) \
+    -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  -o RTVortexGo ./cmd/rtvortex-server/
+
+# Run tests
+go test -race -cover ./...
+
+# Run linter
+go vet ./...
+```
+
+### C++ Engine (Standalone)
+
+```bash
+# Configure
+cmake -B build -S mono/engine \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DAIPR_BUILD_SERVER=ON \
+  -DAIPR_BUILD_TESTS=ON
+
+# Build
+cmake --build build --parallel $(nproc)
+
+# Run tests
+ctest --test-dir build --output-on-failure -C Release
+```
+
+---
+
+## Configuration
+
+### Configuration Files
+
+| File | Purpose |
+|------|---------|
+| `config/rtserverprops.xml` | Database, Redis, LLM, engine, server, security settings |
+| `config/vcsplatforms.xml` | VCS platform OAuth credentials |
+| `config/default.yml` | C++ engine indexing, retrieval, review settings |
+
+### rtserverprops.xml
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<rtvortex-config>
+    <!-- HTTP Server -->
+    <server port="8080"
+            read-timeout="30s"
+            write-timeout="60s"
+            shutdown-timeout="15s"/>
+
+    <!-- Database (PostgreSQL) -->
+    <database host="localhost" port="5432"
+              name="rtvortex" username="rtvortex" password="your_password"
+              max-conns="25" min-conns="5"/>
+
+    <!-- Redis (sessions, rate limiting, cache) -->
+    <redis addr="localhost:6379" password="" db="0"/>
+
+    <!-- C++ Engine connection -->
+    <engine host="${ENGINE_HOST:localhost}"
+            port="${ENGINE_PORT:50051}"
+            max-channels="4"
+            negotiation-type="${ENGINE_NEGOTIATION:PLAINTEXT}"/>
+
+    <!-- LLM Providers -->
+    <llm primary="openai" fallback="ollama">
+        <openai api-key="${LLM_OPENAI_API_KEY}"
+                base-url="https://api.openai.com/v1"
+                model="gpt-4-turbo-preview"/>
+        <anthropic api-key="${LLM_ANTHROPIC_API_KEY}"
+                   model="claude-3-5-sonnet-20241022"/>
+        <ollama base-url="http://localhost:11434"
+                model="codellama"/>
+    </llm>
+
+    <!-- Storage (pushed to C++ engine via gRPC) -->
+    <storage type="local">
+        <local path=".aipr/index"/>
+        <!-- <s3 bucket="my-bucket" region="us-east-1"/> -->
+    </storage>
+
+    <!-- Security -->
+    <security encryption-key="${TOKEN_ENCRYPTION_KEY}"/>
+
+    <!-- Logging -->
+    <log level="info" format="text"/>
+</rtvortex-config>
+```
+
+### vcsplatforms.xml
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<vcs-platforms>
+    <github enabled="true"
+            client-id="${GITHUB_CLIENT_ID}"
+            client-secret="${GITHUB_CLIENT_SECRET}"
+            api-url="https://api.github.com"
+            webhook-secret="${GITHUB_WEBHOOK_SECRET}"/>
+
+    <gitlab enabled="false"
+            application-id="${GITLAB_APPLICATION_ID}"
+            application-secret="${GITLAB_APPLICATION_SECRET}"
+            api-url="https://gitlab.com"
+            webhook-secret="${GITLAB_WEBHOOK_SECRET}"/>
+
+    <bitbucket enabled="false"
+               client-id="${BITBUCKET_CLIENT_ID}"
+               client-secret="${BITBUCKET_CLIENT_SECRET}"
+               api-url="https://api.bitbucket.org/2.0"
+               webhook-secret="${BITBUCKET_WEBHOOK_SECRET}"/>
+
+    <azure-devops enabled="false"
+                  client-id="${AZURE_DEVOPS_CLIENT_ID}"
+                  tenant-id="${AZURE_DEVOPS_TENANT_ID}"
+                  organization="${AZURE_DEVOPS_ORG}"
+                  webhook-secret="${AZURE_DEVOPS_WEBHOOK_SECRET}"/>
+</vcs-platforms>
+```
+
+### Environment Variables
+
+All XML attributes support `${ENV_VAR:default}` syntax. Key variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `RTVORTEX_HOME` | Root directory (auto-discovered if unset) |
+| `ENGINE_HOST` | C++ engine hostname |
+| `ENGINE_PORT` | C++ engine port |
+| `LLM_OPENAI_API_KEY` | OpenAI API key |
+| `LLM_ANTHROPIC_API_KEY` | Anthropic API key |
+| `TOKEN_ENCRYPTION_KEY` | 32-byte hex key for AES-256-GCM |
+| `GITHUB_CLIENT_ID` | GitHub OAuth app client ID |
+| `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret |
+| `GITHUB_WEBHOOK_SECRET` | GitHub webhook HMAC secret |
 
 ---
 
@@ -49,150 +299,52 @@ cd RT-AI-PR-Reviewer/mono
 
 ### How It Works
 
-AI PR Reviewer is **platform-agnostic**. Users choose which platform(s) they want to use via configuration. The server supports **all three simultaneously** - users authenticate with whichever they need.
+RTVortex is **platform-agnostic**. Enable the platforms you need in `vcsplatforms.xml`.
+All platforms can be active simultaneously.
 
-### Scenario 1: User Wants GitHub Only
+### OAuth2 Flow
 
-```yaml
-# config/application.yml (or environment variables)
-aipr:
-  auth:
-    github:
-      enabled: true
-      client-id: ${GITHUB_CLIENT_ID}
-      client-secret: ${GITHUB_CLIENT_SECRET}
-    gitlab:
-      enabled: false
-    bitbucket:
-      enabled: false
 ```
-
-Start server, then:
+Browser → GET /api/v1/auth/login/github → Redirect to GitHub OAuth
+GitHub  → GET /api/v1/auth/callback/github → Exchange code for token
+Server  → Create/update user, generate JWT, set session in Redis
+Browser ← JWT access token + refresh token
 ```
-http://localhost:8080/api/v1/auth/github/login
-```
-
-### Scenario 2: User Wants GitLab Only
-
-```yaml
-aipr:
-  auth:
-    github:
-      enabled: false
-    gitlab:
-      enabled: true
-      application-id: ${GITLAB_APPLICATION_ID}
-      application-secret: ${GITLAB_APPLICATION_SECRET}
-      base-url: https://gitlab.com  # or self-hosted URL
-    bitbucket:
-      enabled: false
-```
-
-Start server, then:
-```
-http://localhost:8080/api/v1/auth/gitlab/login
-```
-
-### Scenario 3: User Wants Bitbucket Only
-
-```yaml
-aipr:
-  auth:
-    github:
-      enabled: false
-    gitlab:
-      enabled: false
-    bitbucket:
-      enabled: true
-      client-id: ${BITBUCKET_CLIENT_ID}
-      client-secret: ${BITBUCKET_CLIENT_SECRET}
-```
-
-Start server, then:
-```
-http://localhost:8080/api/v1/auth/bitbucket/login
-```
-
-### Scenario 4: Enterprise - All Platforms
-
-```yaml
-aipr:
-  auth:
-    github:
-      enabled: true
-      client-id: ${GITHUB_CLIENT_ID}
-      client-secret: ${GITHUB_CLIENT_SECRET}
-    gitlab:
-      enabled: true
-      application-id: ${GITLAB_APPLICATION_ID}
-      application-secret: ${GITLAB_APPLICATION_SECRET}
-    bitbucket:
-      enabled: true
-      client-id: ${BITBUCKET_CLIENT_ID}
-      client-secret: ${BITBUCKET_CLIENT_SECRET}
-```
-
-Users choose their platform at login:
-```
-http://localhost:8080/api/v1/auth/github/login
-http://localhost:8080/api/v1/auth/gitlab/login
-http://localhost:8080/api/v1/auth/bitbucket/login
-```
-
-### Self-Hosted / Enterprise Instances
-
-For self-hosted GitLab, GitHub Enterprise, or Bitbucket Server, configure the base URLs:
-
-**GitHub Enterprise:**
-```yaml
-aipr:
-  auth:
-    github:
-      enabled: true
-      base-url: https://github.yourcompany.com
-      api-url: https://github.yourcompany.com/api/v3
-      client-id: ${GITHUB_CLIENT_ID}
-      client-secret: ${GITHUB_CLIENT_SECRET}
-```
-
-**Self-Hosted GitLab:**
-```yaml
-aipr:
-  auth:
-    gitlab:
-      enabled: true
-      base-url: https://gitlab.yourcompany.com
-      application-id: ${GITLAB_APPLICATION_ID}
-      application-secret: ${GITLAB_APPLICATION_SECRET}
-```
-
-**Bitbucket Server/Data Center:**
-```yaml
-aipr:
-  auth:
-    bitbucket:
-      enabled: true
-      base-url: https://bitbucket.yourcompany.com
-      api-url: https://bitbucket.yourcompany.com/rest/api/1.0
-      client-id: ${BITBUCKET_CLIENT_ID}
-      client-secret: ${BITBUCKET_CLIENT_SECRET}
-```
-
-**Default URLs (Cloud):**
-
-| Platform | Default Base URL | Default API URL |
-|----------|------------------|-----------------|
-| GitHub | `https://github.com` | `https://api.github.com` |
-| GitLab | `https://gitlab.com` | (same as base-url) |
-| Bitbucket | `https://bitbucket.org` | `https://api.bitbucket.org/2.0` |
 
 ### Creating OAuth Apps
 
 | Platform | Where to Create | Callback URL |
 |----------|-----------------|--------------|
-| GitHub | Settings > Developer settings > OAuth Apps | `https://your-server/api/v1/auth/github/callback` |
-| GitLab | User Settings > Applications | `https://your-server/api/v1/auth/gitlab/callback` |
-| Bitbucket | Workspace Settings > OAuth consumers | `https://your-server/api/v1/auth/bitbucket/callback` |
+| GitHub | Settings > Developer settings > OAuth Apps | `https://your-server/api/v1/auth/callback/github` |
+| GitLab | User Settings > Applications | `https://your-server/api/v1/auth/callback/gitlab` |
+| Bitbucket | Workspace Settings > OAuth consumers | `https://your-server/api/v1/auth/callback/bitbucket` |
+| Azure DevOps | Azure Portal > App Registrations | `https://your-server/api/v1/auth/callback/azure-devops` |
+| Google | Google Cloud Console > Credentials | `https://your-server/api/v1/auth/callback/google` |
+| Microsoft | Azure Portal > App Registrations | `https://your-server/api/v1/auth/callback/microsoft` |
+
+### Self-Hosted Instances
+
+For self-hosted platforms, configure the base/API URLs:
+
+```xml
+<!-- GitHub Enterprise -->
+<github enabled="true"
+        api-url="https://github.yourcompany.com/api/v3"
+        client-id="${GITHUB_CLIENT_ID}"
+        client-secret="${GITHUB_CLIENT_SECRET}"/>
+
+<!-- Self-Hosted GitLab -->
+<gitlab enabled="true"
+        api-url="https://gitlab.yourcompany.com"
+        application-id="${GITLAB_APPLICATION_ID}"
+        application-secret="${GITLAB_APPLICATION_SECRET}"/>
+
+<!-- Bitbucket Server -->
+<bitbucket enabled="true"
+           api-url="https://bitbucket.yourcompany.com/rest/api/1.0"
+           client-id="${BITBUCKET_CLIENT_ID}"
+           client-secret="${BITBUCKET_CLIENT_SECRET}"/>
+```
 
 ---
 
@@ -200,32 +352,21 @@ aipr:
 
 ### How CI/CD Integration Works
 
-There are **two ways** to integrate AI PR Reviewer into CI/CD:
+There are **two ways** to integrate RTVortex into CI/CD:
 
 #### Option A: Webhook-Based (Automatic)
 
-The server receives webhooks from GitHub/GitLab/Bitbucket and automatically reviews PRs.
-
 ```
-PR Created --> Webhook --> AI PR Reviewer --> Comments on PR
+PR Created → Webhook → RTVortex Server → Reviews PR → Comments on PR
 ```
-
-**Setup:**
-1. Deploy AI PR Reviewer server
-2. Configure webhook in your repository settings
-3. PRs are automatically reviewed
 
 #### Option B: CLI/Action-Based (Manual Trigger)
 
-Run AI PR Reviewer as a step in your pipeline.
-
 ```
-PR Created --> CI Pipeline --> AI PR Reviewer CLI --> Comments on PR
+PR Created → CI Pipeline → RTVortex CLI → Reviews PR → Comments on PR
 ```
 
-### GitHub Actions Integration
-
-**Using the GitHub Action:**
+### GitHub Actions
 
 ```yaml
 # .github/workflows/pr-review.yml
@@ -239,33 +380,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
       - name: AI PR Review
         uses: AuralithAI/ai-pr-reviewer-action@v1
         with:
-          # Option 1: Use hosted service
-          api-url: https://api.aipr.auralith.ai
+          api-url: https://your-server.com
           api-key: ${{ secrets.AIPR_API_KEY }}
-          
-          # Option 2: Use self-hosted server
-          # api-url: https://your-server.com
-          # api-key: ${{ secrets.AIPR_API_KEY }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-**Using Webhook (auto-review all PRs):**
-
-1. Go to Repository Settings > Webhooks
-2. Add webhook:
-   - URL: `https://your-server/api/v1/webhooks/github`
-   - Content type: `application/json`
-   - Secret: Your webhook secret
-   - Events: Pull requests
-
-### GitLab CI/CD Integration
-
-**Using GitLab CI:**
+### GitLab CI
 
 ```yaml
 # .gitlab-ci.yml
@@ -279,43 +403,26 @@ ai-pr-review:
   variables:
     AIPR_API_URL: https://your-server.com
     AIPR_API_KEY: $AIPR_API_KEY
-    GITLAB_TOKEN: $GITLAB_TOKEN
 ```
 
-**Using Webhook (auto-review all MRs):**
-
-1. Go to Project Settings > Webhooks
-2. Add webhook:
-   - URL: `https://your-server/api/v1/webhooks/gitlab`
-   - Secret token: Your webhook secret
-   - Trigger: Merge request events
-
-### Jenkins Integration
-
-**Jenkinsfile:**
+### Jenkins
 
 ```groovy
 pipeline {
     agent any
-    
     stages {
         stage('AI PR Review') {
-            when {
-                changeRequest()
-            }
+            when { changeRequest() }
             steps {
                 withCredentials([
-                    string(credentialsId: 'aipr-api-key', variable: 'AIPR_API_KEY'),
-                    string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN')
+                    string(credentialsId: 'aipr-api-key', variable: 'AIPR_API_KEY')
                 ]) {
                     sh '''
-                        # Using CLI
                         docker run --rm \
                             -e AIPR_API_URL=https://your-server.com \
                             -e AIPR_API_KEY=$AIPR_API_KEY \
-                            -e GITHUB_TOKEN=$GITHUB_TOKEN \
                             auralithai/aipr-cli:latest \
-                            review --pr ${CHANGE_ID} --repo ${GIT_URL}
+                            review --pr ${CHANGE_ID}
                     '''
                 }
             }
@@ -324,7 +431,7 @@ pipeline {
 }
 ```
 
-### Bitbucket Pipelines Integration
+### Bitbucket Pipelines
 
 ```yaml
 # bitbucket-pipelines.yml
@@ -336,10 +443,28 @@ pipelines:
           image: auralithai/aipr-cli:latest
           script:
             - aipr review --bitbucket-pr $BITBUCKET_PR_ID
-          variables:
-            AIPR_API_URL: https://your-server.com
-            AIPR_API_KEY: $AIPR_API_KEY
-            BITBUCKET_TOKEN: $BITBUCKET_TOKEN
+```
+
+### Azure Pipelines
+
+```yaml
+# azure-pipelines.yml
+trigger: none
+pr:
+  branches:
+    include: ['*']
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  - script: |
+      docker run --rm \
+        -e AIPR_API_URL=https://your-server.com \
+        -e AIPR_API_KEY=$(AIPR_API_KEY) \
+        auralithai/aipr-cli:latest \
+        review --azure-pr $(System.PullRequest.PullRequestId)
+    displayName: 'AI PR Review'
 ```
 
 ### Summary: Which Approach?
@@ -353,188 +478,230 @@ pipelines:
 
 ## Distribution Package
 
-### Package Structure
-
-When you run `./gradlew distZip`, it creates a production-ready distribution:
-
-```
-aipr-<version>.zip
-|
-+-- setup.sh / setup.bat    # Run first to configure environment
-+-- run.sh / run.bat        # Start the server
-|
-+-- bin/                    # Executables
-|   +-- aipr-server         # Server startup script (Linux/Mac)
-|   +-- aipr-server.bat     # Server startup script (Windows)
-|
-+-- lib/                    # Libraries
-|   +-- aipr-server.jar     # Main server JAR
-|   +-- aipr-engine.so      # C++ engine (Linux)
-|   +-- aipr-engine.dll     # C++ engine (Windows)
-|   +-- aipr-engine.dylib   # C++ engine (macOS)
-|
-+-- config/                 # Configuration
-|   +-- rtserverprops.xml   # Server config (database, redis, grpc, llm)
-|   +-- vcsplatforms.xml    # Platform config (GitHub/GitLab/Bitbucket)
-|   +-- application.yml     # Spring config
-|   +-- logback.xml         # Logging config
-|
-+-- certificates/           # TLS certificates
-|   +-- ca.crt              # CA certificate
-|   +-- server.crt          # Server certificate
-|   +-- server.key          # Server private key
-|   +-- client.crt          # Client certificate (for mTLS)
-|   +-- client.key          # Client private key
-|
-+-- data/                   # Runtime data
-|   +-- sql/                # Database migration scripts
-|   +-- cache/              # Local cache (created at runtime)
-|
-+-- temp/                   # Logs + temporary files (RT_TEMP)
-|
-+-- docs/                   # Documentation
-|
-+-- README.txt              # Quick start instructions
-+-- LICENSE
-```
-
-### Building the Distribution
+### Building a Distribution
 
 ```bash
-cd mono
+# Build everything
+make
 
-# Build everything and create distribution
-./gradlew distZip
+# The rt_home/ directory IS the distribution:
+tar -czf rtvortex-$(git describe --tags).tar.gz rt_home/
+```
 
-# Output location
-ls build/distributions/
-# aipr-1.0.0.zip
+### Package Structure
 
-# Or build individual components
-./gradlew distTar      # Creates .tar.gz
-./gradlew installDist  # Creates unzipped in build/install/
+```
+rt_home/
+├── bin/
+│   ├── rtvortex          # C++ engine (static binary)
+│   └── RTVortexGo        # Go server (static binary)
+├── config/
+│   ├── rtserverprops.xml # Server config
+│   ├── vcsplatforms.xml  # Platform OAuth config
+│   ├── default.yml       # Engine defaults
+│   ├── certificates/     # TLS certs (dev only)
+│   └── model-providers/  # LLM config templates
+├── data/sql/
+│   └── initData.sql      # PostgreSQL schema
+├── models/
+│   └── all-MiniLM-L6-v2.onnx  # Embedding model
+└── temp/                  # Logs + scratch (created at runtime)
 ```
 
 ### Running from Distribution
 
 ```bash
 # Extract
-unzip aipr-1.0.0.zip
-cd aipr-1.0.0
+tar -xzf rtvortex-v1.0.0.tar.gz
+cd rt_home
 
-# Run setup (configures RT_HOME, validates environment)
-./setup.sh        # Linux/Mac
-# or
-setup.bat         # Windows
+# Configure
+nano config/rtserverprops.xml
+nano config/vcsplatforms.xml
 
-# Edit configuration
-nano config/rtserverprops.xml     # Database, Redis, gRPC, LLM settings
-nano config/vcsplatforms.xml      # GitHub/GitLab/Bitbucket OAuth
+# Setup database
+psql -U postgres -c "CREATE USER rtvortex WITH PASSWORD 'your_password';"
+psql -U postgres -c "CREATE DATABASE rtvortex OWNER rtvortex;"
+psql -U rtvortex -d rtvortex -f data/sql/initData.sql
 
-# Start server
-./run.sh          # Linux/Mac
-# or
-run.bat           # Windows
+# Start engine (background)
+RTVORTEX_HOME=$(pwd) ./bin/rtvortex --server &
+
+# Start server (foreground)
+RTVORTEX_HOME=$(pwd) ./bin/RTVortexGo
 ```
 
-### Docker Distribution
+---
+
+## Docker Deployment
+
+### Dockerfile (Go Server)
+
+The Go server includes a multi-stage Dockerfile at `mono/server-go/Dockerfile`:
 
 ```bash
-# Build Docker image
-./gradlew dockerBuild
-
-# Or pull from registry
-docker pull ghcr.io/auralithai/aipr-server:latest
+# Build image
+cd mono/server-go
+docker build -t rtvortex-server .
 
 # Run
 docker run -d \
     -p 8080:8080 \
-    -e DATABASE_URL=jdbc:postgresql://host.docker.internal:5432/aipr \
-    -e REDIS_HOST=host.docker.internal \
+    -e DATABASE_HOST=host.docker.internal \
+    -e DATABASE_PORT=5432 \
+    -e DATABASE_NAME=rtvortex \
+    -e DATABASE_USERNAME=rtvortex \
+    -e DATABASE_PASSWORD=secret \
+    -e REDIS_ADDR=host.docker.internal:6379 \
+    -e ENGINE_HOST=host.docker.internal \
+    -e ENGINE_PORT=50051 \
     -e GITHUB_CLIENT_ID=xxx \
     -e GITHUB_CLIENT_SECRET=xxx \
-    ghcr.io/auralithai/aipr-server:latest
+    -e LLM_OPENAI_API_KEY=xxx \
+    rtvortex-server
+```
+
+### Docker Compose
+
+```yaml
+version: '3.8'
+
+services:
+  engine:
+    build: ./mono/engine
+    ports:
+      - "50051:50051"
+    volumes:
+      - ./rt_home/config:/app/config
+      - ./rt_home/models:/app/models
+      - engine-data:/app/data
+    environment:
+      RTVORTEX_HOME: /app
+
+  server:
+    build: ./mono/server-go
+    ports:
+      - "8080:8080"
+    depends_on:
+      - engine
+      - postgres
+      - redis
+    volumes:
+      - ./rt_home/config:/app/config
+    environment:
+      RTVORTEX_HOME: /app
+      ENGINE_HOST: engine
+      ENGINE_PORT: 50051
+      DATABASE_HOST: postgres
+      REDIS_ADDR: redis:6379
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: rtvortex
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: rtvortex
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./rt_home/data/sql/initData.sql:/docker-entrypoint-initdb.d/init.sql
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+
+volumes:
+  engine-data:
+  pgdata:
 ```
 
 ---
 
 ## TLS Certificates
 
-The distribution includes self-signed certificates in `certificates/` for **local development only**.
+The distribution includes self-signed certificates in `config/certificates/` for **development only**.
 
 ### Development (Default)
 
-TLS is disabled by default. The included certificates allow you to test TLS locally:
+TLS is disabled by default for gRPC. Enable it with:
 
 ```xml
 <!-- config/rtserverprops.xml -->
-<engine>
-    <tls>
-        <enabled>true</enabled>
-        <cert-path>certificates/server.crt</cert-path>
-        <key-path>certificates/server.key</key-path>
-        <ca-path>certificates/ca.crt</ca-path>
-    </tls>
-</engine>
+<engine host="localhost" port="50051"
+        negotiation-type="TLS"
+        tls-cert="config/certificates/server.crt"
+        tls-key="config/certificates/server.key"
+        tls-ca="config/certificates/ca.crt"/>
 ```
 
 ### Production Certificates
 
-**DO NOT use the included certificates in production.** Generate proper certificates:
+**DO NOT use the included certificates in production.**
 
-#### Option 1: Let's Encrypt (Recommended)
+#### Option 1: Let's Encrypt
 
 ```bash
 certbot certonly --standalone -d your-domain.com
-# Certificates: /etc/letsencrypt/live/your-domain.com/
 ```
 
-#### Option 2: Self-Signed (Internal Use)
-
-Use the included script to generate new certificates:
-
-```bash
-# Linux/Mac
-./scripts/generate-certs.sh /path/to/output
-
-# Windows (requires OpenSSL)
-scripts\generate-certs.bat C:\path\to\output
-```
-
-Or manually:
+#### Option 2: Self-Signed
 
 ```bash
 # Generate CA
 openssl genrsa -out ca.key 4096
-openssl req -new -x509 -days 365 -key ca.key -out ca.crt -subj "/CN=AIPR-CA"
+openssl req -new -x509 -days 365 -key ca.key -out ca.crt -subj "/CN=RTVortex-CA"
 
 # Generate Server Certificate
 openssl genrsa -out server.key 4096
 openssl req -new -key server.key -out server.csr -subj "/CN=your-domain.com"
-openssl x509 -req -days 365 -in server.csr -CA ca.crt -CAkey ca.key -CAcreateserial -out server.crt
+openssl x509 -req -days 365 -in server.csr -CA ca.crt -CAkey ca.key \
+  -CAcreateserial -out server.crt
 ```
 
-#### Option 3: Corporate CA
+---
 
-Use certificates signed by your organization's Certificate Authority.
+## Database Setup
 
-### Mutual TLS (mTLS)
+### Create Database
 
-For additional security, enable client certificate verification:
-
-```xml
-<engine>
-    <tls>
-        <enabled>true</enabled>
-        <cert-path>certificates/server.crt</cert-path>
-        <key-path>certificates/server.key</key-path>
-        <ca-path>certificates/ca.crt</ca-path>
-        <mtls-enabled>true</mtls-enabled>
-        <client-cert-path>certificates/client.crt</client-cert-path>
-        <client-key-path>certificates/client.key</client-key-path>
-    </tls>
-</engine>
+```bash
+# As PostgreSQL superuser
+psql -U postgres <<SQL
+CREATE USER rtvortex WITH PASSWORD 'your_password';
+CREATE DATABASE rtvortex OWNER rtvortex;
+GRANT ALL PRIVILEGES ON DATABASE rtvortex TO rtvortex;
+SQL
 ```
+
+### Initialize Schema
+
+```bash
+# Apply schema (11 tables)
+psql -U rtvortex -d rtvortex -f rt_home/data/sql/initData.sql
+```
+
+Or use the Makefile:
+
+```bash
+make db-create    # Create role + database
+make db-init      # Apply schema
+make db-install   # Both (after building)
+```
+
+### Schema Tables
+
+| Table | Purpose |
+|-------|---------|
+| `users` | User accounts |
+| `oauth_identities` | OAuth credentials (encrypted) |
+| `organizations` | Multi-tenant orgs |
+| `org_members` | Membership + roles |
+| `repositories` | Registered repos |
+| `reviews` | Review history |
+| `review_comments` | Review line comments |
+| `usage_daily` | Usage statistics |
+| `webhook_events` | Webhook audit trail |
+| `audit_log` | Security events |
+| `schema_info` | Schema version |
 
 ---
 
@@ -542,35 +709,79 @@ For additional security, enable client certificate verification:
 
 ### Build Issues
 
-**Gradle version mismatch:**
+**Go not found:**
 ```bash
-./gradlew wrapper --gradle-version 8.5
+export PATH=$PATH:/usr/local/go/bin
+go version  # should show 1.24+
 ```
 
 **CMake not found:**
 ```bash
-# Windows: Install CMake and add to PATH
-# Linux: sudo apt install cmake
-# macOS: brew install cmake
+sudo apt install cmake    # Linux
+brew install cmake        # macOS
+```
+
+**FAISS linking errors:**
+```bash
+sudo ldconfig  # Refresh shared library cache
 ```
 
 ### Connection Issues
 
 **PostgreSQL connection refused:**
 ```bash
-docker ps | grep postgres
-docker logs aipr-postgres
+# Check if running
+pg_isready -h localhost -p 5432
+
+# Check auth
+psql -U rtvortex -d rtvortex -c "SELECT 1;"
 ```
 
 **Redis connection refused:**
 ```bash
-docker ps | grep redis
-docker logs aipr-redis
+redis-cli ping  # Should return PONG
 ```
 
-### Authentication Issues
+**Engine gRPC connection failed:**
+```bash
+# Check if engine is running
+curl -s http://localhost:8080/ready | python3 -m json.tool
 
-**OAuth callback error:**
-- Verify callback URL matches exactly (including trailing slash)
-- Check client ID/secret are correct
-- Ensure redirect URI is registered in platform settings
+# Check engine directly (requires grpcurl)
+grpcurl -plaintext localhost:50051 list
+```
+
+### Runtime Issues
+
+**"failed to resolve RTVORTEX_HOME":**
+```bash
+# Set explicitly
+export RTVORTEX_HOME=/path/to/rt_home
+```
+
+**"no JWT secret configured":**
+
+Add a JWT secret to `rtserverprops.xml` or set `JWT_SECRET` env var. Without it, a random secret is generated (sessions won't survive restarts).
+
+**"Token encryptor init failed":**
+
+The `encryption-key` in `rtserverprops.xml` must be a 32-byte hex string (64 hex chars). Generate one:
+```bash
+openssl rand -hex 32
+```
+
+### Checking Health
+
+```bash
+# Quick health check
+curl http://localhost:8080/health
+
+# Detailed readiness (checks DB + Redis + Engine)
+curl http://localhost:8080/ready
+
+# Version info
+curl http://localhost:8080/version
+
+# Prometheus metrics
+curl http://localhost:8080/metrics | head -50
+```

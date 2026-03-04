@@ -274,6 +274,7 @@ void printUsage(const char* program_name) {
               << "  ENGINE_TLS_CERT     Path to server certificate\n"
               << "  ENGINE_TLS_KEY      Path to server private key\n"
               << "  ENGINE_TLS_CA       Path to CA certificate (for mTLS)\n"
+              << "  ENGINE_TLS_CLIENT_AUTH  Require client certificate (true/false)\n"
               << "\n"
               << "Directory layout (relative to RTVORTEX_HOME):\n"
               << "  config/             Configuration files\n"
@@ -315,6 +316,9 @@ ServerConfig parseArgs(int argc, char* argv[]) {
     }
     if (const char* env = std::getenv("ENGINE_TLS_CA")) {
         config.tls_root_certs = env;
+    }
+    if (const char* env = std::getenv("ENGINE_TLS_CLIENT_AUTH")) {
+        config.tls_require_client_auth = (std::string(env) == "true" || std::string(env) == "1");
     }
     
     // Parse command line arguments (override env vars)
