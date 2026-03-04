@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   ==============================================================================================
-  AI-PR-Reviewer Server Configuration
+  RTVortex Server Configuration
   ==============================================================================================
 
-  This file contains the configuration parameters for the AI-PR-Reviewer server.
+  This file contains the configuration parameters for the RTVortex server.
   Platform authentication settings are in vcsplatforms.xml.
 
   Variables of the form ${ENV_VAR:default} are resolved at load time:
@@ -12,7 +12,7 @@
     2. The default value after the colon
     3. Empty string if neither is available
 
-  ${aipr.home} is replaced with the RT_HOME installation directory.
+  ${rtvortex.home} is replaced with the RTVORTEX_HOME installation directory.
   ==============================================================================================
 -->
 <serverproperties>
@@ -25,12 +25,12 @@
     <!-- ===================================================================== -->
     <!-- Database (PostgreSQL)                                                 -->
     <!-- ===================================================================== -->
-    <database url="${DATABASE_URL:jdbc:postgresql://localhost:5432/aipr}"
-              username="${DATABASE_USER:aipr}"
-              password="${DATABASE_PASSWORD:aipr_secret}"
+    <database url="${DATABASE_URL:jdbc:postgresql://localhost:5432/rtvortex}"
+              username="${DATABASE_USER:rtvortex}"
+              password="${DATABASE_PASSWORD:rtvortex_secret}"
               driver="org.postgresql.Driver">
 
-        <pool name="aipr-pool"
+        <pool name="rtvortex-pool"
               max-size="${DB_POOL_SIZE:20}"
               min-idle="5"
               connection-timeout-ms="30000"
@@ -170,7 +170,7 @@
     <security jwt-secret="${JWT_SECRET:}"
               jwt-expiration-ms="${JWT_EXPIRATION_MS:3600000}"
               allowed-origins="${ALLOWED_ORIGINS:http://localhost:3000}"
-              encryption-key="${AIPR_ENCRYPTION_KEY:}"/>
+              encryption-key="${RTVORTEX_ENCRYPTION_KEY:}"/>
 
     <!-- ===================================================================== -->
     <!-- Storage                                                               -->

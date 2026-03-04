@@ -66,8 +66,7 @@ struct RtVortexEnvironment {
     std::string home;        // RTVORTEX_HOME — root directory
     std::string config_dir;  // RTVORTEX_HOME/config
     std::string data_dir;    // RTVORTEX_HOME/data
-    std::string logs_dir;    // RTVORTEX_HOME/logs
-    std::string temp_dir;    // RTVORTEX_HOME/tmp
+    std::string temp_dir;    // RTVORTEX_HOME/temp
     std::string models_dir;  // RTVORTEX_HOME/models
     std::string hostname;    // machine hostname
 };
@@ -147,20 +146,19 @@ void initEnvironment() {
     g_env.home       = resolveHome();
     g_env.config_dir = (fs::path(g_env.home) / "config").string();
     g_env.data_dir   = (fs::path(g_env.home) / "data").string();
-    g_env.logs_dir   = (fs::path(g_env.home) / "logs").string();
-    g_env.temp_dir   = (fs::path(g_env.home) / "tmp").string();
+    g_env.temp_dir   = (fs::path(g_env.home) / "temp").string();
     g_env.models_dir = (fs::path(g_env.home) / "models").string();
     g_env.hostname   = getHostname();
 
     // Create directories if they don't exist
-    for (const auto& dir : {g_env.data_dir, g_env.logs_dir, g_env.temp_dir}) {
+    for (const auto& dir : {g_env.data_dir, g_env.temp_dir}) {
         std::error_code ec;
         fs::create_directories(dir, ec);
     }
 
-    // Open log file: logs/rtvortex_<hostname>_<date>.log
+    // Open log file: temp/rtvortex_<hostname>_<date>.log
     std::string log_filename = "rtvortex_" + g_env.hostname + "_" + currentDateStamp() + ".log";
-    std::string log_path = (fs::path(g_env.logs_dir) / log_filename).string();
+    std::string log_path = (fs::path(g_env.temp_dir) / log_filename).string();
 
     g_log_file.open(log_path, std::ios::app);
     if (!g_log_file.is_open()) {
@@ -280,8 +278,7 @@ void printUsage(const char* program_name) {
               << "Directory layout (relative to RTVORTEX_HOME):\n"
               << "  config/             Configuration files\n"
               << "  data/               Persistent data (indexes, caches)\n"
-              << "  logs/               Timestamped log files\n"
-              << "  temp/               Temporary working files\n"
+              << "  temp/               Logs + temporary working files\n"
               << "  models/             ONNX embedding models\n"
               << "\n"
 #ifdef _WIN32
@@ -880,7 +877,6 @@ void runServer(const ServerConfig& config) {
     LOG_INFO("  Home:       " + g_env.home);
     LOG_INFO("  Config dir: " + g_env.config_dir);
     LOG_INFO("  Data dir:   " + g_env.data_dir);
-    LOG_INFO("  Logs dir:   " + g_env.logs_dir);
     LOG_INFO("  Temp dir:   " + g_env.temp_dir);
     LOG_INFO("  Models dir: " + g_env.models_dir);
     LOG_INFO("  ───────────────────────────────────");

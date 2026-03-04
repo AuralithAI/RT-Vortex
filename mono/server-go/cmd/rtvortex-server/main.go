@@ -1,0 +1,459 @@
+// Package main is the entry point for the RTVortex API server.
+//
+// Architecture:
+//
+//	Clients (Web UI, CLI, Webhooks, SDKs)
+//	        │
+//	        ▼  REST / WebSocket
+//	┌───────────────────────┐
+//	│   RTVortex API Server │  ← this binary
+//	│   (Go, chi router)    │
+//	└───────┬───────────────┘
+//	        │  gRPC
+//	┌───────▼───────────────┐
+//	│  RTVortex C++ Engine  │
+//	│  (indexing, retrieval) │
+//	└───────────────────────┘
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/AuralithAI/rtvortex-server/internal/audit"
+	"github.com/AuralithAI/rtvortex-server/internal/auth"
+	authproviders "github.com/AuralithAI/rtvortex-server/internal/auth/providers"
+	"github.com/AuralithAI/rtvortex-server/internal/background"
+	"github.com/AuralithAI/rtvortex-server/internal/config"
+	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
+	"github.com/AuralithAI/rtvortex-server/internal/engine"
+	"github.com/AuralithAI/rtvortex-server/internal/indexing"
+	"github.com/AuralithAI/rtvortex-server/internal/llm"
+	"github.com/AuralithAI/rtvortex-server/internal/review"
+	"github.com/AuralithAI/rtvortex-server/internal/rtenv"
+	"github.com/AuralithAI/rtvortex-server/internal/rtlog"
+	"github.com/AuralithAI/rtvortex-server/internal/server"
+	"github.com/AuralithAI/rtvortex-server/internal/session"
+	"github.com/AuralithAI/rtvortex-server/internal/store"
+	"github.com/AuralithAI/rtvortex-server/internal/vcs"
+	vcsazure "github.com/AuralithAI/rtvortex-server/internal/vcs/azuredevops"
+	vcsbitbucket "github.com/AuralithAI/rtvortex-server/internal/vcs/bitbucket"
+	vcsgithub "github.com/AuralithAI/rtvortex-server/internal/vcs/github"
+	vcsgitlab "github.com/AuralithAI/rtvortex-server/internal/vcs/gitlab"
+	"github.com/AuralithAI/rtvortex-server/internal/ws"
+)
+
+// Build-time variables set via -ldflags
+var (
+	version   = "dev"
+	commit    = "unknown"
+	buildDate = "unknown"
+)
+
+func main() {
+	// ── CLI flags ───────────────────────────────────────────────────────
+	serverPropsPath := flag.String("config", "", "Path to rtserverprops.xml (auto-discovered if omitted)")
+	vcsPropsPath := flag.String("vcs-config", "", "Path to vcsplatforms.xml (auto-discovered if omitted)")
+	showVersion := flag.Bool("version", false, "Print version and exit")
+	showHelp := flag.Bool("help", false, "Print usage and exit")
+	flag.Parse()
+
+	if *showHelp {
+		fmt.Println("RTVortex Go API Server")
+		fmt.Printf("  Version: %s  Commit: %s  Built: %s\n\n", version, commit, buildDate)
+		flag.PrintDefaults()
+		os.Exit(0)
+	}
+	if *showVersion {
+		fmt.Printf("RTVortexGo %s (commit %s, built %s)\n", version, commit, buildDate)
+		os.Exit(0)
+	}
+
+	// ── Resolve RTVORTEX_HOME environment ───────────────────────────────
+	env, err := rtenv.Resolve()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to resolve RTVORTEX_HOME: %v\n", err)
+		os.Exit(1)
+	}
+
+	// ── Setup file-based logging (dual stdout + log file) ───────────────
+	logCleanup, err := rtlog.Setup(env)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to setup file logging: %v\n", err)
+		os.Exit(1)
+	}
+	defer logCleanup()
+
+	log.Printf("[INFO] RTVortexGo %s (commit %s, built %s)", version, commit, buildDate)
+	log.Printf("[INFO] RTVORTEX_HOME = %s", env.Home)
+	log.Printf("[INFO] Hostname      = %s", env.Hostname)
+	log.Printf("[INFO] Config Dir    = %s", env.ConfigDir)
+	log.Printf("[INFO] Temp Dir      = %s", env.TempDir)
+	log.Printf("[INFO] Data Dir      = %s", env.DataDir)
+	log.Printf("[INFO] Models Dir    = %s", env.ModelsDir)
+
+	// ── Load configuration from XML ─────────────────────────────────────
+	cfg, err := config.Load(config.LoadOptions{
+		ServerPropsPath:  *serverPropsPath,
+		VCSPlatformsPath: *vcsPropsPath,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// ── Setup structured logging ────────────────────────────────────────
+	logger := setupLogger(cfg.Log.Level, cfg.Log.Format)
+	slog.SetDefault(logger)
+
+	// Export RTVORTEX_HOME so child processes (C++ engine, scripts) inherit it.
+	_ = os.Setenv("RTVORTEX_HOME", env.Home)
+
+	slog.Info("RTVortexGo API Server starting",
+		"version", version,
+		"commit", commit,
+		"build_date", buildDate,
+		"pid", os.Getpid(),
+		"rtvortex_home", env.Home,
+		"hostname", env.Hostname,
+	)
+
+	// ── Root context with cancellation ──────────────────────────────────
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// ── Initialize PostgreSQL connection pool ───────────────────────────
+	db, err := store.NewPostgresPool(ctx, cfg.Database)
+	if err != nil {
+		slog.Error("failed to connect to PostgreSQL", "error", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	slog.Info("PostgreSQL connected",
+		"host", cfg.Database.Host,
+		"database", cfg.Database.Name,
+		"pool_size", cfg.Database.MaxConns,
+	)
+
+	// Run database schema initialization (auto-applies initData.sql if needed)
+	sqlDir := filepath.Join(env.DataDir, "sql")
+	if err := db.RunMigrations(sqlDir); err != nil {
+		slog.Warn("database schema not auto-initialized (run SQL scripts manually)",
+			"sql_dir", sqlDir,
+			"error", err,
+		)
+	}
+
+	// ── Initialize Redis ────────────────────────────────────────────────
+	redisClient, err := session.NewRedisClient(cfg.Redis)
+	if err != nil {
+		slog.Error("failed to connect to Redis", "error", err)
+		os.Exit(1)
+	}
+	defer redisClient.Close()
+	slog.Info("Redis connected", "addr", cfg.Redis.Addr)
+
+	// ── Initialize gRPC engine client ───────────────────────────────────
+	enginePool, err := engine.NewPool(ctx, cfg.Engine)
+	if err != nil {
+		slog.Error("failed to connect to RTVortex engine", "error", err)
+		os.Exit(1)
+	}
+	defer enginePool.Close()
+	slog.Info("Engine gRPC pool connected",
+		"target", fmt.Sprintf("%s:%d", cfg.Engine.Host, cfg.Engine.Port),
+		"max_channels", cfg.Engine.MaxChannels,
+	)
+
+	// ── Build dependencies (manual DI — no magic) ───────────────────────
+	// Repositories
+	userRepo := store.NewUserRepository(db.Pool)
+	repoRepo := store.NewRepositoryRepo(db.Pool)
+	reviewRepo := store.NewReviewRepository(db.Pool)
+	orgRepo := store.NewOrgRepository(db.Pool)
+	webhookRepo := store.NewWebhookRepository(db.Pool)
+
+	// Engine gRPC client
+	engineClient := engine.NewClient(enginePool)
+
+	// JWT Manager
+	jwtSecret := cfg.Auth.JWTSecret
+	if jwtSecret == "" {
+		jwtSecret, _ = auth.GenerateRandomSecret(32)
+		slog.Warn("no JWT secret configured — using random secret (sessions will not survive restarts)")
+	}
+	jwtMgr := auth.NewJWTManager(auth.JWTConfig{
+		Secret:          jwtSecret,
+		Issuer:          "rtvortex",
+		AccessDuration:  15 * time.Minute,
+		RefreshDuration: 7 * 24 * time.Hour,
+	})
+
+	// Session manager
+	sessionMgr := session.NewManager(redisClient.Client(), 24*time.Hour)
+
+	// OAuth2 provider registry
+	oauthReg := auth.NewProviderRegistry()
+	for name, p := range cfg.Auth.Providers {
+		oauthCfg := auth.OAuthProviderConfig{
+			ClientID:     p.ClientID,
+			ClientSecret: p.ClientSecret,
+			Scopes:       p.Scopes,
+		}
+		switch name {
+		case "google":
+			oauthReg.Register(authproviders.NewGoogleProvider(oauthCfg))
+		case "github":
+			oauthReg.Register(authproviders.NewGitHubProvider(oauthCfg))
+		case "gitlab":
+			oauthReg.Register(authproviders.NewGitLabProvider(oauthCfg))
+		case "microsoft":
+			oauthReg.Register(authproviders.NewMicrosoftProvider(oauthCfg))
+		case "bitbucket":
+			oauthReg.Register(authproviders.NewBitbucketProvider(oauthCfg))
+		case "linkedin":
+			oauthReg.Register(authproviders.NewLinkedInProvider(oauthCfg))
+		}
+		slog.Info("OAuth provider registered", "provider", name)
+	}
+
+	// Token encryptor (AES-256-GCM for OAuth tokens at rest)
+	tokenEnc, err := rtcrypto.NewTokenEncryptor(cfg.Auth.EncryptionKey)
+	if err != nil {
+		slog.Warn("Token encryptor init failed, tokens will be stored unencrypted", "error", err)
+		tokenEnc, _ = rtcrypto.NewTokenEncryptor("") // fall back to no-op
+	}
+	if tokenEnc.IsEnabled() {
+		slog.Info("Token encryption enabled (AES-256-GCM)")
+	} else {
+		slog.Warn("Token encryption DISABLED — set encryption-key in security config for production")
+	}
+
+	// LLM provider registry
+	llmRegistry := llm.NewRegistry()
+	for name, p := range cfg.LLM.Providers {
+		switch name {
+		case "openai":
+			llmRegistry.Register(llm.NewOpenAIProvider(llm.OpenAIConfig{
+				APIKey: p.APIKey, BaseURL: p.BaseURL, DefaultModel: p.Model,
+			}))
+		case "anthropic":
+			llmRegistry.Register(llm.NewAnthropicProvider(llm.AnthropicConfig{
+				APIKey: p.APIKey, DefaultModel: p.Model,
+			}))
+		case "ollama":
+			llmRegistry.Register(llm.NewOllamaProvider(llm.OllamaConfig{
+				BaseURL: p.BaseURL, DefaultModel: p.Model,
+			}))
+		}
+		slog.Info("LLM provider registered", "type", name, "model", p.Model)
+	}
+
+	// VCS platform registry
+	vcsRegistry := vcs.NewPlatformRegistry()
+	if gh := cfg.VCS.GitHub; gh != nil && gh.Enabled {
+		vcsRegistry.Register(vcsgithub.New(vcsgithub.Config{
+			Token: gh.Token, WebhookSecret: gh.Webhook.Secret, BaseURL: gh.APIURL,
+		}))
+		slog.Info("VCS platform registered", "platform", "github")
+	}
+	if gl := cfg.VCS.GitLab; gl != nil && gl.Enabled {
+		vcsRegistry.Register(vcsgitlab.New(vcsgitlab.Config{
+			Token: gl.Token, WebhookSecret: gl.Webhook.Secret, BaseURL: gl.APIURL,
+		}))
+		slog.Info("VCS platform registered", "platform", "gitlab")
+	}
+	if bb := cfg.VCS.Bitbucket; bb != nil && bb.Enabled {
+		token := bb.Token
+		if token == "" {
+			token = bb.Credentials.Token
+		}
+		vcsRegistry.Register(vcsbitbucket.New(vcsbitbucket.Config{
+			Token: token, WebhookSecret: bb.Webhook.Secret, BaseURL: bb.APIURL,
+		}))
+		slog.Info("VCS platform registered", "platform", "bitbucket")
+	}
+	if ado := cfg.VCS.AzureDevOps; ado != nil && ado.Enabled {
+		vcsRegistry.Register(vcsazure.New(vcsazure.Config{
+			PAT: ado.Token, Organization: ado.Organization,
+			WebhookSecret: ado.Webhook.Secret, BaseURL: ado.APIURL,
+		}))
+		slog.Info("VCS platform registered", "platform", "azure_devops")
+	}
+
+	// Review pipeline
+	reviewPipeline := review.NewPipeline(reviewRepo, repoRepo, llmRegistry, vcsRegistry, review.PipelineConfig{
+		MaxFilesPerReview: 50,
+		MaxDiffSizeBytes:  512 * 1024,
+		ConcurrentFiles:   5,
+	})
+
+	// Indexing service
+	indexingService := indexing.NewService(engineClient)
+
+	// WebSocket hub for real-time review progress
+	wsHub := ws.NewHub()
+	defer wsHub.Stop()
+	slog.Info("WebSocket hub started")
+
+	// Wire progress callback — pipeline emits events to WebSocket subscribers
+	reviewPipeline.SetProgressFunc(func(reviewID uuid.UUID, step string, stepIndex, totalSteps int, status, message string, meta map[string]interface{}) {
+		wsHub.Broadcast(reviewID, ws.ProgressEvent{
+			Step:      step,
+			StepIndex: stepIndex,
+			TotalStep: totalSteps,
+			Status:    status,
+			Message:   message,
+			Metadata:  meta,
+		})
+	})
+
+	// Rate limiter (Redis-backed sliding window)
+	rateLimiter := session.NewRateLimiter(redisClient.Client())
+	rateLimiter.Configure("api", session.RateLimitConfig{
+		MaxRequests: 100,
+		Window:      1 * time.Minute,
+	})
+	rateLimiter.Configure("auth", session.RateLimitConfig{
+		MaxRequests: 20,
+		Window:      1 * time.Minute,
+	})
+	rateLimiter.Configure("webhook", session.RateLimitConfig{
+		MaxRequests: 60,
+		Window:      1 * time.Minute,
+	})
+	slog.Info("Rate limiter configured",
+		"api", "100/min",
+		"auth", "20/min",
+		"webhook", "60/min",
+	)
+
+	// Audit logger (security event tracking)
+	auditRepo := store.NewAuditRepository(db.Pool)
+	auditLogger := audit.NewLogger(auditRepo)
+	slog.Info("Audit logger initialized")
+
+	// Background scheduler
+	bgScheduler := background.NewScheduler(ctx, engineClient, llmRegistry, indexingService)
+	bgScheduler.Start()
+	defer bgScheduler.Stop()
+
+	deps := &server.Dependencies{
+		Config:     cfg,
+		DB:         db,
+		Redis:      redisClient,
+		EnginePool: enginePool,
+		Version:    version,
+
+		EngineClient:    engineClient,
+		JWTMgr:          jwtMgr,
+		SessionMgr:      sessionMgr,
+		OAuthReg:        oauthReg,
+		TokenEncryptor:  tokenEnc,
+		LLMRegistry:     llmRegistry,
+		VCSRegistry:     vcsRegistry,
+		ReviewPipeline:  reviewPipeline,
+		IndexingService: indexingService,
+		RateLimiter:     rateLimiter,
+		AuditLogger:     auditLogger,
+		WSHub:           wsHub,
+
+		UserRepo:    userRepo,
+		RepoRepo:    repoRepo,
+		ReviewRepo:  reviewRepo,
+		OrgRepo:     orgRepo,
+		WebhookRepo: webhookRepo,
+	}
+
+	// ── Create HTTP server ──────────────────────────────────────────────
+	srv := server.New(deps)
+	httpServer := &http.Server{
+		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
+		Handler:      srv.Router(),
+		ReadTimeout:  cfg.Server.ReadTimeout,
+		WriteTimeout: cfg.Server.WriteTimeout,
+		IdleTimeout:  cfg.Server.IdleTimeout,
+	}
+
+	// ── Start server in background ──────────────────────────────────────
+	errCh := make(chan error, 1)
+	go func() {
+		slog.Info("HTTP server listening",
+			"port", cfg.Server.Port,
+			"tls", cfg.Server.TLS.Enabled,
+		)
+		if cfg.Server.TLS.Enabled {
+			errCh <- httpServer.ListenAndServeTLS(
+				cfg.Server.TLS.CertFile,
+				cfg.Server.TLS.KeyFile,
+			)
+		} else {
+			errCh <- httpServer.ListenAndServe()
+		}
+	}()
+
+	// ── Graceful shutdown on SIGINT / SIGTERM ────────────────────────────
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	select {
+	case sig := <-quit:
+		slog.Info("shutdown signal received", "signal", sig)
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			slog.Error("server error", "error", err)
+		}
+	}
+
+	// Graceful shutdown with timeout
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
+	defer shutdownCancel()
+
+	slog.Info("shutting down gracefully", "timeout", cfg.Server.ShutdownTimeout)
+	if err := httpServer.Shutdown(shutdownCtx); err != nil {
+		slog.Error("forced shutdown", "error", err)
+	}
+
+	cancel() // Cancel root context to stop background workers
+	slog.Info("RTVortexGo API Server stopped")
+}
+
+// setupLogger creates a structured slog.Logger.
+func setupLogger(level, format string) *slog.Logger {
+	var lvl slog.Level
+	switch level {
+	case "debug":
+		lvl = slog.LevelDebug
+	case "warn":
+		lvl = slog.LevelWarn
+	case "error":
+		lvl = slog.LevelError
+	default:
+		lvl = slog.LevelInfo
+	}
+
+	opts := &slog.HandlerOptions{
+		Level:     lvl,
+		AddSource: level == "debug",
+	}
+
+	var handler slog.Handler
+	if format == "json" {
+		handler = slog.NewJSONHandler(os.Stdout, opts)
+	} else {
+		handler = slog.NewTextHandler(os.Stdout, opts)
+	}
+
+	return slog.New(handler)
+}

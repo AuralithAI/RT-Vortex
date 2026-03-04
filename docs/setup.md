@@ -388,8 +388,9 @@ aipr-<version>.zip
 |
 +-- data/                   # Runtime data
 |   +-- sql/                # Database migration scripts
-|   +-- logs/               # Log files (created at runtime)
 |   +-- cache/              # Local cache (created at runtime)
+|
++-- temp/                   # Logs + temporary files (RT_TEMP)
 |
 +-- docs/                   # Documentation
 |

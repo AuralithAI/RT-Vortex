@@ -813,6 +813,19 @@ if(AIPR_BUILD_SERVER)
     
     message(STATUS "Server executable will be: ${CMAKE_BINARY_DIR}/bin/rtvortex${CMAKE_EXECUTABLE_SUFFIX}")
 
+    # ── Copy to rt_home (shared build output) ────────────────────────────
+    set(RT_HOME_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../rt_home")
+    add_custom_command(TARGET aipr-engine-server POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${RT_HOME_DIR}/bin"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${RT_HOME_DIR}/config"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${RT_HOME_DIR}/data"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${RT_HOME_DIR}/logs"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${RT_HOME_DIR}/tmp"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${RT_HOME_DIR}/models"
+        COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:aipr-engine-server>" "${RT_HOME_DIR}/bin/"
+        COMMENT "Copying rtvortex to rt_home/bin/"
+    )
+
     # ---------------------------------------------------------------------------
     # Local-dev convenience: symlink models/, config/, logs/ into the build tree
     # so the binary can find them without setting RTVORTEX_HOME.

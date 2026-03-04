@@ -1,5 +1,5 @@
-// AI-PR-Reviewer Engine gRPC Service Definition
-// This defines the communication protocol between Java Server and C++ Engine
+// RTVortex Engine gRPC Service Definition
+// This defines the communication protocol between the API Server and C++ Engine
 
 syntax = "proto3";
 
@@ -8,6 +8,7 @@ package aipr.engine.v1;
 option java_package = "ai.aipr.engine.grpc";
 option java_outer_classname = "EngineProto";
 option java_multiple_files = true;
+option go_package = "github.com/AuralithAI/rtvortex-server/internal/engine/pb";
 
 // Main Engine Service
 service EngineService {
@@ -25,7 +26,7 @@ service EngineService {
     rpc BuildReviewContext(ReviewContextRequest) returns (ReviewContextResponse);
     rpc RunHeuristics(HeuristicsRequest) returns (HeuristicsResponse);
 
-    // Configuration — Java server pushes config to engine at startup
+    // Configuration — API server pushes config to engine at startup
     rpc ConfigureStorage(StorageConfigRequest) returns (StorageConfigResponse);
 
     // Health & Diagnostics
@@ -267,7 +268,7 @@ message IndexInfo {
 }
 
 // ============================================================================
-// Storage Configuration — pushed from Java server to C++ engine at startup
+// Storage Configuration — pushed from API server to C++ engine at startup
 // ============================================================================
 
 // Cloud provider type
@@ -282,7 +283,7 @@ enum StorageProvider {
 }
 
 // Request to configure storage backend on the C++ engine.
-// Java reads rtserverprops.xml and pushes this to the engine once at startup.
+// The API server reads rtserverprops.xml and pushes this to the engine once at startup.
 message StorageConfigRequest {
     StorageProvider provider = 1;
 
