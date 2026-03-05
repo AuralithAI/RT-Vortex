@@ -2,7 +2,7 @@ name: Engine CI
 
 # C++ Engine Build, Test, and Package Pipeline
 # This workflow is for the C++ engine component only.
-# Runs independently from the Java server workflow.
+# Runs independently from the Go server workflow.
 
 on:
   push:

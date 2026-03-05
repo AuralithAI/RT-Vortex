@@ -12,12 +12,11 @@ permissions:
   packages: write
 
 env:
-  GRADLE_OPTS: "-Dorg.gradle.daemon=false"
-  JAVA_VERSION: "21"
+  GO_VERSION: "1.24"
   CMAKE_VERSION: "3.28.1"
   MONO_DIR: "mono"
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository_owner }}/rtvortex-server
 
 jobs:
   # ===========================================================================
@@ -256,141 +255,90 @@ jobs:
         run: |
           mkdir -p dist/bin dist/lib
           
-          # Copy server executable (primary artifact)
-          cp build/bin/aipr-engine dist/bin/ 2>/dev/null || true
-          cp build/bin/Release/aipr-engine.exe dist/bin/ 2>/dev/null || true
-          cp build/bin/aipr-engine.exe dist/bin/ 2>/dev/null || true
+          # Copy engine executable
+          cp build/bin/rtvortex dist/bin/ 2>/dev/null || true
+          cp build/bin/Release/rtvortex.exe dist/bin/ 2>/dev/null || true
+          cp build/bin/rtvortex.exe dist/bin/ 2>/dev/null || true
           
-          # Copy libraries (for backward compat)
+          # Copy libraries
           cp build/lib* dist/lib/ 2>/dev/null || true
           cp build/*.dll dist/lib/ 2>/dev/null || true
           cp build/*.dylib dist/lib/ 2>/dev/null || true
           cp build/*.so dist/lib/ 2>/dev/null || true
           cp build/Release/*.dll dist/lib/ 2>/dev/null || true
           
-          tar -czvf aipr-engine-${{ matrix.target }}.tar.gz -C dist .
+          tar -czvf rtvortex-engine-${{ matrix.target }}.tar.gz -C dist .
       
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: engine-${{ matrix.target }}
-          path: aipr-engine-${{ matrix.target }}.tar.gz
+          path: rtvortex-engine-${{ matrix.target }}.tar.gz
 
   # ===========================================================================
-  # Build Distribution Package
+  # Build Go Server for All Platforms
   # ===========================================================================
-  build-distribution:
-    name: Build Distribution
+  build-server:
+    name: Build Server (${{ matrix.goos }}-${{ matrix.goarch }})
     runs-on: ubuntu-latest
-    needs: [version, build-engine]
-    
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: v${{ needs.version.outputs.version }}
-      
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-      
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.5'
-      
-      - name: Download All Engine Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: engine-*
-          path: engine-artifacts/
-      
-      - name: Prepare Engine Libraries
-        run: |
-          mkdir -p ${{ env.MONO_DIR }}/engine/build
-          for artifact in engine-artifacts/engine-*/aipr-engine-*.tar.gz; do
-            tar -xzf "$artifact" -C ${{ env.MONO_DIR }}/engine/build/
-          done
-      
-      - name: Build Distribution
-        working-directory: ${{ env.MONO_DIR }}
-        run: ./gradlew distZip distTar distLinux distMacos
-      
-      - name: Upload Distribution
-        uses: actions/upload-artifact@v4
-        with:
-          name: aipr-${{ needs.version.outputs.version }}
-          path: |
-            ${{ env.MONO_DIR }}/build/distributions/*.zip
-            ${{ env.MONO_DIR }}/build/distributions/*.tar.gz
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            artifact: rtvortex-server-linux-x64
+          - goos: linux
+            goarch: arm64
+            artifact: rtvortex-server-linux-arm64
+          - goos: darwin
+            goarch: amd64
+            artifact: rtvortex-server-darwin-x64
+          - goos: darwin
+            goarch: arm64
+            artifact: rtvortex-server-darwin-arm64
+          - goos: windows
+            goarch: amd64
+            artifact: rtvortex-server-windows-x64
+            ext: .exe
 
-  # ===========================================================================
-  # Build Windows Installer
-  # ===========================================================================
-  build-windows-installer:
-    name: Build Windows Installer
-    runs-on: windows-latest
-    needs: [version, build-engine]
-    
     steps:
       - uses: actions/checkout@v4
         with:
           ref: v${{ needs.version.outputs.version }}
-      
-      - name: Setup Java
-        uses: actions/setup-java@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-      
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.5'
-      
-      - name: Download Windows Engine
-        uses: actions/download-artifact@v4
-        with:
-          name: engine-windows-x64
-          path: engine-artifacts/
-      
-      - name: Prepare Engine Binary
-        shell: pwsh
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.MONO_DIR }}/server-go/go.sum
+
+      - name: Build
+        working-directory: ${{ env.MONO_DIR }}/server-go
         run: |
-          New-Item -ItemType Directory -Force -Path "${{ env.MONO_DIR }}/engine/build/bin"
-          tar -xzf engine-artifacts/aipr-engine-windows-x64.tar.gz -C "${{ env.MONO_DIR }}/engine/build/"
-      
-      - name: Build Windows Distribution
-        working-directory: ${{ env.MONO_DIR }}
-        run: ./gradlew.bat distWindows
-      
-      # WinSW is now downloaded by Gradle's downloadWinSW task (cached)
-      
-      - name: Install NSIS
-        shell: pwsh
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -trimpath \
+            -ldflags "-s -w \
+              -X main.version=${{ needs.version.outputs.version }} \
+              -X main.commit=${{ github.sha }} \
+              -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o ../../dist/RTVortexGo${{ matrix.ext || '' }} \
+            ./cmd/rtvortex-server/
+
+      - name: Package
         run: |
-          choco install nsis -y
-          echo "C:\Program Files (x86)\NSIS" | Out-File -Append -FilePath $env:GITHUB_PATH
-      
-      - name: Build NSIS Installer
-        shell: pwsh
-        working-directory: ${{ env.MONO_DIR }}/build/distributions/windows
-        run: |
-          # Update version in NSIS script
-          $nsisFile = "installer/installer.nsi"
-          $content = Get-Content $nsisFile -Raw
-          $content = $content -replace '!define VERSION ".*"', '!define VERSION "${{ needs.version.outputs.version }}"'
-          Set-Content $nsisFile $content
-          
-          # Run NSIS
-          makensis /V3 installer/installer.nsi
-      
-      - name: Upload Windows Installer
+          mkdir -p dist/db/sql dist/db/migrations dist/config
+          cp ${{ env.MONO_DIR }}/server-go/db/sql/*.sql dist/db/sql/ 2>/dev/null || true
+          cp ${{ env.MONO_DIR }}/server-go/db/migrations/*.sql dist/db/migrations/ 2>/dev/null || true
+          cp -r ${{ env.MONO_DIR }}/config/* dist/config/ 2>/dev/null || true
+          tar -czvf ${{ matrix.artifact }}.tar.gz -C dist .
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aipr-windows-installer
-          path: ${{ env.MONO_DIR }}/build/distributions/windows/installer/aipr-setup-*.exe
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}.tar.gz
 
   # ===========================================================================
   # Build Docker Image
@@ -398,29 +346,23 @@ jobs:
   build-docker:
     name: Build Docker Image
     runs-on: ubuntu-latest
-    needs: [version, build-distribution, build-windows-installer]
+    needs: [version, build-server]
     
     steps:
       - uses: actions/checkout@v4
         with:
           ref: v${{ needs.version.outputs.version }}
-      
-      - name: Download Distribution
-        uses: actions/download-artifact@v4
-        with:
-          name: aipr-${{ needs.version.outputs.version }}
-          path: dist/
-      
+
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
-      
+
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -430,18 +372,20 @@ jobs:
             type=semver,pattern={{version}},value=${{ needs.version.outputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ needs.version.outputs.version }}
             type=raw,value=latest
-      
+
       - name: Build and Push
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
-          context: .
+          context: ${{ env.MONO_DIR }}
           file: ${{ env.MONO_DIR }}/deploy/docker/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.version.outputs.version }}
+            COMMIT=${{ github.sha }}
 
   # ===========================================================================
   # Create GitHub Release
@@ -449,113 +393,90 @@ jobs:
   release:
     name: Create Release
     runs-on: ubuntu-latest
-    needs: [version, build-distribution, build-windows-installer, build-docker]
-    
+    needs: [version, build-engine, build-server, build-docker]
+
     steps:
       - uses: actions/checkout@v4
         with:
           ref: v${{ needs.version.outputs.version }}
-      
+
       - name: Download All Artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts/
-      
+
       - name: Prepare Release Assets
         run: |
           mkdir -p release-assets
-          
-          # Copy distribution packages
-          cp artifacts/aipr-${{ needs.version.outputs.version }}/*.zip release-assets/ || true
-          cp artifacts/aipr-${{ needs.version.outputs.version }}/*.tar.gz release-assets/ || true
-          
-          # Copy Windows installer
-          cp artifacts/aipr-windows-installer/*.exe release-assets/ || true
-          
+
           # Copy engine artifacts
           for dir in artifacts/engine-*; do
             cp "$dir"/*.tar.gz release-assets/ 2>/dev/null || true
           done
-      
+
+          # Copy server artifacts
+          for dir in artifacts/rtvortex-server-*; do
+            cp "$dir"/*.tar.gz release-assets/ 2>/dev/null || true
+          done
+
       - name: Generate Release Notes
         run: |
           cat > release-notes.md << 'EOF'
-          ## AI PR Reviewer v${{ needs.version.outputs.version }}
-          
-          ### Platform Installers
-          
-          | Package | Platform | Description |
-          |---------|----------|-------------|
-          | `aipr-setup-${{ needs.version.outputs.version }}.exe` | Windows | Installer with service registration |
-          | `aipr-${{ needs.version.outputs.version }}-linux.tar.gz` | Linux | Distribution with systemd services |
-          | `aipr-${{ needs.version.outputs.version }}-macos.tar.gz` | macOS | Distribution with launchd daemons |
-          
-          ### Generic Downloads
-          
-          | Package | Description |
-          |---------|-------------|
-          | `aipr-${{ needs.version.outputs.version }}.zip` | Full distribution (all platforms) |
-          | `aipr-${{ needs.version.outputs.version }}.tar.gz` | Full distribution (all platforms) |
-          | `aipr-${{ needs.version.outputs.version }}.zip` | Full distribution (all platforms) |
-          | `aipr-${{ needs.version.outputs.version }}.tar.gz` | Full distribution (all platforms) |
-          
+          ## RTVortex v${{ needs.version.outputs.version }}
+
+          ### Downloads
+
+          #### Go API Server
+          | Package | Platform |
+          |---------|----------|
+          | `rtvortex-server-linux-x64.tar.gz` | Linux x64 |
+          | `rtvortex-server-linux-arm64.tar.gz` | Linux ARM64 |
+          | `rtvortex-server-darwin-x64.tar.gz` | macOS x64 |
+          | `rtvortex-server-darwin-arm64.tar.gz` | macOS ARM64 (Apple Silicon) |
+          | `rtvortex-server-windows-x64.tar.gz` | Windows x64 |
+
+          #### C++ Engine (gRPC)
+          | Package | Platform |
+          |---------|----------|
+          | `rtvortex-engine-linux-x64.tar.gz` | Linux x64 |
+          | `rtvortex-engine-linux-arm64.tar.gz` | Linux ARM64 |
+          | `rtvortex-engine-darwin-x64.tar.gz` | macOS x64 |
+          | `rtvortex-engine-darwin-arm64.tar.gz` | macOS ARM64 |
+          | `rtvortex-engine-windows-x64.tar.gz` | Windows x64 |
+
           ### Docker
-          
+
           ```bash
-          docker pull ghcr.io/${{ github.repository }}:${{ needs.version.outputs.version }}
-          docker pull ghcr.io/${{ github.repository }}:latest
+          docker pull ghcr.io/${{ github.repository_owner }}/rtvortex-server:${{ needs.version.outputs.version }}
+          docker pull ghcr.io/${{ github.repository_owner }}/rtvortex-server:latest
           ```
-          
+
           ### Quick Start
-          
-          #### Windows (Installer)
-          
-          1. Download and run `aipr-setup-${{ needs.version.outputs.version }}.exe`
-          2. Follow the installation wizard
-          3. Services are registered automatically (AIPREngine, AIPRServer)
-          4. Start Menu > AIPR > Start Services
-          
-          #### Linux (systemd)
-          
+
           ```bash
-          tar -xzf aipr-${{ needs.version.outputs.version }}-linux.tar.gz
-          cd aipr-${{ needs.version.outputs.version }}
-          sudo ./aipr/install.sh
-          
-          # Start services
-          sudo systemctl start aipr-engine aipr-server
+          # Extract the server binary
+          tar -xzf rtvortex-server-linux-x64.tar.gz
+
+          # Start the C++ engine (gRPC server on port 50051)
+          ./bin/rtvortex --port 50051 &
+
+          # Start the Go API server
+          export DATABASE_HOST=localhost DATABASE_NAME=rtvortex
+          export ENGINE_HOST=localhost ENGINE_PORT=50051
+          ./RTVortexGo
           ```
-          
-          #### macOS (launchd)
-          
+
+          ### Docker Compose
+
           ```bash
-          tar -xzf aipr-${{ needs.version.outputs.version }}-macos.tar.gz
-          cd aipr-${{ needs.version.outputs.version }}
-          sudo ./aipr/install.sh
-          
-          # Services start automatically via launchd
+          cd mono/deploy/docker
+          export LLM_API_KEY=your_key
+          docker compose up -d
           ```
-          
-          #### Manual Start
-          
-          ```bash
-          # Start C++ Engine (gRPC server on port 50051)
-          ./bin/aipr-engine &
-          
-          # Start Java Server
-          ./bin/aipr-server
-          ```
-          
-          ### Architecture Note
-          
-          The C++ engine runs as a **standalone gRPC server** on port 50051.
-          The Java server connects to it via gRPC. Both services must be running.
-          
-          For Docker deployments, docker-compose handles orchestration automatically.
-          
-          See [Setup Guide](docs/setup.md) for full documentation.
+
+          See [setup guide](docs/setup.md) and [architecture](docs/architecture.md) for details.
           EOF
-      
+
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:

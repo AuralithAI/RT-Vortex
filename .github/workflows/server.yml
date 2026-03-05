@@ -1,149 +1,100 @@
-name: Server CI
+name: Server
 
-# Java Server Build, Test, Coverage, and Quality Gate Pipeline
-# This workflow is for the Java server component only.
-# Runs independently from the C++ engine workflow.
+# Go Server CI Pipeline
+# Handles server-only build, test, lint, security scanning,
+# and Docker image build for the Go API server.
+#
+# For full integration tests (Engine + Server), see ci.yml.
 
 on:
   push:
     branches: ['**']
     paths:
-      - 'mono/server/**'
-      - 'mono/proto-java/**'
-      - 'mono/build.gradle'
-      - 'mono/settings.gradle'
-      - 'mono/gradle/**'
+      - 'mono/server-go/**'
+      - 'mono/proto/**'
+      - 'mono/schemas/**'
       - '.github/workflows/server.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'mono/server/**'
-      - 'mono/proto-java/**'
-      - 'mono/build.gradle'
-      - 'mono/settings.gradle'
-      - 'mono/gradle/**'
+      - 'mono/server-go/**'
+      - 'mono/proto/**'
+      - 'mono/schemas/**'
       - '.github/workflows/server.yml'
-  workflow_dispatch:
 
 concurrency:
   group: server-${{ github.ref }}
   cancel-in-progress: true
 
 env:
-  JAVA_VERSION: "21"
-  MONO_DIR: "mono"
+  GO_VERSION: "1.24"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/rtvortex-server
 
 jobs:
   # ===========================================================================
-  # Lint & Validation
+  # Static Analysis
   # ===========================================================================
   lint:
-    name: Lint & Validate
+    name: Lint & Vet
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-      
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.5'
-      
-      - name: Make Gradle Wrapper Executable
-        run: chmod +x ${{ env.MONO_DIR }}/gradlew
-      
-      - name: Checkstyle
-        working-directory: ${{ env.MONO_DIR }}
-        run: ./gradlew checkstyleMain checkstyleTest || true
-      
-      - name: SpotBugs
-        working-directory: ${{ env.MONO_DIR }}
-        run: ./gradlew spotbugsMain || true
-        continue-on-error: true
-      
-      - name: Validate YAML configs
-        run: |
-          pip install pyyaml
-          for config in ${{ env.MONO_DIR }}/config/*.yml ${{ env.MONO_DIR }}/config/model-providers/*.yml; do
-            if [ -f "$config" ]; then
-              echo "Validating $config..."
-              python3 -c "import yaml; yaml.safe_load(open('$config'))"
-            fi
-          done
-      
-      - name: Validate JSON schemas
-        run: |
-          npm install -g ajv-cli ajv-formats
-          for schema in ${{ env.MONO_DIR }}/schemas/*.schema.json; do
-            if [ -f "$schema" ]; then
-              echo "Validating $schema..."
-              ajv compile -s "$schema" --strict=true || true
-            fi
-          done
-
-  # ===========================================================================
-  # Build
-  # ===========================================================================
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: lint
     defaults:
       run:
-        working-directory: ${{ env.MONO_DIR }}
-    
+        working-directory: mono/server-go
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Java
-        uses: actions/setup-java@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-      
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: mono/server-go/go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
         with:
-          gradle-version: '8.5'
-      
-      - name: Make Gradle Wrapper Executable
-        run: chmod +x gradlew
-      
-      - name: Build (skip tests)
-        run: ./gradlew build -x test
-      
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: server-build
-          path: |
-            ${{ env.MONO_DIR }}/server/build/libs/*.jar
-            ${{ env.MONO_DIR }}/proto-java/build/libs/*.jar
-          retention-days: 7
+          version: v1.64
+          working-directory: mono/server-go
+          args: --timeout=5m
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: Check module tidiness
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum || \
+            (echo "go.mod or go.sum is out of date. Run 'go mod tidy' and commit." && exit 1)
+
+      - name: Check formatting
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "The following files are not formatted:"
+            echo "$UNFORMATTED"
+            echo "Run 'gofmt -w .' and commit."
+            exit 1
+          fi
 
   # ===========================================================================
-  # Test with Coverage
+  # Build & Test
   # ===========================================================================
   test:
-    name: Test & Coverage
+    name: Build & Test
     runs-on: ubuntu-latest
-    needs: build
+    needs: [lint]
     defaults:
       run:
-        working-directory: ${{ env.MONO_DIR }}
-    
+        working-directory: mono/server-go
+
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16-alpine
         env:
-          POSTGRES_USER: aipr
-          POSTGRES_PASSWORD: aipr
-          POSTGRES_DB: aipr_test
+          POSTGRES_USER: rtvortex
+          POSTGRES_PASSWORD: rtvortex
+          POSTGRES_DB: rtvortex_test
         ports:
           - 5432:5432
         options: >-
@@ -151,9 +102,9 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      
+
       redis:
-        image: redis:7
+        image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
@@ -161,226 +112,170 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Java
-        uses: actions/setup-java@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-      
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.5'
-      
-      - name: Make Gradle Wrapper Executable
-        run: chmod +x gradlew
-      
-      - name: Run Tests with Coverage
-        run: ./gradlew test jacocoTestReport
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: mono/server-go/go.sum
+
+      - name: Download Dependencies
+        run: go mod download
+
+      - name: Build
+        run: |
+          go build -v -ldflags="-s -w -X main.Version=$(cat ../../mono/VERSION 2>/dev/null || echo dev)" \
+            ./cmd/rtvortex-server/
+
+      - name: Run Unit Tests
+        run: |
+          go test -race -coverprofile=coverage.out -covermode=atomic \
+            -count=1 -timeout=5m ./...
         env:
-          DATABASE_URL: jdbc:postgresql://localhost:5432/aipr_test
-          DATABASE_USER: aipr
-          DATABASE_PASSWORD: aipr
+          DATABASE_HOST: localhost
+          DATABASE_PORT: "5432"
+          DATABASE_NAME: rtvortex_test
+          DATABASE_USER: rtvortex
+          DATABASE_PASSWORD: rtvortex
           REDIS_HOST: localhost
-          REDIS_PORT: 6379
-          # Engine is not available in unit tests - mock it
-          ENGINE_HOST: localhost
-          ENGINE_PORT: 50051
-      
-      - name: Upload Coverage Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: ${{ env.MONO_DIR }}/server/build/reports/jacoco/
-          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
-      
-      - name: Upload Test Results
+          REDIS_PORT: "6379"
+
+      - name: Coverage Summary
+        if: always()
+        run: |
+          if [ -f coverage.out ]; then
+            TOTAL=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}')
+            echo "### Go Server Coverage: ${TOTAL}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "<details>" >> $GITHUB_STEP_SUMMARY
+            echo "<summary>Per-package breakdown</summary>" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            go tool cover -func=coverage.out >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload Coverage
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results
-          path: ${{ env.MONO_DIR }}/server/build/test-results/
-          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
-      
-      - name: Coverage Summary
-        id: coverage
-        run: |
-          echo "## 📊 Java Server Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Parse test results
-          TEST_RESULTS_DIR="server/build/test-results/test"
-          if [ -d "$TEST_RESULTS_DIR" ]; then
-            TESTS_RUN=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "tests=" {} \; | grep -oP 'tests="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
-            TESTS_FAILED=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "failures=" {} \; | grep -oP 'failures="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
-            TESTS_ERRORS=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "errors=" {} \; | grep -oP 'errors="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
-            TESTS_SKIPPED=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "skipped=" {} \; | grep -oP 'skipped="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
-            TESTS_PASSED=$((TESTS_RUN - TESTS_FAILED - TESTS_ERRORS - TESTS_SKIPPED))
-            
-            echo "### ✅ Test Results" >> $GITHUB_STEP_SUMMARY
-            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
-            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Total Tests | ${TESTS_RUN:-0} |" >> $GITHUB_STEP_SUMMARY
-            echo "| ✅ Passed | ${TESTS_PASSED:-0} |" >> $GITHUB_STEP_SUMMARY
-            echo "| ❌ Failed | ${TESTS_FAILED:-0} |" >> $GITHUB_STEP_SUMMARY
-            echo "| ⚠️ Errors | ${TESTS_ERRORS:-0} |" >> $GITHUB_STEP_SUMMARY
-            echo "| ⏭️ Skipped | ${TESTS_SKIPPED:-0} |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            echo "tests_run=${TESTS_RUN:-0}" >> $GITHUB_OUTPUT
-            echo "tests_passed=${TESTS_PASSED:-0}" >> $GITHUB_OUTPUT
-            echo "tests_failed=${TESTS_FAILED:-0}" >> $GITHUB_OUTPUT
-          fi
-          
-          # Parse JaCoCo coverage
-          JACOCO_XML="server/build/reports/jacoco/test/jacocoTestReport.xml"
-          if [ -f "$JACOCO_XML" ]; then
-            COVERED=$(grep -oP 'type="INSTRUCTION" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
-            MISSED=$(grep -oP 'type="INSTRUCTION" missed="\K\d+' "$JACOCO_XML" | head -1)
-            
-            if [ -n "$COVERED" ] && [ -n "$MISSED" ]; then
-              TOTAL=$((COVERED + MISSED))
-              if [ $TOTAL -gt 0 ]; then
-                COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($COVERED / $TOTAL) * 100}")
-              else
-                COVERAGE_PCT="0.0"
-              fi
-            else
-              COVERAGE_PCT="N/A"
-            fi
-            
-            LINE_COVERED=$(grep -oP 'type="LINE" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
-            LINE_MISSED=$(grep -oP 'type="LINE" missed="\K\d+' "$JACOCO_XML" | head -1)
-            
-            if [ -n "$LINE_COVERED" ] && [ -n "$LINE_MISSED" ]; then
-              LINE_TOTAL=$((LINE_COVERED + LINE_MISSED))
-              if [ $LINE_TOTAL -gt 0 ]; then
-                LINE_COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($LINE_COVERED / $LINE_TOTAL) * 100}")
-              else
-                LINE_COVERAGE_PCT="0.0"
-              fi
-            else
-              LINE_COVERAGE_PCT="N/A"
-            fi
-            
-            echo "### 📈 Code Coverage" >> $GITHUB_STEP_SUMMARY
-            echo "| Metric | Coverage |" >> $GITHUB_STEP_SUMMARY
-            echo "|--------|----------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Instruction Coverage | ${COVERAGE_PCT}% |" >> $GITHUB_STEP_SUMMARY
-            echo "| Line Coverage | ${LINE_COVERAGE_PCT}% |" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            echo "coverage=${COVERAGE_PCT}" >> $GITHUB_OUTPUT
-          fi
+          name: server-coverage
+          path: mono/server-go/coverage.out
+          retention-days: 7
 
   # ===========================================================================
-  # Security Scan
+  # Security Scanning
   # ===========================================================================
   security:
     name: Security Scan
     runs-on: ubuntu-latest
-    needs: build
-    
+    needs: [lint]
+    defaults:
+      run:
+        working-directory: mono/server-go
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Java
-        uses: actions/setup-java@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-      
-      - name: OWASP Dependency Check
-        uses: dependency-check/Dependency-Check_Action@main
-        with:
-          project: 'AI-PR-Reviewer-Server'
-          path: '${{ env.MONO_DIR }}/server'
-          format: 'HTML'
-          out: 'dependency-check-report'
-        continue-on-error: true
-      
-      - name: Upload Dependency Check Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: dependency-check-report
-          path: dependency-check-report/
-          retention-days: 7
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: mono/server-go/go.sum
+
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+      - name: Check for known vulnerable dependencies
+        run: |
+          echo "### Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if govulncheck ./... 2>&1 | grep -q "No vulnerabilities found"; then
+            echo "No known vulnerabilities found." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Vulnerability scan completed. Review output above." >> $GITHUB_STEP_SUMMARY
+          fi
 
   # ===========================================================================
-  # Quality Gate (PRs only)
+  # Docker Build
+  # ===========================================================================
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [test, security]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: mono/deploy/docker/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ github.sha }}
+
+  # ===========================================================================
+  # Quality Gate (PR only)
   # ===========================================================================
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
-    needs: [lint, test]
+    needs: [lint, test, security]
     if: github.event_name == 'pull_request'
-    
+
     steps:
-      - name: Download Coverage Report
+      - name: Download Coverage
         uses: actions/download-artifact@v4
         with:
-          name: coverage-report
-          path: coverage-report
+          name: server-coverage
+          path: coverage
         continue-on-error: true
-      
-      - name: Download Test Results
-        uses: actions/download-artifact@v4
-        with:
-          name: test-results
-          path: test-results
-        continue-on-error: true
-      
-      - name: Evaluate Quality Gate
+
+      - name: Quality Summary
         run: |
-          echo "# 🚀 Server Quality Gate" >> $GITHUB_STEP_SUMMARY
+          echo "# Server Quality Gate" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          PASS=true
-          
-          # Check test results
-          if [ -d "test-results/test" ]; then
-            TESTS_FAILED=$(find test-results/test -name "*.xml" -exec grep -h "failures=" {} \; 2>/dev/null | grep -oP 'failures="\K[0-9]+' | awk '{sum+=$1} END {print sum+0}')
-            TESTS_ERRORS=$(find test-results/test -name "*.xml" -exec grep -h "errors=" {} \; 2>/dev/null | grep -oP 'errors="\K[0-9]+' | awk '{sum+=$1} END {print sum+0}')
-            
-            if [ "$TESTS_FAILED" -gt 0 ] || [ "$TESTS_ERRORS" -gt 0 ]; then
-              echo "❌ **Tests Failed**: $TESTS_FAILED failures, $TESTS_ERRORS errors" >> $GITHUB_STEP_SUMMARY
-              PASS=false
-            else
-              echo "✅ **All tests passed**" >> $GITHUB_STEP_SUMMARY
-            fi
-          fi
-          
-          # Check coverage threshold (60%)
-          JACOCO_XML="coverage-report/test/jacocoTestReport.xml"
-          if [ -f "$JACOCO_XML" ]; then
-            COVERED=$(grep -oP 'type="INSTRUCTION" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
-            MISSED=$(grep -oP 'type="INSTRUCTION" missed="\K\d+' "$JACOCO_XML" | head -1)
-            
-            if [ -n "$COVERED" ] && [ -n "$MISSED" ]; then
-              TOTAL=$((COVERED + MISSED))
-              if [ $TOTAL -gt 0 ]; then
-                COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($COVERED / $TOTAL) * 100}")
-                COVERAGE_INT=$(echo "$COVERAGE_PCT" | cut -d. -f1)
-                
-                if [ "$COVERAGE_INT" -lt 60 ]; then
-                  echo "⚠️ **Coverage below threshold**: ${COVERAGE_PCT}% (minimum: 60%)" >> $GITHUB_STEP_SUMMARY
-                  # Warning only, don't fail
-                else
-                  echo "✅ **Coverage**: ${COVERAGE_PCT}%" >> $GITHUB_STEP_SUMMARY
-                fi
-              fi
-            fi
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "$PASS" = true ]; then
-            echo "## ✅ Quality Gate Passed" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "## ❌ Quality Gate Failed" >> $GITHUB_STEP_SUMMARY
-            exit 1
-          fi
+          echo "| Check | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint & Formatting | ${{ needs.lint.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Unit Tests | ${{ needs.test.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Scan | ${{ needs.security.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY

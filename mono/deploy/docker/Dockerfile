@@ -1,126 +1,89 @@
-# AI PR Reviewer
-# Multi-stage build for minimal image size
-#
+# ==============================================================================
+# RTVortex — Multi-stage Docker Build
+# ==============================================================================
 # Architecture:
-#   - C++ Engine: gRPC server on port 50051
-#   - Java Server: REST/gRPC API on port 8080/9090
+#   - Go API Server:  REST API on port 8080, connects to Engine via gRPC
+#   - C++ Engine:     gRPC server on port 50051 (separate container or sidecar)
 #
-# The engine is built as a standalone executable and runs as a separate process.
+# Build from the mono/ directory:
+#   docker build -f deploy/docker/Dockerfile -t rtvortex-server .
+# ==============================================================================
 
 # =============================================================================
-# Stage 1: Build C++ Engine (gRPC Server)
+# Stage 1: Build Go Server
 # =============================================================================
-FROM ubuntu:22.04 AS engine-builder
+FROM golang:1.24-alpine AS builder
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
-    git \
-    pkg-config \
-    libssl-dev \
-    libopenblas-dev \
-    liblapack-dev \
-    libomp-dev \
-    libfaiss-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /build
 
-# Copy engine source and proto files
-COPY engine/ ./engine/
-COPY proto/engine.proto ./proto/
+# Cache dependencies first
+COPY server-go/go.mod server-go/go.sum ./server-go/
+WORKDIR /build/server-go
+RUN go mod download
 
-# Build engine with gRPC server and FAISS support
-RUN cmake -B build -S engine \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DAIPR_BUILD_TESTS=OFF \
-    -DAIPR_BUILD_SERVER=ON \
-    -DAIPR_USE_FAISS=ON \
-    -DAIPR_USE_TREE_SITTER=ON \
-    && cmake --build build --config Release --parallel $(nproc)
+# Copy source and build
+COPY server-go/ ./
 
+ARG VERSION=dev
+ARG COMMIT=unknown
 
-# =============================================================================
-# Stage 2: Build Java Server
-# =============================================================================
-FROM eclipse-temurin:21-jdk AS server-builder
-
-WORKDIR /build
-
-# Copy Gradle files
-COPY settings.gradle build.gradle gradlew VERSION ./
-COPY gradle/ ./gradle/
-COPY build-logic/ ./build-logic/
-
-# Copy source
-COPY server/ ./server/
-COPY proto-java/ ./proto-java/
-
-# Make gradlew executable
-RUN chmod +x gradlew
-
-# Build (skip engine tasks - it's built separately)
-RUN ./gradlew :server:bootJar :proto-java:jar --no-daemon -x buildEngine
-
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -trimpath \
+    -ldflags "-s -w \
+      -X main.version=${VERSION} \
+      -X main.commit=${COMMIT} \
+      -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -o /build/bin/RTVortexGo \
+    ./cmd/rtvortex-server/
 
 # =============================================================================
-# Stage 3: Final Runtime Image
+# Stage 2: Runtime
 # =============================================================================
-FROM eclipse-temurin:21-jre-jammy
+FROM alpine:3.19
 
-# Labels
-LABEL org.opencontainers.image.title="AI PR Reviewer"
-LABEL org.opencontainers.image.description="AI-powered code review server with standalone C++ engine"
+LABEL org.opencontainers.image.title="RTVortex Server"
+LABEL org.opencontainers.image.description="RTVortex AI code review API server (Go)"
 LABEL org.opencontainers.image.source="https://github.com/AuralithAI/RT-AI-PR-Reviewer"
+LABEL org.opencontainers.image.vendor="AuralithAI"
 
-# Install runtime dependencies for C++ engine
-RUN apt-get update && apt-get install -y \
-    libstdc++6 \
-    curl \
-    netcat-openbsd \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create non-root user
-RUN groupadd -r aipr && useradd -r -g aipr aipr
+RUN apk add --no-cache ca-certificates tzdata curl && \
+    addgroup -S rtvortex && \
+    adduser -S -G rtvortex rtvortex
 
 WORKDIR /app
 
-# Copy C++ engine executable
-COPY --from=engine-builder /build/build/bin/aipr-engine /app/bin/aipr-engine
-RUN chmod +x /app/bin/aipr-engine
+# Copy binary
+COPY --from=builder /build/bin/RTVortexGo /app/RTVortexGo
 
-# Copy Java server JAR
-COPY --from=server-builder /build/server/build/libs/*.jar /app/lib/server.jar
-COPY --from=server-builder /build/proto-java/build/libs/*.jar /app/lib/
+# Copy SQL files for schema bootstrap
+COPY --from=builder /build/server-go/db/sql /app/db/sql
+COPY --from=builder /build/server-go/db/migrations /app/db/migrations
 
-# Copy config files
+# Copy config and schema files
 COPY config/ /app/config/
 COPY schemas/ /app/schemas/
 COPY prompting/ /app/prompting/
 
 # Create data directories
-RUN mkdir -p /app/data /app/logs && chown -R aipr:aipr /app
+RUN mkdir -p /app/temp /app/data /app/config && \
+    chown -R rtvortex:rtvortex /app
 
-USER aipr
+ENV RTVORTEX_HOME=/app
 
-# Expose ports
-# 8080 - REST API
-# 9090 - gRPC API (Java server for SDK clients)
-# 50051 - Engine gRPC (internal, Java server connects here)
-EXPOSE 8080 9090 50051
+USER rtvortex
 
-# Health check (checks Java server)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/actuator/health || exit 1
+# Expose REST API port
+EXPOSE 8080
+
+# Health check against the Go server /health endpoint
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -sf http://localhost:8080/health || exit 1
 
 # Default environment
-ENV JAVA_OPTS="-Xms512m -Xmx2g -XX:+UseG1GC"
-ENV ENGINE_HOST="localhost"
+ENV ENGINE_HOST="engine"
 ENV ENGINE_PORT="50051"
 ENV ENGINE_NEGOTIATION="PLAINTEXT"
 
-# Copy startup script
-COPY deploy/docker/entrypoint.sh /app/entrypoint.sh
-
-# Entry point starts both engine and server
-ENTRYPOINT ["/app/entrypoint.sh"]
+ENTRYPOINT ["/app/RTVortexGo"]

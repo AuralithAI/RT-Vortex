@@ -1,12 +1,12 @@
 name: CI
 
 # Integration CI Pipeline
-# This workflow orchestrates both Engine (C++) and Server (Java) builds,
+# Orchestrates both Engine (C++) and Server (Go) builds,
 # and runs full integration tests with both components.
 #
 # For component-specific builds, see:
-#   - engine.yml (C++ engine only)
-#   - server.yml (Java server only)
+#   - engine.yml  (C++ engine only)
+#   - server.yml  (Go server only)
 
 on:
   push:
@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  JAVA_VERSION: "21"
+  GO_VERSION: "1.24"
   CMAKE_VERSION: "3.28.1"
   MONO_DIR: "mono"
 
@@ -44,9 +44,8 @@ jobs:
               - 'mono/engine/**'
               - 'mono/proto/engine.proto'
             server:
-              - 'mono/server/**'
-              - 'mono/proto-java/**'
-              - 'mono/build.gradle'
+              - 'mono/server-go/**'
+              - '.github/workflows/server.yml'
             config:
               - 'mono/config/**'
               - 'mono/schemas/**'
@@ -59,24 +58,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Java
-        uses: actions/setup-java@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-      
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.MONO_DIR }}/server-go/go.sum
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
         with:
-          gradle-version: '8.5'
-      
-      - name: Checkstyle
-        working-directory: ${{ env.MONO_DIR }}
-        run: |
-          chmod +x gradlew
-          ./gradlew checkstyleMain checkstyleTest || true
-      
+          version: v1.64
+          working-directory: ${{ env.MONO_DIR }}/server-go
+          args: --timeout=5m
+
+      - name: Go vet
+        working-directory: ${{ env.MONO_DIR }}/server-go
+        run: go vet ./...
+
       - name: Validate YAML configs
         run: |
           pip install pyyaml
@@ -86,7 +85,7 @@ jobs:
               python3 -c "import yaml; yaml.safe_load(open('$config'))"
             fi
           done
-      
+
       - name: Validate JSON schemas
         run: |
           npm install -g ajv-cli ajv-formats
@@ -98,7 +97,7 @@ jobs:
           done
 
   # ===========================================================================
-  # Build & Test Server (Java only - no C++ engine dependency for unit tests)
+  # Build & Test Go Server
   # ===========================================================================
   server:
     name: Build & Test Server
@@ -107,15 +106,15 @@ jobs:
     if: ${{ needs.changes.outputs.server == 'true' || github.event_name == 'push' }}
     defaults:
       run:
-        working-directory: ${{ env.MONO_DIR }}
-    
+        working-directory: ${{ env.MONO_DIR }}/server-go
+
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16-alpine
         env:
-          POSTGRES_USER: aipr
-          POSTGRES_PASSWORD: aipr
-          POSTGRES_DB: aipr_test
+          POSTGRES_USER: rtvortex
+          POSTGRES_PASSWORD: rtvortex
+          POSTGRES_DB: rtvortex_test
         ports:
           - 5432:5432
         options: >-
@@ -123,9 +122,9 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      
+
       redis:
-        image: redis:7
+        image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
@@ -133,150 +132,73 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Java
-        uses: actions/setup-java@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-      
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.5'
-      
-      - name: Make Gradle Wrapper Executable
-        run: chmod +x gradlew
-      
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.MONO_DIR }}/server-go/go.sum
+
       - name: Build
-        run: ./gradlew build -x test
-      
+        run: go build -v ./...
+
       - name: Run Tests with Coverage
-        run: ./gradlew test jacocoTestReport
+        run: |
+          go test -race -coverprofile=coverage.out -covermode=atomic -count=1 -timeout=5m ./...
         env:
-          DATABASE_URL: jdbc:postgresql://localhost:5432/aipr_test
-          DATABASE_USER: aipr
-          DATABASE_PASSWORD: aipr
+          DATABASE_HOST: localhost
+          DATABASE_PORT: "5432"
+          DATABASE_NAME: rtvortex_test
+          DATABASE_USER: rtvortex
+          DATABASE_PASSWORD: rtvortex
           REDIS_HOST: localhost
-          REDIS_PORT: 6379
-      
+          REDIS_PORT: "6379"
+
+      - name: Generate Coverage HTML
+        run: go tool cover -html=coverage.out -o coverage.html
+        if: always()
+
       - name: Upload Coverage Report
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: ${{ env.MONO_DIR }}/server/build/reports/jacoco/
-          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 1 }}
-      
-      - name: Upload Test Results
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results
-          path: ${{ env.MONO_DIR }}/server/build/test-results/
-          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 1 }}
-      
+          name: go-coverage-report
+          path: |
+            ${{ env.MONO_DIR }}/server-go/coverage.out
+            ${{ env.MONO_DIR }}/server-go/coverage.html
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
+
       - name: Coverage Summary
         id: coverage
+        if: always()
         run: |
-          echo "## 📊 Java Server Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "## Go Server Test Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Parse test results
-          TEST_RESULTS_DIR="server/build/test-results/test"
-          if [ -d "$TEST_RESULTS_DIR" ]; then
-            TESTS_RUN=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "tests=" {} \; | grep -oP 'tests="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
-            TESTS_FAILED=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "failures=" {} \; | grep -oP 'failures="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
-            TESTS_ERRORS=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "errors=" {} \; | grep -oP 'errors="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
-            TESTS_SKIPPED=$(find $TEST_RESULTS_DIR -name "*.xml" -exec grep -h "skipped=" {} \; | grep -oP 'skipped="\K[0-9]+' | awk '{sum+=$1} END {print sum}')
-            TESTS_PASSED=$((TESTS_RUN - TESTS_FAILED - TESTS_ERRORS - TESTS_SKIPPED))
-            
-            echo "### ✅ Test Results" >> $GITHUB_STEP_SUMMARY
-            echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
-            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Total Tests | ${TESTS_RUN:-0} |" >> $GITHUB_STEP_SUMMARY
-            echo "| ✅ Passed | ${TESTS_PASSED:-0} |" >> $GITHUB_STEP_SUMMARY
-            echo "| ❌ Failed | ${TESTS_FAILED:-0} |" >> $GITHUB_STEP_SUMMARY
-            echo "| ⚠️ Errors | ${TESTS_ERRORS:-0} |" >> $GITHUB_STEP_SUMMARY
-            echo "| ⏭️ Skipped | ${TESTS_SKIPPED:-0} |" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f coverage.out ]; then
+            COVERAGE=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
+            echo "### Code Coverage: ${COVERAGE}%" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            
-            # Set outputs for quality gate
-            echo "tests_run=${TESTS_RUN:-0}" >> $GITHUB_OUTPUT
-            echo "tests_passed=${TESTS_PASSED:-0}" >> $GITHUB_OUTPUT
-            echo "tests_failed=${TESTS_FAILED:-0}" >> $GITHUB_OUTPUT
-          fi
-          
-          # Parse JaCoCo coverage from XML
-          JACOCO_XML="server/build/reports/jacoco/test/jacocoTestReport.xml"
-          if [ -f "$JACOCO_XML" ]; then
-            # Extract instruction coverage
-            COVERED=$(grep -oP 'type="INSTRUCTION" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
-            MISSED=$(grep -oP 'type="INSTRUCTION" missed="\K\d+' "$JACOCO_XML" | head -1)
-            
-            if [ -n "$COVERED" ] && [ -n "$MISSED" ]; then
-              TOTAL=$((COVERED + MISSED))
-              if [ $TOTAL -gt 0 ]; then
-                COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($COVERED / $TOTAL) * 100}")
-              else
-                COVERAGE_PCT="0.0"
-              fi
-            else
-              COVERAGE_PCT="N/A"
-            fi
-            
-            # Extract line coverage
-            LINE_COVERED=$(grep -oP 'type="LINE" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
-            LINE_MISSED=$(grep -oP 'type="LINE" missed="\K\d+' "$JACOCO_XML" | head -1)
-            
-            if [ -n "$LINE_COVERED" ] && [ -n "$LINE_MISSED" ]; then
-              LINE_TOTAL=$((LINE_COVERED + LINE_MISSED))
-              if [ $LINE_TOTAL -gt 0 ]; then
-                LINE_COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($LINE_COVERED / $LINE_TOTAL) * 100}")
-              else
-                LINE_COVERAGE_PCT="0.0"
-              fi
-            else
-              LINE_COVERAGE_PCT="N/A"
-            fi
-            
-            # Extract branch coverage
-            BRANCH_COVERED=$(grep -oP 'type="BRANCH" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
-            BRANCH_MISSED=$(grep -oP 'type="BRANCH" missed="\K\d+' "$JACOCO_XML" | head -1)
-            
-            if [ -n "$BRANCH_COVERED" ] && [ -n "$BRANCH_MISSED" ]; then
-              BRANCH_TOTAL=$((BRANCH_COVERED + BRANCH_MISSED))
-              if [ $BRANCH_TOTAL -gt 0 ]; then
-                BRANCH_COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($BRANCH_COVERED / $BRANCH_TOTAL) * 100}")
-              else
-                BRANCH_COVERAGE_PCT="0.0"
-              fi
-            else
-              BRANCH_COVERAGE_PCT="N/A"
-            fi
-            
-            echo "### 📈 Code Coverage" >> $GITHUB_STEP_SUMMARY
-            echo "| Metric | Coverage |" >> $GITHUB_STEP_SUMMARY
-            echo "|--------|----------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Instruction Coverage | ${COVERAGE_PCT}% |" >> $GITHUB_STEP_SUMMARY
-            echo "| Line Coverage | ${LINE_COVERAGE_PCT}% |" >> $GITHUB_STEP_SUMMARY
-            echo "| Branch Coverage | ${BRANCH_COVERAGE_PCT}% |" >> $GITHUB_STEP_SUMMARY
+
+            echo "<details>" >> $GITHUB_STEP_SUMMARY
+            echo "<summary>Per-package coverage</summary>" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            
-            # Set output for quality gate
-            echo "coverage=${COVERAGE_PCT}" >> $GITHUB_OUTPUT
-            echo "line_coverage=${LINE_COVERAGE_PCT}" >> $GITHUB_OUTPUT
-            echo "branch_coverage=${BRANCH_COVERAGE_PCT}" >> $GITHUB_OUTPUT
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            go tool cover -func=coverage.out >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "</details>" >> $GITHUB_STEP_SUMMARY
+
+            echo "coverage=${COVERAGE}" >> $GITHUB_OUTPUT
           else
-            echo "⚠️ JaCoCo coverage report not found" >> $GITHUB_STEP_SUMMARY
+            echo "Coverage report not found" >> $GITHUB_STEP_SUMMARY
             echo "coverage=0" >> $GITHUB_OUTPUT
           fi
 
   # ===========================================================================
   # Build C++ Engine (gRPC Server)
-  # The engine is now a standalone gRPC server executable.
   # ===========================================================================
   engine:
     name: Build Engine (${{ matrix.os }})
@@ -288,12 +210,12 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: aipr-engine-linux-x64
+            artifact: rtvortex-engine-linux-x64
           - os: macos-latest
-            artifact: aipr-engine-darwin-x64
+            artifact: rtvortex-engine-darwin-x64
           - os: windows-latest
-            artifact: aipr-engine-windows-x64
-    
+            artifact: rtvortex-engine-windows-x64
+
     steps:
       - uses: actions/checkout@v4
 
@@ -316,7 +238,7 @@ jobs:
           key: faiss-windows-x64-v1.7.4
           restore-keys: |
             faiss-windows-x64-v1.7.4
-      
+
       - name: Install Dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
@@ -333,15 +255,12 @@ jobs:
       - name: Build FAISS from source (Ubuntu)
         if: runner.os == 'Linux'
         run: |
-          # Check if FAISS is already installed
           if ldconfig -p | grep -q libfaiss; then
             echo "FAISS already installed, skipping build"
             exit 0
           fi
-          
           git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git /tmp/faiss
-          cd /tmp/faiss
-          mkdir build && cd build
+          cd /tmp/faiss && mkdir build && cd build
           cmake .. \
             -DFAISS_ENABLE_GPU=OFF \
             -DFAISS_ENABLE_PYTHON=OFF \
@@ -353,16 +272,15 @@ jobs:
           cmake --build . --config Release --parallel $(nproc)
           sudo cmake --install . --config Release
           sudo ldconfig
-      
+
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install libomp openblas faiss grpc protobuf
           echo "OpenBLAS_HOME=$(brew --prefix openblas)" >> $GITHUB_ENV
           echo "OpenMP_ROOT=$(brew --prefix libomp)" >> $GITHUB_ENV
-          # Set CMAKE_PREFIX_PATH so CMake can find brew packages
           echo "CMAKE_PREFIX_PATH=$(brew --prefix)/lib/cmake:$(brew --prefix grpc)/lib/cmake:$(brew --prefix protobuf)/lib/cmake:$(brew --prefix abseil)/lib/cmake" >> $GITHUB_ENV
-      
+
       - name: Install Dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
@@ -374,16 +292,13 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Check if FAISS is already installed (from cache)
           if (Test-Path "C:\faiss-install\lib\faiss.lib") {
             Write-Host "FAISS already installed, skipping build"
             exit 0
           }
-          
           git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git C:\faiss
           cd C:\faiss
-          mkdir build
-          cd build
+          mkdir build && cd build
           cmake .. `
             -DFAISS_ENABLE_GPU=OFF `
             -DFAISS_ENABLE_PYTHON=OFF `
@@ -395,21 +310,19 @@ jobs:
           cmake --build . --config Release --parallel 4
           cmake --install . --config Release --prefix C:\faiss-install
           echo "faiss_DIR=C:\faiss-install" >> $env:GITHUB_ENV
-      
+
       - name: Setup CMake
         uses: lukka/get-cmake@latest
         with:
           cmakeVersion: ${{ env.CMAKE_VERSION }}
-      
+
       - name: Configure & Build (Unix)
         if: runner.os != 'Windows'
         run: |
-          # Pass CMAKE_PREFIX_PATH if set (for macOS brew packages)
           CMAKE_EXTRA_ARGS=""
           if [ -n "$CMAKE_PREFIX_PATH" ]; then
             CMAKE_EXTRA_ARGS="-DCMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
           fi
-          
           cmake -B build -S ${{ env.MONO_DIR }}/engine \
             -DCMAKE_BUILD_TYPE=Release \
             -DAIPR_BUILD_TESTS=ON \
@@ -418,7 +331,7 @@ jobs:
             -DAIPR_USE_TREE_SITTER=ON \
             $CMAKE_EXTRA_ARGS
           cmake --build build --config Release --parallel
-      
+
       - name: Configure & Build (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -432,85 +345,29 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DCMAKE_PREFIX_PATH="C:\faiss-install"
           cmake --build build --config Release --parallel 4
-      
+
       - name: Run Tests
         run: ctest --test-dir build --output-on-failure -C Release
         continue-on-error: true
-      
+
       - name: Package
         shell: bash
         run: |
           mkdir -p dist/bin dist/lib
-          
-          # Copy server executable (new gRPC server architecture)
-          cp build/bin/aipr-engine dist/bin/ 2>/dev/null || true
-          cp build/bin/Release/aipr-engine.exe dist/bin/ 2>/dev/null || true
-          cp build/bin/aipr-engine.exe dist/bin/ 2>/dev/null || true
-          
-          # Copy libraries (for backward compat during transition)
+          cp build/bin/rtvortex dist/bin/ 2>/dev/null || true
+          cp build/bin/Release/rtvortex.exe dist/bin/ 2>/dev/null || true
+          cp build/bin/rtvortex.exe dist/bin/ 2>/dev/null || true
           cp build/lib* dist/lib/ 2>/dev/null || true
           cp build/*.dll dist/lib/ 2>/dev/null || true
           cp build/*.dylib dist/lib/ 2>/dev/null || true
           cp build/*.so dist/lib/ 2>/dev/null || true
           cp build/Release/*.dll dist/lib/ 2>/dev/null || true
-      
+
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
           path: dist/
-          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
-
-  # ===========================================================================
-  # Build Distribution Package
-  # ===========================================================================
-  distribution:
-    name: Build Distribution
-    runs-on: ubuntu-latest
-    needs: [server, engine]
-    if: always() && (needs.server.result == 'success' || needs.server.result == 'skipped') && (needs.engine.result == 'success' || needs.engine.result == 'skipped')
-    
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-      
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.5'
-      
-      - name: Make Gradle Wrapper Executable
-        run: chmod +x gradlew
-        working-directory: ${{ env.MONO_DIR }}
-      
-      - name: Download Engine Artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: aipr-engine-*
-          path: ${{ env.MONO_DIR }}/engine/build/
-          merge-multiple: true
-      
-      - name: Build Distribution
-        working-directory: ${{ env.MONO_DIR }}
-        run: ./gradlew distZip distTar
-      
-      - name: Upload Distribution (ZIP)
-        uses: actions/upload-artifact@v4
-        with:
-          name: aipr-distribution-zip
-          path: ${{ env.MONO_DIR }}/build/distributions/*.zip
-          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
-      
-      - name: Upload Distribution (TAR)
-        uses: actions/upload-artifact@v4
-        with:
-          name: aipr-distribution-tar
-          path: ${{ env.MONO_DIR }}/build/distributions/*.tar.gz
           retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
 
   # ===========================================================================
@@ -521,14 +378,14 @@ jobs:
     runs-on: ubuntu-latest
     needs: [server, engine]
     if: always() && needs.server.result == 'success' && needs.engine.result == 'success'
-    
+
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16-alpine
         env:
-          POSTGRES_USER: aipr
-          POSTGRES_PASSWORD: aipr
-          POSTGRES_DB: aipr_test
+          POSTGRES_USER: rtvortex
+          POSTGRES_PASSWORD: rtvortex
+          POSTGRES_DB: rtvortex_test
         ports:
           - 5432:5432
         options: >-
@@ -536,9 +393,9 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      
+
       redis:
-        image: redis:7
+        image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
@@ -546,79 +403,73 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Setup Java
-        uses: actions/setup-java@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
-          distribution: 'temurin'
-          java-version: ${{ env.JAVA_VERSION }}
-      
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: ${{ env.MONO_DIR }}/server-go/go.sum
+
       - name: Download Engine
         uses: actions/download-artifact@v4
         with:
-          name: aipr-engine-linux-x64
+          name: rtvortex-engine-linux-x64
           path: engine-dist/
-      
+
       - name: Start Engine Server
         run: |
-          chmod +x engine-dist/bin/aipr-engine
-          
-          # Start engine in background
+          chmod +x engine-dist/bin/rtvortex
+
           ENGINE_HOST=0.0.0.0 ENGINE_PORT=50051 ENGINE_TLS_ENABLED=false \
-            engine-dist/bin/aipr-engine --port 50051 &
-          
+            engine-dist/bin/rtvortex --port 50051 &
+
           echo "ENGINE_PID=$!" >> $GITHUB_ENV
-          
+
           # Wait for startup
-          sleep 5
-          
-          # Verify running
-          if ! kill -0 $! 2>/dev/null; then
-            echo "Engine failed to start"
-            exit 1
-          fi
-          echo "Engine started on port 50051"
-      
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.5'
-      
+          for i in $(seq 1 30); do
+            if nc -z localhost 50051 2>/dev/null; then
+              echo "Engine started on port 50051"
+              break
+            fi
+            sleep 1
+          done
+
       - name: Run Integration Tests
-        working-directory: ${{ env.MONO_DIR }}
+        working-directory: ${{ env.MONO_DIR }}/server-go
         run: |
-          chmod +x gradlew
-          ./gradlew :server:integrationTest || true
+          go test -race -tags=integration -count=1 -timeout=5m ./...
         env:
-          DATABASE_URL: jdbc:postgresql://localhost:5432/aipr_test
-          DATABASE_USER: aipr
-          DATABASE_PASSWORD: aipr
+          DATABASE_HOST: localhost
+          DATABASE_PORT: "5432"
+          DATABASE_NAME: rtvortex_test
+          DATABASE_USER: rtvortex
+          DATABASE_PASSWORD: rtvortex
           REDIS_HOST: localhost
-          REDIS_PORT: 6379
+          REDIS_PORT: "6379"
           ENGINE_HOST: localhost
-          ENGINE_PORT: 50051
+          ENGINE_PORT: "50051"
           ENGINE_NEGOTIATION: PLAINTEXT
-      
+
       - name: Cleanup
         if: always()
         run: |
           if [ -n "$ENGINE_PID" ]; then
             kill $ENGINE_PID 2>/dev/null || true
           fi
-      
+
       - name: Integration Test Summary
         if: always()
         run: |
-          echo "# 🔗 Integration Test Summary" >> $GITHUB_STEP_SUMMARY
+          echo "# Integration Test Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "## Components Tested" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ C++ Engine (gRPC Server on port 50051)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Java Server (connected via gRPC)" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ PostgreSQL" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Redis" >> $GITHUB_STEP_SUMMARY
+          echo "- C++ Engine (gRPC Server on port 50051)" >> $GITHUB_STEP_SUMMARY
+          echo "- Go API Server (connected via gRPC)" >> $GITHUB_STEP_SUMMARY
+          echo "- PostgreSQL" >> $GITHUB_STEP_SUMMARY
+          echo "- Redis" >> $GITHUB_STEP_SUMMARY
 
   # ===========================================================================
   # PR Quality Gate (only on PRs)
@@ -628,121 +479,35 @@ jobs:
     runs-on: ubuntu-latest
     needs: [lint, server, engine]
     if: github.event_name == 'pull_request'
-    
+
     steps:
       - name: Download Coverage Report
         uses: actions/download-artifact@v4
         with:
-          name: coverage-report
+          name: go-coverage-report
           path: coverage-report
         continue-on-error: true
-      
-      - name: Download Test Results
-        uses: actions/download-artifact@v4
-        with:
-          name: test-results
-          path: test-results
-        continue-on-error: true
-      
+
       - name: Generate Quality Gate Summary
         run: |
-          echo "# 🚀 Quality Gate Summary" >> $GITHUB_STEP_SUMMARY
+          echo "# Quality Gate Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 📋 Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Status" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔍 Lint | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
-          echo "| ☕ Java Server | ${{ needs.server.result == 'success' && '✅ Passed' || needs.server.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ⚙️ C++ Engine (gRPC) | ${{ needs.engine.result == 'success' && '✅ Passed' || needs.engine.result == 'skipped' && '⏭️ Skipped' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ⚙️ C++ Engine | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint (Go + YAML) | ${{ needs.lint.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Go Server | ${{ needs.server.result == 'success' && 'Passed' || needs.server.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| C++ Engine | ${{ needs.engine.result == 'success' && 'Passed' || needs.engine.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Parse Java test results
-          echo "## ☕ Java Server Tests" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ -d "test-results/test" ]; then
-            TESTS_RUN=$(find test-results/test -name "*.xml" -exec grep -h "tests=" {} \; 2>/dev/null | grep -oP 'tests="\K[0-9]+' | awk '{sum+=$1} END {print sum+0}')
-            TESTS_FAILED=$(find test-results/test -name "*.xml" -exec grep -h "failures=" {} \; 2>/dev/null | grep -oP 'failures="\K[0-9]+' | awk '{sum+=$1} END {print sum+0}')
-            TESTS_ERRORS=$(find test-results/test -name "*.xml" -exec grep -h "errors=" {} \; 2>/dev/null | grep -oP 'errors="\K[0-9]+' | awk '{sum+=$1} END {print sum+0}')
-            TESTS_PASSED=$((TESTS_RUN - TESTS_FAILED - TESTS_ERRORS))
-            
-            if [ "$TESTS_FAILED" -eq 0 ] && [ "$TESTS_ERRORS" -eq 0 ]; then
-              TEST_STATUS="✅"
-            else
-              TEST_STATUS="❌"
-            fi
-            
-            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Total Tests | $TESTS_RUN |" >> $GITHUB_STEP_SUMMARY
-            echo "| ✅ Passed | $TESTS_PASSED |" >> $GITHUB_STEP_SUMMARY
-            echo "| ❌ Failed | $TESTS_FAILED |" >> $GITHUB_STEP_SUMMARY
-            echo "| Status | $TEST_STATUS |" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ Test results not available" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Parse JaCoCo coverage
-          echo "## 📈 Code Coverage" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          JACOCO_XML="coverage-report/test/jacocoTestReport.xml"
-          if [ -f "$JACOCO_XML" ]; then
-            # Extract instruction coverage
-            COVERED=$(grep -oP 'type="INSTRUCTION" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
-            MISSED=$(grep -oP 'type="INSTRUCTION" missed="\K\d+' "$JACOCO_XML" | head -1)
-            
-            if [ -n "$COVERED" ] && [ -n "$MISSED" ]; then
-              TOTAL=$((COVERED + MISSED))
-              if [ $TOTAL -gt 0 ]; then
-                COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($COVERED / $TOTAL) * 100}")
-              else
-                COVERAGE_PCT="0.0"
-              fi
-            else
-              COVERAGE_PCT="N/A"
-            fi
-            
-            # Extract line coverage
-            LINE_COVERED=$(grep -oP 'type="LINE" missed="\d+" covered="\K\d+' "$JACOCO_XML" | head -1)
-            LINE_MISSED=$(grep -oP 'type="LINE" missed="\K\d+' "$JACOCO_XML" | head -1)
-            
-            if [ -n "$LINE_COVERED" ] && [ -n "$LINE_MISSED" ]; then
-              LINE_TOTAL=$((LINE_COVERED + LINE_MISSED))
-              if [ $LINE_TOTAL -gt 0 ]; then
-                LINE_COVERAGE_PCT=$(awk "BEGIN {printf \"%.1f\", ($LINE_COVERED / $LINE_TOTAL) * 100}")
-              else
-                LINE_COVERAGE_PCT="0.0"
-              fi
-            else
-              LINE_COVERAGE_PCT="N/A"
-            fi
-            
-            # Determine coverage status (60% threshold)
-            COVERAGE_NUM=$(echo "$COVERAGE_PCT" | grep -oP '[0-9.]+' || echo "0")
-            if (( $(echo "$COVERAGE_NUM >= 60" | bc -l 2>/dev/null || echo "0") )); then
-              COV_STATUS="✅"
-            else
-              COV_STATUS="⚠️"
-            fi
-            
-            echo "| Metric | Coverage | Status |" >> $GITHUB_STEP_SUMMARY
-            echo "|--------|----------|--------|" >> $GITHUB_STEP_SUMMARY
-            echo "| Instruction Coverage | ${COVERAGE_PCT}% | $COV_STATUS |" >> $GITHUB_STEP_SUMMARY
-            echo "| Line Coverage | ${LINE_COVERAGE_PCT}% | |" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f "coverage-report/coverage.out" ]; then
+            echo "## Go Code Coverage" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "> **Threshold:** 60% minimum coverage required" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ Coverage report not available" >> $GITHUB_STEP_SUMMARY
+            echo "Coverage report uploaded as artifact." >> $GITHUB_STEP_SUMMARY
           fi
+
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          # Final verdict
           echo "---" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "## 🎯 Final Verdict" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ **All quality checks passed. PR is ready to merge.**" >> $GITHUB_STEP_SUMMARY
+          echo "All quality checks passed. PR is ready to merge." >> $GITHUB_STEP_SUMMARY

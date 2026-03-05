@@ -1,14 +1,14 @@
 version: '3.8'
 
 # =============================================================================
-# AI PR Reviewer - Docker Compose
+# RTVortex — Docker Compose
 # =============================================================================
 #
 # Architecture:
-#   - engine:  C++ gRPC server (port 50051, internal)
-#   - server:  Java REST/gRPC API (ports 8080, 9090)
-#   - postgres: Database
-#   - redis:    Cache (optional)
+#   - server:    Go REST API (port 8080)
+#   - engine:    C++ gRPC server (port 50051, internal)
+#   - postgres:  Database
+#   - redis:     Cache
 #
 # Quick Start:
 #   export LLM_API_KEY=your_api_key
@@ -18,26 +18,21 @@ version: '3.8'
 
 services:
   # ===========================================================================
-  # C++ Engine - gRPC Server
+  # C++ Engine — gRPC Server
   # ===========================================================================
   engine:
     build:
       context: ../..
-      dockerfile: deploy/docker/Dockerfile
-      target: engine-runtime  # If using multi-target, or just use Dockerfile.engine
-    image: aipr-engine:latest
-    container_name: aipr-engine
-    # Engine only listens internally, not exposed to host by default
-    # Uncomment to expose for debugging:
-    # ports:
-    #   - "50051:50051"
+      dockerfile: deploy/docker/Dockerfile.engine
+    image: rtvortex-engine:latest
+    container_name: rtvortex-engine
     environment:
       - ENGINE_HOST=0.0.0.0
       - ENGINE_PORT=50051
       - ENGINE_TLS_ENABLED=false
     volumes:
-      - aipr-data:/app/data
-      - aipr-logs:/app/logs
+      - rtvortex-data:/app/data
+      - rtvortex-temp:/app/temp
     healthcheck:
       test: ["CMD", "nc", "-z", "localhost", "50051"]
       interval: 10s
@@ -55,22 +50,24 @@ services:
     restart: unless-stopped
 
   # ===========================================================================
-  # Java Server - REST & gRPC API
+  # Go Server — REST API
   # ===========================================================================
   server:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
-    container_name: aipr-server
+    image: rtvortex-server:latest
+    container_name: rtvortex-server
     ports:
       - "8080:8080"   # REST API
-      - "9090:9090"   # gRPC API (for SDK clients)
     environment:
-      - SPRING_PROFILES_ACTIVE=production
+      - RTVORTEX_HOME=/app
       # Database
-      - DATABASE_URL=jdbc:postgresql://postgres:5432/aipr
-      - DATABASE_USER=aipr
-      - DATABASE_PASSWORD=${DB_PASSWORD:-aipr}
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=rtvortex
+      - DATABASE_USER=rtvortex
+      - DATABASE_PASSWORD=${DB_PASSWORD:-rtvortex}
       # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -83,12 +80,12 @@ services:
       - LLM_API_KEY=${LLM_API_KEY}
       - LLM_MODEL=${LLM_MODEL:-gpt-4-turbo-preview}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
-      # Storage
-      - STORAGE_TYPE=local
-      - STORAGE_PATH=/app/data
+      # Server
+      - SERVER_PORT=8080
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
-      - aipr-data:/app/data
-      - aipr-logs:/app/logs
+      - rtvortex-data:/app/data
+      - rtvortex-temp:/app/temp
     depends_on:
       engine:
         condition: service_healthy
@@ -97,19 +94,19 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
-      interval: 30s
-      timeout: 10s
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 3s
       retries: 3
-      start_period: 60s
+      start_period: 10s
     deploy:
       resources:
         limits:
           cpus: '2'
-          memory: 4G
+          memory: 1G
         reservations:
           cpus: '0.5'
-          memory: 1G
+          memory: 256M
     restart: unless-stopped
 
   # ===========================================================================
@@ -117,15 +114,15 @@ services:
   # ===========================================================================
   postgres:
     image: postgres:16-alpine
-    container_name: aipr-postgres
+    container_name: rtvortex-postgres
     environment:
-      - POSTGRES_USER=aipr
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-aipr}
-      - POSTGRES_DB=aipr
+      - POSTGRES_USER=rtvortex
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-rtvortex}
+      - POSTGRES_DB=rtvortex
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aipr"]
+      test: ["CMD-SHELL", "pg_isready -U rtvortex"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -141,7 +138,7 @@ services:
   # ===========================================================================
   redis:
     image: redis:7-alpine
-    container_name: aipr-redis
+    container_name: rtvortex-redis
     command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
@@ -162,9 +159,9 @@ services:
   # ===========================================================================
   prometheus:
     image: prom/prometheus:v2.47.0
-    container_name: aipr-prometheus
+    container_name: rtvortex-prometheus
     ports:
-      - "9091:9090"  # Changed to avoid conflict with server gRPC port
+      - "9091:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -176,10 +173,12 @@ services:
       - server
     restart: unless-stopped
 
-  # Grafana for dashboards
+  # ===========================================================================
+  # Grafana (Dashboards)
+  # ===========================================================================
   grafana:
     image: grafana/grafana:10.2.0
-    container_name: aipr-grafana
+    container_name: rtvortex-grafana
     ports:
       - "3000:3000"
     environment:
@@ -193,8 +192,8 @@ services:
     restart: unless-stopped
 
 volumes:
-  aipr-data:
-  aipr-logs:
+  rtvortex-data:
+  rtvortex-temp:
   postgres-data:
   redis-data:
   prometheus-data:
@@ -202,4 +201,4 @@ volumes:
 
 networks:
   default:
-    name: aipr-network
+    name: rtvortex-network
