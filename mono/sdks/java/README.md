@@ -1,11 +1,11 @@
-# AI-PR-Reviewer Java SDK
+# RTVortex Java SDK
 
-Java client library for interacting with the AI-PR-Reviewer API.
+Official Java SDK for the **RTVortex** AI code-review API.
 
 ## Requirements
 
-- Java 17 or later
-- Maven or Gradle
+- Java 17+
+- Maven 3.9+
 
 ## Installation
 
@@ -13,8 +13,8 @@ Java client library for interacting with the AI-PR-Reviewer API.
 
 ```xml
 <dependency>
-    <groupId>ai.auralith</groupId>
-    <artifactId>aipr-java-sdk</artifactId>
+    <groupId>dev.rtvortex</groupId>
+    <artifactId>rtvortex-sdk</artifactId>
     <version>0.1.0</version>
 </dependency>
 ```
@@ -22,109 +22,79 @@ Java client library for interacting with the AI-PR-Reviewer API.
 ### Gradle
 
 ```groovy
-implementation 'ai.auralith:aipr-java-sdk:0.1.0'
+implementation 'dev.rtvortex:rtvortex-sdk:0.1.0'
 ```
 
 ## Quick Start
 
 ```java
-import ai.auralith.aipr.AIPRClient;
-import ai.auralith.aipr.model.*;
+import dev.rtvortex.sdk.RTVortexClient;
+import dev.rtvortex.sdk.model.*;
 
-// Create client
-AIPRClient client = AIPRClient.builder()
-    .baseUrl("https://api.aipr.example.com")
-    .apiKey("your-api-key")
+RTVortexClient client = new RTVortexClient.Builder()
+    .token(System.getenv("RTVORTEX_TOKEN"))
     .build();
 
-// Submit a review
-ReviewResponse response = client.review(ReviewRequest.builder()
-    .repositoryUrl("https://github.com/owner/repo")
-    .pullRequestId(123)
-    .baseSha("abc123")
-    .headSha("def456")
-    .build());
+// Get current user
+User user = client.me();
+System.out.println(user.getEmail());
 
-// Process comments
-for (ReviewResponse.ReviewComment comment : response.getComments()) {
-    System.out.printf("[%s] %s:%d - %s%n",
-        comment.getSeverity(),
-        comment.getFile(),
-        comment.getLine(),
-        comment.getMessage());
+// Trigger a review
+Review review = client.triggerReview("repo-123", 42);
+
+// Get comments
+List<ReviewComment> comments = client.getReviewComments(review.getId());
+for (ReviewComment c : comments) {
+    System.out.printf("[%s] %s%n", c.getSeverity(), c.getMessage());
 }
 
-// Close client when done
+// Always close when done
 client.close();
-```
-
-## Async Operations
-
-```java
-// Async review
-CompletableFuture<ReviewResponse> future = client.reviewAsync(request);
-
-future.thenAccept(response -> {
-    System.out.println("Review completed: " + response.getSummary());
-}).exceptionally(e -> {
-    System.err.println("Review failed: " + e.getMessage());
-    return null;
-});
-```
-
-## Configuration
-
-```java
-AIPRClient client = AIPRClient.builder()
-    .baseUrl("https://api.aipr.example.com")
-    .apiKey("your-api-key")
-    .connectTimeout(Duration.ofSeconds(30))
-    .readTimeout(Duration.ofMinutes(10))  // Long timeout for large reviews
-    .writeTimeout(Duration.ofSeconds(30))
-    .build();
 ```
 
 ## Error Handling
 
 ```java
+import dev.rtvortex.sdk.*;
+
 try {
-    ReviewResponse response = client.review(request);
-} catch (AIPRException e) {
-    if (e.isRateLimitError()) {
-        // Handle rate limiting
-        Thread.sleep(60000);
-    } else if (e.isClientError()) {
-        // Handle client errors (4xx)
-        System.err.println("Invalid request: " + e.getMessage());
-    } else if (e.isServerError()) {
-        // Handle server errors (5xx)
-        System.err.println("Server error: " + e.getMessage());
-    }
+    client.getReview("nonexistent");
+} catch (NotFoundException e) {
+    System.out.println("Not found: " + e.getMessage());
+} catch (AuthenticationException e) {
+    System.out.println("Auth failed: " + e.getMessage());
+} catch (RTVortexException e) {
+    System.out.printf("API error %d: %s%n", e.getStatusCode(), e.getMessage());
 }
 ```
 
-## Repository Indexing
+## API Reference
 
-```java
-// Start indexing
-IndexResponse indexJob = client.index(IndexRequest.builder()
-    .repositoryUrl("https://github.com/owner/repo")
-    .branch("main")
-    .forceReindex(false)
-    .build());
-
-// Poll for completion
-while (!indexJob.isComplete()) {
-    Thread.sleep(5000);
-    indexJob = client.getIndexStatus(indexJob.getJobId());
-    System.out.printf("Progress: %.1f%%%n", indexJob.getProgressPercent());
-}
-
-if (indexJob.isSuccess()) {
-    System.out.println("Indexed " + indexJob.getFilesIndexed() + " files");
-}
-```
+| Method | Description |
+|--------|-------------|
+| `me()` | Get authenticated user |
+| `updateMe(fields)` | Update user profile |
+| `listOrgs(limit, offset)` | List organizations |
+| `createOrg(name, slug, plan)` | Create organization |
+| `getOrg(id)` | Get organization |
+| `updateOrg(id, fields)` | Update organization |
+| `listMembers(orgId, limit, offset)` | List org members |
+| `inviteMember(orgId, email, role)` | Invite member |
+| `removeMember(orgId, userId)` | Remove member |
+| `listRepos(limit, offset)` | List repositories |
+| `registerRepo(data)` | Register repository |
+| `getRepo(id)` | Get repository |
+| `updateRepo(id, fields)` | Update repository |
+| `deleteRepo(id)` | Delete repository |
+| `triggerReview(repoId, prNumber)` | Trigger a review |
+| `getReview(id)` | Get review |
+| `getReviewComments(id)` | Get review comments |
+| `triggerIndex(repoId)` | Trigger indexing |
+| `getIndexStatus(repoId)` | Get index status |
+| `getStats()` | Get admin stats |
+| `health()` | Health check |
+| `healthDetailed()` | Detailed health check |
 
 ## License
 
-Apache License 2.0
+Apache-2.0
