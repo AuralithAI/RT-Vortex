@@ -38,6 +38,7 @@ jobs:
       sdk-python: ${{ steps.changes.outputs.sdk-python }}
       sdk-node: ${{ steps.changes.outputs.sdk-node }}
       sdk-java: ${{ steps.changes.outputs.sdk-java }}
+      web: ${{ steps.changes.outputs.web }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v2
@@ -61,6 +62,8 @@ jobs:
               - 'mono/sdks/node/**'
             sdk-java:
               - 'mono/sdks/java/**'
+            web:
+              - 'mono/web/**'
 
   # ===========================================================================
   # Lint & Validation (always runs)
@@ -510,6 +513,40 @@ jobs:
           retention-days: 7
 
   # ===========================================================================
+  # Web UI Tests (Next.js)
+  # ===========================================================================
+  web:
+    name: Build & Test Web UI (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    needs: [changes]
+    if: ${{ needs.changes.outputs.web == 'true' || github.event_name == 'push' }}
+    strategy:
+      matrix:
+        node-version: ['20']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: ${{ env.MONO_DIR }}/web/package-lock.json
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+        working-directory: ${{ env.MONO_DIR }}/web
+      - name: Lint
+        run: npm run lint
+        working-directory: ${{ env.MONO_DIR }}/web
+        continue-on-error: true
+      - name: Run tests
+        run: npm test
+        working-directory: ${{ env.MONO_DIR }}/web
+      - name: Build
+        run: npm run build
+        working-directory: ${{ env.MONO_DIR }}/web
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8080
+
+  # ===========================================================================
   # Integration Tests (Engine + Server together)
   # ===========================================================================
   integration-test:
@@ -616,7 +653,7 @@ jobs:
   quality-gate:
     name: Quality Gate
     runs-on: ubuntu-latest
-    needs: [lint, server, engine, cli, sdk-python, sdk-node, sdk-java]
+    needs: [lint, server, engine, cli, sdk-python, sdk-node, sdk-java, web]
     if: github.event_name == 'pull_request'
 
     steps:
@@ -642,6 +679,7 @@ jobs:
           echo "| Python SDK | ${{ needs.sdk-python.result == 'success' && 'Passed' || needs.sdk-python.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Node.js SDK | ${{ needs.sdk-node.result == 'success' && 'Passed' || needs.sdk-node.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Java SDK | ${{ needs.sdk-java.result == 'success' && 'Passed' || needs.sdk-java.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Web UI | ${{ needs.web.result == 'success' && 'Passed' || needs.web.result == 'skipped' && 'Skipped' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ -f "coverage-report/coverage.out" ]; then

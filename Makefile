@@ -34,6 +34,7 @@ CLI_DIR      := $(ROOT_DIR)/mono/cli
 SDK_PY_DIR   := $(ROOT_DIR)/mono/sdks/python
 SDK_NODE_DIR := $(ROOT_DIR)/mono/sdks/node
 SDK_JAVA_DIR := $(ROOT_DIR)/mono/sdks/java
+WEB_DIR      := $(ROOT_DIR)/mono/web
 GO           := $(shell which go 2>/dev/null || echo "/usr/local/go/bin/go")
 PYTHON       := $(shell which python3 2>/dev/null || echo "python3")
 NODE         := $(shell which node 2>/dev/null || echo "node")
@@ -54,6 +55,7 @@ BUILD_DATE   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
         cli sdk-python sdk-node sdk-java sdks \
         test-cli test-sdk-python test-sdk-node test-sdk-java test-sdks test-all \
         build-cli build-sdk-python build-sdk-node build-sdk-java build-sdks \
+        web build-web test-web lint-web \
         version status help rt_home
 
 # ==============================================================================
@@ -231,7 +233,33 @@ test-sdk-java: ## Run Java SDK tests
 sdks: sdk-python sdk-node sdk-java ## Install all SDKs
 build-sdks: build-sdk-python build-sdk-node build-sdk-java ## Build all SDK distributables
 test-sdks: test-sdk-python test-sdk-node test-sdk-java ## Test all SDKs
-test-all: test test-cli test-sdks ## Run all tests (engine + server + CLI + SDKs)
+test-all: test test-cli test-sdks test-web ## Run all tests (engine + server + CLI + SDKs + web)
+
+# ==============================================================================
+# Web UI (Next.js)
+# ==============================================================================
+
+web: ## Install Web UI dependencies
+	@echo ""
+	@echo "──── Installing Web UI dependencies ────────────────────"
+	cd $(WEB_DIR) && $(NPM) ci --legacy-peer-deps
+	@echo "  node_modules/ installed"
+
+build-web: web ## Build Web UI for production
+	@echo ""
+	@echo "──── Building Web UI (production) ──────────────────────"
+	cd $(WEB_DIR) && $(NPM) run build
+	@echo "  .next/ built"
+
+test-web: web ## Run Web UI tests
+	@echo ""
+	@echo "──── Testing Web UI ────────────────────────────────────"
+	cd $(WEB_DIR) && npx vitest run
+
+lint-web: web ## Lint Web UI
+	@echo ""
+	@echo "──── Linting Web UI ────────────────────────────────────"
+	cd $(WEB_DIR) && $(NPM) run lint
 
 # ==============================================================================
 # Run
