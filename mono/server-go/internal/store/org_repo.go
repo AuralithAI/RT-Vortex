@@ -92,17 +92,29 @@ func (r *OrgRepository) Update(ctx context.Context, org *model.Organization) err
 	return nil
 }
 
-// ListByUser returns organizations a user belongs to.
-func (r *OrgRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]*model.Organization, error) {
+// ListByUser returns organizations a user belongs to with pagination.
+func (r *OrgRepository) ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*model.Organization, int, error) {
+	// Get total count first.
+	var total int
+	err := r.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM organizations o
+		 JOIN org_members om ON o.id = om.org_id
+		 WHERE om.user_id = $1`, userID,
+	).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count orgs by user: %w", err)
+	}
+
 	rows, err := r.pool.Query(ctx,
 		`SELECT o.id, o.name, o.slug, o.plan, o.settings, o.created_at, o.updated_at
 		 FROM organizations o
 		 JOIN org_members om ON o.id = om.org_id
 		 WHERE om.user_id = $1
-		 ORDER BY o.name`, userID,
+		 ORDER BY o.name
+		 LIMIT $2 OFFSET $3`, userID, limit, offset,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("list orgs by user: %w", err)
+		return nil, 0, fmt.Errorf("list orgs by user: %w", err)
 	}
 	defer rows.Close()
 
@@ -110,11 +122,11 @@ func (r *OrgRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([]*mo
 	for rows.Next() {
 		org := &model.Organization{}
 		if err := rows.Scan(&org.ID, &org.Name, &org.Slug, &org.Plan, &org.Settings, &org.CreatedAt, &org.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("scan organization: %w", err)
+			return nil, 0, fmt.Errorf("scan organization: %w", err)
 		}
 		orgs = append(orgs, org)
 	}
-	return orgs, nil
+	return orgs, total, nil
 }
 
 // ── Membership ──────────────────────────────────────────────────────────────
@@ -148,17 +160,27 @@ func (r *OrgRepository) RemoveMember(ctx context.Context, orgID, userID uuid.UUI
 	return nil
 }
 
-// ListMembers returns all members of an organization.
-func (r *OrgRepository) ListMembers(ctx context.Context, orgID uuid.UUID) ([]*MemberInfo, error) {
+// ListMembers returns members of an organization with pagination.
+func (r *OrgRepository) ListMembers(ctx context.Context, orgID uuid.UUID, limit, offset int) ([]*MemberInfo, int, error) {
+	// Get total count first.
+	var total int
+	err := r.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM org_members WHERE org_id = $1`, orgID,
+	).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count org members: %w", err)
+	}
+
 	rows, err := r.pool.Query(ctx,
 		`SELECT u.id, u.email, u.display_name, u.avatar_url, om.role, om.joined_at
 		 FROM users u
 		 JOIN org_members om ON u.id = om.user_id
 		 WHERE om.org_id = $1
-		 ORDER BY om.joined_at`, orgID,
+		 ORDER BY om.joined_at
+		 LIMIT $2 OFFSET $3`, orgID, limit, offset,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("list org members: %w", err)
+		return nil, 0, fmt.Errorf("list org members: %w", err)
 	}
 	defer rows.Close()
 
@@ -166,11 +188,11 @@ func (r *OrgRepository) ListMembers(ctx context.Context, orgID uuid.UUID) ([]*Me
 	for rows.Next() {
 		m := &MemberInfo{}
 		if err := rows.Scan(&m.UserID, &m.Email, &m.DisplayName, &m.AvatarURL, &m.Role, &m.JoinedAt); err != nil {
-			return nil, fmt.Errorf("scan member: %w", err)
+			return nil, 0, fmt.Errorf("scan member: %w", err)
 		}
 		members = append(members, m)
 	}
-	return members, nil
+	return members, total, nil
 }
 
 // GetMember returns a user's membership in an organization.

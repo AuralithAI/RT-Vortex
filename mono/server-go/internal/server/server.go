@@ -20,10 +20,13 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
 	rtmetrics "github.com/AuralithAI/rtvortex-server/internal/metrics"
+	"github.com/AuralithAI/rtvortex-server/internal/quota"
 	"github.com/AuralithAI/rtvortex-server/internal/review"
 	"github.com/AuralithAI/rtvortex-server/internal/session"
 	"github.com/AuralithAI/rtvortex-server/internal/store"
+	"github.com/AuralithAI/rtvortex-server/internal/tracing"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
+	"github.com/AuralithAI/rtvortex-server/internal/webhookq"
 	"github.com/AuralithAI/rtvortex-server/internal/ws"
 )
 
@@ -48,6 +51,9 @@ type Dependencies struct {
 	RateLimiter     *session.RateLimiter
 	AuditLogger     *audit.Logger
 	WSHub           *ws.Hub
+	Tracer          *tracing.Tracer
+	QuotaEnforcer   *quota.Enforcer
+	DeliveryRepo    *webhookq.Repository
 
 	// Repositories
 	UserRepo    *store.UserRepository
@@ -87,6 +93,11 @@ func (s *Server) setupRouter() {
 	r.Use(middleware.Timeout(60 * time.Second))
 	r.Use(rtmetrics.Middleware)
 
+	// Distributed tracing
+	if s.deps.Tracer != nil {
+		r.Use(tracing.HTTPMiddleware(s.deps.Tracer))
+	}
+
 	// CORS
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   s.deps.Config.Server.AllowedOrigins,
@@ -114,6 +125,8 @@ func (s *Server) setupRouter() {
 		ReviewPipeline:  s.deps.ReviewPipeline,
 		IndexingService: s.deps.IndexingService,
 		AuditLogger:     s.deps.AuditLogger,
+		QuotaEnforcer:   s.deps.QuotaEnforcer,
+		DeliveryRepo:    s.deps.DeliveryRepo,
 	}
 
 	// ── Health & readiness (no auth required) ───────────────────────────

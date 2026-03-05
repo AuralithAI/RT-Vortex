@@ -22,10 +22,13 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
 	"github.com/AuralithAI/rtvortex-server/internal/model"
+	"github.com/AuralithAI/rtvortex-server/internal/quota"
 	"github.com/AuralithAI/rtvortex-server/internal/review"
 	"github.com/AuralithAI/rtvortex-server/internal/session"
 	"github.com/AuralithAI/rtvortex-server/internal/store"
+	"github.com/AuralithAI/rtvortex-server/internal/validation"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
+	"github.com/AuralithAI/rtvortex-server/internal/webhookq"
 )
 
 // ── Handler aggregates all dependencies needed by API endpoints ─────────────
@@ -49,6 +52,8 @@ type Handler struct {
 	ReviewPipeline  *review.Pipeline
 	IndexingService *indexing.Service
 	AuditLogger     *audit.Logger
+	QuotaEnforcer   *quota.Enforcer
+	DeliveryRepo    *webhookq.Repository
 }
 
 // ─── Auth endpoints ─────────────────────────────────────────────────────────
@@ -306,12 +311,13 @@ func (h *Handler) UpdateCurrentUser(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	var req struct {
-		DisplayName string `json:"display_name"`
-		AvatarURL   string `json:"avatar_url"`
-	}
+	var req validation.UpdateUserRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if ve := req.Validate(); ve != nil {
+		writeValidationError(w, ve)
 		return
 	}
 	user, err := h.UserRepo.GetByID(r.Context(), userID)
@@ -342,12 +348,15 @@ func (h *Handler) ListOrgs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	orgs, err := h.OrgRepo.ListByUser(r.Context(), userID)
+	limit, offset := parsePagination(r)
+	orgs, total, err := h.OrgRepo.ListByUser(r.Context(), userID, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list organizations")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"organizations": orgs, "count": len(orgs)})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"organizations": orgs, "total": total, "limit": limit, "offset": offset,
+	})
 }
 
 // CreateOrg creates a new organization.
@@ -358,16 +367,13 @@ func (h *Handler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	var req struct {
-		Name string `json:"name"`
-		Slug string `json:"slug"`
-	}
+	var req validation.CreateOrgRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Name == "" || req.Slug == "" {
-		writeError(w, http.StatusBadRequest, "name and slug are required")
+	if ve := req.Validate(); ve != nil {
+		writeValidationError(w, ve)
 		return
 	}
 	org := &model.Organization{Name: req.Name, Slug: req.Slug, Plan: "free"}
@@ -421,12 +427,13 @@ func (h *Handler) UpdateOrg(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	var req struct {
-		Name     string                 `json:"name"`
-		Settings map[string]interface{} `json:"settings"`
-	}
+	var req validation.UpdateOrgRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if ve := req.Validate(); ve != nil {
+		writeValidationError(w, ve)
 		return
 	}
 	if req.Name != "" {
@@ -450,12 +457,15 @@ func (h *Handler) ListOrgMembers(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid org ID")
 		return
 	}
-	members, err := h.OrgRepo.ListMembers(r.Context(), orgID)
+	limit, offset := parsePagination(r)
+	members, total, err := h.OrgRepo.ListMembers(r.Context(), orgID, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list members")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"members": members, "count": len(members)})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"members": members, "total": total, "limit": limit, "offset": offset,
+	})
 }
 
 // InviteOrgMember invites a user to an organization.
@@ -466,16 +476,28 @@ func (h *Handler) InviteOrgMember(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid org ID")
 		return
 	}
-	var req struct {
-		Email string `json:"email"`
-		Role  string `json:"role"`
-	}
+	var req validation.InviteMemberRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if ve := req.Validate(); ve != nil {
+		writeValidationError(w, ve)
+		return
+	}
 	if req.Role == "" {
 		req.Role = "member"
+	}
+	// Check member quota.
+	if h.QuotaEnforcer != nil {
+		org, orgErr := h.OrgRepo.GetByID(r.Context(), orgID)
+		if orgErr == nil {
+			result, qErr := h.QuotaEnforcer.CheckMemberQuota(r.Context(), orgID, org.Plan)
+			if qErr == nil && !result.Allowed {
+				writeError(w, http.StatusForbidden, result.Reason)
+				return
+			}
+		}
 	}
 	user, err := h.UserRepo.GetByEmail(r.Context(), req.Email)
 	if err != nil {
@@ -569,21 +591,13 @@ func (h *Handler) RegisterRepo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	var req struct {
-		Platform      string `json:"platform"`
-		Owner         string `json:"owner"`
-		Name          string `json:"name"`
-		DefaultBranch string `json:"default_branch"`
-		CloneURL      string `json:"clone_url"`
-		ExternalID    string `json:"external_id"`
-		OrgID         string `json:"org_id"`
-	}
+	var req validation.RegisterRepoRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Platform == "" || req.Owner == "" || req.Name == "" {
-		writeError(w, http.StatusBadRequest, "platform, owner, and name are required")
+	if ve := req.Validate(); ve != nil {
+		writeValidationError(w, ve)
 		return
 	}
 	if req.DefaultBranch == "" {
@@ -597,6 +611,17 @@ func (h *Handler) RegisterRepo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		orgID = parsed
+	}
+	// Check repo quota.
+	if h.QuotaEnforcer != nil && orgID != uuid.Nil {
+		org, orgErr := h.OrgRepo.GetByID(r.Context(), orgID)
+		if orgErr == nil {
+			result, qErr := h.QuotaEnforcer.CheckRepoQuota(r.Context(), orgID, org.Plan)
+			if qErr == nil && !result.Allowed {
+				writeError(w, http.StatusForbidden, result.Reason)
+				return
+			}
+		}
 	}
 	secretBytes := make([]byte, 32)
 	if _, err := rand.Read(secretBytes); err != nil {
@@ -656,12 +681,13 @@ func (h *Handler) UpdateRepo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
-	var req struct {
-		DefaultBranch string                 `json:"default_branch"`
-		Config        map[string]interface{} `json:"config"`
-	}
+	var req validation.UpdateRepoRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if ve := req.Validate(); ve != nil {
+		writeValidationError(w, ve)
 		return
 	}
 	if req.DefaultBranch != "" {
@@ -716,6 +742,17 @@ func (h *Handler) TriggerIndex(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
+	}
+	// Check indexing quota.
+	if h.QuotaEnforcer != nil {
+		org, orgErr := h.OrgRepo.GetByID(r.Context(), repo.OrgID)
+		if orgErr == nil {
+			result := h.QuotaEnforcer.CheckIndexingAllowed(org.Plan)
+			if !result.Allowed {
+				writeError(w, http.StatusForbidden, result.Reason)
+				return
+			}
+		}
 	}
 	jobID, err := h.IndexingService.StartFullIndex(r.Context(), indexing.FullIndexRequest{
 		RepoID:   repoID.String(),
@@ -795,22 +832,33 @@ func (h *Handler) TriggerReview(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	var req struct {
-		RepoID   string `json:"repo_id"`
-		PRNumber int    `json:"pr_number"`
-	}
+	var req validation.TriggerReviewRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.RepoID == "" || req.PRNumber == 0 {
-		writeError(w, http.StatusBadRequest, "repo_id and pr_number are required")
+	if ve := req.Validate(); ve != nil {
+		writeValidationError(w, ve)
 		return
 	}
 	repoID, err := uuid.Parse(req.RepoID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid repo_id")
 		return
+	}
+	// Check review quota.
+	if h.QuotaEnforcer != nil {
+		repo, repoErr := h.RepoRepo.GetByID(r.Context(), repoID)
+		if repoErr == nil {
+			org, orgErr := h.OrgRepo.GetByID(r.Context(), repo.OrgID)
+			if orgErr == nil {
+				result, qErr := h.QuotaEnforcer.CheckReviewQuota(r.Context(), org.ID, org.Plan)
+				if qErr == nil && !result.Allowed {
+					writeError(w, http.StatusForbidden, result.Reason)
+					return
+				}
+			}
+		}
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -1024,6 +1072,14 @@ func (h *Handler) HandleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		})
 		if err != nil {
 			slog.Error("webhook review failed", "error", err)
+			// Record delivery failure for retry.
+			if h.DeliveryRepo != nil {
+				d := &webhookq.Delivery{
+					WebhookEventID: evt.ID, RepoID: repo.ID,
+					Platform: "github", PRNumber: payload.PullRequest.Number,
+				}
+				_ = h.DeliveryRepo.Create(context.Background(), d)
+			}
 			return
 		}
 		slog.Info("webhook review completed", "review_id", result.ReviewID, "comments", result.CommentsCount)

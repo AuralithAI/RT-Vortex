@@ -109,6 +109,13 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	})
 }
 
+// writeValidationError writes a structured 422 response with field-level errors.
+func writeValidationError(w http.ResponseWriter, ve interface{ StatusCode() int }) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnprocessableEntity)
+	json.NewEncoder(w).Encode(ve)
+}
+
 func readJSON(r *http.Request, v interface{}) error {
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
