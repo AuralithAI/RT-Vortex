@@ -4,6 +4,7 @@ rt_home/
 out/
 target/
 dist/
+.flattened-pom.xml
 *.class
 *.war
 *.ear

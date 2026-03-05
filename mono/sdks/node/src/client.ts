@@ -24,7 +24,10 @@ import type {
 } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://api.rtvortex.dev";
-const USER_AGENT = "@rtvortex/sdk/0.1.0";
+
+// Injected at build time via tsup define, falls back to package.json value
+const SDK_VERSION = process.env.npm_package_version ?? "0.0.0";
+const USER_AGENT = `@rtvortex/sdk/${SDK_VERSION}`;
 
 export interface RTVortexClientOptions {
   /** API bearer token. */

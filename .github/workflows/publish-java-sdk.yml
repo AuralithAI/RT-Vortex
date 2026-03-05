@@ -15,7 +15,7 @@ defaults:
 
 jobs:
   test:
-    name: Test Java SDK
+    name: Test Java SDK (Java ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -27,8 +27,19 @@ jobs:
           distribution: 'temurin'
           java-version: ${{ matrix.java-version }}
           cache: 'maven'
-      - name: Run tests
-        run: mvn -B test
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#java-sdk-v}"
+          echo "SDK_VERSION=${VERSION}" >> $GITHUB_ENV
+      - name: Run tests with coverage
+        run: mvn -B test -Drevision=${{ env.SDK_VERSION || '0.0.0' }}
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always() && matrix.java-version == '17'
+        with:
+          name: java-sdk-test-results
+          path: mono/sdks/java/target/surefire-reports/
+          retention-days: 7
 
   publish:
     name: Publish to Maven Central
@@ -47,8 +58,12 @@ jobs:
           server-password: MAVEN_PASSWORD
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: GPG_PASSPHRASE
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#java-sdk-v}"
+          echo "SDK_VERSION=${VERSION}" >> $GITHUB_ENV
       - name: Build & deploy
-        run: mvn -B deploy -P release
+        run: mvn -B deploy -P release -Drevision=${{ env.SDK_VERSION }}
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}

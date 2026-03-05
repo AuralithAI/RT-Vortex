@@ -30,19 +30,30 @@ ENGINE_DIR   := $(ROOT_DIR)/mono/engine
 SERVER_DIR   := $(ROOT_DIR)/mono/server-go
 CONFIG_DIR   := $(ROOT_DIR)/mono/config
 BUILD_DIR    := $(ROOT_DIR)/build
+CLI_DIR      := $(ROOT_DIR)/mono/cli
+SDK_PY_DIR   := $(ROOT_DIR)/mono/sdks/python
+SDK_NODE_DIR := $(ROOT_DIR)/mono/sdks/node
+SDK_JAVA_DIR := $(ROOT_DIR)/mono/sdks/java
 GO           := $(shell which go 2>/dev/null || echo "/usr/local/go/bin/go")
+PYTHON       := $(shell which python3 2>/dev/null || echo "python3")
+NODE         := $(shell which node 2>/dev/null || echo "node")
+NPM          := $(shell which npm 2>/dev/null || echo "npm")
+MVN          := $(shell which mvn 2>/dev/null || echo "mvn")
 NPROC        := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 MODELS_SRC   := $(ENGINE_DIR)/models
 ONNX_MODEL   := all-MiniLM-L6-v2.onnx
 ONNX_URL     := https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
 
 # ── Version ──────────────────────────────────────────────────────────────────
-VERSION      := $(shell git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0")
+VERSION      := $(shell cat mono/VERSION 2>/dev/null || git describe --tags --always --dirty 2>/dev/null || echo "0.0.0")
 COMMIT       := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 .PHONY: all engine server config models clean clean-all run run-engine run-server \
         test test-engine test-server db-create db-init db-install \
+        cli sdk-python sdk-node sdk-java sdks \
+        test-cli test-sdk-python test-sdk-node test-sdk-java test-sdks test-all \
+        build-cli build-sdk-python build-sdk-node build-sdk-java build-sdks \
         version status help rt_home
 
 # ==============================================================================
@@ -133,6 +144,96 @@ models: rt_home ## Download ONNX model and copy to rt_home/models
 	@echo " rt_home/models/ updated ($$(du -sh $(RT_HOME)/models/ | cut -f1))"
 
 # ==============================================================================
+# CLI & SDKs — Install, Build, Test
+# ==============================================================================
+
+# ── CLI ──────────────────────────────────────────────────────────────────────
+
+cli: ## Install CLI in development mode
+	@echo ""
+	@echo "──── Installing CLI (dev mode) ─────────────────────────"
+	cd $(CLI_DIR) && $(PYTHON) -m pip install -e ".[dev]" --quiet
+	@echo "  rtvortex CLI installed ($(VERSION))"
+
+build-cli: ## Build CLI distribution (sdist + wheel)
+	@echo ""
+	@echo "──── Building CLI distribution ─────────────────────────"
+	cd $(CLI_DIR) && $(PYTHON) -m build
+	@echo "  dist/ created"
+
+test-cli: ## Run CLI tests with coverage
+	@echo ""
+	@echo "──── Testing CLI ───────────────────────────────────────"
+	cd $(CLI_DIR) && $(PYTHON) -m pytest tests/ -v --tb=short \
+		--cov=rtvortex_cli --cov-report=term-missing --cov-report=html:htmlcov
+
+# ── Python SDK ───────────────────────────────────────────────────────────────
+
+sdk-python: ## Install Python SDK in development mode
+	@echo ""
+	@echo "──── Installing Python SDK (dev mode) ──────────────────"
+	cd $(SDK_PY_DIR) && $(PYTHON) -m pip install -e ".[dev]" --quiet
+	@echo "  rtvortex-sdk installed ($(VERSION))"
+
+build-sdk-python: ## Build Python SDK distribution
+	@echo ""
+	@echo "──── Building Python SDK distribution ──────────────────"
+	cd $(SDK_PY_DIR) && $(PYTHON) -m build
+	@echo "  dist/ created"
+
+test-sdk-python: ## Run Python SDK tests with coverage
+	@echo ""
+	@echo "──── Testing Python SDK ────────────────────────────────"
+	cd $(SDK_PY_DIR) && $(PYTHON) -m pytest tests/ -v --tb=short \
+		--cov=rtvortex_sdk --cov-report=term-missing --cov-report=html:htmlcov
+
+# ── Node.js SDK ──────────────────────────────────────────────────────────────
+
+sdk-node: ## Install Node.js SDK dependencies
+	@echo ""
+	@echo "──── Installing Node.js SDK dependencies ───────────────"
+	cd $(SDK_NODE_DIR) && $(NPM) ci
+	@echo "  node_modules/ installed"
+
+build-sdk-node: sdk-node ## Build Node.js SDK
+	@echo ""
+	@echo "──── Building Node.js SDK ──────────────────────────────"
+	cd $(SDK_NODE_DIR) && $(NPM) run build
+	@echo "  dist/ created"
+
+test-sdk-node: sdk-node ## Run Node.js SDK tests
+	@echo ""
+	@echo "──── Testing Node.js SDK ───────────────────────────────"
+	cd $(SDK_NODE_DIR) && $(NPM) run typecheck
+	cd $(SDK_NODE_DIR) && $(NPM) test
+
+# ── Java SDK ─────────────────────────────────────────────────────────────────
+
+sdk-java: ## Compile Java SDK
+	@echo ""
+	@echo "──── Compiling Java SDK ────────────────────────────────"
+	cd $(SDK_JAVA_DIR) && $(MVN) -B compile -Drevision=$(VERSION)
+	@echo "  Java SDK compiled ($(VERSION))"
+
+build-sdk-java: ## Package Java SDK jar
+	@echo ""
+	@echo "──── Building Java SDK jar ─────────────────────────────"
+	cd $(SDK_JAVA_DIR) && $(MVN) -B package -DskipTests -Drevision=$(VERSION)
+	@echo "  target/*.jar created"
+
+test-sdk-java: ## Run Java SDK tests
+	@echo ""
+	@echo "──── Testing Java SDK ──────────────────────────────────"
+	cd $(SDK_JAVA_DIR) && $(MVN) -B test -Drevision=$(VERSION)
+
+# ── Aggregate targets ────────────────────────────────────────────────────────
+
+sdks: sdk-python sdk-node sdk-java ## Install all SDKs
+build-sdks: build-sdk-python build-sdk-node build-sdk-java ## Build all SDK distributables
+test-sdks: test-sdk-python test-sdk-node test-sdk-java ## Test all SDKs
+test-all: test test-cli test-sdks ## Run all tests (engine + server + CLI + SDKs)
+
+# ==============================================================================
 # Run
 # ==============================================================================
 
@@ -155,7 +256,7 @@ run: all ## Build and run both (engine background, server foreground)
 # Testing
 # ==============================================================================
 
-test: test-engine test-server ## Run all tests
+test: test-engine test-server ## Run engine + server tests
 
 test-engine: ## Run C++ engine tests
 	cd $(BUILD_DIR) && cmake $(ENGINE_DIR) -DAIPR_BUILD_TESTS=ON
@@ -201,6 +302,7 @@ version: ## Show version info
 	@echo "Commit:     $(COMMIT)"
 	@echo "Build Date: $(BUILD_DATE)"
 	@echo "RT_HOME:    $(RT_HOME)"
+	@echo "SDK/CLI:    $(VERSION)"
 
 status: ## Show what's in rt_home
 	@echo "rt_home contents:"

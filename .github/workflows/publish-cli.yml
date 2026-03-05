@@ -16,7 +16,7 @@ defaults:
 
 jobs:
   test:
-    name: Test CLI
+    name: Test CLI (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -29,10 +29,23 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" 2>/dev/null || pip install -e .
-          pip install pytest pytest-cov httpx respx click rich pyyaml python-dotenv
-      - name: Run tests
-        run: pytest tests/ -v --tb=short --cov=rtvortex_cli
+          pip install -e ".[dev]"
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --tb=short \
+            --cov=rtvortex_cli \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --junitxml=junit.xml
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.12'
+        with:
+          name: cli-coverage
+          path: |
+            mono/cli/coverage.xml
+            mono/cli/junit.xml
+          retention-days: 7
 
   build:
     name: Build distribution
@@ -43,6 +56,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#cli-v}"
+          sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION}\"/" src/rtvortex_cli/__init__.py
       - name: Install build tools
         run: pip install build
       - name: Build sdist and wheel

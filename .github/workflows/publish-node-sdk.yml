@@ -16,7 +16,7 @@ defaults:
 
 jobs:
   test:
-    name: Test Node.js SDK
+    name: Test Node.js SDK (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -30,8 +30,15 @@ jobs:
         run: npm ci
       - name: Type check
         run: npm run typecheck
-      - name: Run tests
-        run: npm test
+      - name: Run tests with coverage
+        run: npm run test:coverage
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: matrix.node-version == '20'
+        with:
+          name: node-sdk-coverage
+          path: mono/sdks/node/coverage/
+          retention-days: 7
 
   build:
     name: Build package
@@ -43,6 +50,10 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#node-sdk-v}"
+          npm version "${VERSION}" --no-git-tag-version
       - name: Install dependencies
         run: npm ci
       - name: Build
@@ -53,7 +64,6 @@ jobs:
           path: |
             mono/sdks/node/dist/
             mono/sdks/node/package.json
-            mono/sdks/node/README.md
 
   publish-npm:
     name: Publish to npm
@@ -66,6 +76,10 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#node-sdk-v}"
+          npm version "${VERSION}" --no-git-tag-version
       - name: Install dependencies
         run: npm ci
       - name: Build

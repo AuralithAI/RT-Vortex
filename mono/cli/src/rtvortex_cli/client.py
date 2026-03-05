@@ -33,8 +33,10 @@ class APIClient:
 
     def __init__(self, config: Config, *, timeout: float = 30.0):
         self._config = config
+        from rtvortex_cli import __version__
+
         headers: dict[str, str] = {
-            "User-Agent": "rtvortex-cli/0.1.0",
+            "User-Agent": f"rtvortex-cli/{__version__}",
             "Accept": "application/json",
         }
         if config.token:

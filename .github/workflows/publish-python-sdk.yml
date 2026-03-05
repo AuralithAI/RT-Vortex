@@ -16,7 +16,7 @@ defaults:
 
 jobs:
   test:
-    name: Test Python SDK
+    name: Test Python SDK (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -29,10 +29,23 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" 2>/dev/null || pip install -e .
-          pip install pytest pytest-asyncio httpx pydantic respx
-      - name: Run tests
-        run: pytest tests/ -v --tb=short
+          pip install -e ".[dev]"
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --tb=short \
+            --cov=rtvortex_sdk \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            --junitxml=junit.xml
+      - name: Upload coverage
+        uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.12'
+        with:
+          name: python-sdk-coverage
+          path: |
+            mono/sdks/python/coverage.xml
+            mono/sdks/python/junit.xml
+          retention-days: 7
 
   typecheck:
     name: Type check
@@ -44,8 +57,7 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: |
-          pip install -e .
-          pip install mypy httpx pydantic
+          pip install -e ".[dev]"
       - name: Run mypy
         run: mypy src/rtvortex_sdk/ --ignore-missing-imports
 
@@ -58,6 +70,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Set version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#python-sdk-v}"
+          sed -i "s/__version__ = \".*\"/__version__ = \"${VERSION}\"/" src/rtvortex_sdk/__init__.py
       - name: Install build tools
         run: pip install build
       - name: Build sdist and wheel

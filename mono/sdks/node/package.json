@@ -1,6 +1,6 @@
 {
   "name": "@rtvortex/sdk",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "description": "Official Node.js / TypeScript SDK for the RTVortex API",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -15,7 +15,6 @@
   },
   "files": [
     "dist",
-    "README.md",
     "LICENSE"
   ],
   "scripts": {
@@ -23,6 +22,7 @@
     "dev": "tsup --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist",

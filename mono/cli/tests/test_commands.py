@@ -51,10 +51,12 @@ class TestVersionFlag:
     """Test --version flag."""
 
     def test_version(self) -> None:
+        from rtvortex_cli import __version__
+
         runner = CliRunner()
         result = runner.invoke(cli, ["--version"])
         assert result.exit_code == 0
-        assert "0.1.0" in result.output
+        assert __version__ in result.output
 
 
 class TestHelpText:
