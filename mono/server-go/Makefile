@@ -71,6 +71,9 @@ deps: ## Download and tidy dependencies
 test: ## Run all tests
 	$(GO) test -race -cover ./...
 
+test-unit: ## Run unit tests (tests/ directory only)
+	$(GO) test -race -cover -v ./tests/...
+
 test-verbose: ## Run tests with verbose output
 	$(GO) test -race -cover -v ./...
 

@@ -165,6 +165,9 @@ test-engine: ## Run C++ engine tests
 test-server: ## Run Go server tests
 	cd $(SERVER_DIR) && $(GO) test -race -cover ./...
 
+test-server-unit: ## Run Go server unit tests (tests/ dir only)
+	cd $(SERVER_DIR) && $(GO) test -race -cover -v ./tests/...
+
 # ==============================================================================
 # Database
 # ==============================================================================
