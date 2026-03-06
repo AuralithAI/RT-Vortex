@@ -47,34 +47,44 @@ func isTerminal() bool {
 // printBanner prints the RTVortex Go server startup banner.
 // It matches the visual style of the C++ engine banner.
 func printBanner(env *rtenv.Env, cfg *config.Config) {
+	// The banner uses a simple approach: print each line with exact padding.
+	// Unicode box-drawing chars (║ ╔ ╗ ╚ ╝ ═) are 1 column wide in terminals.
+	// The block chars (█ ╗ ╔ ╚ ╝) are also 1 column each.
+	// We use a fixed inner width of 65 chars between the ║ delimiters.
+	bc := colorBold + colorCyan  // border color
+	gc := colorGreen             // green for logo
+	wc := colorBold + colorWhite // white for title
+	dc := colorDim               // dim for subtitle
+	r := colorReset
+
 	banner := fmt.Sprintf(`
-%s%s╔═════════════════════════════════════════════════════════════════════╗%s
-%s%s║%s                                                               %s%s║%s
-%s%s║%s   %s██████╗ ████████╗                  _               %s     %s%s║%s
-%s%s║%s   %s██╔══██╗╚══██╔══╝__   _____  _ __| |_ _____  __%s         %s%s║%s
-%s%s║%s   %s██████╔╝   ██║   \ \ / / _ \| '__| __/ _ \ \/ /%s         %s%s║%s
-%s%s║%s   %s██╔══██╗   ██║    \ V / (_) | |  | ||  __/>  <%s          %s%s║%s
-%s%s║%s   %s██║  ██║   ██║     \_/ \___/|_|   \__\___/_/\_\%s         %s%s║%s
-%s%s║%s   %s╚═╝  ╚═╝   ╚═╝%s                                          %s%s║%s
-%s%s║%s                                                               %s%s║%s
-%s%s║%s         %s%sGo API Server%s  ·  REST  ·  WebSocket  ·  gRPC   %s%s║%s
-%s%s║%s         %sWebhooks · OAuth · Review Pipeline · LLM%s          %s%s║%s
-%s%s║%s                                                               %s%s║%s
-%s%s╚═════════════════════════════════════════════════════════════════════╝%s
+%s╔═══════════════════════════════════════════════════════════════════╗%s
+%s║%s                                                                 %s║%s
+%s║%s   %s██████╗ ████████╗%s                  _                       %s║%s
+%s║%s   %s██╔══██╗╚══██╔══╝%s__   _____  _ __| |_ _____  __           %s║%s
+%s║%s   %s██████╔╝   ██║%s   \ \ / / _ \| '__| __/ _ \ \/ /           %s║%s
+%s║%s   %s██╔══██╗   ██║%s    \ V / (_) | |  | ||  __/>  <            %s║%s
+%s║%s   %s██║  ██║   ██║%s     \_/ \___/|_|   \__\___/_/\_\           %s║%s
+%s║%s   %s╚═╝  ╚═╝   ╚═╝%s                                            %s║%s
+%s║%s                                                                 %s║%s
+%s║%s         %s%sGo API Server%s  ·  REST  ·  WebSocket  ·  gRPC       %s║%s
+%s║%s         %sWebhooks · OAuth · Review Pipeline · LLM%s              %s║%s
+%s║%s                                                                 %s║%s
+%s╚═══════════════════════════════════════════════════════════════════╝%s
 `,
-		colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorGreen, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorGreen, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorGreen, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorGreen, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorGreen, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorGreen, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorBold, colorWhite, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorDim, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset, colorBold, colorCyan, colorReset,
-		colorBold, colorCyan, colorReset,
+		bc, r,
+		bc, r, bc, r,
+		bc, r, gc, r, bc, r,
+		bc, r, gc, r, bc, r,
+		bc, r, gc, r, bc, r,
+		bc, r, gc, r, bc, r,
+		bc, r, gc, r, bc, r,
+		bc, r, gc, r, bc, r,
+		bc, r, bc, r,
+		bc, r, wc, r, bc, r,
+		bc, r, dc, r, bc, r,
+		bc, r, bc, r,
+		bc, r,
 	)
 
 	fmt.Print(banner)
