@@ -16,7 +16,7 @@ export async function POST(request: NextRequest) {
     const response = NextResponse.json({ ok: true });
 
     response.cookies.set("token", token, {
-      httpOnly: true,
+      httpOnly: false, // readable by JS so the API client can set Authorization header
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax",
       path: "/",

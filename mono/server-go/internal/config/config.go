@@ -43,6 +43,7 @@ type Config struct {
 
 // ServerConfig holds HTTP server settings.
 type ServerConfig struct {
+	Host            string // Bind address (default "0.0.0.0"); also used for OAuth callback URLs
 	Port            int
 	ReadTimeout     time.Duration
 	WriteTimeout    time.Duration
@@ -268,25 +269,35 @@ type VCSEventConfig struct {
 // These mirror the XML structure and are unmarshalled first, then converted.
 
 type xmlServerProps struct {
-	XMLName    xml.Name        `xml:"serverproperties"`
-	Server     xmlServer       `xml:"server"`
-	Database   xmlDatabase     `xml:"database"`
-	Redis      xmlRedis        `xml:"redis"`
-	GRPCServer xmlGRPCServer   `xml:"grpc-server"`
-	Engine     xmlEngine       `xml:"engine"`
-	LLM        xmlLLM          `xml:"llm"`
-	Review     xmlReview       `xml:"review"`
-	RateLimit  xmlRateLimit    `xml:"rate-limit"`
-	Security   xmlSecurity     `xml:"security"`
-	Storage    xmlStorage      `xml:"storage"`
-	Repos      xmlRepositories `xml:"repositories"`
-	Logging    xmlLogging      `xml:"logging"`
+	XMLName       xml.Name         `xml:"serverproperties"`
+	Server        xmlServer        `xml:"server"`
+	Database      xmlDatabase      `xml:"database"`
+	Redis         xmlRedis         `xml:"redis"`
+	GRPCServer    xmlGRPCServer    `xml:"grpc-server"`
+	Engine        xmlEngine        `xml:"engine"`
+	LLM           xmlLLM           `xml:"llm"`
+	Review        xmlReview        `xml:"review"`
+	RateLimit     xmlRateLimit     `xml:"rate-limit"`
+	Security      xmlSecurity      `xml:"security"`
+	AuthProviders xmlAuthProviders `xml:"auth-providers"`
+	Storage       xmlStorage       `xml:"storage"`
+	Repos         xmlRepositories  `xml:"repositories"`
+	Logging       xmlLogging       `xml:"logging"`
 }
 
 type xmlServer struct {
-	Port        string `xml:"port,attr"`
-	Shutdown    string `xml:"shutdown,attr"`
-	ContextPath string `xml:"context-path,attr"`
+	Host        string       `xml:"host,attr"`
+	Port        string       `xml:"port,attr"`
+	Shutdown    string       `xml:"shutdown,attr"`
+	ContextPath string       `xml:"context-path,attr"`
+	TLS         xmlServerTLS `xml:"tls"`
+}
+
+// xmlServerTLS holds TLS config for the HTTP server.
+type xmlServerTLS struct {
+	Enabled  string `xml:"enabled,attr"`
+	CertFile string `xml:"cert-file,attr"`
+	KeyFile  string `xml:"key-file,attr"`
 }
 
 type xmlDatabase struct {
@@ -420,6 +431,17 @@ type xmlSecurity struct {
 	JWTExpirationMs string `xml:"jwt-expiration-ms,attr"`
 	AllowedOrigins  string `xml:"allowed-origins,attr"`
 	EncryptionKey   string `xml:"encryption-key,attr"`
+}
+
+type xmlAuthProviders struct {
+	Providers []xmlAuthProvider `xml:"provider"`
+}
+
+type xmlAuthProvider struct {
+	Name         string `xml:"name,attr"`
+	ClientID     string `xml:"client-id,attr"`
+	ClientSecret string `xml:"client-secret,attr"`
+	Scopes       string `xml:"scopes,attr"`
 }
 
 type xmlStorage struct {
@@ -558,27 +580,55 @@ type xmlAzureEvent struct {
 
 // ---- Environment variable expansion ----
 
-// envVarRegex matches ${ENV_VAR:default} patterns.
-var envVarRegex = regexp.MustCompile(`\$\{([^}]+)\}`)
+// envVarRegex matches the innermost ${…} (no nested braces).
+var envVarRegex = regexp.MustCompile(`\$\{([^{}]+)\}`)
+
+// builtinAliases maps legacy property-style names to real env-var names.
+var builtinAliases = map[string]string{
+	"rtvortex.home": "RTVORTEX_HOME",
+}
 
 // expandEnvVars resolves ${ENV_VAR:default} in a string.
 //
-// ${VAR}       -> os.Getenv("VAR"), or ""
-// ${VAR:val}   -> os.Getenv("VAR"), or "val"
+// Supports nested references such as:
+//
+//	${SERVER_TLS_CERT:${rtvortex.home}/config/certificates/server.crt}
+//
+// Resolution is iterative (inside-out): the innermost ${…} is expanded
+// first, then the result is re-scanned until no ${…} references remain
+// (up to 10 iterations to avoid infinite loops).
+//
+//	${VAR}       -> os.Getenv("VAR"), or ""
+//	${VAR:val}   -> os.Getenv("VAR"), or "val"
+//	${rtvortex.home} -> os.Getenv("RTVORTEX_HOME"), or ""
 func expandEnvVars(s string) string {
-	return envVarRegex.ReplaceAllStringFunc(s, func(match string) string {
-		inner := match[2 : len(match)-1] // strip ${ and }
-		parts := strings.SplitN(inner, ":", 2)
-		envKey := parts[0]
-		defaultVal := ""
-		if len(parts) == 2 {
-			defaultVal = parts[1]
+	for i := 0; i < 10; i++ {
+		if !strings.Contains(s, "${") {
+			break
 		}
-		if v, ok := os.LookupEnv(envKey); ok {
-			return v
+		next := envVarRegex.ReplaceAllStringFunc(s, func(match string) string {
+			inner := match[2 : len(match)-1] // strip ${ and }
+			parts := strings.SplitN(inner, ":", 2)
+			envKey := parts[0]
+			defaultVal := ""
+			if len(parts) == 2 {
+				defaultVal = parts[1]
+			}
+			// Check built-in aliases (e.g. rtvortex.home → RTVORTEX_HOME).
+			if alias, ok := builtinAliases[envKey]; ok {
+				envKey = alias
+			}
+			if v, ok := os.LookupEnv(envKey); ok {
+				return v
+			}
+			return defaultVal
+		})
+		if next == s {
+			break // no more substitutions possible
 		}
-		return defaultVal
-	})
+		s = next
+	}
+	return s
 }
 
 // expand is a shorthand -- expand + return.
@@ -802,13 +852,26 @@ func loadServerProps(path string) (*Config, error) {
 	cfg := &Config{}
 
 	// -- Server --
+	serverTLSEnabled := strings.EqualFold(expand(raw.Server.TLS.Enabled), "true")
+	serverCert := expand(raw.Server.TLS.CertFile)
+	serverKey := expand(raw.Server.TLS.KeyFile)
+	// Auto-enable TLS if cert and key are provided but enabled is not explicitly set
+	if serverCert != "" && serverKey != "" && raw.Server.TLS.Enabled == "" {
+		serverTLSEnabled = true
+	}
 	cfg.Server = ServerConfig{
+		Host:            expand(raw.Server.Host),
 		Port:            parseInt(raw.Server.Port, 8080),
 		ReadTimeout:     30 * time.Second,
 		WriteTimeout:    60 * time.Second,
 		IdleTimeout:     120 * time.Second,
 		ShutdownTimeout: 30 * time.Second,
 		ContextPath:     expand(raw.Server.ContextPath),
+		TLS: TLSConfig{
+			Enabled:  serverTLSEnabled,
+			CertFile: serverCert,
+			KeyFile:  serverKey,
+		},
 	}
 
 	// -- Database --
@@ -876,6 +939,25 @@ func loadServerProps(path string) (*Config, error) {
 		cfg.Server.AllowedOrigins = strings.Split(origins, ",")
 	} else {
 		cfg.Server.AllowedOrigins = []string{"http://localhost:3000"}
+	}
+
+	// -- Standalone auth providers (Google, Microsoft, etc.) from <auth-providers> --
+	for _, ap := range raw.AuthProviders.Providers {
+		name := expand(ap.Name)
+		clientID := expand(ap.ClientID)
+		if name == "" || clientID == "" {
+			continue
+		}
+		scopeStr := expand(ap.Scopes)
+		var scopes []string
+		if scopeStr != "" {
+			scopes = strings.Split(scopeStr, ",")
+		}
+		cfg.Auth.Providers[name] = OAuthProvider{
+			ClientID:     clientID,
+			ClientSecret: expand(ap.ClientSecret),
+			Scopes:       scopes,
+		}
 	}
 
 	// -- LLM --

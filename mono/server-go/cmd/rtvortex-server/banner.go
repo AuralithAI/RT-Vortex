@@ -59,17 +59,17 @@ func printBanner(env *rtenv.Env, cfg *config.Config) {
 
 	banner := fmt.Sprintf(`
 %s╔═══════════════════════════════════════════════════════════════════╗%s
-%s║%s                                                                 %s║%s
-%s║%s   %s██████╗ ████████╗%s                  _                       %s║%s
-%s║%s   %s██╔══██╗╚══██╔══╝%s__   _____  _ __| |_ _____  __           %s║%s
-%s║%s   %s██████╔╝   ██║%s   \ \ / / _ \| '__| __/ _ \ \/ /           %s║%s
-%s║%s   %s██╔══██╗   ██║%s    \ V / (_) | |  | ||  __/>  <            %s║%s
-%s║%s   %s██║  ██║   ██║%s     \_/ \___/|_|   \__\___/_/\_\           %s║%s
-%s║%s   %s╚═╝  ╚═╝   ╚═╝%s                                            %s║%s
-%s║%s                                                                 %s║%s
-%s║%s         %s%sGo API Server%s  ·  REST  ·  WebSocket  ·  gRPC       %s║%s
-%s║%s         %sWebhooks · OAuth · Review Pipeline · LLM%s              %s║%s
-%s║%s                                                                 %s║%s
+%s║%s                                                                   %s║%s
+%s║%s   %s██████╗ ████████╗%s                  _                            %s║%s
+%s║%s   %s██╔══██╗╚══██╔══╝%s__   _____  _ __| |_ _____  __                 %s║%s
+%s║%s   %s██████╔╝   ██║%s   \ \ / / _ \| '__| __/ _ \ \/ /                 %s║%s
+%s║%s   %s██╔══██╗   ██║%s    \ V / (_) | |  | ||  __/>  <                  %s║%s
+%s║%s   %s██║  ██║   ██║%s     \_/ \___/|_|   \__\___/_/\_\                 %s║%s
+%s║%s   %s╚═╝  ╚═╝   ╚═╝%s                                                  %s║%s
+%s║%s                                                                   %s║%s
+%s║%s         %sGo API Server%s  ·  REST  ·  WebSocket  ·  gRPC             %s║%s
+%s║%s         %sWebhooks · OAuth · Review Pipeline · LLM%s                  %s║%s
+%s║%s                                                                   %s║%s
 %s╚═══════════════════════════════════════════════════════════════════╝%s
 `,
 		bc, r,
@@ -110,7 +110,11 @@ func printBanner(env *rtenv.Env, cfg *config.Config) {
 
 	// ── Server Config ───────────────────────────────────────────────
 	section("HTTP Server")
-	kv("Listen Port", fmt.Sprintf(":%d", cfg.Server.Port))
+	listenHost := cfg.Server.Host
+	if listenHost == "" {
+		listenHost = "0.0.0.0"
+	}
+	kv("Listen", fmt.Sprintf("%s:%d", listenHost, cfg.Server.Port))
 	if cfg.Server.TLS.Enabled {
 		kv("TLS", fmt.Sprintf("%s✔ enabled%s", colorGreen, colorReset))
 		kv("  Cert", cfg.Server.TLS.CertFile)

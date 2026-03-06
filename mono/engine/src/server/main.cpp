@@ -217,8 +217,10 @@ struct ServerConfig {
     uint16_t port = 50051;
     std::string config_path = "config/default.yml";
     
-    // TLS settings (loaded from config file)
-    bool tls_enabled = false;
+    // TLS settings — ON by default for gRPC channel security.
+    // The engine is an internal service, not browser-facing.
+    // Set ENGINE_TLS_ENABLED=false to disable.
+    bool tls_enabled = true;
     std::string tls_cert_chain;
     std::string tls_private_key;
     std::string tls_root_certs;  // For client auth (mTLS)
@@ -270,7 +272,7 @@ void printUsage(const char* program_name) {
               << "  ENGINE_HOST         Override --host\n"
               << "  ENGINE_PORT         Override --port\n"
               << "  ENGINE_CONFIG       Override --config\n"
-              << "  ENGINE_TLS_ENABLED  Enable TLS (true/false)\n"
+              << "  ENGINE_TLS_ENABLED  Enable TLS (default: true, set false to disable)\n"
               << "  ENGINE_TLS_CERT     Path to server certificate\n"
               << "  ENGINE_TLS_KEY      Path to server private key\n"
               << "  ENGINE_TLS_CA       Path to CA certificate (for mTLS)\n"
@@ -994,6 +996,30 @@ int main(int argc, char* argv[]) {
         
         // Initialize environment directories and logging FIRST
         initEnvironment();
+        
+        // Auto-discover TLS certificates from RTVORTEX_HOME/config/certificates/
+        // when TLS is enabled but cert paths were not explicitly provided.
+        if (config.tls_enabled) {
+            fs::path cert_dir = fs::path(g_env.config_dir) / "certificates";
+            if (config.tls_cert_chain.empty()) {
+                std::string p = (cert_dir / "server.crt").string();
+                if (fileExists(p)) {
+                    config.tls_cert_chain = p;
+                }
+            }
+            if (config.tls_private_key.empty()) {
+                std::string p = (cert_dir / "server.key").string();
+                if (fileExists(p)) {
+                    config.tls_private_key = p;
+                }
+            }
+            if (config.tls_root_certs.empty()) {
+                std::string p = (cert_dir / "ca.crt").string();
+                if (fileExists(p)) {
+                    config.tls_root_certs = p;
+                }
+            }
+        }
         
 #ifdef _WIN32
         // Handle Windows service commands

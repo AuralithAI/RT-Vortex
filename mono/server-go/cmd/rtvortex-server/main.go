@@ -211,10 +211,25 @@ func main() {
 
 	// OAuth2 provider registry
 	oauthReg := auth.NewProviderRegistry()
+	scheme := "http"
+	if cfg.Server.TLS.Enabled {
+		scheme = "https"
+	}
+	// Use configured host for OAuth callback URLs; fall back to "localhost".
+	serverHost := cfg.Server.Host
+	if serverHost == "" || serverHost == "0.0.0.0" || serverHost == "::" {
+		serverHost = "localhost"
+	}
+	serverBase := fmt.Sprintf("%s://%s:%d", scheme, serverHost, cfg.Server.Port)
 	for name, p := range cfg.Auth.Providers {
+		callbackPath := p.CallbackPath
+		if callbackPath == "" {
+			callbackPath = fmt.Sprintf("/api/v1/auth/callback/%s", name)
+		}
 		oauthCfg := auth.OAuthProviderConfig{
 			ClientID:     p.ClientID,
 			ClientSecret: p.ClientSecret,
+			RedirectURL:  serverBase + callbackPath,
 			Scopes:       p.Scopes,
 		}
 		switch name {
@@ -230,6 +245,10 @@ func main() {
 			oauthReg.Register(authproviders.NewBitbucketProvider(oauthCfg))
 		case "linkedin":
 			oauthReg.Register(authproviders.NewLinkedInProvider(oauthCfg))
+		case "apple":
+			oauthReg.Register(authproviders.NewAppleProvider(oauthCfg))
+		case "x":
+			oauthReg.Register(authproviders.NewXProvider(oauthCfg))
 		}
 		slog.Info("OAuth provider registered", "provider", name)
 	}
@@ -384,8 +403,9 @@ func main() {
 
 	// ── Create HTTP server ──────────────────────────────────────────────
 	srv := server.New(deps)
+	listenAddr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	httpServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
+		Addr:         listenAddr,
 		Handler:      srv.Router(),
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,

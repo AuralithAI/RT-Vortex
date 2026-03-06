@@ -9,11 +9,14 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { useAuthProviders } from "@/lib/api/queries";
 import { getApiBaseUrl } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
+import { queryKeys } from "@/lib/api/queries";
 
 function LoginContent() {
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("returnTo") ?? "/dashboard";
-  const { data: providers, isLoading, error } = useAuthProviders();
+  const { data: providers, isLoading, error, isFetching } = useAuthProviders();
+  const queryClient = useQueryClient();
 
   const getCallbackUrl = () => {
     if (typeof window === "undefined") return "";
@@ -52,11 +55,35 @@ function LoginContent() {
 
           {error && (
             <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-center text-sm text-red-600 dark:border-red-900 dark:bg-red-950 dark:text-red-400">
-              Failed to load login providers. Please try again later.
+              <p>Failed to load login providers.</p>
+              <button
+                onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.providers })}
+                disabled={isFetching}
+                className="mt-2 inline-flex items-center gap-1 rounded-md bg-red-100 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-200 disabled:opacity-50 dark:bg-red-900 dark:text-red-300 dark:hover:bg-red-800"
+              >
+                {isFetching ? "Retrying…" : "Retry"}
+              </button>
             </div>
           )}
 
-          {providers?.map((provider) => (
+          {!isLoading && !error && Array.isArray(providers) && providers.length === 0 && (
+            <div className="rounded-lg border border-yellow-200 bg-yellow-50 p-4 text-center text-sm text-yellow-700 dark:border-yellow-900 dark:bg-yellow-950 dark:text-yellow-400">
+              <p className="font-medium">No login providers available</p>
+              <p className="mt-1 text-xs">
+                This may be a temporary issue. Try refreshing, or contact your administrator
+                if the problem persists.
+              </p>
+              <button
+                onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.providers })}
+                disabled={isFetching}
+                className="mt-2 inline-flex items-center gap-1 rounded-md bg-yellow-100 px-3 py-1.5 text-xs font-medium text-yellow-800 transition-colors hover:bg-yellow-200 disabled:opacity-50 dark:bg-yellow-900 dark:text-yellow-300 dark:hover:bg-yellow-800"
+              >
+                {isFetching ? "Retrying…" : "Retry"}
+              </button>
+            </div>
+          )}
+
+          {Array.isArray(providers) && providers.map((provider) => (
             <button
               key={provider.name}
               onClick={() => handleLogin(provider.name)}
@@ -83,6 +110,9 @@ function ProviderIcon({ provider }: { provider: string }) {
     gitlab: "🦊",
     bitbucket: "🪣",
     google: "🔍",
+    microsoft: "🪟",
+    apple: "🍎",
+    x: "𝕏",
   };
   return (
     <span className="flex h-6 w-6 items-center justify-center text-lg">

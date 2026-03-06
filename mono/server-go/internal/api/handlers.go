@@ -62,13 +62,34 @@ type Handler struct {
 // GET /api/v1/auth/providers
 func (h *Handler) ListProviders(w http.ResponseWriter, r *http.Request) {
 	names := h.OAuthReg.List()
-	providers := make([]string, len(names))
-	for i, n := range names {
-		providers[i] = string(n)
+	type providerInfo struct {
+		Name        string `json:"name"`
+		DisplayName string `json:"display_name"`
+		Enabled     bool   `json:"enabled"`
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"providers": providers,
-	})
+	displayNames := map[string]string{
+		"github":    "GitHub",
+		"gitlab":    "GitLab",
+		"google":    "Google",
+		"microsoft": "Microsoft",
+		"bitbucket": "Bitbucket",
+		"linkedin":  "LinkedIn",
+		"apple":     "Apple",
+		"x":         "X",
+	}
+	providers := make([]providerInfo, len(names))
+	for i, n := range names {
+		name := string(n)
+		dn := displayNames[name]
+		if dn == "" {
+			dn = name
+		}
+		providers[i] = providerInfo{Name: name, DisplayName: dn, Enabled: true}
+	}
+	// Prevent browsers and proxies from caching the provider list so that
+	// subsequent loads always hit the Go server and see the real set.
+	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+	writeJSON(w, http.StatusOK, providers)
 }
 
 // OAuthLogin redirects the user to the OAuth2 provider's authorization page.
@@ -225,7 +246,16 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		h.AuditLogger.LogRequest(r, audit.ActionLogin, "user", user.ID.String(), map[string]interface{}{
 			"provider": providerName, "email": user.Email,
 		})
-		http.Redirect(w, r, redirectURL+"?token="+tokenPair.AccessToken, http.StatusTemporaryRedirect)
+		// Use proper query separator: & if URL already contains ?, else ?
+		sep := "?"
+		for _, ch := range redirectURL {
+			if ch == '?' {
+				sep = "&"
+				break
+			}
+		}
+		redirectTarget := redirectURL + sep + "token=" + tokenPair.AccessToken + "&refresh_token=" + tokenPair.RefreshToken
+		http.Redirect(w, r, redirectTarget, http.StatusTemporaryRedirect)
 		return
 	}
 

@@ -8,6 +8,7 @@
 
 import { useSearchParams, useRouter } from "next/navigation";
 import { useEffect, useState, Suspense } from "react";
+import { setAccessToken } from "@/lib/api/client";
 
 function CallbackContent() {
   const searchParams = useSearchParams();
@@ -16,6 +17,7 @@ function CallbackContent() {
 
   useEffect(() => {
     const token = searchParams.get("token");
+    const refreshToken = searchParams.get("refresh_token");
     const returnTo = searchParams.get("returnTo") ?? "/dashboard";
     const errParam = searchParams.get("error");
 
@@ -29,19 +31,18 @@ function CallbackContent() {
       return;
     }
 
-    // Store token in httpOnly cookie via API route
-    fetch("/api/auth/set-token", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token }),
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to set auth token");
-        router.replace(returnTo);
-      })
-      .catch((err) => {
-        setError(err instanceof Error ? err.message : "Authentication failed");
-      });
+    // Store access token in memory + localStorage for API calls.
+    setAccessToken(token);
+
+    // Store refresh token in localStorage for cross-origin token refresh.
+    if (refreshToken) {
+      try { localStorage.setItem("rtvortex_refresh_token", refreshToken); } catch { /* ignore */ }
+    }
+
+    // Also set cookie for middleware route protection.
+    document.cookie = `token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; samesite=lax`;
+
+    router.replace(returnTo);
   }, [searchParams, router]);
 
   if (error) {

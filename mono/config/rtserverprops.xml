@@ -20,15 +20,28 @@
     <!-- ===================================================================== -->
     <!-- REST API Server                                                       -->
     <!-- ===================================================================== -->
-    <server port="${SERVER_PORT:8080}" shutdown="graceful" context-path="/"/>
+    <server host="${SERVER_HOST:0.0.0.0}" port="${SERVER_PORT:8080}" shutdown="graceful" context-path="/">
+        <!--
+            TLS for the REST API server.
+            When enabled, the server listens on HTTPS.
+            Disabled by default for local dev (HTTP on port 8080).
+            To enable: export SERVER_TLS_ENABLED=true
+            Generate your own certs (see docs/setup.md) or use the shipped dev certs.
+        -->
+        <tls enabled="${SERVER_TLS_ENABLED:false}"
+             cert-file="${SERVER_TLS_CERT:${rtvortex.home}/config/certificates/server.crt}"
+             key-file="${SERVER_TLS_KEY:${rtvortex.home}/config/certificates/server.key}"/>
+    </server>
 
     <!-- ===================================================================== -->
     <!-- Database (PostgreSQL)                                                 -->
     <!-- ===================================================================== -->
-    <database url="${DATABASE_URL:jdbc:postgresql://localhost:5432/rtvortex}"
+    <!--
+        URL format: postgresql://host:port/dbname  (or postgres://host:port/dbname)
+    -->
+    <database url="${DATABASE_URL:postgresql://localhost:5432/rtvortex}"
               username="${DATABASE_USER:rtvortex}"
-              password="${DATABASE_PASSWORD:rtvortex_secret}"
-              driver="org.postgresql.Driver">
+              password="${DATABASE_PASSWORD:rtvortex_secret}">
 
         <pool name="rtvortex-pool"
               max-size="${DB_POOL_SIZE:20}"
@@ -37,10 +50,6 @@
               idle-timeout-ms="600000"
               max-lifetime-ms="1800000"
               leak-detection-threshold-ms="60000"/>
-
-        <flyway enabled="true"
-                locations="classpath:db/migration"
-                baseline-on-migrate="true"/>
     </database>
 
     <!-- ===================================================================== -->
@@ -59,31 +68,31 @@
     </redis>
 
     <!-- ===================================================================== -->
-    <!-- gRPC Server (Java — SDK clients, CLI connect here)                    -->
-    <!-- ===================================================================== -->
-    <grpc-server port="${GRPC_SERVER_PORT:9090}">
-
-        <security enabled="${GRPC_TLS_ENABLED:true}"
-                  cert-chain="${GRPC_SERVER_CERT:config/certificates/server.crt}"
-                  private-key="${GRPC_SERVER_KEY:config/certificates/server.key}"
-                  trust-certs="${GRPC_TRUST_CERT:config/certificates/ca.crt}"
-                  client-auth="${GRPC_CLIENT_AUTH:OPTIONAL}"/>
-    </grpc-server>
-
-    <!-- ===================================================================== -->
-    <!-- gRPC Engine Client (C++ engine — standalone gRPC server process)    -->
+    <!-- C++ Engine (gRPC connection from Go server → C++ engine)              -->
     <!-- ===================================================================== -->
     <!--
-        The C++ engine now runs as a standalone gRPC server process on port 50051.
-        The Java server connects to it as a gRPC client. This replaces the previous
-        JNI-based integration.
+        The C++ engine runs as a standalone gRPC server process on port 50051.
+        The Go server connects to it as a gRPC client.
 
         To start the engine:
-          - Linux/Mac: ./bin/aipr-engine-start (or ./bin/aipr-engine directly)
-          - Windows:   bin\aipr-engine-start.bat
-          - Docker:    Included in docker-compose.yml
+          RTVORTEX_HOME=/path/to/rt_home ./bin/rtvortex
 
-        The engine must be running before the Java server starts.
+        Environment overrides:
+          ENGINE_HOST, ENGINE_PORT, ENGINE_TLS_ENABLED, ENGINE_TLS_CERT,
+          ENGINE_TLS_KEY, ENGINE_TLS_CA, ENGINE_TLS_CLIENT_AUTH
+
+        The engine must be running before the Go server starts.
+
+        TLS flow (when ENGINE_NEGOTIATION=TLS):
+          1. The C++ engine starts with server.crt/server.key (env ENGINE_TLS_CERT/KEY)
+             and optionally loads ca.crt to verify clients (mTLS).
+          2. The Go server connects as a gRPC client, presenting client.crt/client.key
+             and verifying the engine's server.crt against ca.crt.
+          3. All certs must be signed by the same CA.
+
+        For development without TLS:
+          Set ENGINE_NEGOTIATION=PLAINTEXT (or export ENGINE_TLS_ENABLED=false
+          when starting the C++ engine).
     -->
     <engine host="${ENGINE_HOST:localhost}"
             port="${ENGINE_PORT:50051}"
@@ -91,12 +100,13 @@
             negotiation-type="${ENGINE_NEGOTIATION:TLS}">
 
         <!--
-            For TLS/mTLS to the C++ engine, provide client certificate paths.
-            For development: use PLAINTEXT negotiation and skip these.
+            Client certificates the Go server presents to the C++ engine.
+            Only used when negotiation-type is TLS or mTLS.
+            trust-certs (CA) is used to verify the engine's server certificate.
         -->
-        <tls cert-chain="${ENGINE_TLS_CERT:config/certificates/client.crt}"
-             private-key="${ENGINE_TLS_KEY:config/certificates/client.key}"
-             trust-certs="${ENGINE_TLS_CA:config/certificates/ca.crt}"/>
+        <tls cert-chain="${ENGINE_TLS_CERT:${rtvortex.home}/config/certificates/client.crt}"
+             private-key="${ENGINE_TLS_KEY:${rtvortex.home}/config/certificates/client.key}"
+             trust-certs="${ENGINE_TLS_CA:${rtvortex.home}/config/certificates/ca.crt}"/>
 
         <retry max-attempts="3"
                initial-backoff-ms="100"
@@ -112,7 +122,7 @@
     <!--
         Multiple LLM providers can be configured. The server uses the primary
         provider and automatically fails over to the fallback if it goes down.
-        Health checks run every 60 seconds via the BackgroundTaskScheduler.
+        Health checks run every 60 seconds in a background goroutine.
 
         Supported provider types:
           openai            - OpenAI API (GPT-4, etc.)
@@ -167,10 +177,53 @@
     <!-- ===================================================================== -->
     <!-- Security                                                              -->
     <!-- ===================================================================== -->
+    <!--
+        Security settings.
+        IMPORTANT: In production, set JWT_SECRET and RTVORTEX_ENCRYPTION_KEY
+        via environment variables — do NOT commit real secrets to the repo.
+
+        Generate a JWT secret:
+          openssl rand -base64 48
+
+        Generate an AES-256 encryption key (64-char hex string = 32 bytes):
+          openssl rand -hex 32
+    -->
     <security jwt-secret="${JWT_SECRET:}"
               jwt-expiration-ms="${JWT_EXPIRATION_MS:3600000}"
               allowed-origins="${ALLOWED_ORIGINS:http://localhost:3000}"
               encryption-key="${RTVORTEX_ENCRYPTION_KEY:}"/>
+
+    <!-- ===================================================================== -->
+    <!-- OAuth Login Providers                                                 -->
+    <!-- ===================================================================== -->
+    <!--
+        Standalone OAuth providers for user login (separate from VCS platforms).
+        VCS providers (GitHub, GitLab, Bitbucket) are auto-imported from
+        vcsplatforms.xml when their OAuth client-id is set.
+
+        For Google:    https://console.cloud.google.com/apis/credentials
+        For Microsoft: https://portal.azure.com > App registrations
+        For Apple:     https://developer.apple.com > Certificates, Identifiers & Profiles > Services IDs
+        For X:         https://developer.x.com/en/portal/projects
+    -->
+    <auth-providers>
+        <provider name="google"
+                  client-id="${GOOGLE_CLIENT_ID:}"
+                  client-secret="${GOOGLE_CLIENT_SECRET:}"
+                  scopes="openid,email,profile"/>
+        <provider name="microsoft"
+                  client-id="${MICROSOFT_CLIENT_ID:}"
+                  client-secret="${MICROSOFT_CLIENT_SECRET:}"
+                  scopes="openid,email,profile,User.Read"/>
+        <provider name="apple"
+                  client-id="${APPLE_CLIENT_ID:}"
+                  client-secret="${APPLE_CLIENT_SECRET:}"
+                  scopes="name,email"/>
+        <provider name="x"
+                  client-id="${X_CLIENT_ID:}"
+                  client-secret="${X_CLIENT_SECRET:}"
+                  scopes="tweet.read,users.read"/>
+    </auth-providers>
 
     <!-- ===================================================================== -->
     <!-- Storage                                                               -->

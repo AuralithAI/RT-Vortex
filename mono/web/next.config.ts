@@ -16,11 +16,17 @@ const nextConfig: NextConfig = {
 
   // Dev-mode proxy: rewrite /api/* → Go server on port 8080.
   // In production nginx handles this (Option A) or NEXT_PUBLIC_API_URL is set (Option B).
+  // NOTE: When NEXT_PUBLIC_API_URL is set, the browser calls the Go server
+  // directly (CORS), so rewrites are not needed for /api/v1/* paths.
+  //
+  // API_BACKEND_URL overrides the default proxy target.
+  // For production with TLS: API_BACKEND_URL=https://your-domain:8080
   async rewrites() {
     if (process.env.NEXT_OUTPUT === "export") return [];
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+    if (process.env.NEXT_PUBLIC_API_URL) return []; // browser calls directly
+    const apiUrl = process.env.API_BACKEND_URL || "http://localhost:8080";
     return [
-      { source: "/api/:path*", destination: `${apiUrl}/api/:path*` },
+      { source: "/api/v1/:path*", destination: `${apiUrl}/api/v1/:path*` },
     ];
   },
 };

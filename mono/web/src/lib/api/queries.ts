@@ -32,6 +32,9 @@ export function useAuthProviders() {
     queryKey: queryKeys.providers,
     queryFn: () => api.auth.providers(),
     staleTime: 5 * 60 * 1000, // providers rarely change
+    retry: 3, // retry up to 3 times on transient failures (e.g. 429, network)
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 8000), // 1s, 2s, 4s
+    refetchOnWindowFocus: true, // refetch when user returns to tab
   });
 }
 

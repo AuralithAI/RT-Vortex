@@ -10,7 +10,20 @@ const PUBLIC_PATHS = new Set(["/login", "/callback"]);
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public paths, static files, and API routes
+  // ── API proxy: inject Authorization header from cookie ────────────────
+  // Next.js rewrites don't forward cookies to the upstream server, so we
+  // read the "token" cookie and attach it as a Bearer header.
+  if (pathname.startsWith("/api/v1/")) {
+    const token = request.cookies.get("token")?.value;
+    if (token) {
+      const headers = new Headers(request.headers);
+      headers.set("Authorization", `Bearer ${token}`);
+      return NextResponse.next({ request: { headers } });
+    }
+    return NextResponse.next();
+  }
+
+  // Allow public paths, static files, and local API routes
   if (
     PUBLIC_PATHS.has(pathname) ||
     pathname.startsWith("/_next") ||

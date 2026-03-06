@@ -267,7 +267,7 @@ lint-web: web ## Lint Web UI
 
 run-engine: engine config ## Build and run the C++ engine
 	@echo "Starting RTVortex C++ Engine..."
-	RTVORTEX_HOME=$(RT_HOME) $(RT_HOME)/bin/rtvortex --server
+	RTVORTEX_HOME=$(RT_HOME) $(RT_HOME)/bin/rtvortex
 
 run-server: server config ## Build and run the Go API server
 	@echo "Starting RTVortexGo API Server..."
@@ -275,7 +275,7 @@ run-server: server config ## Build and run the Go API server
 
 run: all ## Build and run both (engine background, server foreground)
 	@echo "Starting RTVortex C++ Engine (background)..."
-	RTVORTEX_HOME=$(RT_HOME) $(RT_HOME)/bin/rtvortex --server &
+	RTVORTEX_HOME=$(RT_HOME) $(RT_HOME)/bin/rtvortex &
 	sleep 2
 	@echo "Starting RTVortexGo API Server (foreground)..."
 	RTVORTEX_HOME=$(RT_HOME) $(RT_HOME)/bin/RTVortexGo

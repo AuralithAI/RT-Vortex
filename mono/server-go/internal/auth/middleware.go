@@ -38,6 +38,17 @@ func Middleware(jwtMgr *JWTManager) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			token := extractBearerToken(r)
 			if token == "" {
+				// Debug: log what cookies/headers arrived
+				var cookieNames []string
+				for _, c := range r.Cookies() {
+					cookieNames = append(cookieNames, c.Name)
+				}
+				slog.Debug("auth: no token found",
+					"cookies", cookieNames,
+					"has_auth_header", r.Header.Get("Authorization") != "",
+					"remote", r.RemoteAddr,
+					"path", r.URL.Path,
+				)
 				http.Error(w, `{"error":"missing authorization header"}`, http.StatusUnauthorized)
 				return
 			}
@@ -100,13 +111,21 @@ func RequireOrg(next http.Handler) http.Handler {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 func extractBearerToken(r *http.Request) string {
+	// 1. Check Authorization header first.
 	auth := r.Header.Get("Authorization")
-	if auth == "" {
-		return ""
+	if auth != "" {
+		parts := strings.SplitN(auth, " ", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
+			if t := strings.TrimSpace(parts[1]); t != "" {
+				return t
+			}
+		}
 	}
-	parts := strings.SplitN(auth, " ", 2)
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-		return ""
+	// 2. Fall back to cookies (SPA flow via Next.js proxy).
+	for _, name := range []string{"token", "access_token"} {
+		if c, err := r.Cookie(name); err == nil && c.Value != "" {
+			return c.Value
+		}
 	}
-	return strings.TrimSpace(parts[1])
+	return ""
 }

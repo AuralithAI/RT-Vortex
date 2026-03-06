@@ -43,9 +43,55 @@ export class AuthError extends ApiError {
   }
 }
 
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/** In-memory token store. Populated by the callback page after OAuth. */
+let _accessToken: string | null = null;
+
+/** Set the access token (called from callback page). */
+export function setAccessToken(token: string): void {
+  _accessToken = token;
+  // Also persist to localStorage so it survives page reloads.
+  if (typeof window !== "undefined") {
+    try { localStorage.setItem("rtvortex_token", token); } catch { /* ignore */ }
+  }
+}
+
+/** Clear the access token (called on logout). */
+export function clearAccessToken(): void {
+  _accessToken = null;
+  if (typeof window !== "undefined") {
+    try { localStorage.removeItem("rtvortex_token"); } catch { /* ignore */ }
+  }
+}
+
+/** Get the current access token. */
+function getAccessToken(): string | null {
+  if (_accessToken) return _accessToken;
+  // Try localStorage on first access.
+  if (typeof window !== "undefined") {
+    try {
+      const stored = localStorage.getItem("rtvortex_token");
+      if (stored) { _accessToken = stored; return stored; }
+    } catch { /* ignore */ }
+  }
+  // Fall back to cookie.
+  if (typeof document !== "undefined") {
+    const match = document.cookie.match(/(?:^|;\s*)token=([^;]*)/);
+    if (match?.[1]) return match[1];
+  }
+  return null;
+}
+
 // ── Core fetch wrapper ─────────────────────────────────────────────────────
 
 const BASE = getApiBaseUrl();
+
+/** Public endpoints that should never send an Authorization header. */
+const PUBLIC_PATHS = new Set([
+  "/api/v1/auth/providers",
+  "/api/v1/auth/refresh",
+]);
 
 async function request<T>(
   path: string,
@@ -57,20 +103,32 @@ async function request<T>(
     ...(init?.headers as Record<string, string>),
   };
 
+  // Inject Authorization header from stored token — but NOT for public
+  // auth endpoints, which must work regardless of token state.
+  const isPublic = PUBLIC_PATHS.has(path) || path.startsWith("/api/v1/auth/login/");
+  const token = getAccessToken();
+  if (token && !isPublic && !headers["Authorization"]) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const res = await fetch(url, {
     ...init,
     headers,
-    credentials: "include", // send cookies (same-origin via nginx)
   });
 
-  if (res.status === 401) {
-    // Try refresh once
+  if (res.status === 401 && !isPublic) {
+    // Try refresh once — the refresh handler returns a new token pair.
     const refreshed = await tryRefreshToken();
     if (refreshed) {
+      // Re-read token after refresh (tryRefreshToken calls setAccessToken).
+      const newToken = getAccessToken();
+      const retryHeaders = { ...headers };
+      if (newToken) {
+        retryHeaders["Authorization"] = `Bearer ${newToken}`;
+      }
       const retry = await fetch(url, {
         ...init,
-        headers,
-        credentials: "include",
+        headers: retryHeaders,
       });
       if (retry.ok) {
         if (retry.status === 204) return undefined as T;
@@ -91,11 +149,35 @@ async function request<T>(
 
 async function tryRefreshToken(): Promise<boolean> {
   try {
+    // Build the request body — include the refresh token from localStorage
+    // so it works cross-origin (cookies are not sent cross-origin).
+    const body: Record<string, string> = {};
+    if (typeof window !== "undefined") {
+      try {
+        const rt = localStorage.getItem("rtvortex_refresh_token");
+        if (rt) body.refresh_token = rt;
+      } catch { /* ignore */ }
+    }
+
     const res = await fetch(`${BASE}/api/v1/auth/refresh`, {
       method: "POST",
-      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include", // also send cookie if same-origin
+      body: JSON.stringify(body),
     });
-    return res.ok;
+
+    if (!res.ok) return false;
+
+    // The server returns { access_token, refresh_token, expires_in }.
+    // Store the new tokens so subsequent requests use them.
+    const data = await res.json();
+    if (data.access_token) {
+      setAccessToken(data.access_token);
+    }
+    if (data.refresh_token && typeof window !== "undefined") {
+      try { localStorage.setItem("rtvortex_refresh_token", data.refresh_token); } catch { /* ignore */ }
+    }
+    return true;
   } catch {
     return false;
   }
@@ -118,8 +200,17 @@ export const auth = {
   loginUrl: (provider: string, redirectUrl: string) =>
     `${BASE}/api/v1/auth/login/${provider}?redirect_url=${encodeURIComponent(redirectUrl)}`,
 
-  logout: () =>
-    request<void>("/api/v1/auth/logout", { method: "POST" }),
+  logout: () => {
+    clearAccessToken();
+    // Also clear cookies and refresh token.
+    if (typeof document !== "undefined") {
+      document.cookie = "token=; path=/; max-age=0";
+    }
+    if (typeof window !== "undefined") {
+      try { localStorage.removeItem("rtvortex_refresh_token"); } catch { /* ignore */ }
+    }
+    return request<void>("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
+  },
 };
 
 // ── User ────────────────────────────────────────────────────────────────────

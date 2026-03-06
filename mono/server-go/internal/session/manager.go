@@ -112,15 +112,18 @@ func (m *Manager) StoreOAuthState(ctx context.Context, state, provider string, r
 }
 
 // ValidateOAuthState validates and consumes an OAuth state parameter.
+// Uses GET + DEL instead of GETDEL for compatibility with Redis < 6.2.
 func (m *Manager) ValidateOAuthState(ctx context.Context, state string) (provider string, redirectURL string, err error) {
 	key := statePrefix + state
-	val, err := m.rdb.GetDel(ctx, key).Bytes()
+	val, err := m.rdb.Get(ctx, key).Bytes()
 	if err == redis.Nil {
 		return "", "", fmt.Errorf("invalid or expired OAuth state")
 	}
 	if err != nil {
 		return "", "", fmt.Errorf("get oauth state: %w", err)
 	}
+	// Consume the state so it can't be reused (CSRF protection).
+	m.rdb.Del(ctx, key)
 
 	var data map[string]string
 	if err := json.Unmarshal(val, &data); err != nil {
