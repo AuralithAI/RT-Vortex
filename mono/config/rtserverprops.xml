@@ -138,24 +138,32 @@
          temperature="${LLM_TEMPERATURE:0.1}"
          timeout-ms="${LLM_TIMEOUT_MS:120000}">
 
-        <openai api-key="${LLM_OPENAI_API_KEY:}"
-                base-url="${LLM_OPENAI_BASE_URL:https://api.openai.com/v1}"
-                model="${LLM_OPENAI_MODEL:gpt-4-turbo-preview}"/>
+        <!--
+            API keys are NEVER stored in this file.
+            Configure them via:
+              1. Dashboard Settings UI (recommended)
+              2. Environment variables (LLM_OPENAI_API_KEY, LLM_ANTHROPIC_API_KEY, etc.)
+        -->
+        <openai base-url="${LLM_OPENAI_BASE_URL:https://api.openai.com/v1}"
+                model="${LLM_OPENAI_MODEL:gpt-4o}"/>
 
-        <anthropic api-key="${LLM_ANTHROPIC_API_KEY:}"
-                   base-url="${LLM_ANTHROPIC_BASE_URL:https://api.anthropic.com/v1}"
-                   models="${LLM_ANTHROPIC_MODELS:claude-3-opus-20240229,claude-3-sonnet-20240229,claude-3-haiku-20240307,claude-3-5-sonnet-20241022}"/>
+        <anthropic base-url="${LLM_ANTHROPIC_BASE_URL:https://api.anthropic.com/v1}"
+                   models="${LLM_ANTHROPIC_MODELS:claude-sonnet-4-20250514,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022}"/>
+
+        <gemini base-url="${LLM_GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta}"
+                model="${LLM_GEMINI_MODEL:gemini-2.5-flash}"/>
+
+        <grok base-url="${LLM_GROK_BASE_URL:https://api.x.ai/v1}"
+              model="${LLM_GROK_MODEL:grok-3-mini}"/>
 
         <azure-openai endpoint="${LLM_AZURE_OPENAI_ENDPOINT:}"
-                      api-key="${LLM_AZURE_OPENAI_API_KEY:}"
                       deployment="${LLM_AZURE_OPENAI_DEPLOYMENT:}"/>
 
-        <ollama base-url="${LLM_OLLAMA_BASE_URL:}"
+        <ollama base-url="${LLM_OLLAMA_BASE_URL:http://localhost:11434}"
                 discovery-host="${LLM_OLLAMA_DISCOVERY_HOST:localhost}"
                 discovery-ports="${LLM_OLLAMA_DISCOVERY_PORTS:11434,11435,8080}"/>
 
-        <custom base-url="${LLM_CUSTOM_BASE_URL:}"
-                api-key="${LLM_CUSTOM_API_KEY:}"/>
+        <custom base-url="${LLM_CUSTOM_BASE_URL:}"/>
     </llm>
 
     <!-- ===================================================================== -->

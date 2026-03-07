@@ -59,10 +59,10 @@ type Usage struct {
 
 // StreamChunk is a single piece of a streamed completion response.
 type StreamChunk struct {
-	Content      string `json:"content"`                // incremental text delta
-	Model        string `json:"model,omitempty"`        // only set on first/last chunk
+	Content      string `json:"content"`                 // incremental text delta
+	Model        string `json:"model,omitempty"`         // only set on first/last chunk
 	FinishReason string `json:"finish_reason,omitempty"` // set when streaming is done (e.g. "stop")
-	Done         bool   `json:"done"`                   // true on the final chunk
+	Done         bool   `json:"done"`                    // true on the final chunk
 	Usage        *Usage `json:"usage,omitempty"`         // set on the final chunk
 }
 
@@ -94,11 +94,24 @@ type StreamingProvider interface {
 	StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error)
 }
 
+// ── Provider Metadata ───────────────────────────────────────────────────────
+
+// ProviderMeta stores display metadata and configuration status for a provider.
+type ProviderMeta struct {
+	DisplayName  string `json:"display_name"`
+	BaseURL      string `json:"base_url"`
+	DefaultModel string `json:"default_model"`
+	Configured   bool   `json:"configured"`   // true when an API key has been set
+	RequiresKey  bool   `json:"requires_key"` // false for local-only providers like Ollama
+	APIKey       string `json:"-"`            // never serialised — runtime only
+}
+
 // ── Provider Registry ───────────────────────────────────────────────────────
 
 // Registry manages configured LLM providers with fallback ordering.
 type Registry struct {
 	providers map[string]Provider
+	meta      map[string]ProviderMeta
 	primary   string
 	fallbacks []string
 }
@@ -107,6 +120,7 @@ type Registry struct {
 func NewRegistry() *Registry {
 	return &Registry{
 		providers: make(map[string]Provider),
+		meta:      make(map[string]ProviderMeta),
 	}
 }
 
@@ -120,6 +134,12 @@ func (r *Registry) Register(p Provider) {
 	}
 }
 
+// RegisterWithMeta adds a provider along with its display metadata.
+func (r *Registry) RegisterWithMeta(p Provider, m ProviderMeta) {
+	r.Register(p)
+	r.meta[p.Name()] = m
+}
+
 // SetPrimary changes the primary provider.
 func (r *Registry) SetPrimary(name string) {
 	r.primary = name
@@ -131,9 +151,92 @@ func (r *Registry) Get(name string) (Provider, bool) {
 	return p, ok
 }
 
+// GetMeta returns metadata for a provider.
+func (r *Registry) GetMeta(name string) (ProviderMeta, bool) {
+	m, ok := r.meta[name]
+	return m, ok
+}
+
+// UpdateAPIKey replaces the API key for a provider at runtime and marks it configured.
+func (r *Registry) UpdateAPIKey(name, apiKey string) bool {
+	m, ok := r.meta[name]
+	if !ok {
+		return false
+	}
+	m.Configured = apiKey != ""
+	m.APIKey = apiKey
+	r.meta[name] = m
+
+	// Re-create the provider with the new key, preserving the rest.
+	switch name {
+	case "openai":
+		r.providers[name] = NewOpenAIProvider(OpenAIConfig{
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+		})
+	case "anthropic":
+		r.providers[name] = NewAnthropicProvider(AnthropicConfig{
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+		})
+	case "gemini":
+		r.providers[name] = NewGeminiProvider(GeminiConfig{
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+		})
+	case "grok":
+		r.providers[name] = NewGrokProvider(GrokConfig{
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+		})
+	case "ollama":
+		r.providers[name] = NewOllamaProvider(OllamaConfig{
+			BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+		})
+	default:
+		return false
+	}
+	return true
+}
+
+// UpdateModel updates the default model for a provider at runtime.
+func (r *Registry) UpdateModel(name, model string) bool {
+	m, ok := r.meta[name]
+	if !ok {
+		return false
+	}
+	m.DefaultModel = model
+	r.meta[name] = m
+	return true
+}
+
+// UpdateBaseURL updates the base URL for a provider at runtime and re-creates
+// the provider instance. Used for local providers like Ollama where the user
+// configures the URL instead of an API key.
+func (r *Registry) UpdateBaseURL(name, baseURL string) bool {
+	m, ok := r.meta[name]
+	if !ok {
+		return false
+	}
+	m.BaseURL = baseURL
+	m.Configured = baseURL != ""
+	r.meta[name] = m
+
+	switch name {
+	case "ollama":
+		r.providers[name] = NewOllamaProvider(OllamaConfig{
+			BaseURL: baseURL, DefaultModel: m.DefaultModel,
+		})
+	default:
+		return false
+	}
+	return true
+}
+
 // Primary returns the primary provider.
 func (r *Registry) Primary() (Provider, bool) {
 	return r.Get(r.primary)
+}
+
+// PrimaryName returns the name of the primary provider.
+func (r *Registry) PrimaryName() string {
+	return r.primary
 }
 
 // Complete tries the primary provider, then falls back on error.
@@ -165,6 +268,15 @@ func (r *Registry) ListProviders() []string {
 		names = append(names, name)
 	}
 	return names
+}
+
+// AllMeta returns metadata for every registered provider.
+func (r *Registry) AllMeta() map[string]ProviderMeta {
+	out := make(map[string]ProviderMeta, len(r.meta))
+	for k, v := range r.meta {
+		out[k] = v
+	}
+	return out
 }
 
 // StreamComplete tries streaming from the primary provider, falls back to

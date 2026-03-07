@@ -275,8 +275,15 @@ type IndexConfig struct {
 	IncludeLanguages    []string               `protobuf:"bytes,6,rep,name=include_languages,json=includeLanguages,proto3" json:"include_languages,omitempty"`
 	EmbeddingEndpoint   string                 `protobuf:"bytes,7,opt,name=embedding_endpoint,json=embeddingEndpoint,proto3" json:"embedding_endpoint,omitempty"`
 	EmbeddingDimensions uint32                 `protobuf:"varint,8,opt,name=embedding_dimensions,json=embeddingDimensions,proto3" json:"embedding_dimensions,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Embedding provider type: "LOCAL_ONNX", "HTTP", "CUSTOM".
+	// When empty the engine uses its default (LOCAL_ONNX).
+	EmbeddingProvider string `protobuf:"bytes,9,opt,name=embedding_provider,json=embeddingProvider,proto3" json:"embedding_provider,omitempty"`
+	// Embedding model name (e.g. "text-embedding-3-small").
+	EmbeddingModel string `protobuf:"bytes,10,opt,name=embedding_model,json=embeddingModel,proto3" json:"embedding_model,omitempty"`
+	// API key for the external embedding provider (passed at runtime, never stored in config files).
+	EmbeddingApiKey string `protobuf:"bytes,11,opt,name=embedding_api_key,json=embeddingApiKey,proto3" json:"embedding_api_key,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *IndexConfig) Reset() {
@@ -363,6 +370,27 @@ func (x *IndexConfig) GetEmbeddingDimensions() uint32 {
 		return x.EmbeddingDimensions
 	}
 	return 0
+}
+
+func (x *IndexConfig) GetEmbeddingProvider() string {
+	if x != nil {
+		return x.EmbeddingProvider
+	}
+	return ""
+}
+
+func (x *IndexConfig) GetEmbeddingModel() string {
+	if x != nil {
+		return x.EmbeddingModel
+	}
+	return ""
+}
+
+func (x *IndexConfig) GetEmbeddingApiKey() string {
+	if x != nil {
+		return x.EmbeddingApiKey
+	}
+	return ""
 }
 
 type IncrementalIndexRequest struct {
@@ -2527,7 +2555,7 @@ const file_engine_proto_rawDesc = "" +
 	"\fIndexRequest\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12\x1b\n" +
 	"\trepo_path\x18\x02 \x01(\tR\brepoPath\x123\n" +
-	"\x06config\x18\x03 \x01(\v2\x1b.aipr.engine.v1.IndexConfigR\x06config\"\xe4\x02\n" +
+	"\x06config\x18\x03 \x01(\v2\x1b.aipr.engine.v1.IndexConfigR\x06config\"\xe8\x03\n" +
 	"\vIndexConfig\x12'\n" +
 	"\x10max_file_size_kb\x18\x01 \x01(\rR\rmaxFileSizeKb\x12\x1d\n" +
 	"\n" +
@@ -2537,7 +2565,11 @@ const file_engine_proto_rawDesc = "" +
 	"\x10exclude_patterns\x18\x05 \x03(\tR\x0fexcludePatterns\x12+\n" +
 	"\x11include_languages\x18\x06 \x03(\tR\x10includeLanguages\x12-\n" +
 	"\x12embedding_endpoint\x18\a \x01(\tR\x11embeddingEndpoint\x121\n" +
-	"\x14embedding_dimensions\x18\b \x01(\rR\x13embeddingDimensions\"\x99\x01\n" +
+	"\x14embedding_dimensions\x18\b \x01(\rR\x13embeddingDimensions\x12-\n" +
+	"\x12embedding_provider\x18\t \x01(\tR\x11embeddingProvider\x12'\n" +
+	"\x0fembedding_model\x18\n" +
+	" \x01(\tR\x0eembeddingModel\x12*\n" +
+	"\x11embedding_api_key\x18\v \x01(\tR\x0fembeddingApiKey\"\x99\x01\n" +
 	"\x17IncrementalIndexRequest\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12#\n" +
 	"\rchanged_files\x18\x02 \x03(\tR\fchangedFiles\x12\x1f\n" +

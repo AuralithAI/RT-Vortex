@@ -214,8 +214,17 @@ func (s *Server) setupRouter() {
 			// LLM Management
 			r.Route("/llm", func(r chi.Router) {
 				r.Get("/providers", h.ListLLMProviders)
+				r.Put("/providers/{provider}", h.ConfigureLLMProvider)
+				r.Post("/providers/{provider}/balance", h.CheckLLMBalance)
 				r.Post("/providers/test", h.TestLLMProvider)
+				r.Put("/primary", h.SetPrimaryLLMProvider)
 				r.Post("/stream", h.StreamLLMCompletion) // SSE streaming
+			})
+
+			// Embeddings Configuration
+			r.Route("/embeddings", func(r chi.Router) {
+				r.Get("/config", h.GetEmbeddingsConfig)
+				r.Put("/config", h.UpdateEmbeddingsConfig)
 			})
 
 			// Admin

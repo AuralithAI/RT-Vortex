@@ -9,7 +9,13 @@ import { getApiBaseUrl } from "@/lib/utils";
 import type {
   AuthProvider,
   DetailedHealth,
+  EmbeddingsConfig,
+  EmbeddingsUpdateRequest,
+  EmbeddingsUpdateResult,
   IndexStatus,
+  LLMBalanceResult,
+  LLMConfigureRequest,
+  LLMConfigureResult,
   LLMProvider,
   LLMTestResult,
   Org,
@@ -326,6 +332,18 @@ export const llm = {
     return res.providers ?? [];
   },
 
+  configure: (provider: string, data: LLMConfigureRequest) =>
+    request<LLMConfigureResult>(`/api/v1/llm/providers/${provider}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  setPrimary: (provider: string) =>
+    request<{ primary: string }>("/api/v1/llm/primary", {
+      method: "PUT",
+      body: JSON.stringify({ provider }),
+    }),
+
   test: (data: {
     provider: string;
     api_key?: string;
@@ -334,6 +352,25 @@ export const llm = {
   }) =>
     request<LLMTestResult>("/api/v1/llm/providers/test", {
       method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** Check credit/token balance for a cloud provider. */
+  balance: (provider: string) =>
+    request<LLMBalanceResult>(`/api/v1/llm/providers/${provider}/balance`, {
+      method: "POST",
+    }),
+};
+
+// ── Embeddings ──────────────────────────────────────────────────────────────
+
+export const embeddings = {
+  config: () =>
+    request<EmbeddingsConfig>("/api/v1/embeddings/config"),
+
+  update: (data: EmbeddingsUpdateRequest) =>
+    request<EmbeddingsUpdateResult>("/api/v1/embeddings/config", {
+      method: "PUT",
       body: JSON.stringify(data),
     }),
 };
@@ -350,5 +387,5 @@ export const admin = {
 
 // ── Convenience export ──────────────────────────────────────────────────────
 
-const api = { auth, users, orgs, repos, reviews, llm, admin };
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin };
 export default api;

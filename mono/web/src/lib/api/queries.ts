@@ -21,6 +21,7 @@ export const queryKeys = {
   review: (id: string) => ["reviews", id] as const,
   reviewComments: (id: string) => ["reviews", id, "comments"] as const,
   llmProviders: ["llm", "providers"] as const,
+  embeddingsConfig: ["embeddings", "config"] as const,
   adminStats: ["admin", "stats"] as const,
   adminHealth: ["admin", "health"] as const,
 } as const;
@@ -152,6 +153,13 @@ export function useLLMProviders() {
   return useQuery({
     queryKey: queryKeys.llmProviders,
     queryFn: () => api.llm.providers(),
+  });
+}
+
+export function useEmbeddingsConfig() {
+  return useQuery({
+    queryKey: queryKeys.embeddingsConfig,
+    queryFn: () => api.embeddings.config(),
   });
 }
 

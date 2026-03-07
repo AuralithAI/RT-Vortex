@@ -266,25 +266,105 @@ func main() {
 		slog.Warn("Token encryption DISABLED — set encryption-key in security config for production")
 	}
 
-	// LLM provider registry
+	// LLM provider registry — all providers pre-registered with default URLs.
+	// API keys come from environment variables or the dashboard settings UI — never from XML.
 	llmRegistry := llm.NewRegistry()
-	for name, p := range cfg.LLM.Providers {
-		switch name {
-		case "openai":
-			llmRegistry.Register(llm.NewOpenAIProvider(llm.OpenAIConfig{
-				APIKey: p.APIKey, BaseURL: p.BaseURL, DefaultModel: p.Model,
-			}))
-		case "anthropic":
-			llmRegistry.Register(llm.NewAnthropicProvider(llm.AnthropicConfig{
-				APIKey: p.APIKey, DefaultModel: p.Model,
-			}))
-		case "ollama":
-			llmRegistry.Register(llm.NewOllamaProvider(llm.OllamaConfig{
-				BaseURL: p.BaseURL, DefaultModel: p.Model,
-			}))
-		}
-		slog.Info("LLM provider registered", "type", name, "model", p.Model)
+
+	// API keys are sourced exclusively from env vars (or set at runtime via dashboard).
+	envKey := func(envVar string) string {
+		return os.Getenv(envVar)
 	}
+	cfgModel := func(name, fallback string) string {
+		if p, ok := cfg.LLM.Providers[name]; ok && p.Model != "" {
+			return p.Model
+		}
+		return fallback
+	}
+	cfgURL := func(name, fallback string) string {
+		if p, ok := cfg.LLM.Providers[name]; ok && p.BaseURL != "" {
+			return p.BaseURL
+		}
+		return fallback
+	}
+
+	// OpenAI
+	openaiKey := envKey("LLM_OPENAI_API_KEY")
+	llmRegistry.RegisterWithMeta(
+		llm.NewOpenAIProvider(llm.OpenAIConfig{
+			APIKey: openaiKey, BaseURL: cfgURL("openai", "https://api.openai.com/v1"),
+			DefaultModel: cfgModel("openai", "gpt-4o"),
+		}),
+		llm.ProviderMeta{
+			DisplayName: "OpenAI", BaseURL: cfgURL("openai", "https://api.openai.com/v1"),
+			DefaultModel: cfgModel("openai", "gpt-4o"),
+			Configured:   openaiKey != "", RequiresKey: true, APIKey: openaiKey,
+		},
+	)
+
+	// Anthropic
+	anthropicKey := envKey("LLM_ANTHROPIC_API_KEY")
+	llmRegistry.RegisterWithMeta(
+		llm.NewAnthropicProvider(llm.AnthropicConfig{
+			APIKey: anthropicKey, BaseURL: cfgURL("anthropic", "https://api.anthropic.com/v1"),
+			DefaultModel: cfgModel("anthropic", "claude-sonnet-4-20250514"),
+		}),
+		llm.ProviderMeta{
+			DisplayName: "Anthropic", BaseURL: cfgURL("anthropic", "https://api.anthropic.com/v1"),
+			DefaultModel: cfgModel("anthropic", "claude-sonnet-4-20250514"),
+			Configured:   anthropicKey != "", RequiresKey: true, APIKey: anthropicKey,
+		},
+	)
+
+	// Gemini
+	geminiKey := envKey("LLM_GEMINI_API_KEY")
+	llmRegistry.RegisterWithMeta(
+		llm.NewGeminiProvider(llm.GeminiConfig{
+			APIKey: geminiKey, BaseURL: cfgURL("gemini", "https://generativelanguage.googleapis.com/v1beta"),
+			DefaultModel: cfgModel("gemini", "gemini-2.5-flash"),
+		}),
+		llm.ProviderMeta{
+			DisplayName: "Google Gemini", BaseURL: cfgURL("gemini", "https://generativelanguage.googleapis.com/v1beta"),
+			DefaultModel: cfgModel("gemini", "gemini-2.5-flash"),
+			Configured:   geminiKey != "", RequiresKey: true, APIKey: geminiKey,
+		},
+	)
+
+	// Grok (xAI)
+	grokKey := envKey("LLM_GROK_API_KEY")
+	llmRegistry.RegisterWithMeta(
+		llm.NewGrokProvider(llm.GrokConfig{
+			APIKey: grokKey, BaseURL: cfgURL("grok", "https://api.x.ai/v1"),
+			DefaultModel: cfgModel("grok", "grok-3-mini"),
+		}),
+		llm.ProviderMeta{
+			DisplayName: "Grok (xAI)", BaseURL: cfgURL("grok", "https://api.x.ai/v1"),
+			DefaultModel: cfgModel("grok", "grok-3-mini"),
+			Configured:   grokKey != "", RequiresKey: true, APIKey: grokKey,
+		},
+	)
+
+	// Ollama (local — no API key required)
+	llmRegistry.RegisterWithMeta(
+		llm.NewOllamaProvider(llm.OllamaConfig{
+			BaseURL:      cfgURL("ollama", "http://localhost:11434"),
+			DefaultModel: cfgModel("ollama", "llama3.1:8b"),
+		}),
+		llm.ProviderMeta{
+			DisplayName: "Ollama (Local)", BaseURL: cfgURL("ollama", "http://localhost:11434"),
+			DefaultModel: cfgModel("ollama", "llama3.1:8b"),
+			Configured:   true, RequiresKey: false,
+		},
+	)
+
+	// Set primary from config (default: openai).
+	if cfg.LLM.Primary != "" {
+		llmRegistry.SetPrimary(cfg.LLM.Primary)
+	}
+
+	slog.Info("LLM providers registered",
+		"count", len(llmRegistry.ListProviders()),
+		"primary", cfg.LLM.Primary,
+	)
 
 	// VCS platform registry
 	vcsRegistry := vcs.NewPlatformRegistry()

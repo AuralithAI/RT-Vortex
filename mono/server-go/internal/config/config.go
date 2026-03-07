@@ -144,8 +144,9 @@ type LLMConfig struct {
 }
 
 // LLMProviderConfig holds settings for a single LLM provider.
+// API keys are NOT stored here — they come from env vars or the dashboard UI
+// and are managed by the LLM registry at runtime.
 type LLMProviderConfig struct {
-	APIKey  string
 	BaseURL string
 	Model   string
 	Models  []string
@@ -396,13 +397,14 @@ type xmlLLM struct {
 	TimeoutMs         string         `xml:"timeout-ms,attr"`
 	OpenAI            xmlLLMProvider `xml:"openai"`
 	Anthropic         xmlLLMProvider `xml:"anthropic"`
+	Gemini            xmlLLMProvider `xml:"gemini"`
+	Grok              xmlLLMProvider `xml:"grok"`
 	AzureOpenAI       xmlLLMProvider `xml:"azure-openai"`
 	Ollama            xmlLLMProvider `xml:"ollama"`
 	Custom            xmlLLMProvider `xml:"custom"`
 }
 
 type xmlLLMProvider struct {
-	APIKey         string `xml:"api-key,attr"`
 	BaseURL        string `xml:"base-url,attr"`
 	Model          string `xml:"model,attr"`
 	Models         string `xml:"models,attr"`
@@ -970,48 +972,56 @@ func loadServerProps(path string) (*Config, error) {
 		Providers:   make(map[string]LLMProviderConfig),
 	}
 
-	// OpenAI
-	if key := expand(raw.LLM.OpenAI.APIKey); key != "" {
-		cfg.LLM.Providers["openai"] = LLMProviderConfig{
-			APIKey:  key,
-			BaseURL: expand(raw.LLM.OpenAI.BaseURL),
-			Model:   expand(raw.LLM.OpenAI.Model),
+	// Collect providers declared in XML — structural config only (URLs, models).
+	// API keys are NEVER read from XML. They come from env vars or the dashboard UI.
+	addProvider := func(name, baseURL, model, models string) {
+		p := LLMProviderConfig{
+			BaseURL: baseURL,
+			Model:   model,
 		}
+		if models != "" {
+			p.Models = strings.Split(models, ",")
+		}
+		cfg.LLM.Providers[name] = p
 	}
 
-	// Anthropic
-	if key := expand(raw.LLM.Anthropic.APIKey); key != "" {
-		models := []string{}
-		if m := expand(raw.LLM.Anthropic.Models); m != "" {
-			models = strings.Split(m, ",")
-		}
-		cfg.LLM.Providers["anthropic"] = LLMProviderConfig{
-			APIKey:  key,
-			BaseURL: expand(raw.LLM.Anthropic.BaseURL),
-			Models:  models,
-		}
-	}
+	addProvider("openai",
+		expand(raw.LLM.OpenAI.BaseURL),
+		expand(raw.LLM.OpenAI.Model),
+		"",
+	)
+	addProvider("anthropic",
+		expand(raw.LLM.Anthropic.BaseURL),
+		"",
+		expand(raw.LLM.Anthropic.Models),
+	)
+	addProvider("gemini",
+		expand(raw.LLM.Gemini.BaseURL),
+		expand(raw.LLM.Gemini.Model),
+		"",
+	)
+	addProvider("grok",
+		expand(raw.LLM.Grok.BaseURL),
+		expand(raw.LLM.Grok.Model),
+		"",
+	)
+	addProvider("ollama",
+		expand(raw.LLM.Ollama.BaseURL),
+		"",
+		"",
+	)
 
-	// Azure OpenAI
+	// Azure OpenAI (only if an endpoint is configured)
 	if endpoint := expand(raw.LLM.AzureOpenAI.Endpoint); endpoint != "" {
 		cfg.LLM.Providers["azure-openai"] = LLMProviderConfig{
-			APIKey:  expand(raw.LLM.AzureOpenAI.APIKey),
 			BaseURL: endpoint,
 			Model:   expand(raw.LLM.AzureOpenAI.Deployment),
 		}
 	}
 
-	// Ollama
-	if baseURL := expand(raw.LLM.Ollama.BaseURL); baseURL != "" {
-		cfg.LLM.Providers["ollama"] = LLMProviderConfig{
-			BaseURL: baseURL,
-		}
-	}
-
-	// Custom (OpenAI-compatible)
+	// Custom (OpenAI-compatible) — only if base URL set
 	if baseURL := expand(raw.LLM.Custom.BaseURL); baseURL != "" {
 		cfg.LLM.Providers["custom"] = LLMProviderConfig{
-			APIKey:  expand(raw.LLM.Custom.APIKey),
 			BaseURL: baseURL,
 		}
 	}

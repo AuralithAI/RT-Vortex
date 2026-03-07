@@ -166,20 +166,84 @@ export interface ReviewProgressEvent {
 
 export interface LLMProvider {
   name: string;
-  display_name?: string;
-  configured?: boolean;
-  healthy?: boolean;
-  model?: string;
-  base_url?: string;
-  last_tested_at?: string | null;
-  status?: "connected" | "disconnected" | "untested";
+  display_name: string;
+  base_url: string;
+  default_model: string;
+  configured: boolean;
+  requires_key: boolean;
+  healthy: boolean;
+  models: string[];
 }
 
 export interface LLMTestResult {
-  success: boolean;
-  latency_ms: number;
+  provider: string;
+  healthy: boolean;
+  model?: string;
+  response?: string;
+  error?: string;
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+}
+
+export interface LLMConfigureRequest {
+  api_key?: string;
+  model?: string;
+  base_url?: string;
+}
+
+export interface LLMConfigureResult {
+  provider: string;
+  configured: boolean;
+  healthy: boolean;
+}
+
+// Balance check result from POST /api/v1/llm/providers/{provider}/balance
+export interface LLMBalanceResult {
+  provider: string;
+  status: "ok" | "low_balance" | "rate_limited" | "not_configured" | "error" | "unknown";
+  message?: string;
+  warning?: string;
+}
+
+// ── Embeddings ──────────────────────────────────────────────────────────────
+
+export interface BuiltinEmbeddingModel {
+  name: string;
+  provider: string;
+  dimensions: number;
+  description: string;
+}
+
+export interface ExternalEmbeddingProvider {
+  name: string;
+  display_name: string;
   model: string;
-  message: string;
+  dimensions: number;
+  endpoint: string;
+  configured: boolean;
+  requires_key: boolean;
+}
+
+export interface EmbeddingsConfig {
+  use_builtin: boolean;
+  active_provider: string;
+  builtin_model: BuiltinEmbeddingModel;
+  external_providers: ExternalEmbeddingProvider[];
+}
+
+export interface EmbeddingsUpdateRequest {
+  use_builtin: boolean;
+  provider?: string;
+  endpoint?: string;
+  model?: string;
+  dimensions?: number;
+  api_key?: string;
+}
+
+export interface EmbeddingsUpdateResult {
+  use_builtin: boolean;
+  provider: string;
+  model: string;
+  dimensions: number;
 }
 
 // ── Admin ───────────────────────────────────────────────────────────────────

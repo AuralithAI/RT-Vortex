@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -57,6 +59,38 @@ type Handler struct {
 	AuditLogger     *audit.Logger
 	QuotaEnforcer   *quota.Enforcer
 	DeliveryRepo    *webhookq.Repository
+
+	// Runtime embedding configuration — guarded by embedMu.
+	embedMu     sync.RWMutex
+	embedConfig embeddingRuntimeConfig
+}
+
+// embeddingRuntimeConfig holds the user-selected embedding configuration.
+// It defaults to LOCAL_ONNX (built-in MiniLM-L6-v2).
+type embeddingRuntimeConfig struct {
+	UseBuiltin bool   `json:"use_builtin"` // true → LOCAL_ONNX
+	Provider   string `json:"provider"`    // "openai", "cohere", "voyage" (only when UseBuiltin=false)
+	Endpoint   string `json:"endpoint"`    // embedding API URL
+	Model      string `json:"model"`       // e.g. "text-embedding-3-small"
+	Dimensions uint32 `json:"dimensions"`  // e.g. 1536
+	APIKey     string `json:"-"`           // never serialised
+}
+
+// DefaultEmbeddingConfig returns the default built-in embedding configuration.
+func DefaultEmbeddingConfig() embeddingRuntimeConfig {
+	return embeddingRuntimeConfig{
+		UseBuiltin: true,
+		Provider:   "",
+		Endpoint:   "",
+		Model:      "",
+		Dimensions: 384,
+	}
+}
+
+func init() {
+	// Prevent "imported and not used" for json and sync:
+	_ = json.Marshal
+	_ = (*sync.Mutex)(nil)
 }
 
 // ─── Auth endpoints ─────────────────────────────────────────────────────────
@@ -943,12 +977,26 @@ func (h *Handler) TriggerIndex(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Build engine index config with the user's current embedding choice.
+	h.embedMu.RLock()
+	ec := h.embedConfig
+	h.embedMu.RUnlock()
+
+	engineCfg := engine.IndexConfig{
+		MaxFileSizeKB: 512, ChunkSize: 1024, ChunkOverlap: 128, EnableASTChunking: true,
+	}
+	if !ec.UseBuiltin && ec.Provider != "" {
+		engineCfg.EmbeddingProvider = "HTTP"
+		engineCfg.EmbeddingEndpoint = ec.Endpoint
+		engineCfg.EmbeddingModel = ec.Model
+		engineCfg.EmbeddingDimensions = ec.Dimensions
+		engineCfg.EmbeddingAPIKey = ec.APIKey
+	}
+
 	jobID, err := h.IndexingService.StartFullIndex(r.Context(), indexing.FullIndexRequest{
 		RepoID:   repoID.String(),
 		RepoPath: repo.CloneURL,
-		Config: engine.IndexConfig{
-			MaxFileSizeKB: 512, ChunkSize: 1024, ChunkOverlap: 128, EnableASTChunking: true,
-		},
+		Config:   engineCfg,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to start indexing")
@@ -1152,37 +1200,108 @@ func (h *Handler) GetReviewComments(w http.ResponseWriter, r *http.Request) {
 
 // ─── LLM endpoints ──────────────────────────────────────────────────────────
 
-// ListLLMProviders returns configured LLM providers.
+// ListLLMProviders returns all pre-registered LLM providers with rich metadata.
 // GET /api/v1/llm/providers
 func (h *Handler) ListLLMProviders(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	providerNames := h.LLMRegistry.ListProviders()
+
 	type providerInfo struct {
-		Name    string `json:"name"`
-		Healthy bool   `json:"healthy"`
+		Name         string   `json:"name"`
+		DisplayName  string   `json:"display_name"`
+		BaseURL      string   `json:"base_url"`
+		DefaultModel string   `json:"default_model"`
+		Configured   bool     `json:"configured"`
+		RequiresKey  bool     `json:"requires_key"`
+		Healthy      bool     `json:"healthy"`
+		Models       []string `json:"models"`
 	}
+
 	providers := make([]providerInfo, 0, len(providerNames))
 	for _, name := range providerNames {
 		p, ok := h.LLMRegistry.Get(name)
-		healthy := false
-		if ok {
-			healthy = p.Healthy(ctx)
+		meta, hasMeta := h.LLMRegistry.GetMeta(name)
+
+		info := providerInfo{Name: name}
+		if hasMeta {
+			info.DisplayName = meta.DisplayName
+			info.BaseURL = meta.BaseURL
+			info.DefaultModel = meta.DefaultModel
+			info.Configured = meta.Configured
+			info.RequiresKey = meta.RequiresKey
 		}
-		providers = append(providers, providerInfo{Name: name, Healthy: healthy})
+
+		if ok {
+			info.Healthy = p.Healthy(ctx)
+			models, err := p.ListModels(ctx)
+			if err == nil {
+				info.Models = models
+			}
+		}
+
+		providers = append(providers, info)
 	}
-	primary, _ := h.LLMRegistry.Primary()
-	primaryName := ""
-	if primary != nil {
-		primaryName = primary.Name()
-	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"providers": providers, "primary": primaryName, "count": len(providers),
+		"providers": providers,
+		"primary":   h.LLMRegistry.PrimaryName(),
+		"count":     len(providers),
 	})
 }
 
-// TestLLMProvider tests connectivity to an LLM provider.
-// POST /api/v1/llm/providers/test
-func (h *Handler) TestLLMProvider(w http.ResponseWriter, r *http.Request) {
+// ConfigureLLMProvider updates the API key, model, and/or base URL for a provider at runtime.
+// PUT /api/v1/llm/providers/{provider}
+func (h *Handler) ConfigureLLMProvider(w http.ResponseWriter, r *http.Request) {
+	providerName := chi.URLParam(r, "provider")
+	if providerName == "" {
+		writeError(w, http.StatusBadRequest, "provider name required")
+		return
+	}
+
+	var req struct {
+		APIKey  string `json:"api_key"`
+		Model   string `json:"model"`
+		BaseURL string `json:"base_url"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if _, ok := h.LLMRegistry.Get(providerName); !ok {
+		writeError(w, http.StatusNotFound, "provider not found: "+providerName)
+		return
+	}
+
+	if req.APIKey != "" {
+		if !h.LLMRegistry.UpdateAPIKey(providerName, req.APIKey) {
+			writeError(w, http.StatusInternalServerError, "failed to update API key")
+			return
+		}
+	}
+	if req.Model != "" {
+		h.LLMRegistry.UpdateModel(providerName, req.Model)
+	}
+	if req.BaseURL != "" {
+		h.LLMRegistry.UpdateBaseURL(providerName, req.BaseURL)
+	}
+
+	// Re-check health after configuration.
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	p, _ := h.LLMRegistry.Get(providerName)
+	healthy := p.Healthy(ctx)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"provider":   providerName,
+		"configured": true,
+		"healthy":    healthy,
+	})
+}
+
+// SetPrimaryLLMProvider changes the primary LLM provider.
+// PUT /api/v1/llm/primary
+func (h *Handler) SetPrimaryLLMProvider(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Provider string `json:"provider"`
 	}
@@ -1190,11 +1309,51 @@ func (h *Handler) TestLLMProvider(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	provider, ok := h.LLMRegistry.Get(req.Provider)
-	if !ok {
+	if _, ok := h.LLMRegistry.Get(req.Provider); !ok {
 		writeError(w, http.StatusNotFound, "provider not found: "+req.Provider)
 		return
 	}
+	h.LLMRegistry.SetPrimary(req.Provider)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"primary": req.Provider,
+	})
+}
+
+// TestLLMProvider tests connectivity to an LLM provider.
+// POST /api/v1/llm/providers/test
+// Accepts optional api_key / model / base_url so the user can test before
+// clicking "Save". If provided, the registry is updated first so the
+// provider instance uses the new credentials.
+func (h *Handler) TestLLMProvider(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Provider string `json:"provider"`
+		APIKey   string `json:"api_key"`
+		Model    string `json:"model"`
+		BaseURL  string `json:"base_url"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if _, ok := h.LLMRegistry.Get(req.Provider); !ok {
+		writeError(w, http.StatusNotFound, "provider not found: "+req.Provider)
+		return
+	}
+
+	// Apply any unsaved config so the test uses the latest values from the UI.
+	if req.APIKey != "" {
+		h.LLMRegistry.UpdateAPIKey(req.Provider, req.APIKey)
+	}
+	if req.Model != "" {
+		h.LLMRegistry.UpdateModel(req.Provider, req.Model)
+	}
+	if req.BaseURL != "" {
+		h.LLMRegistry.UpdateBaseURL(req.Provider, req.BaseURL)
+	}
+
+	provider, _ := h.LLMRegistry.Get(req.Provider)
+
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	resp, err := provider.Complete(ctx, &llm.CompletionRequest{
@@ -1210,6 +1369,265 @@ func (h *Handler) TestLLMProvider(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"provider": req.Provider, "healthy": true, "model": resp.Model,
 		"response": resp.Content, "usage": resp.Usage,
+	})
+}
+
+// ─── Embeddings endpoints ───────────────────────────────────────────────────
+
+// GetEmbeddingsConfig returns the current embeddings configuration.
+// GET /api/v1/embeddings/config
+func (h *Handler) GetEmbeddingsConfig(w http.ResponseWriter, r *http.Request) {
+	h.embedMu.RLock()
+	ec := h.embedConfig
+	h.embedMu.RUnlock()
+
+	// If embedConfig is zero-valued, initialise with the default.
+	if !ec.UseBuiltin && ec.Provider == "" && ec.Dimensions == 0 {
+		ec = DefaultEmbeddingConfig()
+	}
+
+	// Check which external providers are configured based on the LLM registry API keys.
+	externalProviders := []map[string]interface{}{
+		{
+			"name": "openai", "display_name": "OpenAI Embeddings",
+			"model": "text-embedding-3-small", "dimensions": 1536,
+			"endpoint":     "https://api.openai.com/v1/embeddings",
+			"configured":   h.isLLMKeySet("openai"),
+			"requires_key": true,
+		},
+		{
+			"name": "cohere", "display_name": "Cohere Embed",
+			"model": "embed-english-v3.0", "dimensions": 1024,
+			"endpoint":     "https://api.cohere.ai/v1/embed",
+			"configured":   false,
+			"requires_key": true,
+		},
+		{
+			"name": "voyage", "display_name": "Voyage AI",
+			"model": "voyage-code-3", "dimensions": 1024,
+			"endpoint":     "https://api.voyageai.com/v1/embeddings",
+			"configured":   false,
+			"requires_key": true,
+		},
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"use_builtin":     ec.UseBuiltin,
+		"active_provider": ec.Provider,
+		"builtin_model": map[string]interface{}{
+			"name":        "MiniLM-L6-v2",
+			"provider":    "Sentence Transformers (HuggingFace)",
+			"dimensions":  384,
+			"description": "Lightweight local embedding model — no API key required. Runs on the C++ engine via ONNX Runtime.",
+		},
+		"external_providers": externalProviders,
+	})
+}
+
+// isLLMKeySet checks whether a given LLM provider has an API key configured.
+func (h *Handler) isLLMKeySet(name string) bool {
+	m, ok := h.LLMRegistry.GetMeta(name)
+	return ok && m.Configured
+}
+
+// UpdateEmbeddingsConfig updates the embedding provider selection.
+// PUT /api/v1/embeddings/config
+func (h *Handler) UpdateEmbeddingsConfig(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UseBuiltin bool   `json:"use_builtin"`
+		Provider   string `json:"provider"`   // "openai", "cohere", "voyage"
+		Endpoint   string `json:"endpoint"`   // embedding API URL
+		Model      string `json:"model"`      // e.g. "text-embedding-3-small"
+		Dimensions uint32 `json:"dimensions"` // e.g. 1536
+		APIKey     string `json:"api_key"`    // optional — re-use LLM key if empty
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// If no dedicated embedding API key was provided, try to inherit from the
+	// LLM registry (e.g. OpenAI embeddings share the same key as OpenAI LLM).
+	apiKey := req.APIKey
+	if apiKey == "" && req.Provider != "" {
+		if meta, ok := h.LLMRegistry.GetMeta(req.Provider); ok && meta.Configured {
+			apiKey = meta.APIKey
+		}
+	}
+
+	h.embedMu.Lock()
+	h.embedConfig = embeddingRuntimeConfig{
+		UseBuiltin: req.UseBuiltin,
+		Provider:   req.Provider,
+		Endpoint:   req.Endpoint,
+		Model:      req.Model,
+		Dimensions: req.Dimensions,
+		APIKey:     apiKey,
+	}
+	h.embedMu.Unlock()
+
+	slog.Info("embedding config updated",
+		"use_builtin", req.UseBuiltin,
+		"provider", req.Provider,
+		"model", req.Model,
+		"dimensions", req.Dimensions,
+	)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"use_builtin": req.UseBuiltin,
+		"provider":    req.Provider,
+		"model":       req.Model,
+		"dimensions":  req.Dimensions,
+	})
+}
+
+// CheckLLMBalance checks the credit/token balance for a cloud LLM provider.
+// POST /api/v1/llm/providers/{provider}/balance
+func (h *Handler) CheckLLMBalance(w http.ResponseWriter, r *http.Request) {
+	providerName := chi.URLParam(r, "provider")
+	if providerName == "" {
+		writeError(w, http.StatusBadRequest, "provider name required")
+		return
+	}
+
+	meta, ok := h.LLMRegistry.GetMeta(providerName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "provider not found: "+providerName)
+		return
+	}
+	if !meta.Configured {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": providerName, "status": "not_configured",
+		})
+		return
+	}
+
+	// Provider-specific balance checks.
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	switch providerName {
+	case "openai":
+		h.checkOpenAIBalance(ctx, w, meta)
+	case "anthropic":
+		h.checkAnthropicBalance(ctx, w, meta)
+	case "gemini":
+		// Gemini uses Google Cloud billing — check via a test request's rate limit headers.
+		h.checkGenericBalance(ctx, w, providerName, meta)
+	case "grok":
+		h.checkGenericBalance(ctx, w, providerName, meta)
+	default:
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": providerName, "status": "unknown",
+			"message": "Balance checking is not supported for this provider.",
+		})
+	}
+}
+
+// checkOpenAIBalance checks the OpenAI credit balance via their billing API.
+func (h *Handler) checkOpenAIBalance(ctx context.Context, w http.ResponseWriter, meta llm.ProviderMeta) {
+	// OpenAI doesn't expose a public balance API anymore — we infer from
+	// a lightweight test call and check response headers / errors for rate
+	// limit or billing issues.
+	p, ok := h.LLMRegistry.Get("openai")
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": "openai", "status": "error", "message": "provider not registered",
+		})
+		return
+	}
+	_, err := p.Complete(ctx, &llm.CompletionRequest{
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		MaxTokens: 1, Temperature: 0,
+	})
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "insufficient_quota") || strings.Contains(errStr, "billing") {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"provider": "openai", "status": "low_balance",
+				"warning": "Your OpenAI account has insufficient credits. Please recharge your API usage at https://platform.openai.com/account/billing",
+			})
+			return
+		}
+		if strings.Contains(errStr, "rate_limit") {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"provider": "openai", "status": "rate_limited",
+				"warning": "Rate limited — your account is active but hitting usage limits.",
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": "openai", "status": "error", "message": errStr,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"provider": "openai", "status": "ok", "message": "API key is valid and has available credits.",
+	})
+}
+
+// checkAnthropicBalance checks the Anthropic credit balance.
+func (h *Handler) checkAnthropicBalance(ctx context.Context, w http.ResponseWriter, meta llm.ProviderMeta) {
+	p, ok := h.LLMRegistry.Get("anthropic")
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": "anthropic", "status": "error", "message": "provider not registered",
+		})
+		return
+	}
+	_, err := p.Complete(ctx, &llm.CompletionRequest{
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		MaxTokens: 1, Temperature: 0,
+	})
+	if err != nil {
+		errStr := err.Error()
+		if strings.Contains(errStr, "credit") || strings.Contains(errStr, "billing") || strings.Contains(errStr, "overloaded") {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"provider": "anthropic", "status": "low_balance",
+				"warning": "Your Anthropic account may have insufficient credits. Please recharge at https://console.anthropic.com/settings/billing",
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": "anthropic", "status": "error", "message": errStr,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"provider": "anthropic", "status": "ok", "message": "API key is valid and has available credits.",
+	})
+}
+
+// checkGenericBalance does a lightweight test call and infers balance from errors.
+func (h *Handler) checkGenericBalance(ctx context.Context, w http.ResponseWriter, name string, meta llm.ProviderMeta) {
+	p, ok := h.LLMRegistry.Get(name)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": name, "status": "error", "message": "provider not registered",
+		})
+		return
+	}
+	_, err := p.Complete(ctx, &llm.CompletionRequest{
+		Messages:  []llm.Message{{Role: llm.RoleUser, Content: "hi"}},
+		MaxTokens: 1, Temperature: 0,
+	})
+	if err != nil {
+		errStr := strings.ToLower(err.Error())
+		if strings.Contains(errStr, "quota") || strings.Contains(errStr, "billing") ||
+			strings.Contains(errStr, "credit") || strings.Contains(errStr, "insufficient") {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"provider": name, "status": "low_balance",
+				"warning": fmt.Sprintf("Your %s account may have insufficient credits. Please check your billing settings.", meta.DisplayName),
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": name, "status": "error", "message": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"provider": name, "status": "ok", "message": "API key is valid and has available credits.",
 	})
 }
 

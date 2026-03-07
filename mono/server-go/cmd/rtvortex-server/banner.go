@@ -179,7 +179,19 @@ func printBanner(env *rtenv.Env, cfg *config.Config) {
 		kv("Status", fmt.Sprintf("%snone configured%s", colorYellow, colorReset))
 	}
 	for name, p := range cfg.LLM.Providers {
-		kv(name, fmt.Sprintf("model=%s", p.Model))
+		status := fmt.Sprintf("%sno key%s", colorYellow, colorReset)
+		// API keys come from env vars, not XML config.
+		envVarMap := map[string]string{
+			"openai": "LLM_OPENAI_API_KEY", "anthropic": "LLM_ANTHROPIC_API_KEY",
+			"gemini": "LLM_GEMINI_API_KEY", "grok": "LLM_GROK_API_KEY",
+			"azure-openai": "LLM_AZURE_OPENAI_API_KEY", "custom": "LLM_CUSTOM_API_KEY",
+		}
+		if name == "ollama" {
+			status = fmt.Sprintf("%sready%s", colorGreen, colorReset)
+		} else if envVar, ok := envVarMap[name]; ok && os.Getenv(envVar) != "" {
+			status = fmt.Sprintf("%sready%s", colorGreen, colorReset)
+		}
+		kv(name, fmt.Sprintf("model=%s  %s", p.Model, status))
 	}
 	if cfg.LLM.Primary != "" {
 		kv("Primary", cfg.LLM.Primary)

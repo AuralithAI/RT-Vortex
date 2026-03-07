@@ -211,6 +211,9 @@ type IndexConfig struct {
 	IncludeLanguages    []string
 	EmbeddingEndpoint   string
 	EmbeddingDimensions uint32
+	EmbeddingProvider   string // "LOCAL_ONNX", "HTTP", "CUSTOM"
+	EmbeddingModel      string // e.g. "text-embedding-3-small"
+	EmbeddingAPIKey     string // runtime API key — never persisted
 }
 
 // IndexResult is the outcome of an indexing operation.
@@ -252,6 +255,9 @@ func (c *Client) IndexRepository(ctx context.Context, repoID, repoPath string, c
 			IncludeLanguages:    cfg.IncludeLanguages,
 			EmbeddingEndpoint:   cfg.EmbeddingEndpoint,
 			EmbeddingDimensions: cfg.EmbeddingDimensions,
+			EmbeddingProvider:   cfg.EmbeddingProvider,
+			EmbeddingModel:      cfg.EmbeddingModel,
+			EmbeddingApiKey:     cfg.EmbeddingAPIKey,
 		},
 	})
 	if err != nil {
@@ -297,6 +303,9 @@ func (c *Client) IndexRepositoryStream(ctx context.Context, repoID, repoPath str
 			IncludeLanguages:    cfg.IncludeLanguages,
 			EmbeddingEndpoint:   cfg.EmbeddingEndpoint,
 			EmbeddingDimensions: cfg.EmbeddingDimensions,
+			EmbeddingProvider:   cfg.EmbeddingProvider,
+			EmbeddingModel:      cfg.EmbeddingModel,
+			EmbeddingApiKey:     cfg.EmbeddingAPIKey,
 		},
 	})
 	if err != nil {

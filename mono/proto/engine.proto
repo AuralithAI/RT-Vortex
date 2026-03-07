@@ -77,6 +77,13 @@ message IndexConfig {
     repeated string include_languages = 6;
     string embedding_endpoint = 7;
     uint32 embedding_dimensions = 8;
+    // Embedding provider type: "LOCAL_ONNX", "HTTP", "CUSTOM".
+    // When empty the engine uses its default (LOCAL_ONNX).
+    string embedding_provider = 9;
+    // Embedding model name (e.g. "text-embedding-3-small").
+    string embedding_model = 10;
+    // API key for the external embedding provider (passed at runtime, never stored in config files).
+    string embedding_api_key = 11;
 }
 
 message IncrementalIndexRequest {

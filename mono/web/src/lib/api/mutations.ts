@@ -5,7 +5,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./client";
 import { queryKeys } from "./queries";
-import type { User, Org } from "@/types/api";
+import type { User, Org, EmbeddingsUpdateRequest } from "@/types/api";
 
 // ── User ────────────────────────────────────────────────────────────────────
 
@@ -135,6 +135,49 @@ export function useTestLLM() {
       model?: string;
       base_url?: string;
     }) => api.llm.test(data),
+  });
+}
+
+export function useConfigureLLM() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { provider: string; api_key?: string; model?: string; base_url?: string }) =>
+      api.llm.configure(data.provider, {
+        api_key: data.api_key,
+        model: data.model,
+        base_url: data.base_url,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["llm", "providers"] });
+    },
+  });
+}
+
+export function useSetPrimaryLLM() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (provider: string) => api.llm.setPrimary(provider),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["llm", "providers"] });
+    },
+  });
+}
+
+export function useCheckLLMBalance() {
+  return useMutation({
+    mutationFn: (provider: string) => api.llm.balance(provider),
+  });
+}
+
+// ── Embeddings ──────────────────────────────────────────────────────────────
+
+export function useUpdateEmbeddings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: EmbeddingsUpdateRequest) => api.embeddings.update(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.embeddingsConfig });
+    },
   });
 }
 
