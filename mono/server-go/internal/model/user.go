@@ -2,6 +2,8 @@
 package model
 
 import (
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,4 +73,31 @@ type Repository struct {
 	IndexedAt     *time.Time             `json:"indexed_at,omitempty" db:"indexed_at"`
 	CreatedAt     time.Time              `json:"created_at" db:"created_at"`
 	UpdatedAt     time.Time              `json:"updated_at" db:"updated_at"`
+}
+
+// FullName returns "owner/name".
+func (r *Repository) FullName() string {
+	if r.Owner != "" && r.Name != "" {
+		return fmt.Sprintf("%s/%s", r.Owner, r.Name)
+	}
+	return r.Name
+}
+
+// MarshalJSON adds computed fields the dashboard expects:
+//   - full_name:       "owner/name"
+//   - is_indexed:      true when indexed_at is set
+//   - last_indexed_at: alias for indexed_at (the key the UI reads)
+func (r Repository) MarshalJSON() ([]byte, error) {
+	type Alias Repository // prevent infinite recursion
+	return json.Marshal(&struct {
+		Alias
+		FullName      string     `json:"full_name"`
+		IsIndexed     bool       `json:"is_indexed"`
+		LastIndexedAt *time.Time `json:"last_indexed_at"`
+	}{
+		Alias:         Alias(r),
+		FullName:      r.FullName(),
+		IsIndexed:     r.IndexedAt != nil,
+		LastIndexedAt: r.IndexedAt,
+	})
 }
