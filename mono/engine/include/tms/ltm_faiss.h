@@ -72,7 +72,7 @@ struct LTMConfig {
     // Persistence
     std::string storage_path;
     bool auto_save = true;
-    size_t auto_save_interval = 10000;  // Save every N additions
+    size_t auto_save_interval = 1000;   // Save every N additions
 };
 
 /**

@@ -56,11 +56,12 @@ type Dependencies struct {
 	DeliveryRepo    *webhookq.Repository
 
 	// Repositories
-	UserRepo    *store.UserRepository
-	RepoRepo    *store.RepositoryRepo
-	ReviewRepo  *store.ReviewRepository
-	OrgRepo     *store.OrgRepository
-	WebhookRepo *store.WebhookRepository
+	UserRepo       *store.UserRepository
+	RepoRepo       *store.RepositoryRepo
+	RepoMemberRepo *store.RepoMemberRepo
+	ReviewRepo     *store.ReviewRepository
+	OrgRepo        *store.OrgRepository
+	WebhookRepo    *store.WebhookRepository
 }
 
 // Server holds the HTTP server components.
@@ -112,6 +113,7 @@ func (s *Server) setupRouter() {
 	h := &api.Handler{
 		UserRepo:        s.deps.UserRepo,
 		RepoRepo:        s.deps.RepoRepo,
+		RepoMemberRepo:  s.deps.RepoMemberRepo,
 		ReviewRepo:      s.deps.ReviewRepo,
 		OrgRepo:         s.deps.OrgRepo,
 		WebhookRepo:     s.deps.WebhookRepo,
@@ -183,6 +185,9 @@ func (s *Server) setupRouter() {
 					r.Delete("/", h.DeleteRepo)
 					r.Post("/index", h.TriggerIndex)
 					r.Get("/index/status", h.GetIndexStatus)
+					r.Get("/members", h.ListRepoMembers)
+					r.Post("/members", h.AddRepoMember)
+					r.Delete("/members/{userID}", h.RemoveRepoMember)
 				})
 			})
 

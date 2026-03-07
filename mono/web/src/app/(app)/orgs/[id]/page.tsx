@@ -207,7 +207,7 @@ export default function OrgDetailPage({
                       ))}
                     </TableRow>
                   ))
-                : membersData?.data.map((member) => (
+                : membersData?.data?.map((member) => (
                     <TableRow key={member.user_id}>
                       <TableCell>
                         <div className="flex items-center gap-2">

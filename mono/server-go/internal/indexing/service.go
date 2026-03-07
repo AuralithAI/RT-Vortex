@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
+	"github.com/AuralithAI/rtvortex-server/internal/store"
 )
 
 // ── Job Status ──────────────────────────────────────────────────────────────
@@ -46,14 +47,16 @@ type JobStatus struct {
 // Service manages indexing jobs.
 type Service struct {
 	engineClient *engine.Client
+	repoStore    *store.RepositoryRepo
 	jobs         map[string]*JobStatus
 	mu           sync.RWMutex
 }
 
 // NewService creates an indexing service.
-func NewService(engineClient *engine.Client) *Service {
+func NewService(engineClient *engine.Client, repoStore *store.RepositoryRepo) *Service {
 	return &Service{
 		engineClient: engineClient,
+		repoStore:    repoStore,
 		jobs:         make(map[string]*JobStatus),
 	}
 }
@@ -116,8 +119,16 @@ func (s *Service) runFullIndex(jobID string, req FullIndexRequest) {
 
 	s.updateJob(jobID, JobStateRunning, 90, "Finalizing index")
 
-	// Step 3: Update stats
+	// Step 3: Update indexed_at in the database
 	s.updateJob(jobID, JobStateRunning, 95, "Recording index statistics")
+	if s.repoStore != nil {
+		repoUUID, parseErr := uuid.Parse(req.RepoID)
+		if parseErr == nil {
+			if markErr := s.repoStore.MarkIndexed(context.Background(), repoUUID); markErr != nil {
+				slog.Error("failed to mark repo as indexed", "repo_id", req.RepoID, "error", markErr)
+			}
+		}
+	}
 
 	// Step 4: Mark completed
 	now := time.Now().UTC()

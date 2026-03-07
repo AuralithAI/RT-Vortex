@@ -33,7 +33,7 @@ func TestJobStateConstants(t *testing.T) {
 
 func TestNewService_NilClient(t *testing.T) {
 	// Creating a service with nil engine client should not panic.
-	s := indexing.NewService(nil)
+	s := indexing.NewService(nil, nil)
 	if s == nil {
 		t.Fatal("expected non-nil service")
 	}

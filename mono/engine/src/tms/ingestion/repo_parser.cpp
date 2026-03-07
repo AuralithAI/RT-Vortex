@@ -7,6 +7,7 @@
 #include "tms/repo_parser.h"
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <filesystem>
 #include <regex>
@@ -93,6 +94,8 @@ public:
         auto it = parsers_.find(language);
         if (it == parsers_.end()) return chunks;
 
+        std::lock_guard<std::mutex> lock(ts_mutex_);
+
         TSParser* parser = it->second;
         TSTree* tree = ts_parser_parse_string(parser, nullptr, content.c_str(), content.size());
         if (!tree) return chunks;
@@ -109,6 +112,7 @@ public:
 private:
 #ifdef AIPR_HAS_TREE_SITTER
     std::unordered_map<std::string, TSParser*> parsers_;
+    std::mutex ts_mutex_;
 
     void addParser(const std::string& lang, TSLanguage* language) {
         TSParser* parser = ts_parser_new();
@@ -276,6 +280,8 @@ std::vector<CodeChunk> RepoParser::parseRepository(
 
     auto files = walkDirectory(repo_path);
     last_stats_.total_files = files.size();
+    std::cerr << "[PARSER] parseRepository: path=" << repo_path
+              << " files_found=" << files.size() << std::endl;
 
     std::vector<CodeChunk> all_chunks;
     std::mutex chunks_mutex;
@@ -311,6 +317,10 @@ std::vector<CodeChunk> RepoParser::parseRepository(
     }
 
     thread_pool_->wait();
+
+    std::cerr << "[PARSER] parseRepository done: total_chunks=" << all_chunks.size()
+              << " parsed_files=" << last_stats_.parsed_files
+              << " failed_files=" << last_stats_.failed_files << std::endl;
 
     auto end = std::chrono::steady_clock::now();
     last_stats_.parse_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
@@ -612,16 +622,27 @@ void RepoParser::resetStats() {
 
 std::vector<std::string> RepoParser::walkDirectory(const std::string& root) {
     std::vector<std::string> files;
+    std::cerr << "[PARSER] walkDirectory: root=" << root
+              << " exists=" << fs::exists(root)
+              << " is_dir=" << fs::is_directory(root) << std::endl;
     try {
+        size_t total_seen = 0;
         for (const auto& entry : fs::recursive_directory_iterator(root,
                 fs::directory_options::skip_permission_denied)) {
             if (!entry.is_regular_file()) continue;
+            total_seen++;
             std::string path = entry.path().string();
             if (shouldIncludeFile(path)) {
                 files.push_back(path);
             }
         }
-    } catch (...) {}
+        std::cerr << "[PARSER] walkDirectory: total_seen=" << total_seen
+                  << " included=" << files.size() << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[PARSER] walkDirectory EXCEPTION: " << e.what() << std::endl;
+    } catch (...) {
+        std::cerr << "[PARSER] walkDirectory UNKNOWN EXCEPTION" << std::endl;
+    }
     return files;
 }
 

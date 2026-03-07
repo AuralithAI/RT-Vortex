@@ -704,10 +704,18 @@ void LTMFaiss::save() {
 }
 
 void LTMFaiss::save(const std::string& path) {
-    std::filesystem::create_directories(path);
+    try {
+        std::filesystem::create_directories(path);
+    } catch (...) {
+        return;  // Cannot create directory, skip save
+    }
     
     // Save FAISS index
-    faiss_impl_->save(path);
+    try {
+        faiss_impl_->save(path);
+    } catch (...) {
+        // FAISS write failed — continue saving metadata/chunks
+    }
     
     // Save metadata (JSON format)
     std::ofstream meta_file(path + "/metadata.json");

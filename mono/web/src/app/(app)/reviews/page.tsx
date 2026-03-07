@@ -65,7 +65,7 @@ export default function ReviewsPage() {
                     ))}
                   </TableRow>
                 ))
-              : data?.data.map((review: Review) => (
+              : data?.data?.map((review: Review) => (
                   <TableRow key={review.id}>
                     <TableCell>
                       <Link

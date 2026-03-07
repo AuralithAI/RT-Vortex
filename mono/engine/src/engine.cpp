@@ -21,6 +21,8 @@
 #include <filesystem>
 #include <chrono>
 #include <algorithm>
+#include <cstdlib>
+#include <iostream>
 #include <mutex>
 
 // Platform-specific headers for system diagnostics
@@ -265,6 +267,30 @@ static ParsedDiff parseDiff(const std::string& diff_text) {
 }
 
 // =============================================================================
+// Helper: detect remote URLs and shell-escape strings
+// =============================================================================
+
+static bool isRemoteURL(const std::string& path) {
+    return path.rfind("http://", 0) == 0 ||
+           path.rfind("https://", 0) == 0 ||
+           path.rfind("git@", 0) == 0 ||
+           path.rfind("ssh://", 0) == 0;
+}
+
+static std::string shellEscape(const std::string& s) {
+    std::string escaped = "'";
+    for (char c : s) {
+        if (c == '\'') {
+            escaped += "'\\''";
+        } else {
+            escaped += c;
+        }
+    }
+    escaped += "'";
+    return escaped;
+}
+
+// =============================================================================
 // EngineImpl  —  production implementation backed by TMS
 // =============================================================================
 
@@ -275,13 +301,29 @@ public:
     {
         // Build TMS config from EngineConfig
         tms::TMSConfig tms_cfg;
-        tms_cfg.embedding_dimension   = config.embed_dimensions;
+        tms_cfg.embedding_dimension   = config.embed_provider == EmbedProvider::LOCAL_ONNX ? 384 : config.embed_dimensions;
         tms_cfg.embedding_model       = config.embed_model;
         tms_cfg.storage_path          = config.storage_path + "/tms";
         tms_cfg.ltm_capacity          = 10000000;
         tms_cfg.ltm_default_top_k     = static_cast<int>(config.top_k);
         tms_cfg.vram_budget_gb        = 4.0f;
         tms_cfg.enable_adaptive_strategy = true;
+
+        // Embedding backend config
+        switch (config.embed_provider) {
+            case EmbedProvider::LOCAL_ONNX:
+                tms_cfg.embedding_backend = "onnx";
+                tms_cfg.onnx_model_path = config.onnx_model_path;
+                tms_cfg.onnx_tokenizer_path = config.onnx_tokenizer_path;
+                break;
+            case EmbedProvider::HTTP:
+                tms_cfg.embedding_backend = "http";
+                tms_cfg.embed_api_endpoint = config.embed_endpoint;
+                break;
+            default:
+                tms_cfg.embedding_backend = "mock";
+                break;
+        }
 
         tms_ = std::make_unique<tms::TMSMemorySystem>(tms_cfg);
         tms_->initialize();
@@ -301,21 +343,63 @@ public:
     {
         auto start = std::chrono::steady_clock::now();
 
+        // Determine the local path to index.
+        // If repo_path is a URL, git-clone it first.
+        std::string local_path = repo_path;
+        bool cloned = false;
+
+        if (isRemoteURL(repo_path)) {
+            local_path = config_.storage_path + "/repos/" + repo_id;
+            if (progress) progress(0, 100, "Cloning repository...");
+
+            if (fs::exists(local_path)) {
+                // Pull latest changes
+                std::string pull_cmd = "cd " + shellEscape(local_path) + " && git pull --ff-only 2>&1";
+                int rc = std::system(pull_cmd.c_str());
+                if (rc != 0) {
+                    // If pull fails, remove and re-clone
+                    fs::remove_all(local_path);
+                }
+            }
+
+            if (!fs::exists(local_path)) {
+                fs::create_directories(fs::path(local_path).parent_path());
+                std::string clone_cmd = "git clone --depth 1 " + shellEscape(repo_path) +
+                                        " " + shellEscape(local_path) + " 2>&1";
+                int rc = std::system(clone_cmd.c_str());
+                if (rc != 0) {
+                    throw std::runtime_error("git clone failed for " + repo_path + " (exit code " + std::to_string(rc) + ")");
+                }
+                cloned = true;
+            }
+
+            if (progress) progress(10, 100, "Repository cloned, scanning files...");
+        }
+
         // Wrap the Engine ProgressCallback into the TMS progress callback
         auto tms_progress = [&](float pct, const std::string& status) {
             if (progress) {
-                size_t current = static_cast<size_t>(pct * 100);
+                // If we cloned, offset the progress (10-100%)
+                size_t current = cloned ? (10 + static_cast<size_t>(pct * 90))
+                                        : static_cast<size_t>(pct * 100);
                 progress(current, 100, status);
             }
         };
 
-        tms_->ingestRepository(repo_path, repo_id, tms_progress);
+        std::cerr << "[ENGINE] indexRepository: local_path=" << local_path
+                  << " repo_id=" << repo_id
+                  << " exists=" << fs::exists(local_path) << std::endl;
+
+        tms_->ingestRepository(local_path, repo_id, tms_progress);
 
         auto end = std::chrono::steady_clock::now();
 
         // Build stats from the TMS subsystem
         auto tms_stats = tms_->getStats();
         size_t chunk_count = tms_->ltm().getRepoChunkCount(repo_id);
+
+        std::cerr << "[ENGINE] indexRepository complete: chunk_count=" << chunk_count
+                  << " duration=" << std::chrono::duration_cast<std::chrono::seconds>(end - start).count() << "s" << std::endl;
 
         IndexStats stats;
         stats.repo_id         = repo_id;

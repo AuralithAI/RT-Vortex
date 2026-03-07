@@ -43,7 +43,7 @@ export default function OrgsPage() {
             <Skeleton key={i} className="h-[150px]" />
           ))}
         </div>
-      ) : !data?.data.length ? (
+      ) : !data?.data?.length ? (
         <div className="flex flex-col items-center gap-4 py-20">
           <Building2 className="h-12 w-12 text-muted-foreground" />
           <p className="text-lg font-medium">No organizations yet</p>
@@ -59,7 +59,7 @@ export default function OrgsPage() {
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {data.data.map((org) => (
+          {data?.data?.map((org) => (
             <Link key={org.id} href={`/orgs/${org.id}`}>
               <Card className="h-full transition-shadow hover:shadow-md">
                 <CardHeader>

@@ -72,10 +72,18 @@ export default function ConnectRepoPage() {
         variant: "success",
       });
       router.push("/repos");
-    } catch (err) {
+    } catch (err: unknown) {
+      let msg = "Unknown error";
+      if (err && typeof err === "object" && "body" in err) {
+        const body = (err as { body?: { message?: string } }).body;
+        if (body?.message) msg = body.message;
+        else if (err instanceof Error) msg = err.message;
+      } else if (err instanceof Error) {
+        msg = err.message;
+      }
       addToast({
         title: "Failed to connect repository",
-        description: err instanceof Error ? err.message : "Unknown error",
+        description: msg,
         variant: "error",
       });
     }

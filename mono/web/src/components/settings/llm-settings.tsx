@@ -54,12 +54,12 @@ export function LLMSettings() {
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium">{provider.name}</p>
-                    {provider.configured && (
-                      <Badge variant="success">Configured</Badge>
+                    {provider.healthy && (
+                      <Badge variant="success">Healthy</Badge>
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {provider.model || "No model configured"}
+                    {provider.model || provider.name}
                   </p>
                 </div>
                 <Button

@@ -283,8 +283,13 @@ struct CrossMemoryOutput {
 
 struct TMSConfig {
     // Embedding configuration
-    size_t embedding_dimension = 1536;      // Embedding vector size
-    std::string embedding_model = "text-embedding-3-small";
+    size_t embedding_dimension = 384;       // Embedding vector size (384 for MiniLM)
+    std::string embedding_model = "all-MiniLM-L6-v2";
+    std::string embedding_backend = "onnx"; // "onnx", "http", "mock"
+    std::string onnx_model_path;            // Path to ONNX model file
+    std::string onnx_tokenizer_path;        // Path to tokenizer.json
+    std::string embed_api_endpoint;         // HTTP API endpoint (for http backend)
+    std::string embed_api_key;              // HTTP API key (for http backend)
     
     // LTM Configuration (FAISS)
     size_t ltm_capacity = 10000000;         // 10M vectors for large repos

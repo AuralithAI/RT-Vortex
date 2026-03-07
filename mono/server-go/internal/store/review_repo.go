@@ -112,6 +112,46 @@ func (r *ReviewRepository) ListByRepo(ctx context.Context, repoID uuid.UUID, lim
 	return reviews, total, nil
 }
 
+// ListByUser returns all reviews accessible by a user via org memberships.
+func (r *ReviewRepository) ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*model.Review, int, error) {
+	var total int
+	err := r.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM reviews rv
+		 JOIN repositories rep ON rep.id = rv.repo_id
+		 JOIN org_members om ON om.org_id = rep.org_id
+		 WHERE om.user_id = $1`, userID).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count user reviews: %w", err)
+	}
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT rv.id, rv.repo_id, rv.triggered_by, rv.platform, rv.pr_number, rv.pr_title, rv.pr_author,
+		        rv.base_branch, rv.head_branch, rv.status, rv.files_changed, rv.additions, rv.deletions,
+		        rv.metadata, rv.created_at, rv.completed_at
+		 FROM reviews rv
+		 JOIN repositories rep ON rep.id = rv.repo_id
+		 JOIN org_members om ON om.org_id = rep.org_id
+		 WHERE om.user_id = $1
+		 ORDER BY rv.created_at DESC LIMIT $2 OFFSET $3`, userID, limit, offset,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list user reviews: %w", err)
+	}
+	defer rows.Close()
+
+	var reviews []*model.Review
+	for rows.Next() {
+		rev := &model.Review{}
+		if err := rows.Scan(&rev.ID, &rev.RepoID, &rev.TriggeredBy, &rev.Platform, &rev.PRNumber, &rev.PRTitle, &rev.PRAuthor,
+			&rev.BaseBranch, &rev.HeadBranch, &rev.Status, &rev.FilesChanged, &rev.Additions, &rev.Deletions,
+			&rev.Metadata, &rev.CreatedAt, &rev.CompletedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan user review: %w", err)
+		}
+		reviews = append(reviews, rev)
+	}
+	return reviews, total, nil
+}
+
 // ── Review Comments ─────────────────────────────────────────────────────────
 
 // CreateComment inserts a review comment.

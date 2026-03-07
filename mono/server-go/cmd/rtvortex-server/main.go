@@ -186,6 +186,7 @@ func main() {
 	// Repositories
 	userRepo := store.NewUserRepository(db.Pool)
 	repoRepo := store.NewRepositoryRepo(db.Pool)
+	repoMemberRepo := store.NewRepoMemberRepo(db.Pool)
 	reviewRepo := store.NewReviewRepository(db.Pool)
 	orgRepo := store.NewOrgRepository(db.Pool)
 	webhookRepo := store.NewWebhookRepository(db.Pool)
@@ -325,7 +326,7 @@ func main() {
 	})
 
 	// Indexing service
-	indexingService := indexing.NewService(engineClient)
+	indexingService := indexing.NewService(engineClient, repoRepo)
 
 	// WebSocket hub for real-time review progress
 	wsHub := ws.NewHub()
@@ -394,11 +395,12 @@ func main() {
 		AuditLogger:     auditLogger,
 		WSHub:           wsHub,
 
-		UserRepo:    userRepo,
-		RepoRepo:    repoRepo,
-		ReviewRepo:  reviewRepo,
-		OrgRepo:     orgRepo,
-		WebhookRepo: webhookRepo,
+		UserRepo:       userRepo,
+		RepoRepo:       repoRepo,
+		RepoMemberRepo: repoMemberRepo,
+		ReviewRepo:     reviewRepo,
+		OrgRepo:        orgRepo,
+		WebhookRepo:    webhookRepo,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────

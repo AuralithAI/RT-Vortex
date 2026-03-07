@@ -12,12 +12,162 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
+#include <iostream>
 #include <sstream>
 #include <random>
 #include <functional>
 #include <unordered_map>
+#include <nlohmann/json.hpp>
+
+#ifdef AIPR_HAS_ONNX
+#include <onnxruntime_cxx_api.h>
+#endif
 
 namespace aipr::tms {
+
+// =============================================================================
+// WordPiece Tokenizer  —  tokenizer.json (HuggingFace format)
+// =============================================================================
+
+class WordPieceTokenizer {
+public:
+    bool load(const std::string& path) {
+        try {
+            std::ifstream f(path);
+            if (!f.is_open()) return false;
+            auto j = nlohmann::json::parse(f);
+
+            // Load vocab from model.vocab
+            auto& vocab = j["model"]["vocab"];
+            for (auto it = vocab.begin(); it != vocab.end(); ++it) {
+                token_to_id_[it.key()] = it.value().get<int>();
+                id_to_token_[it.value().get<int>()] = it.key();
+            }
+
+            // Special tokens
+            if (token_to_id_.count("[CLS]")) cls_id_ = token_to_id_["[CLS]"];
+            if (token_to_id_.count("[SEP]")) sep_id_ = token_to_id_["[SEP]"];
+            if (token_to_id_.count("[PAD]")) pad_id_ = token_to_id_["[PAD]"];
+            if (token_to_id_.count("[UNK]")) unk_id_ = token_to_id_["[UNK]"];
+
+            loaded_ = true;
+            return true;
+        } catch (const std::exception& e) {
+            std::cerr << "[TOKENIZER] Failed to load " << path << ": " << e.what() << std::endl;
+            return false;
+        }
+    }
+
+    struct TokenizerOutput {
+        std::vector<int64_t> input_ids;
+        std::vector<int64_t> attention_mask;
+        std::vector<int64_t> token_type_ids;
+    };
+
+    TokenizerOutput encode(const std::string& text, int max_length = 512) const {
+        TokenizerOutput output;
+        if (!loaded_) return output;
+
+        // Tokenize
+        auto tokens = tokenize(text);
+
+        // Truncate (account for [CLS] and [SEP])
+        if (static_cast<int>(tokens.size()) > max_length - 2) {
+            tokens.resize(max_length - 2);
+        }
+
+        // Build input_ids: [CLS] + tokens + [SEP]
+        output.input_ids.push_back(cls_id_);
+        for (const auto& tok : tokens) {
+            auto it = token_to_id_.find(tok);
+            output.input_ids.push_back(it != token_to_id_.end() ? it->second : unk_id_);
+        }
+        output.input_ids.push_back(sep_id_);
+
+        // Attention mask and token type IDs
+        output.attention_mask.resize(output.input_ids.size(), 1);
+        output.token_type_ids.resize(output.input_ids.size(), 0);
+
+        // Pad to max_length
+        while (static_cast<int>(output.input_ids.size()) < max_length) {
+            output.input_ids.push_back(pad_id_);
+            output.attention_mask.push_back(0);
+            output.token_type_ids.push_back(0);
+        }
+
+        return output;
+    }
+
+    bool isLoaded() const { return loaded_; }
+
+private:
+    std::vector<std::string> tokenize(const std::string& text) const {
+        // Basic pre-tokenization: lowercase and split on whitespace/punctuation
+        std::string lower;
+        lower.reserve(text.size());
+        for (char c : text) lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+        std::vector<std::string> words;
+        std::string current;
+        for (char c : lower) {
+            if (std::isspace(static_cast<unsigned char>(c)) || std::ispunct(static_cast<unsigned char>(c))) {
+                if (!current.empty()) { words.push_back(current); current.clear(); }
+                if (std::ispunct(static_cast<unsigned char>(c))) {
+                    words.push_back(std::string(1, c));
+                }
+            } else {
+                current += c;
+            }
+        }
+        if (!current.empty()) words.push_back(current);
+
+        // WordPiece tokenization
+        std::vector<std::string> tokens;
+        for (const auto& word : words) {
+            wordPieceTokenize(word, tokens);
+        }
+        return tokens;
+    }
+
+    void wordPieceTokenize(const std::string& word, std::vector<std::string>& output) const {
+        if (word.empty()) return;
+
+        size_t start = 0;
+        bool is_bad = false;
+        while (start < word.size()) {
+            size_t end = word.size();
+            std::string cur_substr;
+            bool found = false;
+            while (start < end) {
+                std::string substr = word.substr(start, end - start);
+                if (start > 0) substr = "##" + substr;
+                if (token_to_id_.count(substr)) {
+                    cur_substr = substr;
+                    found = true;
+                    break;
+                }
+                end--;
+            }
+            if (!found) {
+                is_bad = true;
+                break;
+            }
+            output.push_back(cur_substr);
+            start = end;
+        }
+        if (is_bad) {
+            output.push_back("[UNK]");
+        }
+    }
+
+    std::unordered_map<std::string, int> token_to_id_;
+    std::unordered_map<int, std::string> id_to_token_;
+    int cls_id_ = 101;
+    int sep_id_ = 102;
+    int pad_id_ = 0;
+    int unk_id_ = 100;
+    bool loaded_ = false;
+};
 
 // =============================================================================
 // BackendImpl (pimpl)
@@ -28,9 +178,17 @@ public:
     explicit BackendImpl(const EmbeddingConfig& config)
         : config_(config), initialized_(false) {}
 
-    ~BackendImpl() = default;
+    ~BackendImpl() {
+#ifdef AIPR_HAS_ONNX
+        ort_session_.reset();
+#endif
+    }
 
     bool initialize() {
+        std::cerr << "[EMBED] Initializing backend: " << static_cast<int>(config_.backend)
+                  << " model_path=" << config_.onnx_model_path
+                  << " tokenizer_path=" << config_.tokenizer_path
+                  << " dimension=" << config_.embedding_dimension << std::endl;
         switch (config_.backend) {
             case EmbeddingBackend::HTTP_API:
                 initialized_ = initializeHttp();
@@ -43,13 +201,19 @@ public:
                 break;
             case EmbeddingBackend::MOCK:
             default:
+                std::cerr << "[EMBED] Using MOCK embedding backend" << std::endl;
                 initialized_ = true;
                 break;
         }
         return initialized_;
     }
 
-    void shutdown() { initialized_ = false; }
+    void shutdown() {
+        initialized_ = false;
+#ifdef AIPR_HAS_ONNX
+        ort_session_.reset();
+#endif
+    }
     bool isInitialized() const { return initialized_; }
 
     std::vector<float> embed(const std::string& text) {
@@ -78,28 +242,192 @@ private:
     EmbeddingConfig config_;
     bool initialized_;
 
+#ifdef AIPR_HAS_ONNX
+    std::unique_ptr<Ort::Env> ort_env_;
+    std::unique_ptr<Ort::Session> ort_session_;
+    WordPieceTokenizer tokenizer_;
+#endif
+
     bool initializeHttp() {
         return !config_.api_endpoint.empty();
     }
 
     bool initializeOnnx() {
-        if (config_.onnx_model_path.empty()) return false;
-        std::ifstream f(config_.onnx_model_path);
-        return f.good();
+#ifdef AIPR_HAS_ONNX
+        if (config_.onnx_model_path.empty()) {
+            std::cerr << "[EMBED] ONNX model path is empty" << std::endl;
+            return false;
+        }
+        {
+            std::ifstream f(config_.onnx_model_path);
+            if (!f.good()) {
+                std::cerr << "[EMBED] ONNX model not found: " << config_.onnx_model_path << std::endl;
+                return false;
+            }
+        }
+
+        // Load tokenizer
+        if (!config_.tokenizer_path.empty()) {
+            if (!tokenizer_.load(config_.tokenizer_path)) {
+                std::cerr << "[EMBED] Failed to load tokenizer: " << config_.tokenizer_path << std::endl;
+                return false;
+            }
+            std::cerr << "[EMBED] Tokenizer loaded from " << config_.tokenizer_path << std::endl;
+        } else {
+            std::cerr << "[EMBED] No tokenizer path configured" << std::endl;
+            return false;
+        }
+
+        // Initialize ONNX Runtime
+        try {
+            ort_env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "rtvortex-embed");
+
+            Ort::SessionOptions session_opts;
+            session_opts.SetIntraOpNumThreads(4);
+            session_opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+
+            ort_session_ = std::make_unique<Ort::Session>(*ort_env_, config_.onnx_model_path.c_str(), session_opts);
+
+            std::cerr << "[EMBED] ONNX Runtime initialized: " << config_.onnx_model_path << std::endl;
+            std::cerr << "[EMBED] Embedding dimension: " << config_.embedding_dimension << std::endl;
+            return true;
+        } catch (const Ort::Exception& e) {
+            std::cerr << "[EMBED] ONNX Runtime init failed: " << e.what() << std::endl;
+            return false;
+        }
+#else
+        std::cerr << "[EMBED] ONNX Runtime not compiled in (AIPR_HAS_ONNX not defined)" << std::endl;
+        return false;
+#endif
     }
 
     bool initializeSentenceTransformers() {
         return !config_.model_name.empty();
     }
 
-    // In production these would call real backends. For now fall back to mock.
+    // ── HTTP backend (stub — falls back to mock for now) ──
     std::vector<std::vector<float>> embedBatchHttp(const std::vector<std::string>& texts) {
+        // TODO: implement real HTTP API call to OpenAI-compatible endpoint
+        std::cerr << "[EMBED] HTTP backend not yet implemented, falling back to mock" << std::endl;
         return embedBatchMock(texts);
     }
+
+    // ── ONNX Runtime backend (real inference) ──
     std::vector<std::vector<float>> embedBatchOnnx(const std::vector<std::string>& texts) {
+#ifdef AIPR_HAS_ONNX
+        if (!ort_session_ || !tokenizer_.isLoaded()) {
+            std::cerr << "[EMBED] ONNX session or tokenizer not ready, falling back to mock" << std::endl;
+            return embedBatchMock(texts);
+        }
+
+        std::vector<std::vector<float>> all_embeddings;
+        all_embeddings.reserve(texts.size());
+
+        // Process in mini-batches to manage memory
+        const size_t mini_batch = 32;
+        for (size_t offset = 0; offset < texts.size(); offset += mini_batch) {
+            size_t end = std::min(offset + mini_batch, texts.size());
+            size_t batch_size = end - offset;
+
+            // Tokenize batch
+            const int max_seq_len = 256;  // MiniLM max 512, use 256 for speed
+            std::vector<int64_t> all_input_ids(batch_size * max_seq_len);
+            std::vector<int64_t> all_attention_mask(batch_size * max_seq_len);
+            std::vector<int64_t> all_token_type_ids(batch_size * max_seq_len);
+
+            for (size_t i = 0; i < batch_size; i++) {
+                auto encoded = tokenizer_.encode(texts[offset + i], max_seq_len);
+                std::copy(encoded.input_ids.begin(), encoded.input_ids.end(),
+                          all_input_ids.begin() + static_cast<long>(i * max_seq_len));
+                std::copy(encoded.attention_mask.begin(), encoded.attention_mask.end(),
+                          all_attention_mask.begin() + static_cast<long>(i * max_seq_len));
+                std::copy(encoded.token_type_ids.begin(), encoded.token_type_ids.end(),
+                          all_token_type_ids.begin() + static_cast<long>(i * max_seq_len));
+            }
+
+            // Create ONNX tensors
+            std::array<int64_t, 2> shape = {static_cast<int64_t>(batch_size), max_seq_len};
+            auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
+
+            auto input_ids_tensor = Ort::Value::CreateTensor<int64_t>(
+                memory_info, all_input_ids.data(), all_input_ids.size(),
+                shape.data(), shape.size());
+            auto attention_mask_tensor = Ort::Value::CreateTensor<int64_t>(
+                memory_info, all_attention_mask.data(), all_attention_mask.size(),
+                shape.data(), shape.size());
+            auto token_type_ids_tensor = Ort::Value::CreateTensor<int64_t>(
+                memory_info, all_token_type_ids.data(), all_token_type_ids.size(),
+                shape.data(), shape.size());
+
+            // Run inference
+            try {
+                const char* input_names[] = {"input_ids", "attention_mask", "token_type_ids"};
+                const char* output_names[] = {"last_hidden_state"};
+
+                std::vector<Ort::Value> inputs;
+                inputs.push_back(std::move(input_ids_tensor));
+                inputs.push_back(std::move(attention_mask_tensor));
+                inputs.push_back(std::move(token_type_ids_tensor));
+
+                auto outputs = ort_session_->Run(
+                    Ort::RunOptions{nullptr},
+                    input_names, inputs.data(), inputs.size(),
+                    output_names, 1);
+
+                // Extract embeddings via mean pooling over token dimension
+                auto& output_tensor = outputs[0];
+                auto type_info = output_tensor.GetTensorTypeAndShapeInfo();
+                auto out_shape = type_info.GetShape();
+                // out_shape = [batch_size, seq_len, hidden_dim]
+                int64_t hidden_dim = out_shape[2];
+                const float* output_data = output_tensor.GetTensorData<float>();
+
+                for (size_t i = 0; i < batch_size; i++) {
+                    std::vector<float> embedding(hidden_dim, 0.0f);
+                    float count = 0.0f;
+
+                    // Mean pooling: average over non-padded tokens
+                    for (int s = 0; s < max_seq_len; s++) {
+                        if (all_attention_mask[i * max_seq_len + s] == 0) continue;
+                        count += 1.0f;
+                        for (int64_t d = 0; d < hidden_dim; d++) {
+                            embedding[d] += output_data[i * max_seq_len * hidden_dim + s * hidden_dim + d];
+                        }
+                    }
+
+                    if (count > 0) {
+                        for (int64_t d = 0; d < hidden_dim; d++) {
+                            embedding[d] /= count;
+                        }
+                    }
+
+                    // L2 normalize
+                    float norm = 0.0f;
+                    for (float v : embedding) norm += v * v;
+                    norm = std::sqrt(norm);
+                    if (norm > 0) {
+                        for (float& v : embedding) v /= norm;
+                    }
+
+                    all_embeddings.push_back(std::move(embedding));
+                }
+            } catch (const Ort::Exception& e) {
+                std::cerr << "[EMBED] ONNX inference error: " << e.what() << std::endl;
+                // Fill failed batch with zero vectors
+                for (size_t i = 0; i < batch_size; i++) {
+                    all_embeddings.push_back(std::vector<float>(config_.embedding_dimension, 0.0f));
+                }
+            }
+        }
+
+        return all_embeddings;
+#else
         return embedBatchMock(texts);
+#endif
     }
+
     std::vector<std::vector<float>> embedBatchSentenceTransformers(const std::vector<std::string>& texts) {
+        // TODO: implement Python bridge
         return embedBatchMock(texts);
     }
 

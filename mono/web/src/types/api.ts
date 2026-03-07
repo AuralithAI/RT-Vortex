@@ -143,12 +143,13 @@ export interface ReviewProgressEvent {
 
 export interface LLMProvider {
   name: string;
-  display_name: string;
-  configured: boolean;
-  model: string;
-  base_url: string;
-  last_tested_at: string | null;
-  status: "connected" | "disconnected" | "untested";
+  display_name?: string;
+  configured?: boolean;
+  healthy?: boolean;
+  model?: string;
+  base_url?: string;
+  last_tested_at?: string | null;
+  status?: "connected" | "disconnected" | "untested";
 }
 
 export interface LLMTestResult {

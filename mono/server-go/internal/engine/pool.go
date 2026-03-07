@@ -119,9 +119,9 @@ func (p *Pool) Healthy() bool {
 func (p *Pool) buildDialOptions() []grpc.DialOption {
 	opts := []grpc.DialOption{
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                30 * time.Second,
-			Timeout:             10 * time.Second,
-			PermitWithoutStream: true,
+			Time:                5 * time.Minute,
+			Timeout:             20 * time.Second,
+			PermitWithoutStream: false,
 		}),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(64*1024*1024), // 64 MB
@@ -195,7 +195,7 @@ func (p *Pool) buildTLSCredentials() (credentials.TransportCredentials, error) {
 }
 
 func (p *Pool) healthCheckLoop() {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
 
 	consecutiveFailures := 0

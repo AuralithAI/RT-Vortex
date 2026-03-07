@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <sstream>
 #include <fstream>
+#include <iostream>
 #include <filesystem>
 #include <unordered_set>
 
@@ -97,6 +98,23 @@ void TMSMemorySystem::initialize() {
     embed_config.model_name = config_.embedding_model;
     embed_config.embedding_dimension = config_.embedding_dimension;
     embed_config.cache_path = config_.storage_path + "/embedding_cache";
+
+    // Set backend based on TMSConfig
+    std::cerr << "[TMS] embedding_backend=" << config_.embedding_backend
+              << " onnx_model=" << config_.onnx_model_path
+              << " tokenizer=" << config_.onnx_tokenizer_path
+              << " dim=" << config_.embedding_dimension << std::endl;
+    if (config_.embedding_backend == "onnx") {
+        embed_config.backend = EmbeddingBackend::ONNX_RUNTIME;
+        embed_config.onnx_model_path = config_.onnx_model_path;
+        embed_config.tokenizer_path = config_.onnx_tokenizer_path;
+    } else if (config_.embedding_backend == "http") {
+        embed_config.backend = EmbeddingBackend::HTTP_API;
+        embed_config.api_endpoint = config_.embed_api_endpoint;
+        embed_config.api_key = config_.embed_api_key;
+    } else {
+        embed_config.backend = EmbeddingBackend::MOCK;
+    }
     
     embedding_engine_ = std::make_unique<EmbeddingEngine>(embed_config);
     
@@ -125,8 +143,15 @@ void TMSMemorySystem::shutdown() {
         consolidation_thread_.join();
     }
     
-    // Persist data
-    save();
+    // Persist data — must not throw since shutdown() is called from destructor
+    try {
+        save();
+    } catch (const std::exception& e) {
+        // Log but don't propagate — throwing from destructors is fatal
+        (void)e;
+    } catch (...) {
+        // Swallow unknown exceptions
+    }
     
     // Clear resources
     {
@@ -175,6 +200,9 @@ void TMSMemorySystem::ingestRepository(
         chunks = repo_parser_->parseRepository(repo_path, parser_progress);
     }
     
+    std::cerr << "[TMS] ingestRepository: repo_path=" << repo_path
+              << " chunks=" << chunks.size() << std::endl;
+
     if (chunks.empty()) {
         if (progress_callback) {
             progress_callback(1.0f, "No chunks extracted");
@@ -208,6 +236,17 @@ void TMSMemorySystem::ingestRepository(
     
     ingestChunksWithEmbeddings(repo_id, chunks, embeddings);
     
+    // Phase 4: Persist to disk
+    if (progress_callback) {
+        progress_callback(0.95f, "Persisting index to disk...");
+    }
+    try {
+        save();
+        std::cerr << "[TMS] Index persisted to disk after ingesting " << chunks.size() << " chunks" << std::endl;
+    } catch (const std::exception& e) {
+        std::cerr << "[TMS] WARNING: Failed to persist index: " << e.what() << std::endl;
+    }
+
     // Done
     auto end_time = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);

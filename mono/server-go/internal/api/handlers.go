@@ -9,7 +9,9 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -35,11 +37,12 @@ import (
 
 // Handler holds all service dependencies for API endpoints.
 type Handler struct {
-	UserRepo    *store.UserRepository
-	RepoRepo    *store.RepositoryRepo
-	ReviewRepo  *store.ReviewRepository
-	OrgRepo     *store.OrgRepository
-	WebhookRepo *store.WebhookRepository
+	UserRepo       *store.UserRepository
+	RepoRepo       *store.RepositoryRepo
+	RepoMemberRepo *store.RepoMemberRepo
+	ReviewRepo     *store.ReviewRepository
+	OrgRepo        *store.OrgRepository
+	WebhookRepo    *store.WebhookRepository
 
 	SessionMgr   *session.Manager
 	JWTMgr       *auth.JWTManager
@@ -385,7 +388,8 @@ func (h *Handler) ListOrgs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"organizations": orgs, "total": total, "limit": limit, "offset": offset,
+		"data": orgs, "total": total, "limit": limit, "offset": offset,
+		"has_more": offset+limit < total,
 	})
 }
 
@@ -408,6 +412,7 @@ func (h *Handler) CreateOrg(w http.ResponseWriter, r *http.Request) {
 	}
 	org := &model.Organization{Name: req.Name, Slug: req.Slug, Plan: "free"}
 	if err := h.OrgRepo.Create(r.Context(), org); err != nil {
+		slog.Error("failed to create organization", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create organization")
 		return
 	}
@@ -577,7 +582,7 @@ func (h *Handler) RemoveOrgMember(w http.ResponseWriter, r *http.Request) {
 
 // ─── Repository endpoints ───────────────────────────────────────────────────
 
-// ListRepos returns repositories for an organization.
+// ListRepos returns repositories for an organization, or all user-accessible repos.
 // GET /api/v1/repos
 func (h *Handler) ListRepos(w http.ResponseWriter, r *http.Request) {
 	claims, ok := auth.ClaimsFromContext(r.Context())
@@ -598,18 +603,24 @@ func (h *Handler) ListRepos(w http.ResponseWriter, r *http.Request) {
 			orgID = parsed
 		}
 	}
-	if orgID == uuid.Nil {
-		writeError(w, http.StatusBadRequest, "org_id is required")
-		return
-	}
 
-	repos, total, err := h.RepoRepo.ListByOrg(r.Context(), orgID, limit, offset)
+	var repos []*model.Repository
+	var total int
+	var err error
+
+	if orgID != uuid.Nil {
+		repos, total, err = h.RepoRepo.ListByOrg(r.Context(), orgID, limit, offset)
+	} else {
+		// No org filter — list all repos accessible by the user via org memberships.
+		repos, total, err = h.RepoRepo.ListByUser(r.Context(), claims.UserID, limit, offset)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list repositories")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"repositories": repos, "total": total, "limit": limit, "offset": offset,
+		"data": repos, "total": total, "limit": limit, "offset": offset,
+		"has_more": offset+limit < total,
 	})
 }
 
@@ -626,6 +637,19 @@ func (h *Handler) RegisterRepo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	// Auto-extract owner and repo name from clone_url when not provided.
+	if req.CloneURL != "" && (req.Owner == "" || req.Name == "") {
+		if parsed, err := parseRepoURL(req.CloneURL); err == nil {
+			if req.Owner == "" {
+				req.Owner = parsed.owner
+			}
+			if req.Name == "" {
+				req.Name = parsed.name
+			}
+		}
+	}
+
 	if ve := req.Validate(); ve != nil {
 		writeValidationError(w, ve)
 		return
@@ -633,6 +657,8 @@ func (h *Handler) RegisterRepo(w http.ResponseWriter, r *http.Request) {
 	if req.DefaultBranch == "" {
 		req.DefaultBranch = "main"
 	}
+
+	// Resolve org: use explicit OrgID, then JWT claim, then auto-create a personal org.
 	orgID := claims.OrgID
 	if req.OrgID != "" {
 		parsed, err := uuid.Parse(req.OrgID)
@@ -642,6 +668,29 @@ func (h *Handler) RegisterRepo(w http.ResponseWriter, r *http.Request) {
 		}
 		orgID = parsed
 	}
+	if orgID == uuid.Nil {
+		// Find or create a personal org for the user.
+		userID := claims.UserID
+		orgs, _, err := h.OrgRepo.ListByUser(r.Context(), userID, 1, 0)
+		if err == nil && len(orgs) > 0 {
+			orgID = orgs[0].ID
+		} else {
+			// Auto-create a personal org.
+			// Derive a URL-safe slug from the email (replace @ and . with hyphens).
+			slug := strings.ToLower(claims.Email)
+			slug = strings.NewReplacer("@", "-", ".", "-").Replace(slug)
+			personalOrg := &model.Organization{Name: claims.Email, Slug: slug, Plan: "free"}
+			if createErr := h.OrgRepo.Create(r.Context(), personalOrg); createErr != nil {
+				slog.Error("failed to create personal organization", "error", createErr)
+				writeError(w, http.StatusInternalServerError, "failed to create personal organization")
+				return
+			}
+			_ = h.OrgRepo.AddMember(r.Context(), personalOrg.ID, userID, "owner")
+			orgID = personalOrg.ID
+			slog.Info("auto-created personal org", "org_id", orgID, "user_id", userID)
+		}
+	}
+
 	// Check repo quota.
 	if h.QuotaEnforcer != nil && orgID != uuid.Nil {
 		org, orgErr := h.OrgRepo.GetByID(r.Context(), orgID)
@@ -653,6 +702,11 @@ func (h *Handler) RegisterRepo(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Auto-generate external_id from owner/name when not provided.
+	if req.ExternalID == "" {
+		req.ExternalID = fmt.Sprintf("%s/%s", req.Owner, req.Name)
+	}
+
 	secretBytes := make([]byte, 32)
 	if _, err := rand.Read(secretBytes); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to generate webhook secret")
@@ -664,6 +718,11 @@ func (h *Handler) RegisterRepo(w http.ResponseWriter, r *http.Request) {
 		CloneURL: req.CloneURL, WebhookSecret: hex.EncodeToString(secretBytes),
 	}
 	if err := h.RepoRepo.Create(r.Context(), repo); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "23505") {
+			writeError(w, http.StatusConflict, fmt.Sprintf("Repository %s/%s is already connected", req.Owner, req.Name))
+			return
+		}
+		slog.Error("failed to register repository", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to register repository")
 		return
 	}
@@ -756,6 +815,106 @@ func (h *Handler) DeleteRepo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// ─── Repository Member Access ────────────────────────────────────────────────
+
+// ListRepoMembers returns users with explicit access to a repository.
+// GET /api/v1/repos/{repoID}/members
+func (h *Handler) ListRepoMembers(w http.ResponseWriter, r *http.Request) {
+	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repo ID")
+		return
+	}
+	members, err := h.RepoMemberRepo.ListMembers(r.Context(), repoID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list repo members")
+		return
+	}
+	if members == nil {
+		members = []*store.RepoMemberInfo{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"data":  members,
+		"total": len(members),
+	})
+}
+
+// AddRepoMember grants a user access to a repository.
+// POST /api/v1/repos/{repoID}/members
+func (h *Handler) AddRepoMember(w http.ResponseWriter, r *http.Request) {
+	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repo ID")
+		return
+	}
+	var req struct {
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Email == "" {
+		writeError(w, http.StatusBadRequest, "email is required")
+		return
+	}
+	if req.Role == "" {
+		req.Role = "viewer"
+	}
+	validRoles := map[string]bool{"admin": true, "reviewer": true, "viewer": true}
+	if !validRoles[req.Role] {
+		writeError(w, http.StatusBadRequest, "role must be admin, reviewer, or viewer")
+		return
+	}
+
+	// Resolve user by email.
+	user, err := h.UserRepo.GetByEmail(r.Context(), req.Email)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "user not found with that email")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to look up user")
+		return
+	}
+
+	if err := h.RepoMemberRepo.AddMember(r.Context(), repoID, user.ID, req.Role); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to add repo member")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"repo_id": repoID,
+		"user_id": user.ID,
+		"role":    req.Role,
+		"status":  "added",
+	})
+}
+
+// RemoveRepoMember revokes a user's access to a repository.
+// DELETE /api/v1/repos/{repoID}/members/{userID}
+func (h *Handler) RemoveRepoMember(w http.ResponseWriter, r *http.Request) {
+	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repo ID")
+		return
+	}
+	userID, err := uuid.Parse(chi.URLParam(r, "userID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid user ID")
+		return
+	}
+	if err := h.RepoMemberRepo.RemoveMember(r.Context(), repoID, userID); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "member not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to remove repo member")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
 // TriggerIndex triggers indexing of a repository.
 // POST /api/v1/repos/{repoID}/index
 func (h *Handler) TriggerIndex(w http.ResponseWriter, r *http.Request) {
@@ -830,27 +989,40 @@ func (h *Handler) GetIndexStatus(w http.ResponseWriter, r *http.Request) {
 
 // ─── Review endpoints ───────────────────────────────────────────────────────
 
-// ListReviews returns reviews for a repository.
+// ListReviews returns reviews for a repository, or all user-accessible reviews.
 // GET /api/v1/reviews
 func (h *Handler) ListReviews(w http.ResponseWriter, r *http.Request) {
-	repoIDStr := r.URL.Query().Get("repo_id")
-	if repoIDStr == "" {
-		writeError(w, http.StatusBadRequest, "repo_id query parameter is required")
-		return
-	}
-	repoID, err := uuid.Parse(repoIDStr)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid repo_id")
-		return
-	}
 	limit, offset := parsePagination(r)
-	reviews, total, err := h.ReviewRepo.ListByRepo(r.Context(), repoID, limit, offset)
+
+	var reviews []*model.Review
+	var total int
+	var err error
+
+	repoIDStr := r.URL.Query().Get("repo_id")
+	if repoIDStr != "" {
+		var repoID uuid.UUID
+		repoID, err = uuid.Parse(repoIDStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid repo_id")
+			return
+		}
+		reviews, total, err = h.ReviewRepo.ListByRepo(r.Context(), repoID, limit, offset)
+	} else {
+		// No repo filter — list all reviews accessible by the user.
+		userID, ok := auth.UserIDFromContext(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		reviews, total, err = h.ReviewRepo.ListByUser(r.Context(), userID, limit, offset)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list reviews")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"reviews": reviews, "total": total, "limit": limit, "offset": offset,
+		"data": reviews, "total": total, "limit": limit, "offset": offset,
+		"has_more": offset+limit < total,
 	})
 }
 
@@ -1282,4 +1454,39 @@ func parsePagination(r *http.Request) (limit, offset int) {
 		}
 	}
 	return
+}
+
+// ─── URL Parsing Helper ────────────────────────────────────────────────────
+
+type repoURLParts struct {
+	owner string
+	name  string
+}
+
+// parseRepoURL extracts owner and repo name from a clone URL.
+// Supports HTTPS (https://github.com/owner/repo.git) and SSH (git@github.com:owner/repo.git).
+func parseRepoURL(rawURL string) (repoURLParts, error) {
+	// Handle SSH URLs like git@github.com:owner/repo.git
+	if strings.Contains(rawURL, ":") && !strings.Contains(rawURL, "://") {
+		idx := strings.LastIndex(rawURL, ":")
+		path := rawURL[idx+1:]
+		path = strings.TrimSuffix(path, ".git")
+		parts := strings.Split(path, "/")
+		if len(parts) >= 2 {
+			return repoURLParts{owner: parts[0], name: parts[1]}, nil
+		}
+	}
+
+	// Handle HTTPS URLs
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return repoURLParts{}, fmt.Errorf("invalid url: %w", err)
+	}
+	path := strings.Trim(u.Path, "/")
+	path = strings.TrimSuffix(path, ".git")
+	parts := strings.Split(path, "/")
+	if len(parts) >= 2 {
+		return repoURLParts{owner: parts[0], name: parts[1]}, nil
+	}
+	return repoURLParts{}, fmt.Errorf("cannot extract owner/name from URL")
 }

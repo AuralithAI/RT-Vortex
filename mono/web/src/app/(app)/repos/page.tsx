@@ -6,9 +6,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { FolderGit2, Plus, RefreshCw } from "lucide-react";
+import { FolderGit2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useRepos } from "@/lib/api/queries";
-import { useTriggerIndex } from "@/lib/api/mutations";
+import { useTriggerIndex, useDeleteRepo } from "@/lib/api/mutations";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,12 +23,30 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { timeAgo } from "@/lib/utils";
 import type { Repo } from "@/types/api";
+import { useUIStore } from "@/lib/stores/ui";
 
 export default function ReposPage() {
   const [offset, setOffset] = useState(0);
   const limit = 20;
   const { data, isLoading } = useRepos({ limit, offset });
   const triggerIndex = useTriggerIndex();
+  const deleteRepo = useDeleteRepo();
+  const { showConfirm, addToast } = useUIStore();
+
+  const handleDelete = (repo: Repo) => {
+    showConfirm(
+      "Delete Repository",
+      `Are you sure you want to remove "${repo.full_name || repo.name}"? This will also delete its index data. This action cannot be undone.`,
+      async () => {
+        try {
+          await deleteRepo.mutateAsync(repo.id);
+          addToast({ title: "Repository deleted", variant: "success" });
+        } catch {
+          addToast({ title: "Failed to delete repository", variant: "error" });
+        }
+      },
+    );
+  };
 
   return (
     <>
@@ -67,7 +85,7 @@ export default function ReposPage() {
                     ))}
                   </TableRow>
                 ))
-              : data?.data.map((repo: Repo) => (
+              : data?.data?.map((repo: Repo) => (
                   <TableRow key={repo.id}>
                     <TableCell>
                       <Link
@@ -94,15 +112,26 @@ export default function ReposPage() {
                         : "Never"}
                     </TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => triggerIndex.mutate(repo.id)}
-                        disabled={triggerIndex.isPending}
-                        title="Re-index"
-                      >
-                        <RefreshCw className="h-4 w-4" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => triggerIndex.mutate(repo.id)}
+                          disabled={triggerIndex.isPending}
+                          title="Re-index"
+                        >
+                          <RefreshCw className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="text-red-500 hover:text-red-600"
+                          onClick={() => handleDelete(repo)}
+                          title="Delete"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

@@ -31,6 +31,9 @@ func (r *OrgRepository) Create(ctx context.Context, org *model.Organization) err
 	now := time.Now().UTC()
 	org.CreatedAt = now
 	org.UpdatedAt = now
+	if org.Settings == nil {
+		org.Settings = map[string]interface{}{}
+	}
 
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO organizations (id, name, slug, plan, settings, created_at, updated_at)

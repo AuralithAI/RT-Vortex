@@ -68,7 +68,9 @@ embed_api_key_env: OPENAI_API_KEY
 embed_model: text-embedding-3-small
 
 # Vector dimensions (must match the model's output)
-embed_dimensions: 1536
+# For LOCAL_ONNX with all-MiniLM-L6-v2: 384
+# For HTTP with text-embedding-3-small: 1536
+embed_dimensions: 384
 
 # Number of texts to embed in a single API call
 embed_batch_size: 100

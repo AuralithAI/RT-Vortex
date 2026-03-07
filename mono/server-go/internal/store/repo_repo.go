@@ -31,6 +31,9 @@ func (r *RepositoryRepo) Create(ctx context.Context, repo *model.Repository) err
 	now := time.Now().UTC()
 	repo.CreatedAt = now
 	repo.UpdatedAt = now
+	if repo.Config == nil {
+		repo.Config = map[string]interface{}{}
+	}
 
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO repositories (id, org_id, platform, external_id, owner, name, default_branch, clone_url, webhook_secret, config, created_at, updated_at)
@@ -134,4 +137,56 @@ func (r *RepositoryRepo) Delete(ctx context.Context, id uuid.UUID) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// MarkIndexed sets indexed_at to now for the given repository.
+func (r *RepositoryRepo) MarkIndexed(ctx context.Context, id uuid.UUID) error {
+	now := time.Now().UTC()
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE repositories SET indexed_at=$2, updated_at=$2 WHERE id=$1`,
+		id, now,
+	)
+	if err != nil {
+		return fmt.Errorf("mark indexed: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// ListByUser returns all repositories the user can access via their org memberships.
+func (r *RepositoryRepo) ListByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*model.Repository, int, error) {
+	var total int
+	err := r.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM repositories rep
+		 JOIN org_members om ON om.org_id = rep.org_id
+		 WHERE om.user_id = $1`, userID).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("count user repositories: %w", err)
+	}
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT rep.id, rep.org_id, rep.platform, rep.external_id, rep.owner, rep.name,
+		        rep.default_branch, rep.clone_url, rep.config, rep.indexed_at, rep.created_at, rep.updated_at
+		 FROM repositories rep
+		 JOIN org_members om ON om.org_id = rep.org_id
+		 WHERE om.user_id = $1
+		 ORDER BY rep.name LIMIT $2 OFFSET $3`, userID, limit, offset,
+	)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list user repositories: %w", err)
+	}
+	defer rows.Close()
+
+	var repos []*model.Repository
+	for rows.Next() {
+		repo := &model.Repository{}
+		if err := rows.Scan(&repo.ID, &repo.OrgID, &repo.Platform, &repo.ExternalID, &repo.Owner, &repo.Name,
+			&repo.DefaultBranch, &repo.CloneURL, &repo.Config, &repo.IndexedAt, &repo.CreatedAt, &repo.UpdatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan user repository: %w", err)
+		}
+		repos = append(repos, repo)
+	}
+	return repos, total, nil
 }

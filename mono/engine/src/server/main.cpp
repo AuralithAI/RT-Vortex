@@ -927,6 +927,19 @@ void runServer(const ServerConfig& config) {
             LOG_WARN("Download from: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2");
         }
     }
+
+    // Resolve tokenizer path relative to RTVORTEX_HOME if not absolute
+    if (!engine_config.onnx_tokenizer_path.empty() &&
+        !fs::path(engine_config.onnx_tokenizer_path).is_absolute()) {
+        std::string resolved = (fs::path(g_env.models_dir) / 
+            fs::path(engine_config.onnx_tokenizer_path).filename()).string();
+        if (fileExists(resolved)) {
+            engine_config.onnx_tokenizer_path = resolved;
+            LOG_INFO("Tokenizer: " + resolved);
+        } else {
+            LOG_WARN("Tokenizer not found: " + resolved);
+        }
+    }
     
     // Point storage_path into RTVORTEX_HOME/data so the engine writes
     // index/TMS data inside the managed directory tree, not a relative ".rtvortex/" folder.

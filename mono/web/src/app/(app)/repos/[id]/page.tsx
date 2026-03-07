@@ -185,13 +185,13 @@ export default function RepoDetailPage({
           </Link>
         </CardHeader>
         <CardContent>
-          {!reviews?.data.length ? (
+          {!reviews?.data?.length ? (
             <p className="py-4 text-center text-sm text-muted-foreground">
               No reviews yet for this repository.
             </p>
           ) : (
             <div className="space-y-2">
-              {reviews.data.map((r) => (
+              {reviews.data?.map((r) => (
                 <Link
                   key={r.id}
                   href={`/reviews/${r.id}`}

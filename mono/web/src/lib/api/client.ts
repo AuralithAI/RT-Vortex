@@ -321,8 +321,10 @@ export const reviews = {
 // ── LLM ─────────────────────────────────────────────────────────────────────
 
 export const llm = {
-  providers: () =>
-    request<LLMProvider[]>("/api/v1/llm/providers"),
+  providers: async () => {
+    const res = await request<{ providers: LLMProvider[]; primary: string; count: number }>("/api/v1/llm/providers");
+    return res.providers ?? [];
+  },
 
   test: (data: {
     provider: string;
