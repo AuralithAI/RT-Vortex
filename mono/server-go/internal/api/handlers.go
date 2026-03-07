@@ -966,6 +966,8 @@ func (h *Handler) GetIndexStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid repo ID")
 		return
 	}
+
+	// If a specific job_id is requested, return that job's status
 	if jobID := r.URL.Query().Get("job_id"); jobID != "" {
 		status, ok := h.IndexingService.GetJobStatus(jobID)
 		if !ok {
@@ -975,16 +977,48 @@ func (h *Handler) GetIndexStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, status)
 		return
 	}
+
+	// Check for active indexing job on this repo
+	if activeJob, ok := h.IndexingService.GetActiveJobForRepo(repoID.String()); ok {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"repo_id":         repoID,
+			"indexed":         false,
+			"status":          "indexing",
+			"job_id":          activeJob.JobID,
+			"progress":        activeJob.Progress,
+			"phase":           activeJob.Phase,
+			"message":         activeJob.Message,
+			"files_processed": activeJob.FilesProcessed,
+			"files_total":     activeJob.FilesTotal,
+			"current_file":    activeJob.CurrentFile,
+			"eta_seconds":     activeJob.ETASeconds,
+			"started_at":      activeJob.StartedAt,
+			"error":           activeJob.Error,
+		})
+		return
+	}
+
+	// No active job — check engine for existing index stats
 	stats, err := h.IndexingService.GetIndexInfo(r.Context(), repoID.String())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get index info")
 		return
 	}
 	if stats == nil {
-		writeJSON(w, http.StatusOK, map[string]interface{}{"indexed": false, "repo_id": repoID})
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"repo_id": repoID,
+			"indexed": false,
+			"status":  "idle",
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"indexed": true, "repo_id": repoID, "stats": stats})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"repo_id":  repoID,
+		"indexed":  true,
+		"status":   "completed",
+		"progress": 100,
+		"stats":    stats,
+	})
 }
 
 // ─── Review endpoints ───────────────────────────────────────────────────────

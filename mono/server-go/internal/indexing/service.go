@@ -23,6 +23,7 @@ type JobState string
 
 const (
 	JobStatePending   JobState = "pending"
+	JobStateQueued    JobState = "queued"
 	JobStateRunning   JobState = "running"
 	JobStateCompleted JobState = "completed"
 	JobStateFailed    JobState = "failed"
@@ -31,16 +32,27 @@ const (
 
 // JobStatus tracks the progress of an indexing job.
 type JobStatus struct {
-	JobID       string             `json:"job_id"`
-	RepoID      string             `json:"repo_id"`
-	State       JobState           `json:"state"`
-	Progress    int                `json:"progress"` // 0-100
-	Message     string             `json:"message"`
-	StartedAt   time.Time          `json:"started_at"`
-	CompletedAt *time.Time         `json:"completed_at,omitempty"`
-	Error       string             `json:"error,omitempty"`
-	Stats       *engine.IndexStats `json:"stats,omitempty"`
+	JobID          string             `json:"job_id"`
+	RepoID         string             `json:"repo_id"`
+	State          JobState           `json:"state"`
+	Progress       int                `json:"progress"`        // 0-100
+	Phase          string             `json:"phase,omitempty"` // "cloning", "scanning", etc.
+	Message        string             `json:"message"`
+	FilesProcessed uint64             `json:"files_processed"`
+	FilesTotal     uint64             `json:"files_total"`
+	CurrentFile    string             `json:"current_file,omitempty"`
+	ETASeconds     int64              `json:"eta_seconds"` // -1 = unknown
+	StartedAt      time.Time          `json:"started_at"`
+	CompletedAt    *time.Time         `json:"completed_at,omitempty"`
+	Error          string             `json:"error,omitempty"`
+	Stats          *engine.IndexStats `json:"stats,omitempty"`
 }
+
+// ── Progress callback ───────────────────────────────────────────────────────
+
+// IndexProgressFunc is called when an indexing job's status changes.
+// It receives the job ID and the current status snapshot.
+type IndexProgressFunc func(jobID string, status JobStatus)
 
 // ── Service ─────────────────────────────────────────────────────────────────
 
@@ -50,15 +62,30 @@ type Service struct {
 	repoStore    *store.RepositoryRepo
 	jobs         map[string]*JobStatus
 	mu           sync.RWMutex
+	onProgress   IndexProgressFunc
+
+	// Concurrency control — limits how many repos index in parallel
+	maxConcurrent int
+	sem           chan struct{}
 }
 
 // NewService creates an indexing service.
 func NewService(engineClient *engine.Client, repoStore *store.RepositoryRepo) *Service {
+	maxConcurrent := 3
 	return &Service{
-		engineClient: engineClient,
-		repoStore:    repoStore,
-		jobs:         make(map[string]*JobStatus),
+		engineClient:  engineClient,
+		repoStore:     repoStore,
+		jobs:          make(map[string]*JobStatus),
+		maxConcurrent: maxConcurrent,
+		sem:           make(chan struct{}, maxConcurrent),
 	}
+}
+
+// SetProgressFunc registers a callback invoked on every progress update.
+func (s *Service) SetProgressFunc(fn IndexProgressFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.onProgress = fn
 }
 
 // ── Full Index ──────────────────────────────────────────────────────────────
@@ -74,12 +101,14 @@ type FullIndexRequest struct {
 func (s *Service) StartFullIndex(ctx context.Context, req FullIndexRequest) (string, error) {
 	jobID := uuid.New().String()
 	job := &JobStatus{
-		JobID:     jobID,
-		RepoID:    req.RepoID,
-		State:     JobStatePending,
-		Progress:  0,
-		Message:   "Job queued",
-		StartedAt: time.Now().UTC(),
+		JobID:      jobID,
+		RepoID:     req.RepoID,
+		State:      JobStatePending,
+		Progress:   0,
+		Phase:      "pending",
+		Message:    "Job queued",
+		ETASeconds: -1,
+		StartedAt:  time.Now().UTC(),
 	}
 
 	s.mu.Lock()
@@ -95,18 +124,34 @@ func (s *Service) StartFullIndex(ctx context.Context, req FullIndexRequest) (str
 }
 
 func (s *Service) runFullIndex(jobID string, req FullIndexRequest) {
-	s.updateJob(jobID, JobStateRunning, 5, "Initializing indexing pipeline")
+	s.updateJobProgress(jobID, JobStatePending, 0, "queued", "Waiting for available slot...", "", 0, 0, -1)
 
-	// Step 1: Push storage config if needed (5%)
-	s.updateJob(jobID, JobStateRunning, 10, "Preparing repository for indexing")
+	// Acquire concurrency slot (blocks if all slots are taken)
+	s.sem <- struct{}{}
+	defer func() { <-s.sem }()
 
-	// Step 2: Call engine to index repository (10% → 85%)
-	s.updateJob(jobID, JobStateRunning, 15, "Scanning repository files")
+	s.updateJobProgress(jobID, JobStateRunning, 5, "cloning", "Initializing indexing pipeline", "", 0, 0, -1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	result, err := s.engineClient.IndexRepository(ctx, req.RepoID, req.RepoPath, req.Config)
+	// Use streaming RPC for real-time progress from the C++ engine
+	result, err := s.engineClient.IndexRepositoryStream(ctx, req.RepoID, req.RepoPath, req.Config,
+		func(update engine.IndexProgressUpdate) {
+			s.updateJobProgress(
+				jobID,
+				JobStateRunning,
+				update.Progress,
+				update.Phase,
+				fmt.Sprintf("Processing: %s", update.Phase),
+				update.CurrentFile,
+				update.FilesProcessed,
+				update.FilesTotal,
+				update.ETASeconds,
+			)
+		},
+	)
+
 	if err != nil {
 		s.failJob(jobID, fmt.Sprintf("indexing failed: %v", err))
 		return
@@ -117,10 +162,8 @@ func (s *Service) runFullIndex(jobID string, req FullIndexRequest) {
 		return
 	}
 
-	s.updateJob(jobID, JobStateRunning, 90, "Finalizing index")
-
-	// Step 3: Update indexed_at in the database
-	s.updateJob(jobID, JobStateRunning, 95, "Recording index statistics")
+	// Update indexed_at in the database
+	s.updateJobProgress(jobID, JobStateRunning, 95, "finalizing", "Recording index statistics", "", 0, 0, 0)
 	if s.repoStore != nil {
 		repoUUID, parseErr := uuid.Parse(req.RepoID)
 		if parseErr == nil {
@@ -130,17 +173,22 @@ func (s *Service) runFullIndex(jobID string, req FullIndexRequest) {
 		}
 	}
 
-	// Step 4: Mark completed
+	// Mark completed
 	now := time.Now().UTC()
 	s.mu.Lock()
 	if job, ok := s.jobs[jobID]; ok {
 		job.State = JobStateCompleted
 		job.Progress = 100
+		job.Phase = "completed"
 		job.Message = "Indexing completed successfully"
 		job.CompletedAt = &now
 		job.Stats = result.Stats
+		job.ETASeconds = 0
+		job.CurrentFile = ""
 	}
 	s.mu.Unlock()
+
+	s.emitProgress(jobID)
 
 	slog.Info("indexing job completed",
 		"job_id", jobID,
@@ -163,12 +211,14 @@ type IncrementalIndexRequest struct {
 func (s *Service) StartIncrementalIndex(ctx context.Context, req IncrementalIndexRequest) (string, error) {
 	jobID := uuid.New().String()
 	job := &JobStatus{
-		JobID:     jobID,
-		RepoID:    req.RepoID,
-		State:     JobStatePending,
-		Progress:  0,
-		Message:   "Incremental index queued",
-		StartedAt: time.Now().UTC(),
+		JobID:      jobID,
+		RepoID:     req.RepoID,
+		State:      JobStatePending,
+		Progress:   0,
+		Phase:      "pending",
+		Message:    "Incremental index queued",
+		ETASeconds: -1,
+		StartedAt:  time.Now().UTC(),
 	}
 
 	s.mu.Lock()
@@ -186,7 +236,11 @@ func (s *Service) StartIncrementalIndex(ctx context.Context, req IncrementalInde
 }
 
 func (s *Service) runIncrementalIndex(jobID string, req IncrementalIndexRequest) {
-	s.updateJob(jobID, JobStateRunning, 10, "Starting incremental index")
+	// Acquire concurrency slot
+	s.sem <- struct{}{}
+	defer func() { <-s.sem }()
+
+	s.updateJobProgress(jobID, JobStateRunning, 10, "scanning", "Starting incremental index", "", 0, 0, -1)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -207,11 +261,15 @@ func (s *Service) runIncrementalIndex(jobID string, req IncrementalIndexRequest)
 	if job, ok := s.jobs[jobID]; ok {
 		job.State = JobStateCompleted
 		job.Progress = 100
+		job.Phase = "completed"
 		job.Message = "Incremental index completed"
 		job.CompletedAt = &now
 		job.Stats = result.Stats
+		job.ETASeconds = 0
 	}
 	s.mu.Unlock()
+
+	s.emitProgress(jobID)
 
 	slog.Info("incremental index completed", "job_id", jobID, "repo_id", req.RepoID)
 }
@@ -263,31 +321,85 @@ func (s *Service) CleanupOldJobs(maxAge time.Duration) int {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-func (s *Service) updateJob(jobID string, state JobState, progress int, msg string) {
+func (s *Service) updateJobProgress(jobID string, state JobState, progress int, phase, msg, currentFile string, filesProcessed, filesTotal uint64, etaSeconds int64) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if job, ok := s.jobs[jobID]; ok {
 		job.State = state
 		job.Progress = progress
+		job.Phase = phase
 		job.Message = msg
+		job.CurrentFile = currentFile
+		job.FilesProcessed = filesProcessed
+		job.FilesTotal = filesTotal
+		job.ETASeconds = etaSeconds
 	}
+	s.mu.Unlock()
+
+	s.emitProgress(jobID)
 }
 
 func (s *Service) failJob(jobID, errMsg string) {
 	now := time.Now().UTC()
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if job, ok := s.jobs[jobID]; ok {
 		job.State = JobStateFailed
+		job.Phase = "failed"
 		job.Message = "Indexing failed"
 		job.Error = errMsg
 		job.CompletedAt = &now
+		job.ETASeconds = 0
 	}
+	s.mu.Unlock()
+
+	s.emitProgress(jobID)
+
 	slog.Error("indexing job failed", "job_id", jobID, "error", errMsg)
+}
+
+// emitProgress calls the registered progress callback with a snapshot.
+func (s *Service) emitProgress(jobID string) {
+	s.mu.RLock()
+	fn := s.onProgress
+	job, ok := s.jobs[jobID]
+	var snapshot JobStatus
+	if ok {
+		snapshot = *job
+	}
+	s.mu.RUnlock()
+
+	if fn != nil && ok {
+		fn(jobID, snapshot)
+	}
 }
 
 func (s *Service) getJob(jobID string) *JobStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.jobs[jobID]
+}
+
+// ActiveJobCount returns the number of currently running/pending jobs.
+func (s *Service) ActiveJobCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	count := 0
+	for _, job := range s.jobs {
+		if job.State == JobStatePending || job.State == JobStateQueued || job.State == JobStateRunning {
+			count++
+		}
+	}
+	return count
+}
+
+// GetActiveJobForRepo returns the active job for a repo, if any.
+func (s *Service) GetActiveJobForRepo(repoID string) (*JobStatus, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, job := range s.jobs {
+		if job.RepoID == repoID && (job.State == JobStatePending || job.State == JobStateQueued || job.State == JobStateRunning) {
+			cp := *job
+			return &cp, true
+		}
+	}
+	return nil, false
 }

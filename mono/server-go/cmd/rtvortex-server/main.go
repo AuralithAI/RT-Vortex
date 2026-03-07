@@ -333,6 +333,22 @@ func main() {
 	defer wsHub.Stop()
 	slog.Info("WebSocket hub started")
 
+	// Wire indexing progress callback — emits events to WebSocket subscribers
+	indexingService.SetProgressFunc(func(jobID string, status indexing.JobStatus) {
+		wsHub.BroadcastIndex(status.RepoID, ws.IndexProgressEvent{
+			JobID:          jobID,
+			State:          string(status.State),
+			Progress:       status.Progress,
+			Phase:          status.Phase,
+			Message:        status.Message,
+			FilesProcessed: status.FilesProcessed,
+			FilesTotal:     status.FilesTotal,
+			CurrentFile:    status.CurrentFile,
+			ETASeconds:     status.ETASeconds,
+			Error:          status.Error,
+		})
+	})
+
 	// Wire progress callback — pipeline emits events to WebSocket subscribers
 	reviewPipeline.SetProgressFunc(func(reviewID uuid.UUID, step string, stepIndex, totalSteps int, status, message string, meta map[string]interface{}) {
 		wsHub.Broadcast(reviewID, ws.ProgressEvent{

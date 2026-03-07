@@ -105,7 +105,9 @@ export function useTriggerIndex() {
   return useMutation({
     mutationFn: (repoId: string) => api.repos.triggerIndex(repoId),
     onSuccess: (_data, repoId) => {
+      // Invalidate both the index status and repo queries to trigger re-fetch
       qc.invalidateQueries({ queryKey: queryKeys.indexStatus(repoId) });
+      qc.invalidateQueries({ queryKey: queryKeys.repo(repoId) });
     },
   });
 }

@@ -17,6 +17,8 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <semaphore>
+#include <condition_variable>
 
 namespace aipr {
 namespace server {
@@ -50,6 +52,12 @@ public:
         grpc::ServerContext* context,
         const aipr::engine::v1::IndexRequest* request,
         aipr::engine::v1::IndexResponse* response
+    ) override;
+
+    grpc::Status IndexRepositoryStream(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::IndexRequest* request,
+        grpc::ServerWriter<aipr::engine::v1::IndexProgressUpdate>* writer
     ) override;
 
     grpc::Status IncrementalIndex(
@@ -154,6 +162,12 @@ private:
     // Storage backend — configured via gRPC ConfigureStorage from Java server
     std::unique_ptr<StorageBackend> storage_;
     mutable std::mutex storage_mutex_;
+
+    // Concurrency control for indexing — limits parallel indexing jobs
+    static constexpr int kMaxConcurrentIndexJobs = 3;
+    std::mutex index_sem_mutex_;
+    std::condition_variable index_sem_cv_;
+    int active_index_jobs_ = 0;
 
     // Convert proto StorageProvider enum to C++ CloudProvider
     static CloudProvider toCloudProvider(aipr::engine::v1::StorageProvider provider);

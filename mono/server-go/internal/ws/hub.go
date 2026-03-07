@@ -44,13 +44,31 @@ type ProgressEvent struct {
 	Timestamp time.Time              `json:"timestamp"`
 }
 
+// IndexProgressEvent is the payload sent to WebSocket clients during indexing.
+type IndexProgressEvent struct {
+	Type           string    `json:"type"` // always "index_progress"
+	RepoID         string    `json:"repo_id"`
+	JobID          string    `json:"job_id"`
+	State          string    `json:"state"`    // "pending", "queued", "running", "completed", "failed"
+	Progress       int       `json:"progress"` // 0-100
+	Phase          string    `json:"phase"`    // "cloning", "scanning", "chunking", etc.
+	Message        string    `json:"message,omitempty"`
+	FilesProcessed uint64    `json:"files_processed"`
+	FilesTotal     uint64    `json:"files_total"`
+	CurrentFile    string    `json:"current_file,omitempty"`
+	ETASeconds     int64     `json:"eta_seconds"` // -1 = unknown
+	Error          string    `json:"error,omitempty"`
+	Timestamp      time.Time `json:"timestamp"`
+}
+
 // ── Client ──────────────────────────────────────────────────────────────────
 
 // Client represents a single WebSocket subscriber.
 type Client struct {
-	conn     *websocket.Conn
-	reviewID uuid.UUID
-	send     chan []byte
+	conn        *websocket.Conn
+	reviewID    uuid.UUID // set for review subscriptions
+	indexRepoID string    // set for indexing subscriptions
+	send        chan []byte
 }
 
 const (
@@ -64,6 +82,7 @@ const (
 type Hub struct {
 	mu      sync.RWMutex
 	reviews map[uuid.UUID]map[*Client]struct{} // reviewID → set of clients
+	indexes map[string]map[*Client]struct{}    // repoID → set of clients (indexing)
 
 	register   chan *Client
 	unregister chan *Client
@@ -74,6 +93,7 @@ type Hub struct {
 func NewHub() *Hub {
 	h := &Hub{
 		reviews:    make(map[uuid.UUID]map[*Client]struct{}),
+		indexes:    make(map[string]map[*Client]struct{}),
 		register:   make(chan *Client, 32),
 		unregister: make(chan *Client, 32),
 		done:       make(chan struct{}),
@@ -92,26 +112,48 @@ func (h *Hub) run() {
 		select {
 		case c := <-h.register:
 			h.mu.Lock()
-			clients, ok := h.reviews[c.reviewID]
-			if !ok {
-				clients = make(map[*Client]struct{})
-				h.reviews[c.reviewID] = clients
+			if c.indexRepoID != "" {
+				// Indexing subscription
+				clients, ok := h.indexes[c.indexRepoID]
+				if !ok {
+					clients = make(map[*Client]struct{})
+					h.indexes[c.indexRepoID] = clients
+				}
+				clients[c] = struct{}{}
+				slog.Debug("ws index client registered", "repo_id", c.indexRepoID)
+			} else {
+				// Review subscription
+				clients, ok := h.reviews[c.reviewID]
+				if !ok {
+					clients = make(map[*Client]struct{})
+					h.reviews[c.reviewID] = clients
+				}
+				clients[c] = struct{}{}
+				slog.Debug("ws client registered", "review_id", c.reviewID)
 			}
-			clients[c] = struct{}{}
 			h.mu.Unlock()
-			slog.Debug("ws client registered", "review_id", c.reviewID)
 
 		case c := <-h.unregister:
 			h.mu.Lock()
-			if clients, ok := h.reviews[c.reviewID]; ok {
-				delete(clients, c)
-				if len(clients) == 0 {
-					delete(h.reviews, c.reviewID)
+			if c.indexRepoID != "" {
+				if clients, ok := h.indexes[c.indexRepoID]; ok {
+					delete(clients, c)
+					if len(clients) == 0 {
+						delete(h.indexes, c.indexRepoID)
+					}
 				}
+				slog.Debug("ws index client unregistered", "repo_id", c.indexRepoID)
+			} else {
+				if clients, ok := h.reviews[c.reviewID]; ok {
+					delete(clients, c)
+					if len(clients) == 0 {
+						delete(h.reviews, c.reviewID)
+					}
+				}
+				slog.Debug("ws client unregistered", "review_id", c.reviewID)
 			}
 			close(c.send)
 			h.mu.Unlock()
-			slog.Debug("ws client unregistered", "review_id", c.reviewID)
 
 		case <-h.done:
 			h.mu.Lock()
@@ -120,7 +162,13 @@ func (h *Hub) run() {
 					close(c.send)
 				}
 			}
+			for _, clients := range h.indexes {
+				for c := range clients {
+					close(c.send)
+				}
+			}
 			h.reviews = make(map[uuid.UUID]map[*Client]struct{})
+			h.indexes = make(map[string]map[*Client]struct{})
 			h.mu.Unlock()
 			return
 		}
@@ -183,6 +231,61 @@ func (h *Hub) HasSubscribers(reviewID uuid.UUID) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	clients, ok := h.reviews[reviewID]
+	return ok && len(clients) > 0
+}
+
+// ── Indexing subscriptions ──────────────────────────────────────────────────
+
+// SubscribeIndex registers a client for indexing progress on a repo.
+func (h *Hub) SubscribeIndex(conn *websocket.Conn, repoID string) *Client {
+	c := &Client{
+		conn:        conn,
+		indexRepoID: repoID,
+		send:        make(chan []byte, sendBufSize),
+	}
+	h.register <- c
+	metrics.WSConnectionsActive.Inc()
+	return c
+}
+
+// BroadcastIndex sends an IndexProgressEvent to all clients watching a repo.
+func (h *Hub) BroadcastIndex(repoID string, evt IndexProgressEvent) {
+	evt.RepoID = repoID
+	evt.Type = "index_progress"
+	if evt.Timestamp.IsZero() {
+		evt.Timestamp = time.Now()
+	}
+
+	data, err := json.Marshal(evt)
+	if err != nil {
+		slog.Error("ws: failed to marshal index event", "error", err)
+		return
+	}
+
+	h.mu.RLock()
+	clients, ok := h.indexes[repoID]
+	h.mu.RUnlock()
+	if !ok || len(clients) == 0 {
+		return
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for c := range clients {
+		select {
+		case c.send <- data:
+			metrics.WSMessagesTotal.Inc()
+		default:
+			slog.Debug("ws: dropping index message, client buffer full", "repo_id", repoID)
+		}
+	}
+}
+
+// HasIndexSubscribers returns true if at least one client is watching indexing for a repo.
+func (h *Hub) HasIndexSubscribers(repoID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	clients, ok := h.indexes[repoID]
 	return ok && len(clients) > 0
 }
 

@@ -14,6 +14,7 @@ option go_package = "github.com/AuralithAI/rtvortex-server/internal/engine/pb";
 service EngineService {
     // Indexing Operations
     rpc IndexRepository(IndexRequest) returns (IndexResponse);
+    rpc IndexRepositoryStream(IndexRequest) returns (stream IndexProgressUpdate);
     rpc IncrementalIndex(IncrementalIndexRequest) returns (IndexResponse);
     rpc GetIndexStats(IndexStatsRequest) returns (IndexStatsResponse);
     rpc DeleteIndex(DeleteIndexRequest) returns (DeleteIndexResponse);
@@ -89,6 +90,21 @@ message IndexResponse {
     bool success = 1;
     string message = 2;
     IndexStats stats = 3;
+}
+
+// Progress update streamed during IndexRepositoryStream.
+message IndexProgressUpdate {
+    string repo_id = 1;
+    int32 progress = 2;              // 0-100
+    string phase = 3;                // "cloning", "scanning", "chunking", "embedding", "finalizing"
+    uint64 files_processed = 4;
+    uint64 files_total = 5;
+    string current_file = 6;
+    int64 eta_seconds = 7;           // estimated time remaining (-1 = unknown)
+    bool done = 8;                   // true on final message
+    bool success = 9;                // only meaningful when done=true
+    string error = 10;               // populated on failure
+    IndexStats final_stats = 11;     // populated only when done=true && success=true
 }
 
 message IndexStatsRequest {

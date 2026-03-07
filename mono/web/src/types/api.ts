@@ -70,11 +70,34 @@ export interface IndexStatus {
   repo_id: string;
   status: "idle" | "indexing" | "completed" | "failed";
   progress: number;
+  phase?: string;
+  message?: string;
   files_total: number;
   files_indexed: number;
+  files_processed?: number;
+  current_file?: string;
+  eta_seconds?: number;
+  job_id?: string;
   started_at: string | null;
   completed_at: string | null;
   error: string | null;
+}
+
+// WebSocket indexing progress event
+export interface IndexProgressEvent {
+  type: "index_progress";
+  repo_id: string;
+  job_id: string;
+  state: string;
+  progress: number;
+  phase: string;
+  message?: string;
+  files_processed: number;
+  files_total: number;
+  current_file?: string;
+  eta_seconds: number;
+  error?: string;
+  timestamp: string;
 }
 
 // ── Review ──────────────────────────────────────────────────────────────────

@@ -50,31 +50,34 @@ VERSION      := $(shell cat mono/VERSION 2>/dev/null || git describe --tags --al
 COMMIT       := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_DATE   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
-.PHONY: all engine server config models clean clean-all run run-engine run-server \
+.PHONY: all engine server config models clean clean-all run run-engine run-server run-web \
         test test-engine test-server db-create db-init db-install \
         cli sdk-python sdk-node sdk-java sdks \
         test-cli test-sdk-python test-sdk-node test-sdk-java test-sdks test-all \
         build-cli build-sdk-python build-sdk-node build-sdk-java build-sdks \
         web build-web test-web lint-web \
+        proto proto-go \
         version status help rt_home
 
 # ==============================================================================
 # Top-level targets
 # ==============================================================================
 
-all: rt_home engine server config models ## Build everything
+all: rt_home engine server build-web config models ## Build everything
 	@echo ""
 	@echo "════════════════════════════════════════════════════════"
 	@echo "  RTVortex build complete — $(VERSION)"
 	@echo "  rt_home/bin/rtvortex     (C++ engine)"
 	@echo "  rt_home/bin/RTVortexGo   (Go API server)"
+	@echo "  rt_home/webApps/         (Next.js dashboard)"
 	@echo "════════════════════════════════════════════════════════"
 
 # ── rt_home directory structure ──────────────────────────────────────────────
 
 rt_home:
 	@mkdir -p $(RT_HOME)/bin $(RT_HOME)/lib $(RT_HOME)/config \
-	          $(RT_HOME)/data/sql $(RT_HOME)/temp $(RT_HOME)/models
+	          $(RT_HOME)/data/sql $(RT_HOME)/temp $(RT_HOME)/models \
+	          $(RT_HOME)/webApps
 
 # ==============================================================================
 # C++ Engine
@@ -98,7 +101,7 @@ engine: rt_home ## Build the C++ RTVortex engine
 # Go API Server
 # ==============================================================================
 
-server: rt_home ## Build the Go RTVortexGo API server
+server: rt_home proto-go ## Build the Go RTVortexGo API server
 	@echo ""
 	@echo "──── Building Go API Server ─────────────────────────────"
 	cd $(SERVER_DIR) && $(GO) build -trimpath \
@@ -144,6 +147,39 @@ models: rt_home ## Download ONNX model and copy to rt_home/models
 	@cp -f $(MODELS_SRC)/tokenizer.json $(RT_HOME)/models/ 2>/dev/null || true
 	@cp -f $(MODELS_SRC)/vocab.txt $(RT_HOME)/models/ 2>/dev/null || true
 	@echo " rt_home/models/ updated ($$(du -sh $(RT_HOME)/models/ | cut -f1))"
+
+# ==============================================================================
+# Proto Code Generation
+# ==============================================================================
+# C++ proto stubs are generated automatically by CMake when building the engine.
+# This section handles Go proto stubs, using the protoc built by the engine's
+# gRPC FetchContent (build/bin/protoc) so both sides use the same version.
+# ==============================================================================
+
+PROTOC_BIN   := $(BUILD_DIR)/bin/protoc
+PROTO_SRC    := $(ROOT_DIR)/mono/proto
+GO_PB_OUT    := $(SERVER_DIR)/internal/engine/pb
+GO_PROTOC_GO := $(shell ls $(HOME)/go/bin/protoc-gen-go 2>/dev/null || echo "")
+
+proto: proto-go ## Regenerate all proto stubs (C++ is automatic via CMake)
+
+proto-go: ## Generate Go gRPC stubs from engine.proto
+	@if [ ! -x "$(PROTOC_BIN)" ]; then \
+		echo "ERROR: $(PROTOC_BIN) not found. Run 'make engine' first to build protoc."; \
+		exit 1; \
+	fi
+	@if [ -z "$(GO_PROTOC_GO)" ]; then \
+		echo "Installing protoc-gen-go and protoc-gen-go-grpc..."; \
+		GOBIN=$(HOME)/go/bin $(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@latest; \
+		GOBIN=$(HOME)/go/bin $(GO) install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest; \
+	fi
+	@mkdir -p $(GO_PB_OUT)
+	PATH="$(HOME)/go/bin:$(PATH)" $(PROTOC_BIN) \
+		--proto_path=$(PROTO_SRC) \
+		--go_out=$(GO_PB_OUT) --go_opt=paths=source_relative \
+		--go-grpc_out=$(GO_PB_OUT) --go-grpc_opt=paths=source_relative \
+		$(PROTO_SRC)/engine.proto
+	@echo "Go proto stubs generated in $(GO_PB_OUT)"
 
 # ==============================================================================
 # CLI & SDKs — Install, Build, Test
@@ -245,11 +281,19 @@ web: ## Install Web UI dependencies
 	cd $(WEB_DIR) && $(NPM) ci --legacy-peer-deps
 	@echo "  node_modules/ installed"
 
-build-web: web ## Build Web UI for production
+build-web: rt_home web ## Build Web UI for production and deploy to rt_home/webApps
 	@echo ""
 	@echo "──── Building Web UI (production) ──────────────────────"
 	cd $(WEB_DIR) && $(NPM) run build
 	@echo "  .next/ built"
+	@echo "──── Deploying Web UI to rt_home/webApps ───────────────"
+	@rm -rf $(RT_HOME)/webApps/dashboard
+	@mkdir -p $(RT_HOME)/webApps/dashboard
+	@cp -r $(WEB_DIR)/.next/standalone/. $(RT_HOME)/webApps/dashboard/
+	@cp -r $(WEB_DIR)/.next/static $(RT_HOME)/webApps/dashboard/.next/static
+	@cp -r $(WEB_DIR)/public $(RT_HOME)/webApps/dashboard/public 2>/dev/null || true
+	@echo "  rt_home/webApps/dashboard/ ($$(du -sh $(RT_HOME)/webApps/dashboard | cut -f1))"
+	@echo "  Run: cd rt_home/webApps/dashboard && node server.js"
 
 test-web: web ## Run Web UI tests
 	@echo ""
@@ -273,12 +317,19 @@ run-server: server config ## Build and run the Go API server
 	@echo "Starting RTVortexGo API Server..."
 	RTVORTEX_HOME=$(RT_HOME) $(RT_HOME)/bin/RTVortexGo
 
-run: all ## Build and run both (engine background, server foreground)
+run-web: build-web ## Build and run the Next.js dashboard
+	@echo "Starting RTVortex Dashboard on port 3000..."
+	cd $(RT_HOME)/webApps/dashboard && HOSTNAME=0.0.0.0 PORT=3000 $(NODE) server.js
+
+run: all ## Build and run all (engine + server + web)
 	@echo "Starting RTVortex C++ Engine (background)..."
 	RTVORTEX_HOME=$(RT_HOME) $(RT_HOME)/bin/rtvortex &
 	sleep 2
-	@echo "Starting RTVortexGo API Server (foreground)..."
-	RTVORTEX_HOME=$(RT_HOME) $(RT_HOME)/bin/RTVortexGo
+	@echo "Starting RTVortexGo API Server (background)..."
+	RTVORTEX_HOME=$(RT_HOME) $(RT_HOME)/bin/RTVortexGo &
+	sleep 1
+	@echo "Starting RTVortex Dashboard (foreground, port 3000)..."
+	cd $(RT_HOME)/webApps/dashboard && HOSTNAME=0.0.0.0 PORT=3000 $(NODE) server.js
 
 # ==============================================================================
 # Testing

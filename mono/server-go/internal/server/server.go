@@ -188,6 +188,12 @@ func (s *Server) setupRouter() {
 					r.Get("/members", h.ListRepoMembers)
 					r.Post("/members", h.AddRepoMember)
 					r.Delete("/members/{userID}", h.RemoveRepoMember)
+
+					// WebSocket: real-time indexing progress streaming
+					if s.deps.WSHub != nil {
+						indexWSHandler := ws.NewIndexHandler(s.deps.WSHub)
+						r.Get("/index/ws", indexWSHandler.ServeHTTP)
+					}
 				})
 			})
 

@@ -96,9 +96,12 @@ export function useIndexStatus(repoId: string, enabled = true) {
     queryFn: () => api.repos.indexStatus(repoId),
     enabled: !!repoId && enabled,
     refetchInterval: (query) => {
-      // Poll while indexing
+      // Poll while indexing, queued, or pending
       const status = query.state.data?.status;
-      return status === "indexing" ? 2000 : false;
+      if (status === "indexing") return 2000;
+      if (status === "idle") return false;
+      // For pending/other active states, poll less aggressively
+      return status && status !== "completed" && status !== "failed" ? 5000 : false;
     },
   });
 }

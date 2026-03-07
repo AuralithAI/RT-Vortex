@@ -260,6 +260,100 @@ func (c *Client) IndexRepository(ctx context.Context, repoID, repoPath string, c
 	return convertIndexResponse(resp), nil
 }
 
+// IndexProgressUpdate is a progress event received from the engine stream.
+type IndexProgressUpdate struct {
+	RepoID         string
+	Progress       int    // 0-100
+	Phase          string // "queued", "cloning", "scanning", "chunking", "embedding", "finalizing", "completed", "failed"
+	FilesProcessed uint64
+	FilesTotal     uint64
+	CurrentFile    string
+	ETASeconds     int64 // -1 = unknown
+	Done           bool
+	Success        bool
+	Error          string
+	FinalStats     *IndexStats
+}
+
+// ProgressFunc is called for each progress update from the engine.
+type ProgressFunc func(update IndexProgressUpdate)
+
+// IndexRepositoryStream triggers indexing and streams progress updates.
+// The onProgress callback is invoked for each update from the engine.
+// This method blocks until indexing completes or fails.
+func (c *Client) IndexRepositoryStream(ctx context.Context, repoID, repoPath string, cfg IndexConfig, onProgress ProgressFunc) (*IndexResult, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	defer cancel()
+
+	stream, err := c.stub().IndexRepositoryStream(ctx, &pb.IndexRequest{
+		RepoId:   repoID,
+		RepoPath: repoPath,
+		Config: &pb.IndexConfig{
+			MaxFileSizeKb:       cfg.MaxFileSizeKB,
+			ChunkSize:           cfg.ChunkSize,
+			ChunkOverlap:        cfg.ChunkOverlap,
+			EnableAstChunking:   cfg.EnableASTChunking,
+			ExcludePatterns:     cfg.ExcludePatterns,
+			IncludeLanguages:    cfg.IncludeLanguages,
+			EmbeddingEndpoint:   cfg.EmbeddingEndpoint,
+			EmbeddingDimensions: cfg.EmbeddingDimensions,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("index repository stream: %w", err)
+	}
+
+	var lastUpdate *pb.IndexProgressUpdate
+	for {
+		update, err := stream.Recv()
+		if err != nil {
+			// Stream ended unexpectedly
+			if lastUpdate != nil && lastUpdate.Done {
+				break // normal completion
+			}
+			return nil, fmt.Errorf("index stream recv: %w", err)
+		}
+		lastUpdate = update
+
+		// Build the Go-side progress update
+		pu := IndexProgressUpdate{
+			RepoID:         update.RepoId,
+			Progress:       int(update.Progress),
+			Phase:          update.Phase,
+			FilesProcessed: update.FilesProcessed,
+			FilesTotal:     update.FilesTotal,
+			CurrentFile:    update.CurrentFile,
+			ETASeconds:     update.EtaSeconds,
+			Done:           update.Done,
+			Success:        update.Success,
+			Error:          update.Error,
+		}
+		if update.FinalStats != nil {
+			pu.FinalStats = convertStats(update.FinalStats)
+		}
+
+		if onProgress != nil {
+			onProgress(pu)
+		}
+
+		if update.Done {
+			if update.Success {
+				return &IndexResult{
+					Success: true,
+					Message: "Index completed successfully",
+					Stats:   pu.FinalStats,
+				}, nil
+			}
+			return &IndexResult{
+				Success: false,
+				Message: update.Error,
+			}, fmt.Errorf("engine indexing failed: %s", update.Error)
+		}
+	}
+
+	return &IndexResult{Success: false, Message: "stream ended unexpectedly"}, fmt.Errorf("index stream ended unexpectedly")
+}
+
 // IncrementalIndex updates an existing index with changed files.
 func (c *Client) IncrementalIndex(ctx context.Context, repoID string, changedFiles []string, baseCommit, headCommit string) (*IndexResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)

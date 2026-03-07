@@ -9,6 +9,7 @@
 
 #include <sstream>
 #include <mutex>
+#include <chrono>
 
 namespace aipr {
 namespace server {
@@ -58,6 +59,149 @@ grpc::Status EngineServiceImpl::IndexRepository(
         response->set_success(false);
         response->set_message(std::string("Indexing failed: ") + e.what());
         return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
+grpc::Status EngineServiceImpl::IndexRepositoryStream(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::IndexRequest* request,
+    grpc::ServerWriter<aipr::engine::v1::IndexProgressUpdate>* writer)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    const std::string& repo_id = request->repo_id();
+
+    // ── Acquire concurrency slot ────────────────────────────────────────
+    {
+        std::unique_lock<std::mutex> lock(index_sem_mutex_);
+        // Wait until a slot opens up, checking for cancellation
+        while (active_index_jobs_ >= kMaxConcurrentIndexJobs) {
+            // Send a "queued" progress update while waiting
+            aipr::engine::v1::IndexProgressUpdate queued;
+            queued.set_repo_id(repo_id);
+            queued.set_progress(0);
+            queued.set_phase("queued");
+            queued.set_eta_seconds(-1);
+            queued.set_done(false);
+            writer->Write(queued);
+
+            // Wait up to 5 seconds before re-checking
+            index_sem_cv_.wait_for(lock, std::chrono::seconds(5));
+
+            if (context->IsCancelled()) {
+                return grpc::Status(grpc::StatusCode::CANCELLED,
+                    "Request cancelled while waiting in queue");
+            }
+        }
+        active_index_jobs_++;
+    }
+
+    // RAII guard to release the slot on any exit path
+    struct SlotGuard {
+        EngineServiceImpl* self;
+        ~SlotGuard() {
+            std::lock_guard<std::mutex> lock(self->index_sem_mutex_);
+            self->active_index_jobs_--;
+            self->index_sem_cv_.notify_one();
+        }
+    } slot_guard{this};
+
+    try {
+        auto start_time = std::chrono::steady_clock::now();
+
+        // gRPC ServerWriter::Write() is NOT thread-safe, but the engine's
+        // repo_parser calls our progress callback from a thread-pool.
+        // We protect all writes with a mutex AND throttle to avoid flooding.
+        std::mutex writer_mutex;
+        auto last_write_time = std::chrono::steady_clock::now();
+        int last_written_pct = -1;
+        constexpr auto kMinWriteInterval = std::chrono::milliseconds(500);
+        constexpr int kMinPctDelta = 2;
+
+        // Progress callback — streams updates to the gRPC client
+        auto progress_cb = [&](size_t current, size_t total, const std::string& status_msg) {
+            if (context->IsCancelled()) return;
+
+            int pct = total > 0 ? static_cast<int>((current * 100) / total) : 0;
+
+            // Throttle: skip unless enough time or progress has changed
+            auto now = std::chrono::steady_clock::now();
+            {
+                std::lock_guard<std::mutex> lock(writer_mutex);
+
+                bool time_elapsed = (now - last_write_time) >= kMinWriteInterval;
+                bool pct_jumped = (pct - last_written_pct) >= kMinPctDelta;
+                bool is_first = (last_written_pct < 0);
+                bool is_last = (current == total && total > 0);
+
+                if (!is_first && !is_last && !time_elapsed && !pct_jumped) {
+                    return;  // skip — too soon, not enough change
+                }
+
+                aipr::engine::v1::IndexProgressUpdate update;
+                update.set_repo_id(repo_id);
+                update.set_progress(pct);
+                update.set_files_total(total);
+                update.set_files_processed(current);
+                update.set_current_file(status_msg);
+                update.set_done(false);
+
+                // Determine phase from progress
+                if (pct < 10)       update.set_phase("cloning");
+                else if (pct < 30)  update.set_phase("scanning");
+                else if (pct < 70)  update.set_phase("chunking");
+                else if (pct < 90)  update.set_phase("embedding");
+                else                update.set_phase("finalizing");
+
+                // Compute ETA
+                auto elapsed = now - start_time;
+                auto elapsed_secs = std::chrono::duration_cast<std::chrono::seconds>(elapsed).count();
+                if (current > 0 && total > 0 && current < total) {
+                    double rate = static_cast<double>(current) / static_cast<double>(elapsed_secs > 0 ? elapsed_secs : 1);
+                    double remaining = static_cast<double>(total - current) / rate;
+                    update.set_eta_seconds(static_cast<int64_t>(remaining));
+                } else {
+                    update.set_eta_seconds(-1);
+                }
+
+                writer->Write(update);
+                last_write_time = now;
+                last_written_pct = pct;
+            }
+        };
+
+        IndexStats stats = engine_->indexRepository(
+            repo_id,
+            request->repo_path(),
+            progress_cb
+        );
+
+        // Send final completion update
+        aipr::engine::v1::IndexProgressUpdate final_update;
+        final_update.set_repo_id(repo_id);
+        final_update.set_progress(100);
+        final_update.set_phase("completed");
+        final_update.set_done(true);
+        final_update.set_success(stats.is_complete);
+        final_update.set_eta_seconds(0);
+        toProto(stats, final_update.mutable_final_stats());
+        writer->Write(final_update);
+
+        return grpc::Status::OK;
+
+    } catch (const std::exception& e) {
+        // Send failure update
+        aipr::engine::v1::IndexProgressUpdate fail_update;
+        fail_update.set_repo_id(repo_id);
+        fail_update.set_done(true);
+        fail_update.set_success(false);
+        fail_update.set_error(e.what());
+        fail_update.set_phase("failed");
+        writer->Write(fail_update);
+
+        return grpc::Status::OK;  // Return OK — error is in the stream payload
     }
 }
 

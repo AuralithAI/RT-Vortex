@@ -18,7 +18,7 @@ LDFLAGS     := -s -w \
 CMD_DIR     := ./cmd/rtvortex-server
 RT_HOME     := ../../rt_home
 PROTO_DIR   := ../proto
-PROTO_OUT   := ./proto/gen
+PROTO_OUT   := ./internal/engine/pb
 
 .PHONY: all build run test lint clean proto deps docker help
 
@@ -87,10 +87,14 @@ bench: ## Run benchmarks
 	$(GO) test -bench=. -benchmem ./...
 
 # ── Proto ────────────────────────────────────────────────────────────────────
+# Uses the protoc built by the C++ engine's gRPC FetchContent (build/bin/protoc).
+# Falls back to system protoc if the build protoc is not available.
+
+PROTOC_BIN := $(shell ls ../../build/bin/protoc 2>/dev/null || echo "protoc")
 
 proto: ## Generate Go code from proto files
 	@mkdir -p $(PROTO_OUT)
-	protoc --proto_path=$(PROTO_DIR) \
+	PATH="$(HOME)/go/bin:$(PATH)" $(PROTOC_BIN) --proto_path=$(PROTO_DIR) \
 		--go_out=$(PROTO_OUT) --go_opt=paths=source_relative \
 		--go-grpc_out=$(PROTO_OUT) --go-grpc_opt=paths=source_relative \
 		$(PROTO_DIR)/engine.proto
