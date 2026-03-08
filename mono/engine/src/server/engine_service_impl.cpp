@@ -6,6 +6,7 @@
  */
 
 #include "engine_service_impl.h"
+#include "logging.h"
 
 #include <sstream>
 #include <mutex>
@@ -386,6 +387,10 @@ grpc::Status EngineServiceImpl::BuildReviewContext(
     const aipr::engine::v1::ReviewContextRequest* request,
     aipr::engine::v1::ReviewContextResponse* response)
 {
+    LOG_INFO("BuildReviewContext called for repo=" + request->repo_id() +
+             " pr_title=" + request->pr_title() +
+             " diff_size=" + std::to_string(request->diff().size()));
+
     if (context->IsCancelled()) {
         return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
     }
@@ -424,10 +429,133 @@ grpc::Status EngineServiceImpl::BuildReviewContext(
         }
         proto_pack->set_total_tokens_estimate(total_chars / 4);
 
+        LOG_INFO("BuildReviewContext completed: chunks=" +
+                 std::to_string(pack.context_chunks.size()) +
+                 " symbols=" + std::to_string(pack.touched_symbols.size()) +
+                 " warnings=" + std::to_string(pack.heuristic_warnings.size()) +
+                 " est_tokens=" + std::to_string(total_chars / 4));
+
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {
+        LOG_ERROR("BuildReviewContext failed: " + std::string(e.what()));
         return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
+grpc::Status EngineServiceImpl::BuildReviewContextStream(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::ReviewContextRequest* request,
+    grpc::ServerWriter<aipr::engine::v1::PREmbedProgressUpdate>* writer)
+{
+    LOG_INFO("BuildReviewContextStream called for repo=" + request->repo_id() +
+             " pr_title=" + request->pr_title() +
+             " diff_size=" + std::to_string(request->diff().size()));
+
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    const std::string& repo_id = request->repo_id();
+
+    auto send_progress = [&](int pct, const std::string& phase,
+                             const std::string& current_file = "",
+                             uint32_t files_processed = 0,
+                             uint32_t files_total = 0) {
+        if (context->IsCancelled()) return;
+        aipr::engine::v1::PREmbedProgressUpdate update;
+        update.set_repo_id(repo_id);
+        update.set_progress(pct);
+        update.set_phase(phase);
+        update.set_files_processed(files_processed);
+        update.set_files_total(files_total);
+        update.set_current_file(current_file);
+        update.set_eta_seconds(-1);
+        update.set_done(false);
+        writer->Write(update);
+    };
+
+    try {
+        // Phase 1: Parsing diff
+        send_progress(5, "parsing_diff");
+
+        // Phase 2: Building review context (does parsing, TMS search,
+        //          symbol resolution, and heuristic checks internally)
+        send_progress(15, "resolving_symbols");
+
+        ContextPack pack = engine_->buildReviewContext(
+            repo_id,
+            request->diff(),
+            request->pr_title(),
+            request->pr_description()
+        );
+
+        if (context->IsCancelled()) {
+            return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+        }
+
+        // Phase 3: Building context pack proto
+        send_progress(70, "building_context",
+                      "", pack.context_chunks.size(), pack.context_chunks.size());
+
+        auto* proto_pack = new aipr::engine::v1::ContextPack();
+        proto_pack->set_repo_id(pack.repo_id);
+        proto_pack->set_pr_title(pack.pr_title);
+        proto_pack->set_pr_description(pack.pr_description);
+        proto_pack->set_diff(pack.diff);
+
+        for (const auto& chunk : pack.context_chunks) {
+            toProto(chunk, proto_pack->add_context_chunks());
+        }
+
+        for (const auto& symbol : pack.touched_symbols) {
+            toProto(symbol, proto_pack->add_touched_symbols());
+        }
+
+        for (const auto& warning : pack.heuristic_warnings) {
+            proto_pack->add_heuristic_warnings(warning);
+        }
+
+        // Estimate tokens (rough: 4 chars per token)
+        size_t total_chars = pack.diff.size();
+        for (const auto& chunk : pack.context_chunks) {
+            total_chars += chunk.content.size();
+        }
+        proto_pack->set_total_tokens_estimate(total_chars / 4);
+
+        send_progress(90, "finalizing");
+
+        // Phase 4: Send final completion with context_pack
+        aipr::engine::v1::PREmbedProgressUpdate final_update;
+        final_update.set_repo_id(repo_id);
+        final_update.set_progress(100);
+        final_update.set_phase("completed");
+        final_update.set_done(true);
+        final_update.set_success(true);
+        final_update.set_eta_seconds(0);
+        final_update.set_allocated_context_pack(proto_pack);  // transfers ownership
+        writer->Write(final_update);
+
+        LOG_INFO("BuildReviewContextStream completed: chunks=" +
+                 std::to_string(pack.context_chunks.size()) +
+                 " symbols=" + std::to_string(pack.touched_symbols.size()) +
+                 " est_tokens=" + std::to_string(total_chars / 4));
+
+        return grpc::Status::OK;
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("BuildReviewContextStream failed: " + std::string(e.what()));
+
+        // Send failure update
+        aipr::engine::v1::PREmbedProgressUpdate fail_update;
+        fail_update.set_repo_id(repo_id);
+        fail_update.set_done(true);
+        fail_update.set_success(false);
+        fail_update.set_error(e.what());
+        fail_update.set_phase("failed");
+        writer->Write(fail_update);
+
+        return grpc::Status::OK;  // Return OK — error is in the stream payload
     }
 }
 

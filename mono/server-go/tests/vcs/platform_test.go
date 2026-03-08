@@ -32,6 +32,9 @@ func (m *mockPlatform) GetFileContent(_ context.Context, _, _, _, _ string) ([]b
 func (m *mockPlatform) ValidateWebhookSignature(_ []byte, _ string) bool {
 	return true
 }
+func (m *mockPlatform) ListOpenPullRequests(_ context.Context, _, _ string, _ int) ([]vcs.PullRequest, error) {
+	return nil, nil
+}
 
 // ── Registry Tests ──────────────────────────────────────────────────────────
 

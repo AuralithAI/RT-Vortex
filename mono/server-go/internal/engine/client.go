@@ -559,6 +559,122 @@ func (c *Client) BuildReviewContext(ctx context.Context, repoID, diff, prTitle, 
 	return result, nil
 }
 
+// ── PR Embedding Progress Streaming ─────────────────────────────────────────
+
+// PREmbedProgressUpdate is a progress event received from the engine stream
+// during PR diff embedding.
+type PREmbedProgressUpdate struct {
+	RepoID         string
+	PRNumber       int
+	Progress       int    // 0-100
+	Phase          string // "parsing_diff", "resolving_symbols", "building_graph", "embedding_chunks", "finalizing"
+	FilesProcessed uint32
+	FilesTotal     uint32
+	CurrentFile    string
+	ETASeconds     int64 // -1 = unknown
+	Done           bool
+	Success        bool
+	Error          string
+	ContextPack    *ContextPack
+}
+
+// PREmbedProgressFunc is called for each progress update during streaming PR embedding.
+type PREmbedProgressFunc func(update PREmbedProgressUpdate)
+
+// BuildReviewContextStream triggers PR embedding and streams progress updates.
+// The onProgress callback is invoked for each update from the engine.
+// This method blocks until embedding completes or fails.
+func (c *Client) BuildReviewContextStream(
+	ctx context.Context,
+	repoID, diff, prTitle, prDescription string,
+	maxChunks uint32,
+	onProgress PREmbedProgressFunc,
+) (*ContextPack, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
+	stream, err := c.stub().BuildReviewContextStream(ctx, &pb.ReviewContextRequest{
+		RepoId:           repoID,
+		Diff:             diff,
+		PrTitle:          prTitle,
+		PrDescription:    prDescription,
+		MaxContextChunks: maxChunks,
+	})
+	if err != nil {
+		// Fall back to unary call if streaming is not supported
+		if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+			slog.Debug("engine does not support BuildReviewContextStream, falling back to unary")
+			return c.BuildReviewContext(ctx, repoID, diff, prTitle, prDescription, maxChunks)
+		}
+		return nil, fmt.Errorf("build review context stream: %w", err)
+	}
+
+	var lastUpdate *pb.PREmbedProgressUpdate
+	for {
+		update, err := stream.Recv()
+		if err != nil {
+			// The C++ engine may not implement this streaming RPC yet.
+			// With server-streaming, Unimplemented arrives on the first Recv(), not on stream creation.
+			if s, ok := status.FromError(err); ok && s.Code() == codes.Unimplemented {
+				slog.Debug("engine does not support BuildReviewContextStream (recv), falling back to unary")
+				return c.BuildReviewContext(ctx, repoID, diff, prTitle, prDescription, maxChunks)
+			}
+			if lastUpdate != nil && lastUpdate.Done {
+				break // normal completion
+			}
+			return nil, fmt.Errorf("embed stream recv: %w", err)
+		}
+		lastUpdate = update
+
+		pu := PREmbedProgressUpdate{
+			RepoID:         update.RepoId,
+			PRNumber:       int(update.PrNumber),
+			Progress:       int(update.Progress),
+			Phase:          update.Phase,
+			FilesProcessed: update.FilesProcessed,
+			FilesTotal:     update.FilesTotal,
+			CurrentFile:    update.CurrentFile,
+			ETASeconds:     update.EtaSeconds,
+			Done:           update.Done,
+			Success:        update.Success,
+			Error:          update.Error,
+		}
+		if update.ContextPack != nil {
+			pack := update.ContextPack
+			cp := &ContextPack{
+				RepoID:              pack.RepoId,
+				PRTitle:             pack.PrTitle,
+				PRDescription:       pack.PrDescription,
+				Diff:                pack.Diff,
+				HeuristicWarnings:   pack.HeuristicWarnings,
+				TotalTokensEstimate: pack.TotalTokensEstimate,
+			}
+			for _, ch := range pack.ContextChunks {
+				cp.ContextChunks = append(cp.ContextChunks, convertChunk(ch))
+			}
+			for _, ts := range pack.TouchedSymbols {
+				cp.TouchedSymbols = append(cp.TouchedSymbols, convertTouchedSymbol(ts))
+			}
+			pu.ContextPack = cp
+		}
+
+		if onProgress != nil {
+			onProgress(pu)
+		}
+
+		if update.Done {
+			if update.Success && pu.ContextPack != nil {
+				return pu.ContextPack, nil
+			}
+			if !update.Success {
+				return nil, fmt.Errorf("engine PR embedding failed: %s", update.Error)
+			}
+		}
+	}
+
+	return nil, fmt.Errorf("embed stream ended unexpectedly")
+}
+
 // ── Heuristics ──────────────────────────────────────────────────────────────
 
 // HeuristicFinding is a heuristic check result from the engine.

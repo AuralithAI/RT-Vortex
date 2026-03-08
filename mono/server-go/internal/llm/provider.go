@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 )
 
 // ── Errors ──────────────────────────────────────────────────────────────────
@@ -108,12 +110,22 @@ type ProviderMeta struct {
 
 // ── Provider Registry ───────────────────────────────────────────────────────
 
+// SecretStore is the interface for persisting API keys. Implementations include
+// file-based vaults (local dev), HashiCorp Vault, AWS Secrets Manager, etc.
+type SecretStore interface {
+	Get(key string) (string, error)
+	Set(key, value string) error
+	Delete(key string) error
+	GetAll() (map[string]string, error)
+}
+
 // Registry manages configured LLM providers with fallback ordering.
 type Registry struct {
 	providers map[string]Provider
 	meta      map[string]ProviderMeta
 	primary   string
 	fallbacks []string
+	vault     SecretStore // optional — if set, API keys are persisted
 }
 
 // NewRegistry creates an empty LLM provider registry.
@@ -122,6 +134,11 @@ func NewRegistry() *Registry {
 		providers: make(map[string]Provider),
 		meta:      make(map[string]ProviderMeta),
 	}
+}
+
+// SetVault attaches a secret store for persisting API keys across restarts.
+func (r *Registry) SetVault(v SecretStore) {
+	r.vault = v
 }
 
 // Register adds a provider. The first registered becomes the primary.
@@ -158,6 +175,7 @@ func (r *Registry) GetMeta(name string) (ProviderMeta, bool) {
 }
 
 // UpdateAPIKey replaces the API key for a provider at runtime and marks it configured.
+// If a vault is attached, the key is persisted for survival across restarts.
 func (r *Registry) UpdateAPIKey(name, apiKey string) bool {
 	m, ok := r.meta[name]
 	if !ok {
@@ -192,7 +210,120 @@ func (r *Registry) UpdateAPIKey(name, apiKey string) bool {
 	default:
 		return false
 	}
+
+	// Persist to vault if available.
+	if r.vault != nil {
+		vaultKey := fmt.Sprintf("llm.%s.api_key", name)
+		if apiKey != "" {
+			if err := r.vault.Set(vaultKey, apiKey); err != nil {
+				slog.Error("vault: failed to persist API key", "provider", name, "error", err)
+			} else {
+				slog.Info("vault: API key persisted", "provider", name)
+			}
+		} else {
+			if err := r.vault.Delete(vaultKey); err != nil {
+				slog.Error("vault: failed to delete API key", "provider", name, "error", err)
+			}
+		}
+	}
+
 	return true
+}
+
+// LoadFromVault loads any previously-persisted API keys from the vault and
+// applies them to the registered providers. Called once at startup after all
+// providers are registered. Environment variables take precedence — vault
+// values are only used when the env var is empty.
+func (r *Registry) LoadFromVault() int {
+	if r.vault == nil {
+		return 0
+	}
+
+	secrets, err := r.vault.GetAll()
+	if err != nil {
+		slog.Error("vault: failed to load secrets", "error", err)
+		return 0
+	}
+
+	loaded := 0
+	for vaultKey, apiKey := range secrets {
+		// Keys are stored as "llm.<provider>.api_key".
+		if len(vaultKey) < 5 || vaultKey[:4] != "llm." {
+			continue
+		}
+		parts := splitVaultKey(vaultKey)
+		if len(parts) != 3 || parts[2] != "api_key" {
+			continue
+		}
+		providerName := parts[1]
+
+		// Skip if the provider already has a key (from env var).
+		if m, ok := r.meta[providerName]; ok && m.Configured && m.APIKey != "" {
+			slog.Debug("vault: skipping — env var already set", "provider", providerName)
+			continue
+		}
+
+		if apiKey != "" {
+			// Apply without re-persisting (avoid write loop).
+			r.updateAPIKeyInternal(providerName, apiKey)
+			slog.Info("vault: loaded API key for provider", "provider", providerName)
+			loaded++
+		}
+	}
+
+	return loaded
+}
+
+// updateAPIKeyInternal applies an API key without persisting back to vault.
+// Used during vault loading to avoid write loops.
+func (r *Registry) updateAPIKeyInternal(name, apiKey string) bool {
+	m, ok := r.meta[name]
+	if !ok {
+		return false
+	}
+	m.Configured = apiKey != ""
+	m.APIKey = apiKey
+	r.meta[name] = m
+
+	switch name {
+	case "openai":
+		r.providers[name] = NewOpenAIProvider(OpenAIConfig{
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+		})
+	case "anthropic":
+		r.providers[name] = NewAnthropicProvider(AnthropicConfig{
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+		})
+	case "gemini":
+		r.providers[name] = NewGeminiProvider(GeminiConfig{
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+		})
+	case "grok":
+		r.providers[name] = NewGrokProvider(GrokConfig{
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+		})
+	case "ollama":
+		r.providers[name] = NewOllamaProvider(OllamaConfig{
+			BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+		})
+	default:
+		return false
+	}
+	return true
+}
+
+// splitVaultKey splits a dotted key like "llm.openai.api_key" into parts.
+func splitVaultKey(key string) []string {
+	var parts []string
+	start := 0
+	for i := 0; i < len(key); i++ {
+		if key[i] == '.' {
+			parts = append(parts, key[start:i])
+			start = i + 1
+		}
+	}
+	parts = append(parts, key[start:])
+	return parts
 }
 
 // UpdateModel updates the default model for a provider at runtime.

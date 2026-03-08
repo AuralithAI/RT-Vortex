@@ -54,13 +54,16 @@ func (c *Client) Type() vcs.PlatformType { return vcs.PlatformGitLab }
 // ── Merge Request ───────────────────────────────────────────────────────────
 
 type glMergeRequest struct {
-	IID          int    `json:"iid"`
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	State        string `json:"state"` // opened, closed, merged
-	WebURL       string `json:"web_url"`
-	SourceBranch string `json:"source_branch"`
-	TargetBranch string `json:"target_branch"`
+	IID          int       `json:"iid"`
+	Title        string    `json:"title"`
+	Description  string    `json:"description"`
+	State        string    `json:"state"` // opened, closed, merged
+	WebURL       string    `json:"web_url"`
+	SourceBranch string    `json:"source_branch"`
+	TargetBranch string    `json:"target_branch"`
+	Draft        bool      `json:"draft"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 	Author       struct {
 		Username string `json:"username"`
 	} `json:"author"`
@@ -92,7 +95,72 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number 
 		URL:          glMR.WebURL,
 		HeadSHA:      glMR.DiffRefs.HeadSHA,
 		BaseSHA:      glMR.DiffRefs.BaseSHA,
+		Draft:        glMR.Draft,
+		CreatedAt:    glMR.CreatedAt,
+		UpdatedAt:    glMR.UpdatedAt,
 	}, nil
+}
+
+// ListOpenPullRequests returns all open merge requests for a GitLab project.
+func (c *Client) ListOpenPullRequests(ctx context.Context, owner, repo string, maxResults int) ([]vcs.PullRequest, error) {
+	if maxResults <= 0 {
+		maxResults = 100
+	}
+
+	projectPath := fmt.Sprintf("%s%%2F%s", owner, repo)
+	var allPRs []vcs.PullRequest
+	page := 1
+	perPage := 100
+	if maxResults < perPage {
+		perPage = maxResults
+	}
+
+	for len(allPRs) < maxResults {
+		url := fmt.Sprintf("%s/projects/%s/merge_requests?state=opened&per_page=%d&page=%d&order_by=updated_at&sort=desc",
+			c.baseURL, projectPath, perPage, page)
+
+		var glMRs []glMergeRequest
+		if err := c.doJSON(ctx, http.MethodGet, url, nil, &glMRs); err != nil {
+			return nil, fmt.Errorf("list open MRs (page %d): %w", page, err)
+		}
+
+		if len(glMRs) == 0 {
+			break
+		}
+
+		for _, mr := range glMRs {
+			if len(allPRs) >= maxResults {
+				break
+			}
+			state := mr.State
+			if state == "opened" {
+				state = "open"
+			}
+			allPRs = append(allPRs, vcs.PullRequest{
+				ID:           fmt.Sprintf("%d", mr.IID),
+				Number:       mr.IID,
+				Title:        mr.Title,
+				Description:  mr.Description,
+				Author:       mr.Author.Username,
+				SourceBranch: mr.SourceBranch,
+				TargetBranch: mr.TargetBranch,
+				State:        state,
+				URL:          mr.WebURL,
+				HeadSHA:      mr.DiffRefs.HeadSHA,
+				BaseSHA:      mr.DiffRefs.BaseSHA,
+				Draft:        mr.Draft,
+				CreatedAt:    mr.CreatedAt,
+				UpdatedAt:    mr.UpdatedAt,
+			})
+		}
+
+		if len(glMRs) < perPage {
+			break
+		}
+		page++
+	}
+
+	return allPRs, nil
 }
 
 // ── MR Diff ─────────────────────────────────────────────────────────────────

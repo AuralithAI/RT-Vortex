@@ -26,6 +26,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
 	"github.com/AuralithAI/rtvortex-server/internal/model"
+	"github.com/AuralithAI/rtvortex-server/internal/prsync"
 	"github.com/AuralithAI/rtvortex-server/internal/quota"
 	"github.com/AuralithAI/rtvortex-server/internal/review"
 	"github.com/AuralithAI/rtvortex-server/internal/session"
@@ -45,6 +46,7 @@ type Handler struct {
 	ReviewRepo     *store.ReviewRepository
 	OrgRepo        *store.OrgRepository
 	WebhookRepo    *store.WebhookRepository
+	PRRepo         *store.PullRequestRepo
 
 	SessionMgr   *session.Manager
 	JWTMgr       *auth.JWTManager
@@ -59,6 +61,7 @@ type Handler struct {
 	AuditLogger     *audit.Logger
 	QuotaEnforcer   *quota.Enforcer
 	DeliveryRepo    *webhookq.Repository
+	PRSyncWorker    *prsync.Worker
 
 	// Runtime embedding configuration — guarded by embedMu.
 	embedMu     sync.RWMutex

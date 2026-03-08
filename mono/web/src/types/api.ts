@@ -100,6 +100,24 @@ export interface IndexProgressEvent {
   timestamp: string;
 }
 
+// WebSocket PR embed progress event
+export interface PREmbedProgressEvent {
+  type: "pr_embed_progress";
+  repo_id: string;
+  pr_number: number;
+  pr_id: string;
+  state: "embedding" | "completed" | "failed";
+  progress: number;
+  phase: string;
+  message?: string;
+  files_processed: number;
+  files_total: number;
+  current_file?: string;
+  eta_seconds: number;
+  error?: string;
+  timestamp: string;
+}
+
 // ── Review ──────────────────────────────────────────────────────────────────
 
 export type ReviewStatus =
@@ -286,4 +304,61 @@ export interface PaginatedResponse<T> {
 export interface PaginationParams {
   limit?: number;
   offset?: number;
+}
+
+// ── Tracked Pull Requests ───────────────────────────────────────────────────
+
+export type PRSyncStatus =
+  | "open"
+  | "closed"
+  | "merged"
+  | "draft"
+  | "stale"
+  | "embedded"
+  | "embedding"
+  | "embed_error";
+
+export type PRReviewStatus =
+  | "none"
+  | "pending"
+  | "completed"
+  | "skipped";
+
+export interface TrackedPullRequest {
+  id: string;
+  repo_id: string;
+  platform: string;
+  pr_number: number;
+  external_id: string;
+  title: string;
+  description: string;
+  author: string;
+  source_branch: string;
+  target_branch: string;
+  head_sha: string;
+  base_sha: string;
+  pr_url: string;
+  sync_status: PRSyncStatus;
+  review_status: PRReviewStatus;
+  last_review_id?: string | null;
+  files_changed: number;
+  additions: number;
+  deletions: number;
+  embedded_at?: string | null;
+  embed_error?: string;
+  synced_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PRListFilter {
+  sync_status?: PRSyncStatus;
+  review_status?: PRReviewStatus;
+  author?: string;
+  target_branch?: string;
+}
+
+export interface PRStats {
+  counts: Record<string, number>;
+  embed_queue: number;
 }

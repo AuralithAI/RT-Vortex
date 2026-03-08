@@ -19,6 +19,7 @@
 
 #include "engine_service_impl.h"
 #include "engine_api.h"
+#include "logging.h"
 #include "version.h"
 #include "splash_screen.h"
 
@@ -166,8 +167,9 @@ void initEnvironment() {
     }
 }
 
-enum class LogLevel { DEBUG, INFO, WARN, ERROR, FATAL };
+} // end anonymous namespace — so aipr::logMessage lives in the real ::aipr
 
+namespace aipr {
 void logMessage(LogLevel level, const std::string& msg) {
     static const char* labels[] = {"DEBUG", "INFO ", "WARN ", "ERROR", "FATAL"};
     int idx = static_cast<int>(level);
@@ -193,13 +195,9 @@ void logMessage(LogLevel level, const std::string& msg) {
         g_log_file.flush();
     }
 }
+} // namespace aipr
 
-// Convenience macros
-#define LOG_DEBUG(msg) logMessage(LogLevel::DEBUG, msg)
-#define LOG_INFO(msg)  logMessage(LogLevel::INFO,  msg)
-#define LOG_WARN(msg)  logMessage(LogLevel::WARN,  msg)
-#define LOG_ERROR(msg) logMessage(LogLevel::ERROR, msg)
-#define LOG_FATAL(msg) logMessage(LogLevel::FATAL, msg)
+namespace { // reopen anonymous namespace
 
 //=============================================================================
 // Global State for Signal Handling

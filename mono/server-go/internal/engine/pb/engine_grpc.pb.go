@@ -22,18 +22,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	EngineService_IndexRepository_FullMethodName       = "/aipr.engine.v1.EngineService/IndexRepository"
-	EngineService_IndexRepositoryStream_FullMethodName = "/aipr.engine.v1.EngineService/IndexRepositoryStream"
-	EngineService_IncrementalIndex_FullMethodName      = "/aipr.engine.v1.EngineService/IncrementalIndex"
-	EngineService_GetIndexStats_FullMethodName         = "/aipr.engine.v1.EngineService/GetIndexStats"
-	EngineService_DeleteIndex_FullMethodName           = "/aipr.engine.v1.EngineService/DeleteIndex"
-	EngineService_Search_FullMethodName                = "/aipr.engine.v1.EngineService/Search"
-	EngineService_SearchStream_FullMethodName          = "/aipr.engine.v1.EngineService/SearchStream"
-	EngineService_BuildReviewContext_FullMethodName    = "/aipr.engine.v1.EngineService/BuildReviewContext"
-	EngineService_RunHeuristics_FullMethodName         = "/aipr.engine.v1.EngineService/RunHeuristics"
-	EngineService_ConfigureStorage_FullMethodName      = "/aipr.engine.v1.EngineService/ConfigureStorage"
-	EngineService_HealthCheck_FullMethodName           = "/aipr.engine.v1.EngineService/HealthCheck"
-	EngineService_GetDiagnostics_FullMethodName        = "/aipr.engine.v1.EngineService/GetDiagnostics"
+	EngineService_IndexRepository_FullMethodName          = "/aipr.engine.v1.EngineService/IndexRepository"
+	EngineService_IndexRepositoryStream_FullMethodName    = "/aipr.engine.v1.EngineService/IndexRepositoryStream"
+	EngineService_IncrementalIndex_FullMethodName         = "/aipr.engine.v1.EngineService/IncrementalIndex"
+	EngineService_GetIndexStats_FullMethodName            = "/aipr.engine.v1.EngineService/GetIndexStats"
+	EngineService_DeleteIndex_FullMethodName              = "/aipr.engine.v1.EngineService/DeleteIndex"
+	EngineService_Search_FullMethodName                   = "/aipr.engine.v1.EngineService/Search"
+	EngineService_SearchStream_FullMethodName             = "/aipr.engine.v1.EngineService/SearchStream"
+	EngineService_BuildReviewContext_FullMethodName       = "/aipr.engine.v1.EngineService/BuildReviewContext"
+	EngineService_BuildReviewContextStream_FullMethodName = "/aipr.engine.v1.EngineService/BuildReviewContextStream"
+	EngineService_RunHeuristics_FullMethodName            = "/aipr.engine.v1.EngineService/RunHeuristics"
+	EngineService_ConfigureStorage_FullMethodName         = "/aipr.engine.v1.EngineService/ConfigureStorage"
+	EngineService_HealthCheck_FullMethodName              = "/aipr.engine.v1.EngineService/HealthCheck"
+	EngineService_GetDiagnostics_FullMethodName           = "/aipr.engine.v1.EngineService/GetDiagnostics"
 )
 
 // EngineServiceClient is the client API for EngineService service.
@@ -53,6 +54,7 @@ type EngineServiceClient interface {
 	SearchStream(ctx context.Context, in *SearchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ContextChunk], error)
 	// Review Operations
 	BuildReviewContext(ctx context.Context, in *ReviewContextRequest, opts ...grpc.CallOption) (*ReviewContextResponse, error)
+	BuildReviewContextStream(ctx context.Context, in *ReviewContextRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PREmbedProgressUpdate], error)
 	RunHeuristics(ctx context.Context, in *HeuristicsRequest, opts ...grpc.CallOption) (*HeuristicsResponse, error)
 	// Configuration — API server pushes config to engine at startup
 	ConfigureStorage(ctx context.Context, in *StorageConfigRequest, opts ...grpc.CallOption) (*StorageConfigResponse, error)
@@ -167,6 +169,25 @@ func (c *engineServiceClient) BuildReviewContext(ctx context.Context, in *Review
 	return out, nil
 }
 
+func (c *engineServiceClient) BuildReviewContextStream(ctx context.Context, in *ReviewContextRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PREmbedProgressUpdate], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EngineService_ServiceDesc.Streams[2], EngineService_BuildReviewContextStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ReviewContextRequest, PREmbedProgressUpdate]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngineService_BuildReviewContextStreamClient = grpc.ServerStreamingClient[PREmbedProgressUpdate]
+
 func (c *engineServiceClient) RunHeuristics(ctx context.Context, in *HeuristicsRequest, opts ...grpc.CallOption) (*HeuristicsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HeuristicsResponse)
@@ -224,6 +245,7 @@ type EngineServiceServer interface {
 	SearchStream(*SearchRequest, grpc.ServerStreamingServer[ContextChunk]) error
 	// Review Operations
 	BuildReviewContext(context.Context, *ReviewContextRequest) (*ReviewContextResponse, error)
+	BuildReviewContextStream(*ReviewContextRequest, grpc.ServerStreamingServer[PREmbedProgressUpdate]) error
 	RunHeuristics(context.Context, *HeuristicsRequest) (*HeuristicsResponse, error)
 	// Configuration — API server pushes config to engine at startup
 	ConfigureStorage(context.Context, *StorageConfigRequest) (*StorageConfigResponse, error)
@@ -263,6 +285,9 @@ func (UnimplementedEngineServiceServer) SearchStream(*SearchRequest, grpc.Server
 }
 func (UnimplementedEngineServiceServer) BuildReviewContext(context.Context, *ReviewContextRequest) (*ReviewContextResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BuildReviewContext not implemented")
+}
+func (UnimplementedEngineServiceServer) BuildReviewContextStream(*ReviewContextRequest, grpc.ServerStreamingServer[PREmbedProgressUpdate]) error {
+	return status.Error(codes.Unimplemented, "method BuildReviewContextStream not implemented")
 }
 func (UnimplementedEngineServiceServer) RunHeuristics(context.Context, *HeuristicsRequest) (*HeuristicsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RunHeuristics not implemented")
@@ -427,6 +452,17 @@ func _EngineService_BuildReviewContext_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngineService_BuildReviewContextStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ReviewContextRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(EngineServiceServer).BuildReviewContextStream(m, &grpc.GenericServerStream[ReviewContextRequest, PREmbedProgressUpdate]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngineService_BuildReviewContextStreamServer = grpc.ServerStreamingServer[PREmbedProgressUpdate]
+
 func _EngineService_RunHeuristics_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(HeuristicsRequest)
 	if err := dec(in); err != nil {
@@ -556,6 +592,11 @@ var EngineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "SearchStream",
 			Handler:       _EngineService_SearchStream_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "BuildReviewContextStream",
+			Handler:       _EngineService_BuildReviewContextStream_Handler,
 			ServerStreams: true,
 		},
 	},

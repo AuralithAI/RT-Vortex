@@ -59,12 +59,15 @@ func (c *Client) Type() vcs.PlatformType { return vcs.PlatformGitHub }
 // ── Pull Request ────────────────────────────────────────────────────────────
 
 type ghPullRequest struct {
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	Body   string `json:"body"`
-	State  string `json:"state"`
-	URL    string `json:"html_url"`
-	User   struct {
+	Number    int       `json:"number"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	State     string    `json:"state"`
+	URL       string    `json:"html_url"`
+	Draft     bool      `json:"draft"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	User      struct {
 		Login string `json:"login"`
 	} `json:"user"`
 	Head struct {
@@ -102,7 +105,72 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number 
 		URL:          ghPR.URL,
 		HeadSHA:      ghPR.Head.SHA,
 		BaseSHA:      ghPR.Base.SHA,
+		Draft:        ghPR.Draft,
+		CreatedAt:    ghPR.CreatedAt,
+		UpdatedAt:    ghPR.UpdatedAt,
 	}, nil
+}
+
+// ListOpenPullRequests returns all open PRs for a GitHub repository.
+// It handles pagination internally, fetching up to maxResults PRs.
+func (c *Client) ListOpenPullRequests(ctx context.Context, owner, repo string, maxResults int) ([]vcs.PullRequest, error) {
+	if maxResults <= 0 {
+		maxResults = 100
+	}
+
+	var allPRs []vcs.PullRequest
+	page := 1
+	perPage := 100
+	if maxResults < perPage {
+		perPage = maxResults
+	}
+
+	for len(allPRs) < maxResults {
+		url := fmt.Sprintf("%s/repos/%s/%s/pulls?state=open&per_page=%d&page=%d&sort=updated&direction=desc",
+			c.baseURL, owner, repo, perPage, page)
+
+		var ghPRs []ghPullRequest
+		if err := c.doJSON(ctx, http.MethodGet, url, nil, &ghPRs); err != nil {
+			return nil, fmt.Errorf("list open PRs (page %d): %w", page, err)
+		}
+
+		if len(ghPRs) == 0 {
+			break
+		}
+
+		for _, ghPR := range ghPRs {
+			if len(allPRs) >= maxResults {
+				break
+			}
+			state := ghPR.State
+			if ghPR.Merged {
+				state = "merged"
+			}
+			allPRs = append(allPRs, vcs.PullRequest{
+				ID:           fmt.Sprintf("%d", ghPR.Number),
+				Number:       ghPR.Number,
+				Title:        ghPR.Title,
+				Description:  ghPR.Body,
+				Author:       ghPR.User.Login,
+				SourceBranch: ghPR.Head.Ref,
+				TargetBranch: ghPR.Base.Ref,
+				State:        state,
+				URL:          ghPR.URL,
+				HeadSHA:      ghPR.Head.SHA,
+				BaseSHA:      ghPR.Base.SHA,
+				Draft:        ghPR.Draft,
+				CreatedAt:    ghPR.CreatedAt,
+				UpdatedAt:    ghPR.UpdatedAt,
+			})
+		}
+
+		if len(ghPRs) < perPage {
+			break // last page
+		}
+		page++
+	}
+
+	return allPRs, nil
 }
 
 // ── PR Diff ─────────────────────────────────────────────────────────────────

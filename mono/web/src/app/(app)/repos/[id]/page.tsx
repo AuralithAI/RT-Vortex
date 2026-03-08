@@ -11,6 +11,7 @@ import { useRepo, useIndexStatus, useReviews } from "@/lib/api/queries";
 import { useTriggerIndex, useDeleteRepo } from "@/lib/api/mutations";
 import { useIndexProgress, formatETA } from "@/hooks/use-index-progress";
 import { PageHeader } from "@/components/layout/page-header";
+import { PullRequestList } from "@/components/dashboard/pull-request-list";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -271,6 +272,9 @@ export default function RepoDetailPage({
           )}
         </CardContent>
       </Card>
+
+      {/* Tracked Pull Requests */}
+      <PullRequestList repoId={id} />
     </>
   );
 }

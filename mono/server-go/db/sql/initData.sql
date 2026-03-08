@@ -227,6 +227,57 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log(resource_type, re
 CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
 
 -- ============================================================================
+-- TRACKED PULL REQUESTS
+-- ============================================================================
+-- Stores PRs discovered from connected VCS platforms for background syncing,
+-- pre-embedding via the C++ engine, and one-click review triggering.
+
+CREATE TABLE IF NOT EXISTS tracked_pull_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    repo_id UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    platform VARCHAR(50) NOT NULL,
+    pr_number INTEGER NOT NULL,
+    external_id VARCHAR(255) NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    description TEXT DEFAULT '',
+    author VARCHAR(255) NOT NULL DEFAULT '',
+    source_branch VARCHAR(255) NOT NULL DEFAULT '',
+    target_branch VARCHAR(255) NOT NULL DEFAULT '',
+    head_sha VARCHAR(64) NOT NULL DEFAULT '',
+    base_sha VARCHAR(64) NOT NULL DEFAULT '',
+    pr_url TEXT DEFAULT '',
+
+    -- Sync metadata
+    sync_status VARCHAR(30) NOT NULL DEFAULT 'open',
+    review_status VARCHAR(30) NOT NULL DEFAULT 'none',
+    last_review_id UUID REFERENCES reviews(id) ON DELETE SET NULL,
+
+    -- File change statistics
+    files_changed INTEGER NOT NULL DEFAULT 0,
+    additions INTEGER NOT NULL DEFAULT 0,
+    deletions INTEGER NOT NULL DEFAULT 0,
+
+    -- Engine embedding metadata
+    embedded_at TIMESTAMPTZ,
+    embed_error TEXT,
+
+    -- Timestamps
+    synced_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- A PR is uniquely identified by repo + platform + number
+    UNIQUE(repo_id, platform, pr_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tracked_prs_repo ON tracked_pull_requests(repo_id);
+CREATE INDEX IF NOT EXISTS idx_tracked_prs_status ON tracked_pull_requests(sync_status);
+CREATE INDEX IF NOT EXISTS idx_tracked_prs_review_status ON tracked_pull_requests(review_status);
+CREATE INDEX IF NOT EXISTS idx_tracked_prs_repo_status ON tracked_pull_requests(repo_id, sync_status);
+CREATE INDEX IF NOT EXISTS idx_tracked_prs_synced ON tracked_pull_requests(synced_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tracked_prs_updated ON tracked_pull_requests(updated_at DESC);
+
+-- ============================================================================
 -- SCHEMA VERSION TRACKING
 -- ============================================================================
 -- Simple version tracking table (no migration runner needed).
@@ -244,6 +295,10 @@ WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 1);
 INSERT INTO schema_info (version, description)
 SELECT 2, 'Add audit_log table for security event tracking'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 2);
+
+INSERT INTO schema_info (version, description)
+SELECT 5, 'Add tracked_pull_requests table for PR discovery, sync, and pre-embedding'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 5);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
@@ -279,3 +334,7 @@ CREATE TRIGGER trg_repositories_updated_at
     BEFORE UPDATE ON repositories
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS trg_tracked_prs_updated_at ON tracked_pull_requests;
+CREATE TRIGGER trg_tracked_prs_updated_at
+    BEFORE UPDATE ON tracked_pull_requests
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();

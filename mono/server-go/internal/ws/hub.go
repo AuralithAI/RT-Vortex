@@ -61,6 +61,24 @@ type IndexProgressEvent struct {
 	Timestamp      time.Time `json:"timestamp"`
 }
 
+// PREmbedProgressEvent is the payload sent to WebSocket clients during PR diff embedding.
+type PREmbedProgressEvent struct {
+	Type           string    `json:"type"` // always "pr_embed_progress"
+	RepoID         string    `json:"repo_id"`
+	PRNumber       int       `json:"pr_number"`
+	PRID           string    `json:"pr_id"`    // tracked PR UUID
+	State          string    `json:"state"`    // "pending", "embedding", "completed", "failed"
+	Progress       int       `json:"progress"` // 0-100
+	Phase          string    `json:"phase"`    // "parsing_diff", "resolving_symbols", "building_graph", "embedding_chunks", "finalizing"
+	Message        string    `json:"message,omitempty"`
+	FilesProcessed uint32    `json:"files_processed"`
+	FilesTotal     uint32    `json:"files_total"`
+	CurrentFile    string    `json:"current_file,omitempty"`
+	ETASeconds     int64     `json:"eta_seconds"` // -1 = unknown
+	Error          string    `json:"error,omitempty"`
+	Timestamp      time.Time `json:"timestamp"`
+}
+
 // ── Client ──────────────────────────────────────────────────────────────────
 
 // Client represents a single WebSocket subscriber.
@@ -68,6 +86,7 @@ type Client struct {
 	conn        *websocket.Conn
 	reviewID    uuid.UUID // set for review subscriptions
 	indexRepoID string    // set for indexing subscriptions
+	embedRepoID string    // set for PR embed progress subscriptions
 	send        chan []byte
 }
 
@@ -80,9 +99,10 @@ const (
 
 // Hub manages WebSocket clients subscribed to review progress.
 type Hub struct {
-	mu      sync.RWMutex
-	reviews map[uuid.UUID]map[*Client]struct{} // reviewID → set of clients
-	indexes map[string]map[*Client]struct{}    // repoID → set of clients (indexing)
+	mu       sync.RWMutex
+	reviews  map[uuid.UUID]map[*Client]struct{} // reviewID → set of clients
+	indexes  map[string]map[*Client]struct{}    // repoID → set of clients (indexing)
+	prEmbeds map[string]map[*Client]struct{}    // repoID → set of clients (PR embedding)
 
 	register   chan *Client
 	unregister chan *Client
@@ -94,6 +114,7 @@ func NewHub() *Hub {
 	h := &Hub{
 		reviews:    make(map[uuid.UUID]map[*Client]struct{}),
 		indexes:    make(map[string]map[*Client]struct{}),
+		prEmbeds:   make(map[string]map[*Client]struct{}),
 		register:   make(chan *Client, 32),
 		unregister: make(chan *Client, 32),
 		done:       make(chan struct{}),
@@ -112,7 +133,16 @@ func (h *Hub) run() {
 		select {
 		case c := <-h.register:
 			h.mu.Lock()
-			if c.indexRepoID != "" {
+			if c.embedRepoID != "" {
+				// PR embed subscription
+				clients, ok := h.prEmbeds[c.embedRepoID]
+				if !ok {
+					clients = make(map[*Client]struct{})
+					h.prEmbeds[c.embedRepoID] = clients
+				}
+				clients[c] = struct{}{}
+				slog.Debug("ws pr-embed client registered", "repo_id", c.embedRepoID)
+			} else if c.indexRepoID != "" {
 				// Indexing subscription
 				clients, ok := h.indexes[c.indexRepoID]
 				if !ok {
@@ -135,7 +165,15 @@ func (h *Hub) run() {
 
 		case c := <-h.unregister:
 			h.mu.Lock()
-			if c.indexRepoID != "" {
+			if c.embedRepoID != "" {
+				if clients, ok := h.prEmbeds[c.embedRepoID]; ok {
+					delete(clients, c)
+					if len(clients) == 0 {
+						delete(h.prEmbeds, c.embedRepoID)
+					}
+				}
+				slog.Debug("ws pr-embed client unregistered", "repo_id", c.embedRepoID)
+			} else if c.indexRepoID != "" {
 				if clients, ok := h.indexes[c.indexRepoID]; ok {
 					delete(clients, c)
 					if len(clients) == 0 {
@@ -167,8 +205,14 @@ func (h *Hub) run() {
 					close(c.send)
 				}
 			}
+			for _, clients := range h.prEmbeds {
+				for c := range clients {
+					close(c.send)
+				}
+			}
 			h.reviews = make(map[uuid.UUID]map[*Client]struct{})
 			h.indexes = make(map[string]map[*Client]struct{})
+			h.prEmbeds = make(map[string]map[*Client]struct{})
 			h.mu.Unlock()
 			return
 		}
@@ -286,6 +330,61 @@ func (h *Hub) HasIndexSubscribers(repoID string) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	clients, ok := h.indexes[repoID]
+	return ok && len(clients) > 0
+}
+
+// ── PR embed subscriptions ─────────────────────────────────────────────────
+
+// SubscribePREmbed registers a client for PR embedding progress on a repo.
+func (h *Hub) SubscribePREmbed(conn *websocket.Conn, repoID string) *Client {
+	c := &Client{
+		conn:        conn,
+		embedRepoID: repoID,
+		send:        make(chan []byte, sendBufSize),
+	}
+	h.register <- c
+	metrics.WSConnectionsActive.Inc()
+	return c
+}
+
+// BroadcastPREmbed sends a PREmbedProgressEvent to all clients watching PR embedding for a repo.
+func (h *Hub) BroadcastPREmbed(repoID string, evt PREmbedProgressEvent) {
+	evt.RepoID = repoID
+	evt.Type = "pr_embed_progress"
+	if evt.Timestamp.IsZero() {
+		evt.Timestamp = time.Now()
+	}
+
+	data, err := json.Marshal(evt)
+	if err != nil {
+		slog.Error("ws: failed to marshal PR embed event", "error", err)
+		return
+	}
+
+	h.mu.RLock()
+	clients, ok := h.prEmbeds[repoID]
+	h.mu.RUnlock()
+	if !ok || len(clients) == 0 {
+		return
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for c := range clients {
+		select {
+		case c.send <- data:
+			metrics.WSMessagesTotal.Inc()
+		default:
+			slog.Debug("ws: dropping PR embed message, client buffer full", "repo_id", repoID)
+		}
+	}
+}
+
+// HasPREmbedSubscribers returns true if at least one client is watching PR embedding for a repo.
+func (h *Hub) HasPREmbedSubscribers(repoID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	clients, ok := h.prEmbeds[repoID]
 	return ok && len(clients) > 0
 }
 

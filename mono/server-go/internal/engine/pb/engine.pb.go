@@ -1462,6 +1462,139 @@ func (x *ReviewContextResponse) GetContextPack() *ContextPack {
 	return nil
 }
 
+// Progress update streamed during BuildReviewContextStream.
+type PREmbedProgressUpdate struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	RepoId         string                 `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
+	PrNumber       int32                  `protobuf:"varint,2,opt,name=pr_number,json=prNumber,proto3" json:"pr_number,omitempty"`
+	Progress       int32                  `protobuf:"varint,3,opt,name=progress,proto3" json:"progress,omitempty"` // 0-100
+	Phase          string                 `protobuf:"bytes,4,opt,name=phase,proto3" json:"phase,omitempty"`        // "parsing_diff", "resolving_symbols", "building_graph", "embedding_chunks", "finalizing"
+	FilesProcessed uint32                 `protobuf:"varint,5,opt,name=files_processed,json=filesProcessed,proto3" json:"files_processed,omitempty"`
+	FilesTotal     uint32                 `protobuf:"varint,6,opt,name=files_total,json=filesTotal,proto3" json:"files_total,omitempty"`
+	CurrentFile    string                 `protobuf:"bytes,7,opt,name=current_file,json=currentFile,proto3" json:"current_file,omitempty"`
+	EtaSeconds     int64                  `protobuf:"varint,8,opt,name=eta_seconds,json=etaSeconds,proto3" json:"eta_seconds,omitempty"`    // estimated time remaining (-1 = unknown)
+	Done           bool                   `protobuf:"varint,9,opt,name=done,proto3" json:"done,omitempty"`                                  // true on final message
+	Success        bool                   `protobuf:"varint,10,opt,name=success,proto3" json:"success,omitempty"`                           // only meaningful when done=true
+	Error          string                 `protobuf:"bytes,11,opt,name=error,proto3" json:"error,omitempty"`                                // populated on failure
+	ContextPack    *ContextPack           `protobuf:"bytes,12,opt,name=context_pack,json=contextPack,proto3" json:"context_pack,omitempty"` // populated only when done=true && success=true
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PREmbedProgressUpdate) Reset() {
+	*x = PREmbedProgressUpdate{}
+	mi := &file_engine_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PREmbedProgressUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PREmbedProgressUpdate) ProtoMessage() {}
+
+func (x *PREmbedProgressUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PREmbedProgressUpdate.ProtoReflect.Descriptor instead.
+func (*PREmbedProgressUpdate) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *PREmbedProgressUpdate) GetRepoId() string {
+	if x != nil {
+		return x.RepoId
+	}
+	return ""
+}
+
+func (x *PREmbedProgressUpdate) GetPrNumber() int32 {
+	if x != nil {
+		return x.PrNumber
+	}
+	return 0
+}
+
+func (x *PREmbedProgressUpdate) GetProgress() int32 {
+	if x != nil {
+		return x.Progress
+	}
+	return 0
+}
+
+func (x *PREmbedProgressUpdate) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *PREmbedProgressUpdate) GetFilesProcessed() uint32 {
+	if x != nil {
+		return x.FilesProcessed
+	}
+	return 0
+}
+
+func (x *PREmbedProgressUpdate) GetFilesTotal() uint32 {
+	if x != nil {
+		return x.FilesTotal
+	}
+	return 0
+}
+
+func (x *PREmbedProgressUpdate) GetCurrentFile() string {
+	if x != nil {
+		return x.CurrentFile
+	}
+	return ""
+}
+
+func (x *PREmbedProgressUpdate) GetEtaSeconds() int64 {
+	if x != nil {
+		return x.EtaSeconds
+	}
+	return 0
+}
+
+func (x *PREmbedProgressUpdate) GetDone() bool {
+	if x != nil {
+		return x.Done
+	}
+	return false
+}
+
+func (x *PREmbedProgressUpdate) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *PREmbedProgressUpdate) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *PREmbedProgressUpdate) GetContextPack() *ContextPack {
+	if x != nil {
+		return x.ContextPack
+	}
+	return nil
+}
+
 type ContextPack struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	RepoId              string                 `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
@@ -1478,7 +1611,7 @@ type ContextPack struct {
 
 func (x *ContextPack) Reset() {
 	*x = ContextPack{}
-	mi := &file_engine_proto_msgTypes[17]
+	mi := &file_engine_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1490,7 +1623,7 @@ func (x *ContextPack) String() string {
 func (*ContextPack) ProtoMessage() {}
 
 func (x *ContextPack) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[17]
+	mi := &file_engine_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1503,7 +1636,7 @@ func (x *ContextPack) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ContextPack.ProtoReflect.Descriptor instead.
 func (*ContextPack) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{17}
+	return file_engine_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ContextPack) GetRepoId() string {
@@ -1579,7 +1712,7 @@ type TouchedSymbol struct {
 
 func (x *TouchedSymbol) Reset() {
 	*x = TouchedSymbol{}
-	mi := &file_engine_proto_msgTypes[18]
+	mi := &file_engine_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1591,7 +1724,7 @@ func (x *TouchedSymbol) String() string {
 func (*TouchedSymbol) ProtoMessage() {}
 
 func (x *TouchedSymbol) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[18]
+	mi := &file_engine_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1604,7 +1737,7 @@ func (x *TouchedSymbol) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TouchedSymbol.ProtoReflect.Descriptor instead.
 func (*TouchedSymbol) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{18}
+	return file_engine_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *TouchedSymbol) GetName() string {
@@ -1680,7 +1813,7 @@ type HeuristicsRequest struct {
 
 func (x *HeuristicsRequest) Reset() {
 	*x = HeuristicsRequest{}
-	mi := &file_engine_proto_msgTypes[19]
+	mi := &file_engine_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1692,7 +1825,7 @@ func (x *HeuristicsRequest) String() string {
 func (*HeuristicsRequest) ProtoMessage() {}
 
 func (x *HeuristicsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[19]
+	mi := &file_engine_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1705,7 +1838,7 @@ func (x *HeuristicsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeuristicsRequest.ProtoReflect.Descriptor instead.
 func (*HeuristicsRequest) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{19}
+	return file_engine_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *HeuristicsRequest) GetDiff() string {
@@ -1731,7 +1864,7 @@ type HeuristicsResponse struct {
 
 func (x *HeuristicsResponse) Reset() {
 	*x = HeuristicsResponse{}
-	mi := &file_engine_proto_msgTypes[20]
+	mi := &file_engine_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1743,7 +1876,7 @@ func (x *HeuristicsResponse) String() string {
 func (*HeuristicsResponse) ProtoMessage() {}
 
 func (x *HeuristicsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[20]
+	mi := &file_engine_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1756,7 +1889,7 @@ func (x *HeuristicsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeuristicsResponse.ProtoReflect.Descriptor instead.
 func (*HeuristicsResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{20}
+	return file_engine_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *HeuristicsResponse) GetFindings() []*HeuristicFinding {
@@ -1786,7 +1919,7 @@ type HeuristicFinding struct {
 
 func (x *HeuristicFinding) Reset() {
 	*x = HeuristicFinding{}
-	mi := &file_engine_proto_msgTypes[21]
+	mi := &file_engine_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1798,7 +1931,7 @@ func (x *HeuristicFinding) String() string {
 func (*HeuristicFinding) ProtoMessage() {}
 
 func (x *HeuristicFinding) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[21]
+	mi := &file_engine_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1811,7 +1944,7 @@ func (x *HeuristicFinding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeuristicFinding.ProtoReflect.Descriptor instead.
 func (*HeuristicFinding) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{21}
+	return file_engine_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *HeuristicFinding) GetId() string {
@@ -1906,7 +2039,7 @@ type HealthCheckRequest struct {
 
 func (x *HealthCheckRequest) Reset() {
 	*x = HealthCheckRequest{}
-	mi := &file_engine_proto_msgTypes[22]
+	mi := &file_engine_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1918,7 +2051,7 @@ func (x *HealthCheckRequest) String() string {
 func (*HealthCheckRequest) ProtoMessage() {}
 
 func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[22]
+	mi := &file_engine_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1931,7 +2064,7 @@ func (x *HealthCheckRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckRequest.ProtoReflect.Descriptor instead.
 func (*HealthCheckRequest) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{22}
+	return file_engine_proto_rawDescGZIP(), []int{23}
 }
 
 type HealthCheckResponse struct {
@@ -1946,7 +2079,7 @@ type HealthCheckResponse struct {
 
 func (x *HealthCheckResponse) Reset() {
 	*x = HealthCheckResponse{}
-	mi := &file_engine_proto_msgTypes[23]
+	mi := &file_engine_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1958,7 +2091,7 @@ func (x *HealthCheckResponse) String() string {
 func (*HealthCheckResponse) ProtoMessage() {}
 
 func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[23]
+	mi := &file_engine_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1971,7 +2104,7 @@ func (x *HealthCheckResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthCheckResponse.ProtoReflect.Descriptor instead.
 func (*HealthCheckResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{23}
+	return file_engine_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *HealthCheckResponse) GetHealthy() bool {
@@ -2012,7 +2145,7 @@ type DiagnosticsRequest struct {
 
 func (x *DiagnosticsRequest) Reset() {
 	*x = DiagnosticsRequest{}
-	mi := &file_engine_proto_msgTypes[24]
+	mi := &file_engine_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2024,7 +2157,7 @@ func (x *DiagnosticsRequest) String() string {
 func (*DiagnosticsRequest) ProtoMessage() {}
 
 func (x *DiagnosticsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[24]
+	mi := &file_engine_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2037,7 +2170,7 @@ func (x *DiagnosticsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiagnosticsRequest.ProtoReflect.Descriptor instead.
 func (*DiagnosticsRequest) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{24}
+	return file_engine_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *DiagnosticsRequest) GetIncludeMemory() bool {
@@ -2065,7 +2198,7 @@ type DiagnosticsResponse struct {
 
 func (x *DiagnosticsResponse) Reset() {
 	*x = DiagnosticsResponse{}
-	mi := &file_engine_proto_msgTypes[25]
+	mi := &file_engine_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2077,7 +2210,7 @@ func (x *DiagnosticsResponse) String() string {
 func (*DiagnosticsResponse) ProtoMessage() {}
 
 func (x *DiagnosticsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[25]
+	mi := &file_engine_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2090,7 +2223,7 @@ func (x *DiagnosticsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiagnosticsResponse.ProtoReflect.Descriptor instead.
 func (*DiagnosticsResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{25}
+	return file_engine_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *DiagnosticsResponse) GetMemory() *MemoryStats {
@@ -2125,7 +2258,7 @@ type MemoryStats struct {
 
 func (x *MemoryStats) Reset() {
 	*x = MemoryStats{}
-	mi := &file_engine_proto_msgTypes[26]
+	mi := &file_engine_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2137,7 +2270,7 @@ func (x *MemoryStats) String() string {
 func (*MemoryStats) ProtoMessage() {}
 
 func (x *MemoryStats) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[26]
+	mi := &file_engine_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2150,7 +2283,7 @@ func (x *MemoryStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MemoryStats.ProtoReflect.Descriptor instead.
 func (*MemoryStats) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{26}
+	return file_engine_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *MemoryStats) GetHeapUsedBytes() uint64 {
@@ -2186,7 +2319,7 @@ type IndexInfo struct {
 
 func (x *IndexInfo) Reset() {
 	*x = IndexInfo{}
-	mi := &file_engine_proto_msgTypes[27]
+	mi := &file_engine_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2198,7 +2331,7 @@ func (x *IndexInfo) String() string {
 func (*IndexInfo) ProtoMessage() {}
 
 func (x *IndexInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[27]
+	mi := &file_engine_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2211,7 +2344,7 @@ func (x *IndexInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IndexInfo.ProtoReflect.Descriptor instead.
 func (*IndexInfo) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{27}
+	return file_engine_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *IndexInfo) GetRepoId() string {
@@ -2284,7 +2417,7 @@ type StorageConfigRequest struct {
 
 func (x *StorageConfigRequest) Reset() {
 	*x = StorageConfigRequest{}
-	mi := &file_engine_proto_msgTypes[28]
+	mi := &file_engine_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2296,7 +2429,7 @@ func (x *StorageConfigRequest) String() string {
 func (*StorageConfigRequest) ProtoMessage() {}
 
 func (x *StorageConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[28]
+	mi := &file_engine_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2309,7 +2442,7 @@ func (x *StorageConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageConfigRequest.ProtoReflect.Descriptor instead.
 func (*StorageConfigRequest) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{28}
+	return file_engine_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *StorageConfigRequest) GetProvider() StorageProvider {
@@ -2498,7 +2631,7 @@ type StorageConfigResponse struct {
 
 func (x *StorageConfigResponse) Reset() {
 	*x = StorageConfigResponse{}
-	mi := &file_engine_proto_msgTypes[29]
+	mi := &file_engine_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2510,7 +2643,7 @@ func (x *StorageConfigResponse) String() string {
 func (*StorageConfigResponse) ProtoMessage() {}
 
 func (x *StorageConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[29]
+	mi := &file_engine_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2523,7 +2656,7 @@ func (x *StorageConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StorageConfigResponse.ProtoReflect.Descriptor instead.
 func (*StorageConfigResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{29}
+	return file_engine_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *StorageConfigResponse) GetSuccess() bool {
@@ -2667,7 +2800,23 @@ const file_engine_proto_rawDesc = "" +
 	"\x0epr_description\x18\x04 \x01(\tR\rprDescription\x12,\n" +
 	"\x12max_context_chunks\x18\x05 \x01(\rR\x10maxContextChunks\"W\n" +
 	"\x15ReviewContextResponse\x12>\n" +
-	"\fcontext_pack\x18\x01 \x01(\v2\x1b.aipr.engine.v1.ContextPackR\vcontextPack\"\xec\x02\n" +
+	"\fcontext_pack\x18\x01 \x01(\v2\x1b.aipr.engine.v1.ContextPackR\vcontextPack\"\x91\x03\n" +
+	"\x15PREmbedProgressUpdate\x12\x17\n" +
+	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12\x1b\n" +
+	"\tpr_number\x18\x02 \x01(\x05R\bprNumber\x12\x1a\n" +
+	"\bprogress\x18\x03 \x01(\x05R\bprogress\x12\x14\n" +
+	"\x05phase\x18\x04 \x01(\tR\x05phase\x12'\n" +
+	"\x0ffiles_processed\x18\x05 \x01(\rR\x0efilesProcessed\x12\x1f\n" +
+	"\vfiles_total\x18\x06 \x01(\rR\n" +
+	"filesTotal\x12!\n" +
+	"\fcurrent_file\x18\a \x01(\tR\vcurrentFile\x12\x1f\n" +
+	"\veta_seconds\x18\b \x01(\x03R\n" +
+	"etaSeconds\x12\x12\n" +
+	"\x04done\x18\t \x01(\bR\x04done\x12\x18\n" +
+	"\asuccess\x18\n" +
+	" \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\v \x01(\tR\x05error\x12>\n" +
+	"\fcontext_pack\x18\f \x01(\v2\x1b.aipr.engine.v1.ContextPackR\vcontextPack\"\xec\x02\n" +
 	"\vContextPack\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12\x19\n" +
 	"\bpr_title\x18\x02 \x01(\tR\aprTitle\x12%\n" +
@@ -2803,7 +2952,7 @@ const file_engine_proto_rawDesc = "" +
 	"\x16STORAGE_PROVIDER_AZURE\x10\x03\x12\x18\n" +
 	"\x14STORAGE_PROVIDER_OCI\x10\x04\x12\x1a\n" +
 	"\x16STORAGE_PROVIDER_MINIO\x10\x05\x12\x1b\n" +
-	"\x17STORAGE_PROVIDER_CUSTOM\x10\x062\xb0\b\n" +
+	"\x17STORAGE_PROVIDER_CUSTOM\x10\x062\x9b\t\n" +
 	"\rEngineService\x12N\n" +
 	"\x0fIndexRepository\x12\x1c.aipr.engine.v1.IndexRequest\x1a\x1d.aipr.engine.v1.IndexResponse\x12\\\n" +
 	"\x15IndexRepositoryStream\x12\x1c.aipr.engine.v1.IndexRequest\x1a#.aipr.engine.v1.IndexProgressUpdate0\x01\x12Z\n" +
@@ -2812,7 +2961,8 @@ const file_engine_proto_rawDesc = "" +
 	"\vDeleteIndex\x12\".aipr.engine.v1.DeleteIndexRequest\x1a#.aipr.engine.v1.DeleteIndexResponse\x12G\n" +
 	"\x06Search\x12\x1d.aipr.engine.v1.SearchRequest\x1a\x1e.aipr.engine.v1.SearchResponse\x12M\n" +
 	"\fSearchStream\x12\x1d.aipr.engine.v1.SearchRequest\x1a\x1c.aipr.engine.v1.ContextChunk0\x01\x12a\n" +
-	"\x12BuildReviewContext\x12$.aipr.engine.v1.ReviewContextRequest\x1a%.aipr.engine.v1.ReviewContextResponse\x12V\n" +
+	"\x12BuildReviewContext\x12$.aipr.engine.v1.ReviewContextRequest\x1a%.aipr.engine.v1.ReviewContextResponse\x12i\n" +
+	"\x18BuildReviewContextStream\x12$.aipr.engine.v1.ReviewContextRequest\x1a%.aipr.engine.v1.PREmbedProgressUpdate0\x01\x12V\n" +
 	"\rRunHeuristics\x12!.aipr.engine.v1.HeuristicsRequest\x1a\".aipr.engine.v1.HeuristicsResponse\x12_\n" +
 	"\x10ConfigureStorage\x12$.aipr.engine.v1.StorageConfigRequest\x1a%.aipr.engine.v1.StorageConfigResponse\x12V\n" +
 	"\vHealthCheck\x12\".aipr.engine.v1.HealthCheckRequest\x1a#.aipr.engine.v1.HealthCheckResponse\x12Y\n" +
@@ -2832,7 +2982,7 @@ func file_engine_proto_rawDescGZIP() []byte {
 }
 
 var file_engine_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
+var file_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
 var file_engine_proto_goTypes = []any{
 	(Severity)(0),                   // 0: aipr.engine.v1.Severity
 	(CheckCategory)(0),              // 1: aipr.engine.v1.CheckCategory
@@ -2854,72 +3004,76 @@ var file_engine_proto_goTypes = []any{
 	(*SearchMetrics)(nil),           // 17: aipr.engine.v1.SearchMetrics
 	(*ReviewContextRequest)(nil),    // 18: aipr.engine.v1.ReviewContextRequest
 	(*ReviewContextResponse)(nil),   // 19: aipr.engine.v1.ReviewContextResponse
-	(*ContextPack)(nil),             // 20: aipr.engine.v1.ContextPack
-	(*TouchedSymbol)(nil),           // 21: aipr.engine.v1.TouchedSymbol
-	(*HeuristicsRequest)(nil),       // 22: aipr.engine.v1.HeuristicsRequest
-	(*HeuristicsResponse)(nil),      // 23: aipr.engine.v1.HeuristicsResponse
-	(*HeuristicFinding)(nil),        // 24: aipr.engine.v1.HeuristicFinding
-	(*HealthCheckRequest)(nil),      // 25: aipr.engine.v1.HealthCheckRequest
-	(*HealthCheckResponse)(nil),     // 26: aipr.engine.v1.HealthCheckResponse
-	(*DiagnosticsRequest)(nil),      // 27: aipr.engine.v1.DiagnosticsRequest
-	(*DiagnosticsResponse)(nil),     // 28: aipr.engine.v1.DiagnosticsResponse
-	(*MemoryStats)(nil),             // 29: aipr.engine.v1.MemoryStats
-	(*IndexInfo)(nil),               // 30: aipr.engine.v1.IndexInfo
-	(*StorageConfigRequest)(nil),    // 31: aipr.engine.v1.StorageConfigRequest
-	(*StorageConfigResponse)(nil),   // 32: aipr.engine.v1.StorageConfigResponse
-	nil,                             // 33: aipr.engine.v1.IndexStats.FilesByLanguageEntry
-	nil,                             // 34: aipr.engine.v1.HealthCheckResponse.ComponentsEntry
-	nil,                             // 35: aipr.engine.v1.DiagnosticsResponse.ConfigEntry
+	(*PREmbedProgressUpdate)(nil),   // 20: aipr.engine.v1.PREmbedProgressUpdate
+	(*ContextPack)(nil),             // 21: aipr.engine.v1.ContextPack
+	(*TouchedSymbol)(nil),           // 22: aipr.engine.v1.TouchedSymbol
+	(*HeuristicsRequest)(nil),       // 23: aipr.engine.v1.HeuristicsRequest
+	(*HeuristicsResponse)(nil),      // 24: aipr.engine.v1.HeuristicsResponse
+	(*HeuristicFinding)(nil),        // 25: aipr.engine.v1.HeuristicFinding
+	(*HealthCheckRequest)(nil),      // 26: aipr.engine.v1.HealthCheckRequest
+	(*HealthCheckResponse)(nil),     // 27: aipr.engine.v1.HealthCheckResponse
+	(*DiagnosticsRequest)(nil),      // 28: aipr.engine.v1.DiagnosticsRequest
+	(*DiagnosticsResponse)(nil),     // 29: aipr.engine.v1.DiagnosticsResponse
+	(*MemoryStats)(nil),             // 30: aipr.engine.v1.MemoryStats
+	(*IndexInfo)(nil),               // 31: aipr.engine.v1.IndexInfo
+	(*StorageConfigRequest)(nil),    // 32: aipr.engine.v1.StorageConfigRequest
+	(*StorageConfigResponse)(nil),   // 33: aipr.engine.v1.StorageConfigResponse
+	nil,                             // 34: aipr.engine.v1.IndexStats.FilesByLanguageEntry
+	nil,                             // 35: aipr.engine.v1.HealthCheckResponse.ComponentsEntry
+	nil,                             // 36: aipr.engine.v1.DiagnosticsResponse.ConfigEntry
 }
 var file_engine_proto_depIdxs = []int32{
 	4,  // 0: aipr.engine.v1.IndexRequest.config:type_name -> aipr.engine.v1.IndexConfig
 	10, // 1: aipr.engine.v1.IndexResponse.stats:type_name -> aipr.engine.v1.IndexStats
 	10, // 2: aipr.engine.v1.IndexProgressUpdate.final_stats:type_name -> aipr.engine.v1.IndexStats
 	10, // 3: aipr.engine.v1.IndexStatsResponse.stats:type_name -> aipr.engine.v1.IndexStats
-	33, // 4: aipr.engine.v1.IndexStats.files_by_language:type_name -> aipr.engine.v1.IndexStats.FilesByLanguageEntry
+	34, // 4: aipr.engine.v1.IndexStats.files_by_language:type_name -> aipr.engine.v1.IndexStats.FilesByLanguageEntry
 	14, // 5: aipr.engine.v1.SearchRequest.config:type_name -> aipr.engine.v1.SearchConfig
 	16, // 6: aipr.engine.v1.SearchResponse.chunks:type_name -> aipr.engine.v1.ContextChunk
 	17, // 7: aipr.engine.v1.SearchResponse.metrics:type_name -> aipr.engine.v1.SearchMetrics
-	20, // 8: aipr.engine.v1.ReviewContextResponse.context_pack:type_name -> aipr.engine.v1.ContextPack
-	16, // 9: aipr.engine.v1.ContextPack.context_chunks:type_name -> aipr.engine.v1.ContextChunk
-	21, // 10: aipr.engine.v1.ContextPack.touched_symbols:type_name -> aipr.engine.v1.TouchedSymbol
-	24, // 11: aipr.engine.v1.HeuristicsResponse.findings:type_name -> aipr.engine.v1.HeuristicFinding
-	1,  // 12: aipr.engine.v1.HeuristicFinding.category:type_name -> aipr.engine.v1.CheckCategory
-	0,  // 13: aipr.engine.v1.HeuristicFinding.severity:type_name -> aipr.engine.v1.Severity
-	34, // 14: aipr.engine.v1.HealthCheckResponse.components:type_name -> aipr.engine.v1.HealthCheckResponse.ComponentsEntry
-	29, // 15: aipr.engine.v1.DiagnosticsResponse.memory:type_name -> aipr.engine.v1.MemoryStats
-	30, // 16: aipr.engine.v1.DiagnosticsResponse.indices:type_name -> aipr.engine.v1.IndexInfo
-	35, // 17: aipr.engine.v1.DiagnosticsResponse.config:type_name -> aipr.engine.v1.DiagnosticsResponse.ConfigEntry
-	2,  // 18: aipr.engine.v1.StorageConfigRequest.provider:type_name -> aipr.engine.v1.StorageProvider
-	3,  // 19: aipr.engine.v1.EngineService.IndexRepository:input_type -> aipr.engine.v1.IndexRequest
-	3,  // 20: aipr.engine.v1.EngineService.IndexRepositoryStream:input_type -> aipr.engine.v1.IndexRequest
-	5,  // 21: aipr.engine.v1.EngineService.IncrementalIndex:input_type -> aipr.engine.v1.IncrementalIndexRequest
-	8,  // 22: aipr.engine.v1.EngineService.GetIndexStats:input_type -> aipr.engine.v1.IndexStatsRequest
-	11, // 23: aipr.engine.v1.EngineService.DeleteIndex:input_type -> aipr.engine.v1.DeleteIndexRequest
-	13, // 24: aipr.engine.v1.EngineService.Search:input_type -> aipr.engine.v1.SearchRequest
-	13, // 25: aipr.engine.v1.EngineService.SearchStream:input_type -> aipr.engine.v1.SearchRequest
-	18, // 26: aipr.engine.v1.EngineService.BuildReviewContext:input_type -> aipr.engine.v1.ReviewContextRequest
-	22, // 27: aipr.engine.v1.EngineService.RunHeuristics:input_type -> aipr.engine.v1.HeuristicsRequest
-	31, // 28: aipr.engine.v1.EngineService.ConfigureStorage:input_type -> aipr.engine.v1.StorageConfigRequest
-	25, // 29: aipr.engine.v1.EngineService.HealthCheck:input_type -> aipr.engine.v1.HealthCheckRequest
-	27, // 30: aipr.engine.v1.EngineService.GetDiagnostics:input_type -> aipr.engine.v1.DiagnosticsRequest
-	6,  // 31: aipr.engine.v1.EngineService.IndexRepository:output_type -> aipr.engine.v1.IndexResponse
-	7,  // 32: aipr.engine.v1.EngineService.IndexRepositoryStream:output_type -> aipr.engine.v1.IndexProgressUpdate
-	6,  // 33: aipr.engine.v1.EngineService.IncrementalIndex:output_type -> aipr.engine.v1.IndexResponse
-	9,  // 34: aipr.engine.v1.EngineService.GetIndexStats:output_type -> aipr.engine.v1.IndexStatsResponse
-	12, // 35: aipr.engine.v1.EngineService.DeleteIndex:output_type -> aipr.engine.v1.DeleteIndexResponse
-	15, // 36: aipr.engine.v1.EngineService.Search:output_type -> aipr.engine.v1.SearchResponse
-	16, // 37: aipr.engine.v1.EngineService.SearchStream:output_type -> aipr.engine.v1.ContextChunk
-	19, // 38: aipr.engine.v1.EngineService.BuildReviewContext:output_type -> aipr.engine.v1.ReviewContextResponse
-	23, // 39: aipr.engine.v1.EngineService.RunHeuristics:output_type -> aipr.engine.v1.HeuristicsResponse
-	32, // 40: aipr.engine.v1.EngineService.ConfigureStorage:output_type -> aipr.engine.v1.StorageConfigResponse
-	26, // 41: aipr.engine.v1.EngineService.HealthCheck:output_type -> aipr.engine.v1.HealthCheckResponse
-	28, // 42: aipr.engine.v1.EngineService.GetDiagnostics:output_type -> aipr.engine.v1.DiagnosticsResponse
-	31, // [31:43] is the sub-list for method output_type
-	19, // [19:31] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	21, // 8: aipr.engine.v1.ReviewContextResponse.context_pack:type_name -> aipr.engine.v1.ContextPack
+	21, // 9: aipr.engine.v1.PREmbedProgressUpdate.context_pack:type_name -> aipr.engine.v1.ContextPack
+	16, // 10: aipr.engine.v1.ContextPack.context_chunks:type_name -> aipr.engine.v1.ContextChunk
+	22, // 11: aipr.engine.v1.ContextPack.touched_symbols:type_name -> aipr.engine.v1.TouchedSymbol
+	25, // 12: aipr.engine.v1.HeuristicsResponse.findings:type_name -> aipr.engine.v1.HeuristicFinding
+	1,  // 13: aipr.engine.v1.HeuristicFinding.category:type_name -> aipr.engine.v1.CheckCategory
+	0,  // 14: aipr.engine.v1.HeuristicFinding.severity:type_name -> aipr.engine.v1.Severity
+	35, // 15: aipr.engine.v1.HealthCheckResponse.components:type_name -> aipr.engine.v1.HealthCheckResponse.ComponentsEntry
+	30, // 16: aipr.engine.v1.DiagnosticsResponse.memory:type_name -> aipr.engine.v1.MemoryStats
+	31, // 17: aipr.engine.v1.DiagnosticsResponse.indices:type_name -> aipr.engine.v1.IndexInfo
+	36, // 18: aipr.engine.v1.DiagnosticsResponse.config:type_name -> aipr.engine.v1.DiagnosticsResponse.ConfigEntry
+	2,  // 19: aipr.engine.v1.StorageConfigRequest.provider:type_name -> aipr.engine.v1.StorageProvider
+	3,  // 20: aipr.engine.v1.EngineService.IndexRepository:input_type -> aipr.engine.v1.IndexRequest
+	3,  // 21: aipr.engine.v1.EngineService.IndexRepositoryStream:input_type -> aipr.engine.v1.IndexRequest
+	5,  // 22: aipr.engine.v1.EngineService.IncrementalIndex:input_type -> aipr.engine.v1.IncrementalIndexRequest
+	8,  // 23: aipr.engine.v1.EngineService.GetIndexStats:input_type -> aipr.engine.v1.IndexStatsRequest
+	11, // 24: aipr.engine.v1.EngineService.DeleteIndex:input_type -> aipr.engine.v1.DeleteIndexRequest
+	13, // 25: aipr.engine.v1.EngineService.Search:input_type -> aipr.engine.v1.SearchRequest
+	13, // 26: aipr.engine.v1.EngineService.SearchStream:input_type -> aipr.engine.v1.SearchRequest
+	18, // 27: aipr.engine.v1.EngineService.BuildReviewContext:input_type -> aipr.engine.v1.ReviewContextRequest
+	18, // 28: aipr.engine.v1.EngineService.BuildReviewContextStream:input_type -> aipr.engine.v1.ReviewContextRequest
+	23, // 29: aipr.engine.v1.EngineService.RunHeuristics:input_type -> aipr.engine.v1.HeuristicsRequest
+	32, // 30: aipr.engine.v1.EngineService.ConfigureStorage:input_type -> aipr.engine.v1.StorageConfigRequest
+	26, // 31: aipr.engine.v1.EngineService.HealthCheck:input_type -> aipr.engine.v1.HealthCheckRequest
+	28, // 32: aipr.engine.v1.EngineService.GetDiagnostics:input_type -> aipr.engine.v1.DiagnosticsRequest
+	6,  // 33: aipr.engine.v1.EngineService.IndexRepository:output_type -> aipr.engine.v1.IndexResponse
+	7,  // 34: aipr.engine.v1.EngineService.IndexRepositoryStream:output_type -> aipr.engine.v1.IndexProgressUpdate
+	6,  // 35: aipr.engine.v1.EngineService.IncrementalIndex:output_type -> aipr.engine.v1.IndexResponse
+	9,  // 36: aipr.engine.v1.EngineService.GetIndexStats:output_type -> aipr.engine.v1.IndexStatsResponse
+	12, // 37: aipr.engine.v1.EngineService.DeleteIndex:output_type -> aipr.engine.v1.DeleteIndexResponse
+	15, // 38: aipr.engine.v1.EngineService.Search:output_type -> aipr.engine.v1.SearchResponse
+	16, // 39: aipr.engine.v1.EngineService.SearchStream:output_type -> aipr.engine.v1.ContextChunk
+	19, // 40: aipr.engine.v1.EngineService.BuildReviewContext:output_type -> aipr.engine.v1.ReviewContextResponse
+	20, // 41: aipr.engine.v1.EngineService.BuildReviewContextStream:output_type -> aipr.engine.v1.PREmbedProgressUpdate
+	24, // 42: aipr.engine.v1.EngineService.RunHeuristics:output_type -> aipr.engine.v1.HeuristicsResponse
+	33, // 43: aipr.engine.v1.EngineService.ConfigureStorage:output_type -> aipr.engine.v1.StorageConfigResponse
+	27, // 44: aipr.engine.v1.EngineService.HealthCheck:output_type -> aipr.engine.v1.HealthCheckResponse
+	29, // 45: aipr.engine.v1.EngineService.GetDiagnostics:output_type -> aipr.engine.v1.DiagnosticsResponse
+	33, // [33:46] is the sub-list for method output_type
+	20, // [20:33] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_engine_proto_init() }
@@ -2933,7 +3087,7 @@ func file_engine_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_engine_proto_rawDesc), len(file_engine_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   33,
+			NumMessages:   34,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

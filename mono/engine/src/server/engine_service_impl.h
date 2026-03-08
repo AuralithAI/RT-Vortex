@@ -104,6 +104,12 @@ public:
         aipr::engine::v1::ReviewContextResponse* response
     ) override;
 
+    grpc::Status BuildReviewContextStream(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::ReviewContextRequest* request,
+        grpc::ServerWriter<aipr::engine::v1::PREmbedProgressUpdate>* writer
+    ) override;
+
     grpc::Status RunHeuristics(
         grpc::ServerContext* context,
         const aipr::engine::v1::HeuristicsRequest* request,

@@ -195,3 +195,28 @@ export function useLogout() {
     },
   });
 }
+
+// ── Pull Requests ───────────────────────────────────────────────────────────
+
+export function useSyncPullRequests() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (repoId: string) => api.pullRequests.sync(repoId),
+    onSuccess: (_data, repoId) => {
+      // Invalidate all PR queries for this repo
+      qc.invalidateQueries({ queryKey: ["repos", repoId, "pull-requests"] });
+    },
+  });
+}
+
+export function useReviewPullRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, prId }: { repoId: string; prId: string }) =>
+      api.pullRequests.review(repoId, prId),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: ["repos", repoId, "pull-requests"] });
+      qc.invalidateQueries({ queryKey: ["reviews"] });
+    },
+  });
+}

@@ -25,6 +25,7 @@ service EngineService {
 
     // Review Operations
     rpc BuildReviewContext(ReviewContextRequest) returns (ReviewContextResponse);
+    rpc BuildReviewContextStream(ReviewContextRequest) returns (stream PREmbedProgressUpdate);
     rpc RunHeuristics(HeuristicsRequest) returns (HeuristicsResponse);
 
     // Configuration — API server pushes config to engine at startup
@@ -204,6 +205,22 @@ message ReviewContextRequest {
 
 message ReviewContextResponse {
     ContextPack context_pack = 1;
+}
+
+// Progress update streamed during BuildReviewContextStream.
+message PREmbedProgressUpdate {
+    string repo_id = 1;
+    int32 pr_number = 2;
+    int32 progress = 3;              // 0-100
+    string phase = 4;                // "parsing_diff", "resolving_symbols", "building_graph", "embedding_chunks", "finalizing"
+    uint32 files_processed = 5;
+    uint32 files_total = 6;
+    string current_file = 7;
+    int64 eta_seconds = 8;           // estimated time remaining (-1 = unknown)
+    bool done = 9;                   // true on final message
+    bool success = 10;               // only meaningful when done=true
+    string error = 11;               // populated on failure
+    ContextPack context_pack = 12;   // populated only when done=true && success=true
 }
 
 message ContextPack {

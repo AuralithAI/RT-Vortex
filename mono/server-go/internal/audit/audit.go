@@ -39,6 +39,8 @@ const (
 	ActionAdminStats      = "admin.stats"
 	ActionAdminHealth     = "admin.detailed_health"
 	ActionWebhookReceived = "webhook.received"
+	ActionPRSync          = "pr.sync"
+	ActionPRReview        = "pr.review"
 )
 
 // ── Logger ──────────────────────────────────────────────────────────────────

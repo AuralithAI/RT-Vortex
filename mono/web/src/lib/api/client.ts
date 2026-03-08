@@ -22,10 +22,13 @@ import type {
   OrgMember,
   PaginatedResponse,
   PaginationParams,
+  PRListFilter,
+  PRStats,
   Repo,
   Review,
   ReviewComment,
   SystemStats,
+  TrackedPullRequest,
   User,
 } from "@/types/api";
 
@@ -320,8 +323,10 @@ export const reviews = {
       body: JSON.stringify(data),
     }),
 
-  comments: (id: string) =>
-    request<ReviewComment[]>(`/api/v1/reviews/${id}/comments`),
+  comments: async (id: string) => {
+    const res = await request<{ comments: ReviewComment[]; count: number }>(`/api/v1/reviews/${id}/comments`);
+    return res.comments ?? [];
+  },
 };
 
 // ── LLM ─────────────────────────────────────────────────────────────────────
@@ -385,7 +390,48 @@ export const admin = {
     request<DetailedHealth>("/api/v1/admin/health/detailed"),
 };
 
+// ── Pull Requests ───────────────────────────────────────────────────────────
+
+export const pullRequests = {
+  list: (repoId: string, p?: PaginationParams, filter?: PRListFilter) => {
+    const params = new URLSearchParams();
+    if (p?.limit != null) params.set("limit", String(p.limit));
+    if (p?.offset != null) params.set("offset", String(p.offset));
+    if (filter?.sync_status) params.set("sync_status", filter.sync_status);
+    if (filter?.review_status) params.set("review_status", filter.review_status);
+    if (filter?.author) params.set("author", filter.author);
+    if (filter?.target_branch) params.set("target_branch", filter.target_branch);
+    const q = params.toString();
+    return request<PaginatedResponse<TrackedPullRequest>>(
+      `/api/v1/repos/${repoId}/pull-requests${q ? `?${q}` : ""}`,
+    );
+  },
+
+  get: (repoId: string, prId: string) =>
+    request<TrackedPullRequest>(`/api/v1/repos/${repoId}/pull-requests/${prId}`),
+
+  getByNumber: (repoId: string, prNumber: number) =>
+    request<TrackedPullRequest>(
+      `/api/v1/repos/${repoId}/pull-requests/by-number/${prNumber}`,
+    ),
+
+  sync: (repoId: string) =>
+    request<{ status: string; message: string }>(
+      `/api/v1/repos/${repoId}/pull-requests/sync`,
+      { method: "POST" },
+    ),
+
+  stats: (repoId: string) =>
+    request<PRStats>(`/api/v1/repos/${repoId}/pull-requests/stats`),
+
+  review: (repoId: string, prId: string) =>
+    request<{ status: string; message: string }>(
+      `/api/v1/repos/${repoId}/pull-requests/${prId}/review`,
+      { method: "POST" },
+    ),
+};
+
 // ── Convenience export ──────────────────────────────────────────────────────
 
-const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin };
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests };
 export default api;

@@ -57,10 +57,12 @@ func (c *Client) Type() vcs.PlatformType { return vcs.PlatformBitbucket }
 // ── Pull Request ────────────────────────────────────────────────────────────
 
 type bbPullRequest struct {
-	ID          int    `json:"id"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	State       string `json:"state"` // OPEN, MERGED, DECLINED, SUPERSEDED
+	ID          int       `json:"id"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	State       string    `json:"state"` // OPEN, MERGED, DECLINED, SUPERSEDED
+	CreatedOn   time.Time `json:"created_on"`
+	UpdatedOn   time.Time `json:"updated_on"`
 	Links       struct {
 		HTML struct {
 			Href string `json:"href"`
@@ -118,7 +120,69 @@ func (c *Client) GetPullRequest(ctx context.Context, owner, repo string, number 
 		URL:          bbPR.Links.HTML.Href,
 		HeadSHA:      bbPR.Source.Commit.Hash,
 		BaseSHA:      bbPR.Destination.Commit.Hash,
+		CreatedAt:    bbPR.CreatedOn,
+		UpdatedAt:    bbPR.UpdatedOn,
 	}, nil
+}
+
+// ── List Open PRs ───────────────────────────────────────────────────────────
+
+// bbPullRequestListResponse wraps the paginated Bitbucket PR list response.
+type bbPullRequestListResponse struct {
+	Values []bbPullRequest `json:"values"`
+	Next   string          `json:"next"` // pagination URL
+	Size   int             `json:"size"` // total count
+}
+
+// ListOpenPullRequests returns all open PRs for a Bitbucket repository.
+func (c *Client) ListOpenPullRequests(ctx context.Context, owner, repo string, maxResults int) ([]vcs.PullRequest, error) {
+	if maxResults <= 0 {
+		maxResults = 100
+	}
+
+	var allPRs []vcs.PullRequest
+	url := fmt.Sprintf("%s/repositories/%s/%s/pullrequests?state=OPEN&pagelen=50&sort=-updated_on",
+		c.baseURL, owner, repo)
+
+	for url != "" && len(allPRs) < maxResults {
+		var page bbPullRequestListResponse
+		if err := c.doJSON(ctx, http.MethodGet, url, nil, &page); err != nil {
+			return nil, fmt.Errorf("list open PRs: %w", err)
+		}
+
+		for _, bbPR := range page.Values {
+			if len(allPRs) >= maxResults {
+				break
+			}
+			state := strings.ToLower(bbPR.State)
+			if state == "declined" || state == "superseded" {
+				state = "closed"
+			}
+			author := bbPR.Author.Nickname
+			if author == "" {
+				author = bbPR.Author.DisplayName
+			}
+			allPRs = append(allPRs, vcs.PullRequest{
+				ID:           fmt.Sprintf("%d", bbPR.ID),
+				Number:       bbPR.ID,
+				Title:        bbPR.Title,
+				Description:  bbPR.Description,
+				Author:       author,
+				SourceBranch: bbPR.Source.Branch.Name,
+				TargetBranch: bbPR.Destination.Branch.Name,
+				State:        state,
+				URL:          bbPR.Links.HTML.Href,
+				HeadSHA:      bbPR.Source.Commit.Hash,
+				BaseSHA:      bbPR.Destination.Commit.Hash,
+				CreatedAt:    bbPR.CreatedOn,
+				UpdatedAt:    bbPR.UpdatedOn,
+			})
+		}
+
+		url = page.Next
+	}
+
+	return allPRs, nil
 }
 
 // ── PR Diff ─────────────────────────────────────────────────────────────────

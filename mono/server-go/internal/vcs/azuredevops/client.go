@@ -89,11 +89,13 @@ func (c *Client) basicAuth() string {
 // ── Pull Request ────────────────────────────────────────────────────────────
 
 type adoPullRequest struct {
-	PullRequestID int    `json:"pullRequestId"`
-	Title         string `json:"title"`
-	Description   string `json:"description"`
-	Status        string `json:"status"` // active, completed, abandoned
-	URL           string `json:"url"`
+	PullRequestID int       `json:"pullRequestId"`
+	Title         string    `json:"title"`
+	Description   string    `json:"description"`
+	Status        string    `json:"status"` // active, completed, abandoned
+	IsDraft       bool      `json:"isDraft"`
+	URL           string    `json:"url"`
+	CreationDate  time.Time `json:"creationDate"`
 	CreatedBy     struct {
 		DisplayName string `json:"displayName"`
 		UniqueName  string `json:"uniqueName"`
@@ -138,7 +140,70 @@ func (c *Client) GetPullRequest(ctx context.Context, project, repo string, numbe
 		URL:          adoPR.URL,
 		HeadSHA:      adoPR.LastMergeSourceCommit.CommitID,
 		BaseSHA:      adoPR.LastMergeTargetCommit.CommitID,
+		Draft:        adoPR.IsDraft,
+		CreatedAt:    adoPR.CreationDate,
 	}, nil
+}
+
+// ── List Open PRs ───────────────────────────────────────────────────────────
+
+// adoPullRequestList wraps the Azure DevOps PR list response.
+type adoPullRequestList struct {
+	Value []adoPullRequest `json:"value"`
+	Count int              `json:"count"`
+}
+
+// ListOpenPullRequests returns all active PRs for an Azure DevOps repository.
+// Note: Azure DevOps uses "project" as "owner" and "repo" as the repository name.
+func (c *Client) ListOpenPullRequests(ctx context.Context, project, repo string, maxResults int) ([]vcs.PullRequest, error) {
+	if maxResults <= 0 {
+		maxResults = 100
+	}
+
+	top := maxResults
+	if top > 1000 {
+		top = 1000
+	}
+
+	url := c.apiURL(project, repo, fmt.Sprintf("pullrequests?searchCriteria.status=active&$top=%d", top))
+
+	var adoList adoPullRequestList
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &adoList); err != nil {
+		return nil, fmt.Errorf("list open PRs: %w", err)
+	}
+
+	prs := make([]vcs.PullRequest, 0, len(adoList.Value))
+	for _, adoPR := range adoList.Value {
+		if len(prs) >= maxResults {
+			break
+		}
+		state := strings.ToLower(adoPR.Status)
+		switch state {
+		case "active":
+			state = "open"
+		case "completed":
+			state = "merged"
+		case "abandoned":
+			state = "closed"
+		}
+		prs = append(prs, vcs.PullRequest{
+			ID:           fmt.Sprintf("%d", adoPR.PullRequestID),
+			Number:       adoPR.PullRequestID,
+			Title:        adoPR.Title,
+			Description:  adoPR.Description,
+			Author:       adoPR.CreatedBy.UniqueName,
+			SourceBranch: trimRefPrefix(adoPR.SourceRefName),
+			TargetBranch: trimRefPrefix(adoPR.TargetRefName),
+			State:        state,
+			URL:          adoPR.URL,
+			HeadSHA:      adoPR.LastMergeSourceCommit.CommitID,
+			BaseSHA:      adoPR.LastMergeTargetCommit.CommitID,
+			Draft:        adoPR.IsDraft,
+			CreatedAt:    adoPR.CreationDate,
+		})
+	}
+
+	return prs, nil
 }
 
 // trimRefPrefix strips "refs/heads/" from Azure DevOps branch ref names.

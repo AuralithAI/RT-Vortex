@@ -20,6 +20,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
 	rtmetrics "github.com/AuralithAI/rtvortex-server/internal/metrics"
+	"github.com/AuralithAI/rtvortex-server/internal/prsync"
 	"github.com/AuralithAI/rtvortex-server/internal/quota"
 	"github.com/AuralithAI/rtvortex-server/internal/review"
 	"github.com/AuralithAI/rtvortex-server/internal/session"
@@ -62,6 +63,10 @@ type Dependencies struct {
 	ReviewRepo     *store.ReviewRepository
 	OrgRepo        *store.OrgRepository
 	WebhookRepo    *store.WebhookRepository
+	PRRepo         *store.PullRequestRepo
+
+	// PR Sync
+	PRSyncWorker *prsync.Worker
 }
 
 // Server holds the HTTP server components.
@@ -129,6 +134,8 @@ func (s *Server) setupRouter() {
 		AuditLogger:     s.deps.AuditLogger,
 		QuotaEnforcer:   s.deps.QuotaEnforcer,
 		DeliveryRepo:    s.deps.DeliveryRepo,
+		PRRepo:          s.deps.PRRepo,
+		PRSyncWorker:    s.deps.PRSyncWorker,
 	}
 
 	// ── Health & readiness (no auth required) ───────────────────────────
@@ -188,6 +195,24 @@ func (s *Server) setupRouter() {
 					r.Get("/members", h.ListRepoMembers)
 					r.Post("/members", h.AddRepoMember)
 					r.Delete("/members/{userID}", h.RemoveRepoMember)
+
+					// Pull Request discovery & management
+					r.Route("/pull-requests", func(r chi.Router) {
+						r.Get("/", h.ListPullRequests)
+						r.Post("/sync", h.SyncPullRequests)
+						r.Get("/stats", h.GetPullRequestStats)
+						r.Get("/by-number/{prNumber}", h.GetPullRequestByNumber)
+						r.Route("/{prID}", func(r chi.Router) {
+							r.Get("/", h.GetPullRequest)
+							r.Post("/review", h.ReviewPullRequest)
+						})
+
+						// WebSocket: real-time PR embedding progress streaming
+						if s.deps.WSHub != nil {
+							prEmbedWSHandler := ws.NewPREmbedHandler(s.deps.WSHub)
+							r.Get("/embed/ws", prEmbedWSHandler.ServeHTTP)
+						}
+					})
 
 					// WebSocket: real-time indexing progress streaming
 					if s.deps.WSHub != nil {

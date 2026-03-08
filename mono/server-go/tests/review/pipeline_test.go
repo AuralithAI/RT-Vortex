@@ -223,7 +223,7 @@ func TestMatchesSkipPattern_NoPatterns(t *testing.T) {
 
 func TestNewPipeline_ConfigDefaults(t *testing.T) {
 	cfg := review.PipelineConfig{}
-	p := review.NewPipeline(nil, nil, nil, nil, cfg)
+	p := review.NewPipeline(nil, nil, nil, nil, nil, cfg)
 	if p == nil {
 		t.Fatal("expected non-nil pipeline")
 	}

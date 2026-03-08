@@ -4,7 +4,7 @@
 
 import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
 import api from "./client";
-import type { PaginationParams } from "@/types/api";
+import type { PaginationParams, PRListFilter } from "@/types/api";
 
 // ── Keys ────────────────────────────────────────────────────────────────────
 
@@ -24,6 +24,12 @@ export const queryKeys = {
   embeddingsConfig: ["embeddings", "config"] as const,
   adminStats: ["admin", "stats"] as const,
   adminHealth: ["admin", "health"] as const,
+  pullRequests: (repoId: string, p?: PaginationParams, f?: PRListFilter) =>
+    ["repos", repoId, "pull-requests", p, f] as const,
+  pullRequest: (repoId: string, prId: string) =>
+    ["repos", repoId, "pull-requests", prId] as const,
+  pullRequestStats: (repoId: string) =>
+    ["repos", repoId, "pull-requests", "stats"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -178,5 +184,40 @@ export function useDetailedHealth() {
     queryKey: queryKeys.adminHealth,
     queryFn: () => api.admin.health(),
     refetchInterval: 15_000,
+  });
+}
+
+// ── Pull Requests ───────────────────────────────────────────────────────────
+
+export function usePullRequests(
+  repoId: string,
+  params?: PaginationParams,
+  filter?: PRListFilter,
+) {
+  return useQuery({
+    queryKey: queryKeys.pullRequests(repoId, params, filter),
+    queryFn: () => api.pullRequests.list(repoId, params, filter),
+    enabled: !!repoId,
+  });
+}
+
+export function usePullRequest(repoId: string, prId: string) {
+  return useQuery({
+    queryKey: queryKeys.pullRequest(repoId, prId),
+    queryFn: () => api.pullRequests.get(repoId, prId),
+    enabled: !!repoId && !!prId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.review_status;
+      return status === "pending" ? 3000 : false;
+    },
+  });
+}
+
+export function usePullRequestStats(repoId: string) {
+  return useQuery({
+    queryKey: queryKeys.pullRequestStats(repoId),
+    queryFn: () => api.pullRequests.stats(repoId),
+    enabled: !!repoId,
+    refetchInterval: 15_000, // Poll every 15s to keep embed queue / counts fresh
   });
 }

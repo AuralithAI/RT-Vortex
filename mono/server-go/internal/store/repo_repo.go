@@ -25,6 +25,12 @@ func NewRepositoryRepo(pool *pgxpool.Pool) *RepositoryRepo {
 	return &RepositoryRepo{pool: pool}
 }
 
+// Pool returns the underlying connection pool. Used by internal services
+// that need direct access for cross-cutting queries (e.g., PR sync worker).
+func (r *RepositoryRepo) Pool() *pgxpool.Pool {
+	return r.pool
+}
+
 // Create inserts a new repository.
 func (r *RepositoryRepo) Create(ctx context.Context, repo *model.Repository) error {
 	repo.ID = uuid.New()

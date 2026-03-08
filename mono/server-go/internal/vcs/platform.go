@@ -3,6 +3,7 @@ package vcs
 import (
 	"context"
 	"errors"
+	"time"
 )
 
 // ── Errors ──────────────────────────────────────────────────────────────────
@@ -28,17 +29,20 @@ const (
 
 // PullRequest represents a normalized pull request across platforms.
 type PullRequest struct {
-	ID           string `json:"id"`
-	Number       int    `json:"number"`
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	Author       string `json:"author"`
-	SourceBranch string `json:"source_branch"`
-	TargetBranch string `json:"target_branch"`
-	State        string `json:"state"` // open, closed, merged
-	URL          string `json:"url"`
-	HeadSHA      string `json:"head_sha"`
-	BaseSHA      string `json:"base_sha"`
+	ID           string    `json:"id"`
+	Number       int       `json:"number"`
+	Title        string    `json:"title"`
+	Description  string    `json:"description"`
+	Author       string    `json:"author"`
+	SourceBranch string    `json:"source_branch"`
+	TargetBranch string    `json:"target_branch"`
+	State        string    `json:"state"` // open, closed, merged
+	URL          string    `json:"url"`
+	HeadSHA      string    `json:"head_sha"`
+	BaseSHA      string    `json:"base_sha"`
+	Draft        bool      `json:"draft"`
+	CreatedAt    time.Time `json:"created_at,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
 }
 
 // DiffFile represents a single changed file in a PR.
@@ -80,6 +84,10 @@ type Platform interface {
 
 	// GetPullRequest fetches a PR by number.
 	GetPullRequest(ctx context.Context, owner, repo string, number int) (*PullRequest, error)
+
+	// ListOpenPullRequests returns all open/active PRs for a repository.
+	// The implementation handles pagination internally and returns up to maxResults PRs.
+	ListOpenPullRequests(ctx context.Context, owner, repo string, maxResults int) ([]PullRequest, error)
 
 	// GetPullRequestDiff returns the file-level diff for a PR.
 	GetPullRequestDiff(ctx context.Context, owner, repo string, number int) ([]DiffFile, error)

@@ -40,12 +40,14 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
+	"github.com/AuralithAI/rtvortex-server/internal/prsync"
 	"github.com/AuralithAI/rtvortex-server/internal/review"
 	"github.com/AuralithAI/rtvortex-server/internal/rtenv"
 	"github.com/AuralithAI/rtvortex-server/internal/rtlog"
 	"github.com/AuralithAI/rtvortex-server/internal/server"
 	"github.com/AuralithAI/rtvortex-server/internal/session"
 	"github.com/AuralithAI/rtvortex-server/internal/store"
+	"github.com/AuralithAI/rtvortex-server/internal/vault"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
 	vcsazure "github.com/AuralithAI/rtvortex-server/internal/vcs/azuredevops"
 	vcsbitbucket "github.com/AuralithAI/rtvortex-server/internal/vcs/bitbucket"
@@ -190,6 +192,7 @@ func main() {
 	reviewRepo := store.NewReviewRepository(db.Pool)
 	orgRepo := store.NewOrgRepository(db.Pool)
 	webhookRepo := store.NewWebhookRepository(db.Pool)
+	prRepo := store.NewPullRequestRepo(db.Pool)
 
 	// Engine gRPC client
 	engineClient := engine.NewClient(enginePool)
@@ -356,6 +359,24 @@ func main() {
 		},
 	)
 
+	// File vault — persists API keys entered via the dashboard across restarts.
+	// Uses the same AES-256-GCM key as token encryption.
+	vaultPath := filepath.Join(env.ConfigDir, ".vault.enc")
+	var vaultOpts []vault.FileVaultOption
+	if cfg.Auth.EncryptionKey != "" {
+		vaultOpts = append(vaultOpts, vault.WithEncryptionKey(cfg.Auth.EncryptionKey))
+	}
+	fileVault, err := vault.NewFileVault(vaultPath, vaultOpts...)
+	if err != nil {
+		slog.Warn("File vault init failed — API keys will not persist", "error", err)
+	} else {
+		llmRegistry.SetVault(fileVault)
+		loaded := llmRegistry.LoadFromVault()
+		if loaded > 0 {
+			slog.Info("Loaded API keys from vault", "count", loaded)
+		}
+	}
+
 	// Set primary from config (default: openai).
 	if cfg.LLM.Primary != "" {
 		llmRegistry.SetPrimary(cfg.LLM.Primary)
@@ -399,7 +420,7 @@ func main() {
 	}
 
 	// Review pipeline
-	reviewPipeline := review.NewPipeline(reviewRepo, repoRepo, llmRegistry, vcsRegistry, review.PipelineConfig{
+	reviewPipeline := review.NewPipeline(reviewRepo, repoRepo, llmRegistry, vcsRegistry, engineClient, review.PipelineConfig{
 		MaxFilesPerReview: 50,
 		MaxDiffSizeBytes:  512 * 1024,
 		ConcurrentFiles:   5,
@@ -471,6 +492,11 @@ func main() {
 	bgScheduler.Start()
 	defer bgScheduler.Stop()
 
+	// PR sync worker — discovers and tracks open PRs from connected VCS platforms
+	prSyncWorker := prsync.NewWorker(ctx, prRepo, repoRepo, vcsRegistry, engineClient, wsHub, prsync.DefaultConfig())
+	prSyncWorker.Start()
+	defer prSyncWorker.Stop()
+
 	deps := &server.Dependencies{
 		Config:     cfg,
 		DB:         db,
@@ -497,6 +523,8 @@ func main() {
 		ReviewRepo:     reviewRepo,
 		OrgRepo:        orgRepo,
 		WebhookRepo:    webhookRepo,
+		PRRepo:         prRepo,
+		PRSyncWorker:   prSyncWorker,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────
