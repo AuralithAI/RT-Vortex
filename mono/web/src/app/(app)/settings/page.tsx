@@ -1,5 +1,5 @@
 // ─── Settings Page ───────────────────────────────────────────────────────────
-// Tabbed settings: Profile, LLM Configuration, Embeddings.
+// Tabbed settings: Profile, LLM Configuration, Embeddings, Version Control.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { ProfileSettings } from "@/components/settings/profile-settings";
 import { LLMSettings } from "@/components/settings/llm-settings";
 import { EmbeddingsSettings } from "@/components/settings/embeddings-settings";
+import { VCSSettings } from "@/components/settings/vcs-settings";
 
 export default function SettingsPage() {
   return (
@@ -23,6 +24,7 @@ export default function SettingsPage() {
           <TabsTrigger value="profile">Profile</TabsTrigger>
           <TabsTrigger value="llm">LLM Configuration</TabsTrigger>
           <TabsTrigger value="embeddings">Embeddings</TabsTrigger>
+          <TabsTrigger value="vcs">Version Control</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile">
@@ -35,6 +37,10 @@ export default function SettingsPage() {
 
         <TabsContent value="embeddings">
           <EmbeddingsSettings />
+        </TabsContent>
+
+        <TabsContent value="vcs">
+          <VCSSettings />
         </TabsContent>
       </Tabs>
     </>

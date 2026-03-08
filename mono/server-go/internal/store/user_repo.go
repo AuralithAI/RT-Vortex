@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -36,14 +38,21 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 // Create inserts a new user and returns the created record.
 func (r *UserRepository) Create(ctx context.Context, u *model.User) error {
 	u.ID = uuid.New()
+	if u.VaultToken == "" {
+		token, err := generateVaultToken()
+		if err != nil {
+			return fmt.Errorf("generate vault token: %w", err)
+		}
+		u.VaultToken = token
+	}
 	now := time.Now().UTC()
 	u.CreatedAt = now
 	u.UpdatedAt = now
 
 	_, err := r.pool.Exec(ctx,
-		`INSERT INTO users (id, email, display_name, avatar_url, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		u.ID, u.Email, u.DisplayName, u.AvatarURL, u.CreatedAt, u.UpdatedAt,
+		`INSERT INTO users (id, email, display_name, avatar_url, vault_token, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		u.ID, u.Email, u.DisplayName, u.AvatarURL, u.VaultToken, u.CreatedAt, u.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("create user: %w", err)
@@ -55,9 +64,9 @@ func (r *UserRepository) Create(ctx context.Context, u *model.User) error {
 func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.User, error) {
 	u := &model.User{}
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, email, display_name, avatar_url, created_at, updated_at
+		`SELECT id, email, display_name, avatar_url, vault_token, created_at, updated_at
 		 FROM users WHERE id = $1`, id,
-	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarURL, &u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarURL, &u.VaultToken, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -71,9 +80,9 @@ func (r *UserRepository) GetByID(ctx context.Context, id uuid.UUID) (*model.User
 func (r *UserRepository) GetByEmail(ctx context.Context, email string) (*model.User, error) {
 	u := &model.User{}
 	err := r.pool.QueryRow(ctx,
-		`SELECT id, email, display_name, avatar_url, created_at, updated_at
+		`SELECT id, email, display_name, avatar_url, vault_token, created_at, updated_at
 		 FROM users WHERE email = $1`, email,
-	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarURL, &u.CreatedAt, &u.UpdatedAt)
+	).Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarURL, &u.VaultToken, &u.CreatedAt, &u.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -142,7 +151,7 @@ func (r *UserRepository) ListUsers(ctx context.Context, limit, offset int) ([]*m
 	}
 
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, email, display_name, avatar_url, created_at, updated_at
+		`SELECT id, email, display_name, avatar_url, vault_token, created_at, updated_at
 		 FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`, limit, offset,
 	)
 	if err != nil {
@@ -153,10 +162,20 @@ func (r *UserRepository) ListUsers(ctx context.Context, limit, offset int) ([]*m
 	var users []*model.User
 	for rows.Next() {
 		u := &model.User{}
-		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarURL, &u.CreatedAt, &u.UpdatedAt); err != nil {
+		if err := rows.Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarURL, &u.VaultToken, &u.CreatedAt, &u.UpdatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan user: %w", err)
 		}
 		users = append(users, u)
 	}
 	return users, total, nil
+}
+
+// generateVaultToken produces a 32-byte (64 hex char) cryptographically random
+// token used to scope per-user secrets in the file vault.
+func generateVaultToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

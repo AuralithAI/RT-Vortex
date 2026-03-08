@@ -255,3 +255,32 @@ export function useDeleteChatSession() {
     },
   });
 }
+
+// ── VCS Platform Settings ───────────────────────────────────────────────────
+
+export function useConfigureVCS() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ platform, fields }: { platform: string; fields: Record<string, string> }) =>
+      api.vcsPlatforms.configure(platform, fields),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.vcsPlatforms });
+    },
+  });
+}
+
+export function useDeleteVCS() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (platform: string) => api.vcsPlatforms.remove(platform),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.vcsPlatforms });
+    },
+  });
+}
+
+export function useTestVCS() {
+  return useMutation({
+    mutationFn: (platform: string) => api.vcsPlatforms.test(platform),
+  });
+}

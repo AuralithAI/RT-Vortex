@@ -17,8 +17,27 @@ type User struct {
 	Email       string    `json:"email" db:"email"`
 	DisplayName string    `json:"display_name" db:"display_name"`
 	AvatarURL   string    `json:"avatar_url,omitempty" db:"avatar_url"`
+	VaultToken  string    `json:"-" db:"vault_token"` // 32-byte crypto-random hex string, never exposed
 	CreatedAt   time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// ─── UserVCSPlatform ─────────────────────────────────────────────────────────
+
+// UserVCSPlatform stores non-secret VCS configuration (URLs, usernames, org names)
+// in PostgreSQL. Actual secrets (tokens, passwords) are stored in the file vault.
+type UserVCSPlatform struct {
+	ID           uuid.UUID `json:"id" db:"id"`
+	UserID       uuid.UUID `json:"user_id" db:"user_id"`
+	Platform     string    `json:"platform" db:"platform"`           // github, gitlab, bitbucket, azure_devops
+	BaseURL      string    `json:"base_url" db:"base_url"`           // base URL (for on-prem / self-hosted)
+	APIURL       string    `json:"api_url" db:"api_url"`             // API URL (if different from base)
+	Organization string    `json:"organization" db:"organization"`   // Azure DevOps org, etc.
+	Username     string    `json:"username" db:"username"`            // Bitbucket username, etc.
+	TenantID     string    `json:"tenant_id" db:"tenant_id"`         // Azure AD tenant ID
+	ClientID     string    `json:"client_id" db:"client_id"`         // Azure AD client ID
+	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // MarshalJSON emits both "name" and "display_name" so the web frontend

@@ -32,6 +32,9 @@ import type {
   SystemStats,
   TrackedPullRequest,
   User,
+  VCSConfigureResult,
+  VCSPlatformInfo,
+  VCSTestResult,
 } from "@/types/api";
 
 // ── Error classes ───────────────────────────────────────────────────────────
@@ -512,7 +515,32 @@ export const chat = {
   },
 };
 
+// ── VCS Platform Settings ───────────────────────────────────────────────────
+
+export const vcsPlatforms = {
+  list: async () => {
+    const res = await request<{ platforms: VCSPlatformInfo[] }>("/api/v1/vcs/platforms");
+    return res.platforms ?? [];
+  },
+
+  configure: (platform: string, fields: Record<string, string>) =>
+    request<VCSConfigureResult>(`/api/v1/vcs/platforms/${platform}`, {
+      method: "PUT",
+      body: JSON.stringify(fields),
+    }),
+
+  remove: (platform: string) =>
+    request<{ platform: string; deleted: number }>(`/api/v1/vcs/platforms/${platform}`, {
+      method: "DELETE",
+    }),
+
+  test: (platform: string) =>
+    request<VCSTestResult>(`/api/v1/vcs/platforms/${platform}/test`, {
+      method: "POST",
+    }),
+};
+
 // ── Convenience export ──────────────────────────────────────────────────────
 
-const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat };
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms };
 export default api;

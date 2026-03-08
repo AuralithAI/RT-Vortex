@@ -427,3 +427,35 @@ export interface ChatStreamEvent {
   chunks_retrieved?: number;
   error?: string;
 }
+
+// ── VCS Platform Settings ───────────────────────────────────────────────────
+
+export interface VCSFieldInfo {
+  key: string;
+  label: string;
+  secret: boolean;
+  has_value: boolean;
+  value: string;
+  default_value?: string;
+  hint?: string;
+}
+
+export interface VCSPlatformInfo {
+  name: string;
+  display_name: string;
+  configured: boolean;
+  fields: VCSFieldInfo[];
+}
+
+export interface VCSConfigureResult {
+  platform: string;
+  saved_secrets: number;
+  saved_config: number;
+}
+
+export interface VCSTestResult {
+  platform: string;
+  success: boolean;
+  message?: string;
+  error?: string;
+}

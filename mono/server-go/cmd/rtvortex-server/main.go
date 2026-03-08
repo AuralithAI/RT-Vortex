@@ -502,6 +502,9 @@ func main() {
 	chatRepo := store.NewChatRepository(db.Pool)
 	chatService := chat.NewService(chatRepo, engineClient, llmRegistry, chat.DefaultConfig())
 
+	// VCS platform config repo — per-user non-secret VCS settings (URLs, usernames)
+	vcsPlatformRepo := store.NewVCSPlatformRepo(db.Pool)
+
 	deps := &server.Dependencies{
 		Config:     cfg,
 		DB:         db,
@@ -532,6 +535,8 @@ func main() {
 		PRSyncWorker:   prSyncWorker,
 		ChatRepo:       chatRepo,
 		ChatService:    chatService,
+		Vault:          fileVault,
+		VCSPlatformRepo: vcsPlatformRepo,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────

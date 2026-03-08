@@ -36,6 +36,7 @@ export const queryKeys = {
     ["repos", repoId, "chat", "sessions", sessionId] as const,
   chatMessages: (repoId: string, sessionId: string) =>
     ["repos", repoId, "chat", "sessions", sessionId, "messages"] as const,
+  vcsPlatforms: ["vcs", "platforms"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -257,5 +258,14 @@ export function useChatMessages(repoId: string, sessionId: string) {
       return res.messages ?? [];
     },
     enabled: !!repoId && !!sessionId,
+  });
+}
+
+// ── VCS ─────────────────────────────────────────────────────────────────────
+
+export function useVCSPlatforms() {
+  return useQuery({
+    queryKey: queryKeys.vcsPlatforms,
+    queryFn: () => api.vcsPlatforms.list(),
   });
 }

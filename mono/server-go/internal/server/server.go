@@ -27,6 +27,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/session"
 	"github.com/AuralithAI/rtvortex-server/internal/store"
 	"github.com/AuralithAI/rtvortex-server/internal/tracing"
+	"github.com/AuralithAI/rtvortex-server/internal/vault"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
 	"github.com/AuralithAI/rtvortex-server/internal/webhookq"
 	"github.com/AuralithAI/rtvortex-server/internal/ws"
@@ -72,6 +73,12 @@ type Dependencies struct {
 	// Chat
 	ChatRepo    *store.ChatRepository
 	ChatService *chat.Service
+
+	// File Vault — shared vault for per-user secret storage
+	Vault *vault.FileVault
+
+	// VCS Platform Config — per-user non-secret VCS settings (URLs, usernames)
+	VCSPlatformRepo *store.VCSPlatformRepo
 }
 
 // Server holds the HTTP server components.
@@ -143,6 +150,8 @@ func (s *Server) setupRouter() {
 		PRSyncWorker:    s.deps.PRSyncWorker,
 		ChatRepo:        s.deps.ChatRepo,
 		ChatService:     s.deps.ChatService,
+		Vault:           s.deps.Vault,
+		VCSPlatformRepo: s.deps.VCSPlatformRepo,
 	}
 
 	// ── Health & readiness (no auth required) ───────────────────────────
@@ -270,6 +279,14 @@ func (s *Server) setupRouter() {
 			r.Route("/embeddings", func(r chi.Router) {
 				r.Get("/config", h.GetEmbeddingsConfig)
 				r.Put("/config", h.UpdateEmbeddingsConfig)
+			})
+
+			// VCS Platform Settings (per-user credentials stored in vault)
+			r.Route("/vcs", func(r chi.Router) {
+				r.Get("/platforms", h.ListVCSPlatforms)
+				r.Put("/platforms/{platform}", h.ConfigureVCSPlatform)
+				r.Delete("/platforms/{platform}", h.DeleteVCSPlatform)
+				r.Post("/platforms/{platform}/test", h.TestVCSPlatform)
 			})
 
 			// Admin
