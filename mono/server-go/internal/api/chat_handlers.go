@@ -63,6 +63,15 @@ func (h *Handler) CreateChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	slog.Info("[Chat] session created",
+		"session_id", session.ID,
+		"repo_id", repoID,
+		"user_id", userID,
+		"title", title,
+		"model", body.Model,
+		"provider", body.Provider,
+	)
+
 	writeJSON(w, http.StatusCreated, session)
 }
 
@@ -300,7 +309,16 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		Attachments: body.Attachments,
 	}
 
+	slog.Info("[Chat] message send request",
+		"session_id", sessionID,
+		"repo_id", repoID,
+		"user_id", userID,
+		"content_len", len(body.Content),
+		"attachments", len(body.Attachments),
+	)
+
 	// Use a timeout context for long-running requests.
+	msgStart := time.Now()
 	ctx := r.Context()
 	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
@@ -322,11 +340,22 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		slog.Error("chat message processing failed", "error", err)
+		slog.Error("[Chat] message processing failed",
+			"session_id", sessionID,
+			"repo_id", repoID,
+			"error", err,
+			"duration_ms", time.Since(msgStart).Milliseconds(),
+		)
 		// Try to send error event (client may have disconnected).
 		errEvent, _ := json.Marshal(model.ChatStreamEvent{Type: "error", Error: err.Error()})
 		fmt.Fprintf(w, "data: %s\n\n", errEvent)
 		flusher.Flush()
+	} else {
+		slog.Info("[Chat] message completed",
+			"session_id", sessionID,
+			"repo_id", repoID,
+			"duration_ms", time.Since(msgStart).Milliseconds(),
+		)
 	}
 
 	// Signal end of stream.

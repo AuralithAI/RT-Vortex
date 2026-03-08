@@ -5,6 +5,7 @@
  */
 
 #include "tms/ltm_faiss.h"
+#include "logging.h"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -476,30 +477,59 @@ std::vector<RetrievedChunk> LTMFaiss::search(
     
     std::lock_guard<std::mutex> lock(mutex_);
     
-    // Search FAISS
+    // Search FAISS — when filtering by repo we MUST search the entire index.
+    //
+    // FAISS returns the globally nearest vectors regardless of repo ownership.
+    // If the target repo is a small fraction of the index (e.g. 5%), even
+    // a 10× over-fetch may return zero matching chunks because the nearest
+    // neighbors are all from other repos.  The only safe strategy is to
+    // search all vectors and let convertResults() filter + cap at top_k.
+    //
+    // Performance: FlatL2/HNSW brute-force over 70-100k 384-dim vectors
+    // takes ~30-60ms which is acceptable for interactive chat.
     int search_k = top_k;
     if (!repo_filter.empty()) {
-        // Over-fetch to compensate for filtering
-        search_k = std::min(top_k * 3, static_cast<int>(chunks_.size()));
+        size_t total  = chunks_.size();
+        size_t repo_n = 0;
+        auto it = repo_to_chunks_.find(repo_filter);
+        if (it != repo_to_chunks_.end()) repo_n = it->second.size();
+
+        // Always search the full index — post-filter in convertResults
+        search_k = static_cast<int>(total);
+
+        LOG_DEBUG("[LTM] search: repo_filter='" + repo_filter +
+                  "' repo_chunks=" + std::to_string(repo_n) +
+                  " total=" + std::to_string(total) +
+                  " search_k=" + std::to_string(search_k));
     }
     
     auto [ids, distances] = faiss_impl_->search(query_embedding, search_k);
     
-    return convertResults(ids, distances);
+    return convertResults(ids, distances, repo_filter, top_k);
 }
 
 std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
     const std::string& query_text,
     const std::vector<float>& query_embedding,
     int top_k,
-    float alpha
+    float alpha,
+    const std::string& repo_filter
 ) {
     if (top_k <= 0) top_k = config_.default_top_k;
     
     std::lock_guard<std::mutex> lock(mutex_);
     
+    // Over-fetch when repo_filter is set — same strategy as search():
+    // always search the full index so post-filtering can find matches.
+    int over_fetch_k;
+    if (repo_filter.empty()) {
+        over_fetch_k = top_k * 2;
+    } else {
+        over_fetch_k = static_cast<int>(chunks_.size());
+    }
+    
     // Vector search
-    int vector_k = static_cast<int>(top_k * 2);  // Over-fetch for fusion
+    int vector_k = over_fetch_k;
     auto [v_ids, v_distances] = faiss_impl_->search(query_embedding, vector_k);
     
     // Lexical search
@@ -515,6 +545,14 @@ std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
         
         auto it = faiss_id_to_chunk_id_.find(v_ids[rank]);
         if (it != faiss_id_to_chunk_id_.end()) {
+            // Apply repo filter: skip chunks that don't belong to the target repo
+            if (!repo_filter.empty()) {
+                const std::string& chunk_id = it->second;
+                if (chunk_id.size() <= repo_filter.size() || 
+                    chunk_id.substr(0, repo_filter.size() + 1) != repo_filter + ":") {
+                    continue;
+                }
+            }
             float rrf_score = alpha / (k + rank + 1);
             combined_scores[it->second] += rrf_score;
         }
@@ -522,6 +560,14 @@ std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
     
     // Add lexical scores
     for (size_t rank = 0; rank < lexical_results.size(); ++rank) {
+        // Apply repo filter to lexical results too
+        if (!repo_filter.empty()) {
+            const std::string& chunk_id = lexical_results[rank].first;
+            if (chunk_id.size() <= repo_filter.size() || 
+                chunk_id.substr(0, repo_filter.size() + 1) != repo_filter + ":") {
+                continue;
+            }
+        }
         float rrf_score = (1.0f - alpha) / (k + rank + 1);
         combined_scores[lexical_results[rank].first] += rrf_score;
     }
@@ -553,6 +599,11 @@ std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
         }
         
         results.push_back(result);
+    }
+    
+    if (!repo_filter.empty()) {
+        LOG_DEBUG("[LTM] hybridSearch: repo_filter='" + repo_filter +
+                  "' returning " + std::to_string(results.size()) + " chunks after filtering");
     }
     
     return results;
@@ -949,9 +1000,17 @@ FAISSIndexType LTMFaiss::selectIndexType(size_t expected_size) {
 
 std::vector<RetrievedChunk> LTMFaiss::convertResults(
     const std::vector<int64_t>& ids,
-    const std::vector<float>& distances
+    const std::vector<float>& distances,
+    const std::string& repo_filter,
+    int top_k
 ) {
     std::vector<RetrievedChunk> results;
+
+    // Precompute the repo prefix for filtering (format: "repo_id:")
+    std::string repo_prefix;
+    if (!repo_filter.empty()) {
+        repo_prefix = repo_filter + ":";
+    }
     
     for (size_t i = 0; i < ids.size(); ++i) {
         if (ids[i] < 0) continue;
@@ -960,6 +1019,13 @@ std::vector<RetrievedChunk> LTMFaiss::convertResults(
         if (chunk_id_it == faiss_id_to_chunk_id_.end()) continue;
         
         const std::string& chunk_id = chunk_id_it->second;
+
+        // ── Repo filter: skip chunks that don't belong to the requested repo ──
+        if (!repo_prefix.empty()) {
+            if (chunk_id.compare(0, repo_prefix.size(), repo_prefix) != 0) {
+                continue;  // chunk belongs to a different repository
+            }
+        }
         
         auto chunk_it = chunks_.find(chunk_id);
         if (chunk_it == chunks_.end()) continue;
@@ -982,6 +1048,11 @@ std::vector<RetrievedChunk> LTMFaiss::convertResults(
         }
         
         results.push_back(result);
+
+        // Stop once we have enough results (respects top_k after filtering)
+        if (top_k > 0 && static_cast<int>(results.size()) >= top_k) {
+            break;
+        }
     }
     
     return results;

@@ -303,11 +303,17 @@ grpc::Status EngineServiceImpl::Search(
     const aipr::engine::v1::SearchRequest* request,
     aipr::engine::v1::SearchResponse* response)
 {
+    LOG_INFO("Search called: repo=" + request->repo_id() +
+             " query_len=" + std::to_string(request->query().size()) +
+             " query=\"" + request->query().substr(0, 120) + "\"");
+
     if (context->IsCancelled()) {
         return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
     }
 
     try {
+        auto search_start = std::chrono::steady_clock::now();
+
         // Determine top_k from config or use default
         size_t top_k = 20;
         if (request->has_config() && request->config().top_k() > 0) {
@@ -319,6 +325,33 @@ grpc::Status EngineServiceImpl::Search(
             request->query(),
             top_k
         );
+
+        auto search_end = std::chrono::steady_clock::now();
+        auto search_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            search_end - search_start).count();
+
+        // Compute total context size in characters (for token estimation)
+        size_t total_context_chars = 0;
+        for (const auto& chunk : chunks) {
+            total_context_chars += chunk.content.size();
+        }
+
+        LOG_INFO("Search completed: repo=" + request->repo_id() +
+                 " chunks_retrieved=" + std::to_string(chunks.size()) +
+                 " top_k=" + std::to_string(top_k) +
+                 " context_chars=" + std::to_string(total_context_chars) +
+                 " est_tokens=" + std::to_string(total_context_chars / 4) +
+                 " search_ms=" + std::to_string(search_ms));
+
+        // Log individual chunk details at DEBUG level
+        for (size_t i = 0; i < chunks.size(); ++i) {
+            LOG_DEBUG("  chunk[" + std::to_string(i) + "]: " +
+                      chunks[i].file_path + ":" +
+                      std::to_string(chunks[i].start_line) + "-" +
+                      std::to_string(chunks[i].end_line) +
+                      " score=" + std::to_string(chunks[i].relevance_score) +
+                      " chars=" + std::to_string(chunks[i].content.size()));
+        }
 
         // Convert results to proto
         for (const auto& chunk : chunks) {
@@ -332,6 +365,8 @@ grpc::Status EngineServiceImpl::Search(
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {
+        LOG_ERROR("Search failed: repo=" + request->repo_id() +
+                  " error=" + std::string(e.what()));
         return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
     }
 }
@@ -341,11 +376,17 @@ grpc::Status EngineServiceImpl::SearchStream(
     const aipr::engine::v1::SearchRequest* request,
     grpc::ServerWriter<aipr::engine::v1::ContextChunk>* writer)
 {
+    LOG_INFO("SearchStream called: repo=" + request->repo_id() +
+             " query_len=" + std::to_string(request->query().size()) +
+             " query=\"" + request->query().substr(0, 120) + "\"");
+
     if (context->IsCancelled()) {
         return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
     }
 
     try {
+        auto search_start = std::chrono::steady_clock::now();
+
         size_t top_k = 20;
         if (request->has_config() && request->config().top_k() > 0) {
             top_k = request->config().top_k();
@@ -357,9 +398,29 @@ grpc::Status EngineServiceImpl::SearchStream(
             top_k
         );
 
+        auto search_end = std::chrono::steady_clock::now();
+        auto search_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            search_end - search_start).count();
+
+        size_t total_context_chars = 0;
+        for (const auto& chunk : chunks) {
+            total_context_chars += chunk.content.size();
+        }
+
+        LOG_INFO("SearchStream retrieval done: repo=" + request->repo_id() +
+                 " chunks_retrieved=" + std::to_string(chunks.size()) +
+                 " top_k=" + std::to_string(top_k) +
+                 " context_chars=" + std::to_string(total_context_chars) +
+                 " est_tokens=" + std::to_string(total_context_chars / 4) +
+                 " search_ms=" + std::to_string(search_ms));
+
         // Stream results one by one
+        size_t streamed = 0;
         for (const auto& chunk : chunks) {
             if (context->IsCancelled()) {
+                LOG_WARN("SearchStream cancelled by client after " +
+                         std::to_string(streamed) + "/" +
+                         std::to_string(chunks.size()) + " chunks");
                 return grpc::Status(grpc::StatusCode::CANCELLED, "Stream cancelled by client");
             }
 
@@ -367,13 +428,21 @@ grpc::Status EngineServiceImpl::SearchStream(
             toProto(chunk, &proto_chunk);
 
             if (!writer->Write(proto_chunk)) {
+                LOG_ERROR("SearchStream write failed after " +
+                          std::to_string(streamed) + " chunks");
                 return grpc::Status(grpc::StatusCode::UNKNOWN, "Failed to write to stream");
             }
+            streamed++;
         }
+
+        LOG_DEBUG("SearchStream completed: streamed " +
+                  std::to_string(streamed) + " chunks to client");
 
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {
+        LOG_ERROR("SearchStream failed: repo=" + request->repo_id() +
+                  " error=" + std::string(e.what()));
         return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
     }
 }

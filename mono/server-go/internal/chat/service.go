@@ -107,6 +107,12 @@ type StreamCallback func(event model.ChatStreamEvent)
 func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest, onEvent StreamCallback) (*model.ChatMessage, error) {
 	log := slog.With("session_id", req.SessionID, "repo_id", req.RepoID)
 
+	log.Info("[Chat] message received",
+		"user_id", req.UserID,
+		"content_len", len(req.Content),
+		"attachments", len(req.Attachments),
+	)
+
 	// 1. Persist user message.
 	userMsg := &model.ChatMessage{
 		SessionID:   req.SessionID,
@@ -164,10 +170,32 @@ func (s *Service) SendMessage(ctx context.Context, req SendMessageRequest, onEve
 					Citation: &citation,
 				})
 			}
-			log.Debug("engine search completed",
-				"chunks", len(contextChunks),
+
+			// Compute total context size for logging
+			totalContextChars := 0
+			for _, chunk := range contextChunks {
+				totalContextChars += len(chunk.Content)
+			}
+
+			log.Info("[Chat] engine search completed",
+				"chunks_retrieved", len(contextChunks),
+				"total_context_chars", totalContextChars,
+				"est_tokens", totalContextChars/4,
 				"search_time_ms", time.Since(searchStart).Milliseconds(),
+				"top_k", s.cfg.MaxContextChunks,
 			)
+
+			// Log individual chunks at debug level
+			for i, chunk := range contextChunks {
+				log.Debug("[Chat] retrieved chunk",
+					"index", i,
+					"file", chunk.FilePath,
+					"lines", fmt.Sprintf("%d-%d", chunk.StartLine, chunk.EndLine),
+					"score", fmt.Sprintf("%.4f", chunk.RelevanceScore),
+					"chars", len(chunk.Content),
+					"symbols", len(chunk.Symbols),
+				)
+			}
 		}
 	}
 	searchTimeMs := int(time.Since(searchStart).Milliseconds())

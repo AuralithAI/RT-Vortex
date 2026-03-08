@@ -7,6 +7,7 @@
 #include "tms/tms_memory_system.h"
 #include "tms/repo_parser.h"
 #include "tms/embedding_engine.h"
+#include "logging.h"
 #include <chrono>
 #include <algorithm>
 #include <sstream>
@@ -370,15 +371,27 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     
     auto start_time = std::chrono::steady_clock::now();
     TMSResponse response;
+
+    LOG_DEBUG("[TMS] forward: query_len=" + std::to_string(query.query_text.size()) +
+              " repo=" + query.repo_filter +
+              " session=" + query.session_id +
+              " hints=" + std::to_string(query.hint_files.size()));
     
     // Step 1: Compute query embedding if not provided
     std::vector<float> query_embedding = query.query_embedding;
     if (query_embedding.empty()) {
+        auto embed_start = std::chrono::steady_clock::now();
         auto result = embedding_engine_->embed(query.query_text);
         if (!result.success) {
+            LOG_ERROR("[TMS] embedding failed: " + result.error);
             throw std::runtime_error("Failed to compute query embedding: " + result.error);
         }
         query_embedding = std::move(result.embedding);
+        auto embed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - embed_start).count();
+        LOG_DEBUG("[TMS] query embedding computed: dim=" +
+                  std::to_string(query_embedding.size()) +
+                  " embed_ms=" + std::to_string(embed_ms));
     }
     
     // Step 2: Compute Controller decides strategy
@@ -400,9 +413,15 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     // Step 3: Retrieve from LTM
     std::vector<RetrievedChunk> ltm_results;
     if (decision.strategy != ComputeStrategy::FAST || decision.ltm_top_k > 0) {
+        auto ltm_start = std::chrono::steady_clock::now();
         ltm_results = ltm_->search(query_embedding, decision.ltm_top_k, query.repo_filter);
+        auto ltm_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - ltm_start).count();
         response.reasoning_trace.push_back("LTM: Retrieved " + std::to_string(ltm_results.size()) + " chunks");
         response.ltm_items_scanned = ltm_results.size();
+        LOG_DEBUG("[TMS] LTM search: retrieved=" + std::to_string(ltm_results.size()) +
+                  " top_k=" + std::to_string(decision.ltm_top_k) +
+                  " ltm_ms=" + std::to_string(ltm_ms));
     }
     
     // Step 4: Retrieve from STM
@@ -411,6 +430,8 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
         stm_results = stm_->search(query.session_id, query_embedding, decision.stm_top_k);
         response.reasoning_trace.push_back("STM: Retrieved " + std::to_string(stm_results.size()) + " items");
         response.stm_items_scanned = stm_results.size();
+        LOG_DEBUG("[TMS] STM search: retrieved=" + std::to_string(stm_results.size()) +
+                  " session=" + query.session_id);
     }
     
     // Step 5: Match patterns and strategies from MTM
@@ -429,6 +450,8 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
         response.reasoning_trace.push_back("MTM: Matched " + std::to_string(patterns.size()) + " patterns, " 
                                            + std::to_string(strategies.size()) + " strategies");
         response.mtm_items_scanned = patterns.size() + strategies.size();
+        LOG_DEBUG("[TMS] MTM match: patterns=" + std::to_string(patterns.size()) +
+                  " strategies=" + std::to_string(strategies.size()));
     }
     
     response.matched_patterns = patterns;
@@ -484,6 +507,11 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     // Finalize
     auto end_time = std::chrono::steady_clock::now();
     response.total_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+    LOG_DEBUG("[TMS] forward complete: total_ms=" + std::to_string(response.total_time.count()) +
+              " fused_chunks=" + std::to_string(response.attention_output.fused_chunks.size()) +
+              " fused_context_len=" + std::to_string(response.attention_output.fused_context.size()) +
+              " confidence=" + std::to_string(response.attention_output.confidence_score));
     
     return response;
 }

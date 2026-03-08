@@ -8,6 +8,7 @@
 
 #include "engine_api.h"
 #include "review_signals.h"
+#include "logging.h"
 #include "version.h"
 #include "tms/tms_memory_system.h"
 #include "tms/tms_types.h"
@@ -458,6 +459,12 @@ public:
         const std::string& query,
         size_t top_k) override
     {
+        auto start = std::chrono::steady_clock::now();
+
+        LOG_INFO("[ChatRAG] search: repo=" + repo_id +
+                 " top_k=" + std::to_string(top_k) +
+                 " query_len=" + std::to_string(query.size()));
+
         // Build TMS query
         tms::TMSQuery tms_q;
         tms_q.query_text  = query;
@@ -466,12 +473,52 @@ public:
 
         tms::TMSResponse resp = tms_->forward(tms_q);
 
+        auto search_end = std::chrono::steady_clock::now();
+        auto search_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            search_end - start).count();
+
+        // Log TMS retrieval metrics
+        LOG_INFO("[ChatRAG] TMS forward complete: " +
+                 std::string("strategy=") + resp.compute_decision.reasoning +
+                 " ltm_scanned=" + std::to_string(resp.ltm_items_scanned) +
+                 " stm_scanned=" + std::to_string(resp.stm_items_scanned) +
+                 " mtm_scanned=" + std::to_string(resp.mtm_items_scanned) +
+                 " fused_chunks=" + std::to_string(resp.attention_output.fused_chunks.size()) +
+                 " patterns_matched=" + std::to_string(resp.matched_patterns.size()) +
+                 " tms_ms=" + std::to_string(search_ms));
+
         // Convert fused chunks to ContextChunks, respecting top_k
         std::vector<ContextChunk> results;
         results.reserve(std::min(top_k, resp.attention_output.fused_chunks.size()));
+
+        size_t total_content_chars = 0;
         for (size_t i = 0; i < resp.attention_output.fused_chunks.size() && i < top_k; ++i) {
-            results.push_back(toContextChunk(resp.attention_output.fused_chunks[i]));
+            auto cc = toContextChunk(resp.attention_output.fused_chunks[i]);
+            total_content_chars += cc.content.size();
+            results.push_back(std::move(cc));
         }
+
+        LOG_INFO("[ChatRAG] search result: repo=" + repo_id +
+                 " chunks_returned=" + std::to_string(results.size()) +
+                 " total_content_chars=" + std::to_string(total_content_chars) +
+                 " est_tokens=" + std::to_string(total_content_chars / 4) +
+                 " total_ms=" + std::to_string(search_ms));
+
+        // Log per-chunk details at DEBUG
+        for (size_t i = 0; i < results.size(); ++i) {
+            const auto& rc = resp.attention_output.fused_chunks[i];
+            LOG_DEBUG("[ChatRAG]   chunk[" + std::to_string(i) + "]: " +
+                      results[i].file_path + ":" +
+                      std::to_string(results[i].start_line) + "-" +
+                      std::to_string(results[i].end_line) +
+                      " score=" + std::to_string(results[i].relevance_score) +
+                      " (vec=" + std::to_string(rc.similarity_score) +
+                      " lex=" + std::to_string(rc.lexical_score) +
+                      " attn=" + std::to_string(rc.attention_weight) +
+                      ") src=" + rc.memory_source +
+                      " chars=" + std::to_string(results[i].content.size()));
+        }
+
         return results;
     }
 

@@ -141,12 +141,14 @@ public:
      * @param query_embedding Query embedding (for vector search)
      * @param top_k Number of results
      * @param alpha Weight for vector vs lexical (0.7 = 70% vector)
+     * @param repo_filter If non-empty, only return chunks from this repo
      */
     std::vector<RetrievedChunk> hybridSearch(
         const std::string& query_text,
         const std::vector<float>& query_embedding,
         int top_k = -1,
-        float alpha = 0.7f
+        float alpha = 0.7f,
+        const std::string& repo_filter = ""
     );
     
     // =========================================================================
@@ -297,7 +299,9 @@ private:
     void initializeFAISSIndex(FAISSIndexType type);
     std::vector<RetrievedChunk> convertResults(
         const std::vector<int64_t>& ids,
-        const std::vector<float>& distances
+        const std::vector<float>& distances,
+        const std::string& repo_filter = "",
+        int top_k = -1
     );
     void maybeAutoSave();
 };
