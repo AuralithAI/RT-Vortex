@@ -29,13 +29,13 @@ type User struct {
 type UserVCSPlatform struct {
 	ID           uuid.UUID `json:"id" db:"id"`
 	UserID       uuid.UUID `json:"user_id" db:"user_id"`
-	Platform     string    `json:"platform" db:"platform"`           // github, gitlab, bitbucket, azure_devops
-	BaseURL      string    `json:"base_url" db:"base_url"`           // base URL (for on-prem / self-hosted)
-	APIURL       string    `json:"api_url" db:"api_url"`             // API URL (if different from base)
-	Organization string    `json:"organization" db:"organization"`   // Azure DevOps org, etc.
-	Username     string    `json:"username" db:"username"`            // Bitbucket username, etc.
-	TenantID     string    `json:"tenant_id" db:"tenant_id"`         // Azure AD tenant ID
-	ClientID     string    `json:"client_id" db:"client_id"`         // Azure AD client ID
+	Platform     string    `json:"platform" db:"platform"`         // github, gitlab, bitbucket, azure_devops
+	BaseURL      string    `json:"base_url" db:"base_url"`         // base URL (for on-prem / self-hosted)
+	APIURL       string    `json:"api_url" db:"api_url"`           // API URL (if different from base)
+	Organization string    `json:"organization" db:"organization"` // Azure DevOps org, etc.
+	Username     string    `json:"username" db:"username"`         // Bitbucket username, etc.
+	TenantID     string    `json:"tenant_id" db:"tenant_id"`       // Azure AD tenant ID
+	ClientID     string    `json:"client_id" db:"client_id"`       // Azure AD client ID
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
 }

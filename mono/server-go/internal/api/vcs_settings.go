@@ -42,8 +42,8 @@ type vcsFieldDef struct {
 	Key          string `json:"key"`
 	Label        string `json:"label"`
 	Secret       bool   `json:"secret"`        // true → stored in vault; false → stored in DB
-	DefaultValue string `json:"default_value"`  // default for URL fields (empty = no default)
-	Hint         string `json:"hint"`           // UI hint text
+	DefaultValue string `json:"default_value"` // default for URL fields (empty = no default)
+	Hint         string `json:"hint"`          // UI hint text
 }
 
 var vcsPlatformDefs = map[string]struct {
