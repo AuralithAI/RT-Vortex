@@ -230,7 +230,7 @@ export const users = {
   me: () =>
     request<User>("/api/v1/user/me"),
 
-  updateMe: (fields: Partial<Pick<User, "name" | "email">>) =>
+  updateMe: (fields: Record<string, string>) =>
     request<User>("/api/v1/user/me", {
       method: "PUT",
       body: JSON.stringify(fields),

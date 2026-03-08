@@ -21,6 +21,19 @@ type User struct {
 	UpdatedAt   time.Time `json:"updated_at" db:"updated_at"`
 }
 
+// MarshalJSON emits both "name" and "display_name" so the web frontend
+// (which uses `user.name`) and the canonical API field are both populated.
+func (u User) MarshalJSON() ([]byte, error) {
+	type alias User
+	return json.Marshal(struct {
+		alias
+		Name string `json:"name"`
+	}{
+		alias: alias(u),
+		Name:  u.DisplayName,
+	})
+}
+
 // OAuthIdentity links a user to an OAuth2 provider account.
 type OAuthIdentity struct {
 	ID              uuid.UUID  `json:"id" db:"id"`

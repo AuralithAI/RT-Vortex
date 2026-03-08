@@ -793,12 +793,12 @@ function CitationList({ citations }: { citations: ChatCitation[] }) {
           {visibleCitations.map((c, i) => (
             <Tooltip key={i}>
               <TooltipTrigger asChild>
-                <button className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted hover:bg-accent border border-border text-[11px] text-foreground transition-colors">
-                  <FileCode2 className="h-3 w-3 text-emerald-400" />
+                <button className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 text-[11px] text-zinc-800 dark:text-zinc-200 font-medium shadow-sm transition-colors">
+                  <FileCode2 className="h-3 w-3 text-emerald-500" />
                   <span className="font-mono truncate max-w-[160px]">
                     {c.file_path.split("/").pop()}
                   </span>
-                  <span className="text-muted-foreground">
+                  <span className="text-zinc-500 dark:text-zinc-400 font-normal">
                     :{c.start_line}–{c.end_line}
                   </span>
                 </button>

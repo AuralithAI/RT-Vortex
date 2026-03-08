@@ -202,6 +202,7 @@ func (r *UpdateOrgRequest) Validate() *ValidationError {
 // UpdateUserRequest is the validated input for updating user profile.
 type UpdateUserRequest struct {
 	DisplayName string `json:"display_name"`
+	Email       string `json:"email"`
 	AvatarURL   string `json:"avatar_url"`
 }
 
@@ -211,6 +212,10 @@ func (r *UpdateUserRequest) Validate() *ValidationError {
 	if r.DisplayName != "" {
 		MinLength(ve, "display_name", r.DisplayName, 1)
 		MaxLength(ve, "display_name", r.DisplayName, 100)
+	}
+	if r.Email != "" {
+		Email(ve, "email", r.Email)
+		MaxLength(ve, "email", r.Email, 255)
 	}
 	if r.AvatarURL != "" {
 		URL(ve, "avatar_url", r.AvatarURL)

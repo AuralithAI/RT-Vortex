@@ -401,6 +401,9 @@ func (h *Handler) UpdateCurrentUser(w http.ResponseWriter, r *http.Request) {
 	if req.DisplayName != "" {
 		user.DisplayName = req.DisplayName
 	}
+	if req.Email != "" {
+		user.Email = req.Email
+	}
 	if req.AvatarURL != "" {
 		user.AvatarURL = req.AvatarURL
 	}

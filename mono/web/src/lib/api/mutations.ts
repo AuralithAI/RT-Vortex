@@ -12,7 +12,7 @@ import type { User, Org, EmbeddingsUpdateRequest } from "@/types/api";
 export function useUpdateMe() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (data: Partial<User>) => api.users.updateMe(data),
+    mutationFn: (data: Record<string, string>) => api.users.updateMe(data),
     onSuccess: (user) => {
       qc.setQueryData(queryKeys.me, user);
     },

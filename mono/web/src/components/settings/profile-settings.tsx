@@ -21,7 +21,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useUIStore } from "@/lib/stores/ui";
 
 const schema = z.object({
-  name: z.string().min(1, "Name is required"),
+  display_name: z.string().min(1, "Name is required"),
   email: z.string().email("Invalid email address"),
 });
 
@@ -39,7 +39,7 @@ export function ProfileSettings() {
   } = useForm<FormData>({
     resolver: zodResolver(schema),
     defaultValues: {
-      name: user?.name ?? "",
+      display_name: user?.name ?? "",
       email: user?.email ?? "",
     },
   });
@@ -90,10 +90,10 @@ export function ProfileSettings() {
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="name">Name</Label>
-            <Input id="name" {...register("name")} />
-            {errors.name && (
-              <p className="text-xs text-red-500">{errors.name.message}</p>
+            <Label htmlFor="display_name">Name</Label>
+            <Input id="display_name" {...register("display_name")} />
+            {errors.display_name && (
+              <p className="text-xs text-red-500">{errors.display_name.message}</p>
             )}
           </div>
 
