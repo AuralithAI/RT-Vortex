@@ -220,3 +220,38 @@ export function useReviewPullRequest() {
     },
   });
 }
+
+// ── Chat ────────────────────────────────────────────────────────────────────
+
+export function useCreateChatSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, title }: { repoId: string; title?: string }) =>
+      api.chat.createSession(repoId, { title }),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.chatSessions(repoId) });
+    },
+  });
+}
+
+export function useUpdateChatSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, sessionId, title }: { repoId: string; sessionId: string; title: string }) =>
+      api.chat.updateSession(repoId, sessionId, title),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.chatSessions(repoId) });
+    },
+  });
+}
+
+export function useDeleteChatSession() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, sessionId }: { repoId: string; sessionId: string }) =>
+      api.chat.deleteSession(repoId, sessionId),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.chatSessions(repoId) });
+    },
+  });
+}

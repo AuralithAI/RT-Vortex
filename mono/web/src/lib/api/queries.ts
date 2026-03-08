@@ -30,6 +30,12 @@ export const queryKeys = {
     ["repos", repoId, "pull-requests", prId] as const,
   pullRequestStats: (repoId: string) =>
     ["repos", repoId, "pull-requests", "stats"] as const,
+  chatSessions: (repoId: string) =>
+    ["repos", repoId, "chat", "sessions"] as const,
+  chatSession: (repoId: string, sessionId: string) =>
+    ["repos", repoId, "chat", "sessions", sessionId] as const,
+  chatMessages: (repoId: string, sessionId: string) =>
+    ["repos", repoId, "chat", "sessions", sessionId, "messages"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -219,5 +225,37 @@ export function usePullRequestStats(repoId: string) {
     queryFn: () => api.pullRequests.stats(repoId),
     enabled: !!repoId,
     refetchInterval: 15_000, // Poll every 15s to keep embed queue / counts fresh
+  });
+}
+
+// ── Chat ────────────────────────────────────────────────────────────────────
+
+export function useChatSessions(repoId: string) {
+  return useQuery({
+    queryKey: queryKeys.chatSessions(repoId),
+    queryFn: async () => {
+      const res = await api.chat.sessions(repoId, { limit: 50 });
+      return res.sessions ?? [];
+    },
+    enabled: !!repoId,
+  });
+}
+
+export function useChatSession(repoId: string, sessionId: string) {
+  return useQuery({
+    queryKey: queryKeys.chatSession(repoId, sessionId),
+    queryFn: () => api.chat.getSession(repoId, sessionId),
+    enabled: !!repoId && !!sessionId,
+  });
+}
+
+export function useChatMessages(repoId: string, sessionId: string) {
+  return useQuery({
+    queryKey: queryKeys.chatMessages(repoId, sessionId),
+    queryFn: async () => {
+      const res = await api.chat.messages(repoId, sessionId, { limit: 200 });
+      return res.messages ?? [];
+    },
+    enabled: !!repoId && !!sessionId,
   });
 }

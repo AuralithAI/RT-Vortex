@@ -41,6 +41,9 @@ const (
 	ActionWebhookReceived = "webhook.received"
 	ActionPRSync          = "pr.sync"
 	ActionPRReview        = "pr.review"
+	ActionChatCreate      = "chat.create"
+	ActionChatMessage     = "chat.message"
+	ActionChatDelete      = "chat.delete"
 )
 
 // ── Logger ──────────────────────────────────────────────────────────────────

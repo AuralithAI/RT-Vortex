@@ -19,8 +19,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
-import { CommentThread } from "@/components/reviews/comment-thread";
 import { ReviewProgress } from "@/components/reviews/review-progress";
+import {
+  ReviewDiffView,
+  ReviewFileSummary,
+} from "@/components/reviews/review-diff-view";
 import { formatDate, formatDuration } from "@/lib/utils";
 
 const statusVariant: Record<string, "default" | "secondary" | "destructive" | "success" | "warning" | "outline"> = {
@@ -157,11 +160,16 @@ export default function ReviewDetailPage({
         <ReviewProgress events={stream.events} connected={stream.connected} />
       )}
 
-      {/* Comments */}
+      {/* Comments — Diff View */}
       <div>
-        <h2 className="mb-4 text-lg font-semibold">
-          Review Comments ({comments?.length ?? 0})
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">
+            Review Comments ({comments?.length ?? 0})
+          </h2>
+          {comments && comments.length > 0 && (
+            <ReviewFileSummary comments={comments} />
+          )}
+        </div>
         <Separator className="mb-4" />
         {!comments || comments.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">
@@ -170,11 +178,7 @@ export default function ReviewDetailPage({
               : "No comments were generated for this review."}
           </p>
         ) : (
-          <div className="space-y-3">
-            {comments.map((comment) => (
-              <CommentThread key={comment.id} comment={comment} />
-            ))}
-          </div>
+          <ReviewDiffView comments={comments} />
         )}
       </div>
     </>

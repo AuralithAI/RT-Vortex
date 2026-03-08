@@ -14,6 +14,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/api"
 	"github.com/AuralithAI/rtvortex-server/internal/audit"
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
+	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
@@ -67,6 +68,10 @@ type Dependencies struct {
 
 	// PR Sync
 	PRSyncWorker *prsync.Worker
+
+	// Chat
+	ChatRepo    *store.ChatRepository
+	ChatService *chat.Service
 }
 
 // Server holds the HTTP server components.
@@ -136,6 +141,8 @@ func (s *Server) setupRouter() {
 		DeliveryRepo:    s.deps.DeliveryRepo,
 		PRRepo:          s.deps.PRRepo,
 		PRSyncWorker:    s.deps.PRSyncWorker,
+		ChatRepo:        s.deps.ChatRepo,
+		ChatService:     s.deps.ChatService,
 	}
 
 	// ── Health & readiness (no auth required) ───────────────────────────
@@ -219,6 +226,19 @@ func (s *Server) setupRouter() {
 						indexWSHandler := ws.NewIndexHandler(s.deps.WSHub)
 						r.Get("/index/ws", indexWSHandler.ServeHTTP)
 					}
+
+					// Chat sessions & messages
+					r.Route("/chat/sessions", func(r chi.Router) {
+						r.Post("/", h.CreateChatSession)
+						r.Get("/", h.ListChatSessions)
+						r.Route("/{sessionID}", func(r chi.Router) {
+							r.Get("/", h.GetChatSession)
+							r.Put("/", h.UpdateChatSession)
+							r.Delete("/", h.DeleteChatSession)
+							r.Get("/messages", h.ListChatMessages)
+							r.Post("/messages", h.SendChatMessage)
+						})
+					})
 				})
 			})
 

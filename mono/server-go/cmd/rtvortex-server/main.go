@@ -35,6 +35,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
 	authproviders "github.com/AuralithAI/rtvortex-server/internal/auth/providers"
 	"github.com/AuralithAI/rtvortex-server/internal/background"
+	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
@@ -497,6 +498,10 @@ func main() {
 	prSyncWorker.Start()
 	defer prSyncWorker.Stop()
 
+	// Chat repo + RAG chat service
+	chatRepo := store.NewChatRepository(db.Pool)
+	chatService := chat.NewService(chatRepo, engineClient, llmRegistry, chat.DefaultConfig())
+
 	deps := &server.Dependencies{
 		Config:     cfg,
 		DB:         db,
@@ -525,6 +530,8 @@ func main() {
 		WebhookRepo:    webhookRepo,
 		PRRepo:         prRepo,
 		PRSyncWorker:   prSyncWorker,
+		ChatRepo:       chatRepo,
+		ChatService:    chatService,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────

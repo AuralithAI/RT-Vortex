@@ -362,3 +362,68 @@ export interface PRStats {
   counts: Record<string, number>;
   embed_queue: number;
 }
+
+// ── Chat ────────────────────────────────────────────────────────────────────
+
+export interface ChatSession {
+  id: string;
+  repo_id: string;
+  user_id: string;
+  title: string;
+  message_count: number;
+  last_message_at: string | null;
+  model: string;
+  provider: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type ChatMessageRole = "user" | "assistant" | "system";
+
+export interface ChatCitation {
+  file_path: string;
+  start_line: number;
+  end_line: number;
+  content: string;
+  language: string;
+  relevance_score: number;
+  symbols?: string[];
+}
+
+export interface ChatAttachment {
+  type: "file" | "code_snippet" | "image";
+  filename: string;
+  content: string;
+  language?: string;
+  mime_type?: string;
+  size?: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  session_id: string;
+  role: ChatMessageRole;
+  content: string;
+  encrypted: boolean;
+  citations?: ChatCitation[];
+  attachments?: ChatAttachment[];
+  prompt_tokens: number;
+  completion_tokens: number;
+  search_time_ms: number;
+  chunks_retrieved: number;
+  created_at: string;
+}
+
+export interface ChatStreamEvent {
+  type: "delta" | "citation" | "thinking" | "done" | "error";
+  content?: string;
+  citation?: ChatCitation;
+  phase?: string;
+  message?: string;
+  message_id?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  search_time_ms?: number;
+  chunks_retrieved?: number;
+  error?: string;
+}

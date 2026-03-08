@@ -21,6 +21,7 @@ import (
 
 	"github.com/AuralithAI/rtvortex-server/internal/audit"
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
+	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
@@ -62,6 +63,8 @@ type Handler struct {
 	QuotaEnforcer   *quota.Enforcer
 	DeliveryRepo    *webhookq.Repository
 	PRSyncWorker    *prsync.Worker
+	ChatRepo        *store.ChatRepository
+	ChatService     *chat.Service
 
 	// Runtime embedding configuration — guarded by embedMu.
 	embedMu     sync.RWMutex

@@ -36,3 +36,10 @@ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'rtvortex')\gexec
 
 -- Grant connect privilege
 GRANT ALL PRIVILEGES ON DATABASE rtvortex TO rtvortex;
+
+-- Set default privileges so tables/sequences/functions created by any role
+-- (e.g. postgres running migrations) are automatically accessible by rtvortex.
+\connect rtvortex
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO rtvortex;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO rtvortex;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON FUNCTIONS TO rtvortex;

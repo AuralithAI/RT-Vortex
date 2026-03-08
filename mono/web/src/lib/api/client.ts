@@ -8,6 +8,8 @@
 import { getApiBaseUrl } from "@/lib/utils";
 import type {
   AuthProvider,
+  ChatMessage,
+  ChatSession,
   DetailedHealth,
   EmbeddingsConfig,
   EmbeddingsUpdateRequest,
@@ -431,7 +433,86 @@ export const pullRequests = {
     ),
 };
 
+// ── Chat ────────────────────────────────────────────────────────────────────
+
+export const chat = {
+  sessions: (repoId: string, p?: PaginationParams) => {
+    const params = new URLSearchParams();
+    if (p?.limit != null) params.set("limit", String(p.limit));
+    if (p?.offset != null) params.set("offset", String(p.offset));
+    const q = params.toString();
+    return request<{ sessions: ChatSession[]; count: number; total: number }>(
+      `/api/v1/repos/${repoId}/chat/sessions${q ? `?${q}` : ""}`,
+    );
+  },
+
+  getSession: (repoId: string, sessionId: string) =>
+    request<ChatSession>(`/api/v1/repos/${repoId}/chat/sessions/${sessionId}`),
+
+  createSession: (repoId: string, data?: { title?: string; model?: string; provider?: string }) =>
+    request<ChatSession>(`/api/v1/repos/${repoId}/chat/sessions`, {
+      method: "POST",
+      body: JSON.stringify(data ?? {}),
+    }),
+
+  updateSession: (repoId: string, sessionId: string, title: string) =>
+    request<ChatSession>(`/api/v1/repos/${repoId}/chat/sessions/${sessionId}`, {
+      method: "PUT",
+      body: JSON.stringify({ title }),
+    }),
+
+  deleteSession: (repoId: string, sessionId: string) =>
+    request<void>(`/api/v1/repos/${repoId}/chat/sessions/${sessionId}`, {
+      method: "DELETE",
+    }),
+
+  messages: (repoId: string, sessionId: string, p?: PaginationParams) => {
+    const params = new URLSearchParams();
+    if (p?.limit != null) params.set("limit", String(p.limit));
+    if (p?.offset != null) params.set("offset", String(p.offset));
+    const q = params.toString();
+    return request<{ messages: ChatMessage[]; count: number; total: number }>(
+      `/api/v1/repos/${repoId}/chat/sessions/${sessionId}/messages${q ? `?${q}` : ""}`,
+    );
+  },
+
+  /**
+   * Send a message and receive a streaming SSE response.
+   * Returns an EventSource-like interface for consuming events.
+   */
+  sendMessageStream: (
+    repoId: string,
+    sessionId: string,
+    content: string,
+    attachments?: import("@/types/api").ChatAttachment[],
+  ): { read: () => Promise<ReadableStream<string>>; abort: () => void } => {
+    const controller = new AbortController();
+    const token = getAccessToken();
+
+    const streamPromise = fetch(`${BASE}/api/v1/repos/${repoId}/chat/sessions/${sessionId}/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ content, attachments }),
+      signal: controller.signal,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new ApiError(res.status, res.statusText, body);
+      }
+      return res.body!.pipeThrough(new TextDecoderStream());
+    });
+
+    return {
+      read: () => streamPromise,
+      abort: () => controller.abort(),
+    };
+  },
+};
+
 // ── Convenience export ──────────────────────────────────────────────────────
 
-const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests };
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat };
 export default api;

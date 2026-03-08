@@ -6,7 +6,7 @@
 
 import { use } from "react";
 import Link from "next/link";
-import { ArrowLeft, RefreshCw, Trash2, FolderGit2, CheckCircle2, XCircle, Loader2, Clock } from "lucide-react";
+import { ArrowLeft, RefreshCw, Trash2, FolderGit2, CheckCircle2, XCircle, Loader2, Clock, MessageSquare } from "lucide-react";
 import { useRepo, useIndexStatus, useReviews } from "@/lib/api/queries";
 import { useTriggerIndex, useDeleteRepo } from "@/lib/api/mutations";
 import { useIndexProgress, formatETA } from "@/hooks/use-index-progress";
@@ -98,6 +98,12 @@ export default function RepoDetailPage({
               <Link href="/repos">
                 <ArrowLeft className="mr-1 h-4 w-4" />
                 Back
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link href={`/repos/${id}/chat`}>
+                <MessageSquare className="mr-1 h-4 w-4" />
+                Chat
               </Link>
             </Button>
             <Button

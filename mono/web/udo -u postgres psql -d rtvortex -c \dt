@@ -1,0 +1,22 @@
+       tablename       | tableowner 
+-----------------------+------------
+ audit_log             | rtvortex
+ chat_messages         | postgres
+ chat_sessions         | postgres
+ oauth_identities      | rtvortex
+ org_members           | rtvortex
+ organizations         | rtvortex
+ plan_limits           | rtvortex
+ repo_members          | rtvortex
+ repositories          | rtvortex
+ review_comments       | rtvortex
+ reviews               | rtvortex
+ schema_info           | rtvortex
+ schema_migrations     | rtvortex
+ tracked_pull_requests | rtvortex
+ usage_daily           | rtvortex
+ users                 | rtvortex
+ webhook_deliveries    | rtvortex
+ webhook_events        | rtvortex
+(18 rows)
+
