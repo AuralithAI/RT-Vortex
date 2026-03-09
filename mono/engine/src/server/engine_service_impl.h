@@ -142,6 +142,16 @@ public:
         aipr::engine::v1::StorageConfigResponse* response
     ) override;
 
+    //-------------------------------------------------------------------------
+    // Metrics Streaming
+    //-------------------------------------------------------------------------
+
+    grpc::Status StreamEngineMetrics(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::EngineMetricsRequest* request,
+        grpc::ServerWriter<aipr::engine::v1::EngineMetricsSnapshot>* writer
+    ) override;
+
     /**
      * Get the active storage backend (may be null if not configured)
      */
@@ -168,6 +178,9 @@ private:
     // Storage backend — configured via gRPC ConfigureStorage from Java server
     std::unique_ptr<StorageBackend> storage_;
     mutable std::mutex storage_mutex_;
+
+    // Active metrics stream subscribers
+    std::atomic<uint32_t> active_metric_streams_{0};
 
     // Concurrency control for indexing — limits parallel indexing jobs
     static constexpr int kMaxConcurrentIndexJobs = 3;

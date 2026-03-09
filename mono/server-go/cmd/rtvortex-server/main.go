@@ -505,6 +505,23 @@ func main() {
 	// VCS platform config repo — per-user non-secret VCS settings (URLs, usernames)
 	vcsPlatformRepo := store.NewVCSPlatformRepo(db.Pool)
 
+	// Opens a gRPC streaming connection to the C++ engine to receive real-time metrics.
+	metricsCollector := engine.NewMetricsCollector(engineClient, 1000)
+	metricsCollector.Start(ctx)
+	if wsHub != nil {
+		metricsCollector.OnSnapshot(func(snap *engine.EngineMetricsSnapshot) {
+			if !wsHub.HasMetricsSubscribers() {
+				return
+			}
+			data, err := engine.MarshalWSEvent(snap)
+			if err != nil {
+				slog.Error("failed to marshal engine metrics WS event", "error", err)
+				return
+			}
+			wsHub.BroadcastMetrics(data)
+		})
+	}
+
 	deps := &server.Dependencies{
 		Config:     cfg,
 		DB:         db,
@@ -525,18 +542,19 @@ func main() {
 		AuditLogger:     auditLogger,
 		WSHub:           wsHub,
 
-		UserRepo:        userRepo,
-		RepoRepo:        repoRepo,
-		RepoMemberRepo:  repoMemberRepo,
-		ReviewRepo:      reviewRepo,
-		OrgRepo:         orgRepo,
-		WebhookRepo:     webhookRepo,
-		PRRepo:          prRepo,
-		PRSyncWorker:    prSyncWorker,
-		ChatRepo:        chatRepo,
-		ChatService:     chatService,
-		Vault:           fileVault,
-		VCSPlatformRepo: vcsPlatformRepo,
+		UserRepo:         userRepo,
+		RepoRepo:         repoRepo,
+		RepoMemberRepo:   repoMemberRepo,
+		ReviewRepo:       reviewRepo,
+		OrgRepo:          orgRepo,
+		WebhookRepo:      webhookRepo,
+		PRRepo:           prRepo,
+		PRSyncWorker:     prSyncWorker,
+		ChatRepo:         chatRepo,
+		ChatService:      chatService,
+		Vault:            fileVault,
+		VCSPlatformRepo:  vcsPlatformRepo,
+		MetricsCollector: metricsCollector,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────
@@ -593,6 +611,7 @@ func main() {
 		slog.Error("forced shutdown", "error", err)
 	}
 
+	metricsCollector.Stop()
 	cancel() // Cancel root context to stop background workers
 	slog.Info("RTVortexGo API Server stopped")
 }

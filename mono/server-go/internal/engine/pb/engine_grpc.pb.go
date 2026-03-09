@@ -35,6 +35,7 @@ const (
 	EngineService_ConfigureStorage_FullMethodName         = "/aipr.engine.v1.EngineService/ConfigureStorage"
 	EngineService_HealthCheck_FullMethodName              = "/aipr.engine.v1.EngineService/HealthCheck"
 	EngineService_GetDiagnostics_FullMethodName           = "/aipr.engine.v1.EngineService/GetDiagnostics"
+	EngineService_StreamEngineMetrics_FullMethodName      = "/aipr.engine.v1.EngineService/StreamEngineMetrics"
 )
 
 // EngineServiceClient is the client API for EngineService service.
@@ -61,6 +62,9 @@ type EngineServiceClient interface {
 	// Health & Diagnostics
 	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 	GetDiagnostics(ctx context.Context, in *DiagnosticsRequest, opts ...grpc.CallOption) (*DiagnosticsResponse, error)
+	// Metrics — server-streaming so the Go API server can relay to the dashboard.
+	// The engine pushes a snapshot every interval_ms (default 1000).
+	StreamEngineMetrics(ctx context.Context, in *EngineMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineMetricsSnapshot], error)
 }
 
 type engineServiceClient struct {
@@ -228,6 +232,25 @@ func (c *engineServiceClient) GetDiagnostics(ctx context.Context, in *Diagnostic
 	return out, nil
 }
 
+func (c *engineServiceClient) StreamEngineMetrics(ctx context.Context, in *EngineMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineMetricsSnapshot], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EngineService_ServiceDesc.Streams[3], EngineService_StreamEngineMetrics_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[EngineMetricsRequest, EngineMetricsSnapshot]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngineService_StreamEngineMetricsClient = grpc.ServerStreamingClient[EngineMetricsSnapshot]
+
 // EngineServiceServer is the server API for EngineService service.
 // All implementations must embed UnimplementedEngineServiceServer
 // for forward compatibility.
@@ -252,6 +275,9 @@ type EngineServiceServer interface {
 	// Health & Diagnostics
 	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 	GetDiagnostics(context.Context, *DiagnosticsRequest) (*DiagnosticsResponse, error)
+	// Metrics — server-streaming so the Go API server can relay to the dashboard.
+	// The engine pushes a snapshot every interval_ms (default 1000).
+	StreamEngineMetrics(*EngineMetricsRequest, grpc.ServerStreamingServer[EngineMetricsSnapshot]) error
 	mustEmbedUnimplementedEngineServiceServer()
 }
 
@@ -300,6 +326,9 @@ func (UnimplementedEngineServiceServer) HealthCheck(context.Context, *HealthChec
 }
 func (UnimplementedEngineServiceServer) GetDiagnostics(context.Context, *DiagnosticsRequest) (*DiagnosticsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetDiagnostics not implemented")
+}
+func (UnimplementedEngineServiceServer) StreamEngineMetrics(*EngineMetricsRequest, grpc.ServerStreamingServer[EngineMetricsSnapshot]) error {
+	return status.Error(codes.Unimplemented, "method StreamEngineMetrics not implemented")
 }
 func (UnimplementedEngineServiceServer) mustEmbedUnimplementedEngineServiceServer() {}
 func (UnimplementedEngineServiceServer) testEmbeddedByValue()                       {}
@@ -535,6 +564,17 @@ func _EngineService_GetDiagnostics_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngineService_StreamEngineMetrics_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(EngineMetricsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(EngineServiceServer).StreamEngineMetrics(m, &grpc.GenericServerStream[EngineMetricsRequest, EngineMetricsSnapshot]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngineService_StreamEngineMetricsServer = grpc.ServerStreamingServer[EngineMetricsSnapshot]
+
 // EngineService_ServiceDesc is the grpc.ServiceDesc for EngineService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -597,6 +637,11 @@ var EngineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "BuildReviewContextStream",
 			Handler:       _EngineService_BuildReviewContextStream_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "StreamEngineMetrics",
+			Handler:       _EngineService_StreamEngineMetrics_Handler,
 			ServerStreams: true,
 		},
 	},

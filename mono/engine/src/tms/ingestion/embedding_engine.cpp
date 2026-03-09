@@ -9,6 +9,7 @@
 #include "tms/repo_parser.h"
 #include "tms/ltm_faiss.h"
 #include "tms/mtm_graph.h"
+#include "metrics.h"
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -576,6 +577,7 @@ EmbeddingEngine::EmbeddingEngine(const EmbeddingConfig& config)
     rate_limiter_ = std::make_unique<RateLimiter>(
         config.max_requests_per_minute, config.max_tokens_per_minute);
     backend_->initialize();
+    aipr::metrics::Registry::instance().setGauge(aipr::metrics::MINILM_READY, 1.0);
 }
 
 EmbeddingEngine::~EmbeddingEngine() = default;
@@ -588,6 +590,8 @@ EmbeddingResult EmbeddingEngine::embed(const std::string& text) {
     auto start = std::chrono::steady_clock::now();
     EmbeddingResult result;
 
+    aipr::metrics::Registry::instance().incCounter(aipr::metrics::EMBED_TOTAL_CALLS);
+
     if (config_.enable_cache) {
         std::string hash = computeHash(text);
         auto cached = cache_->get(hash);
@@ -598,6 +602,10 @@ EmbeddingResult EmbeddingEngine::embed(const std::string& text) {
             auto end_t = std::chrono::steady_clock::now();
             result.computation_time = std::chrono::duration_cast<std::chrono::microseconds>(end_t - start);
             updateStats(result);
+
+            double secs = std::chrono::duration<double>(end_t - start).count();
+            aipr::metrics::Registry::instance().observeHistogram(aipr::metrics::EMBED_LATENCY_S, secs);
+
             return result;
         }
     }
@@ -617,6 +625,10 @@ EmbeddingResult EmbeddingEngine::embed(const std::string& text) {
     auto end_t = std::chrono::steady_clock::now();
     result.computation_time = std::chrono::duration_cast<std::chrono::microseconds>(end_t - start);
     updateStats(result);
+
+    double secs = std::chrono::duration<double>(end_t - start).count();
+    aipr::metrics::Registry::instance().observeHistogram(aipr::metrics::EMBED_LATENCY_S, secs);
+
     return result;
 }
 
@@ -798,6 +810,17 @@ void EmbeddingEngine::updateStats(const EmbeddingResult& result) {
         double n = static_cast<double>(stats_.total_embeddings);
         double ms = static_cast<double>(result.computation_time.count()) / 1000.0;
         stats_.avg_embedding_time_ms = (stats_.avg_embedding_time_ms * (n - 1) + ms) / n;
+    }
+
+    // Update cache hit rate gauge
+    {
+        size_t h = cache_->hits();
+        size_t total = h + cache_->misses();
+        if (total > 0) {
+            double hit_rate = static_cast<double>(h) / static_cast<double>(total);
+            aipr::metrics::Registry::instance().setGauge(
+                aipr::metrics::EMBED_CACHE_HIT_RATE, hit_rate);
+        }
     }
 }
 

@@ -8,6 +8,7 @@
 #include "tms/repo_parser.h"
 #include "tms/embedding_engine.h"
 #include "logging.h"
+#include "metrics.h"
 #include <chrono>
 #include <algorithm>
 #include <sstream>
@@ -131,6 +132,9 @@ void TMSMemorySystem::initialize() {
     }
     
     initialized_.store(true);
+
+    // set component health gauges
+    metrics::Registry::instance().setGauge(metrics::FAISS_LOADED, 1.0);
 }
 
 void TMSMemorySystem::shutdown() {
@@ -368,6 +372,9 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     if (!initialized_.load()) {
         throw std::runtime_error("TMSMemorySystem not initialized");
     }
+
+    // scope-timer records into metrics registry
+    AIPR_METRICS_SCOPE(aipr::metrics::TMS_FORWARD_LATENCY_S);
     
     auto start_time = std::chrono::steady_clock::now();
     TMSResponse response;
@@ -512,6 +519,10 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
               " fused_chunks=" + std::to_string(response.attention_output.fused_chunks.size()) +
               " fused_context_len=" + std::to_string(response.attention_output.fused_context.size()) +
               " confidence=" + std::to_string(response.attention_output.confidence_score));
+
+    // record CMA confidence score
+    metrics::Registry::instance().setGauge(
+        metrics::CMA_SCORE, response.attention_output.confidence_score);
     
     return response;
 }

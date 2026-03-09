@@ -6,6 +6,7 @@
 
 #include "tms/ltm_faiss.h"
 #include "logging.h"
+#include "metrics.h"
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -465,6 +466,14 @@ void LTMFaiss::addBatch(
     faiss_impl_->addBatch(faiss_ids, flat_embeddings);
     
     additions_since_save_ += chunks.size();
+
+    // record ingestion metrics
+    aipr::metrics::Registry::instance().incCounter(
+        aipr::metrics::CHUNKS_INGESTED, static_cast<double>(chunks.size()));
+    aipr::metrics::Registry::instance().setGauge(
+        aipr::metrics::INDEX_SIZE_VECTORS,
+        static_cast<double>(faiss_impl_->size()));
+
     maybeAutoSave();
 }
 
@@ -474,6 +483,9 @@ std::vector<RetrievedChunk> LTMFaiss::search(
     const std::string& repo_filter
 ) {
     if (top_k <= 0) top_k = config_.default_top_k;
+
+    // record search latency
+    AIPR_METRICS_SCOPE(aipr::metrics::SEARCH_LATENCY_S);
     
     std::lock_guard<std::mutex> lock(mutex_);
     

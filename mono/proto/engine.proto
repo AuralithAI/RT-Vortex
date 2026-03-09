@@ -34,6 +34,10 @@ service EngineService {
     // Health & Diagnostics
     rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
     rpc GetDiagnostics(DiagnosticsRequest) returns (DiagnosticsResponse);
+
+    // Metrics — server-streaming so the Go API server can relay to the dashboard.
+    // The engine pushes a snapshot every interval_ms (default 1000).
+    rpc StreamEngineMetrics(EngineMetricsRequest) returns (stream EngineMetricsSnapshot);
 }
 
 // ============================================================================
@@ -281,6 +285,8 @@ message HealthCheckResponse {
     string version = 2;
     uint64 uptime_seconds = 3;
     map<string, string> components = 4;
+    bool metrics_enabled = 5;           // true if StreamEngineMetrics is available
+    uint32 active_metric_streams = 6;   // number of connected metric subscribers
 }
 
 message DiagnosticsRequest {
@@ -372,3 +378,43 @@ message StorageConfigResponse {
     string active_provider = 3;        // Echoes back the provider now in use
 }
 
+// ============================================================================
+// Engine Metrics
+// ============================================================================
+
+// Request to start the metrics stream.
+message EngineMetricsRequest {
+    uint32 interval_ms = 1;
+}
+
+// A single metric value in the snapshot.
+message MetricValueProto {
+    enum MetricType {
+        COUNTER   = 0;
+        GAUGE     = 1;
+        HISTOGRAM = 2;
+    }
+    MetricType type = 1;
+    double scalar = 2;                  // For COUNTER and GAUGE
+    HistogramProto histogram = 3;       // For HISTOGRAM
+}
+
+// Histogram percentile snapshot.
+message HistogramProto {
+    uint64 count   = 1;
+    double sum     = 2;
+    double min_val = 3;
+    double max_val = 4;
+    double avg     = 5;
+    double p50     = 6;
+    double p90     = 7;
+    double p95     = 8;
+    double p99     = 9;
+}
+
+// Full engine metrics snapshot pushed on each interval.
+message EngineMetricsSnapshot {
+    uint64 timestamp_ms = 1;                        // Unix epoch millis
+    map<string, MetricValueProto> metrics = 2;      // All metrics by name
+    uint64 uptime_s = 3;                            // Engine uptime in seconds
+}

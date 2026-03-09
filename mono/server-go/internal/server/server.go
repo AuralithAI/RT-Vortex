@@ -79,6 +79,9 @@ type Dependencies struct {
 
 	// VCS Platform Config — per-user non-secret VCS settings (URLs, usernames)
 	VCSPlatformRepo *store.VCSPlatformRepo
+
+	// Engine Metrics Collector — Phase 0 observability
+	MetricsCollector *engine.MetricsCollector
 }
 
 // Server holds the HTTP server components.
@@ -152,6 +155,9 @@ func (s *Server) setupRouter() {
 		ChatService:     s.deps.ChatService,
 		Vault:           s.deps.Vault,
 		VCSPlatformRepo: s.deps.VCSPlatformRepo,
+	}
+	if s.deps.MetricsCollector != nil {
+		h.MetricsCollector = s.deps.MetricsCollector
 	}
 
 	// ── Health & readiness (no auth required) ───────────────────────────
@@ -287,6 +293,18 @@ func (s *Server) setupRouter() {
 				r.Put("/platforms/{platform}", h.ConfigureVCSPlatform)
 				r.Delete("/platforms/{platform}", h.DeleteVCSPlatform)
 				r.Post("/platforms/{platform}/test", h.TestVCSPlatform)
+			})
+
+			// Engine Metrics — Phase 0 observability
+			r.Route("/engine", func(r chi.Router) {
+				r.Get("/metrics", h.GetEngineMetrics)
+				r.Get("/health", h.GetEngineHealth)
+
+				// WebSocket: real-time engine metrics streaming
+				if s.deps.WSHub != nil {
+					metricsWSHandler := ws.NewMetricsHandler(s.deps.WSHub)
+					r.Get("/metrics/ws", metricsWSHandler.ServeHTTP)
+				}
 			})
 
 			// Admin

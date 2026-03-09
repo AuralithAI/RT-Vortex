@@ -15,6 +15,7 @@ import {
   ShieldCheck,
   ChevronLeft,
   ChevronRight,
+  Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/lib/stores/ui";
@@ -29,6 +30,7 @@ import {
 
 const navItems = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
+  { href: "/dashboard/engine", icon: Activity, label: "Engine Performance" },
   { href: "/reviews", icon: GitPullRequest, label: "Reviews" },
   { href: "/repos", icon: FolderGit2, label: "Repositories" },
   { href: "/orgs", icon: Building2, label: "Organizations" },

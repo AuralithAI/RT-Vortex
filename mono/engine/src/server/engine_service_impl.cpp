@@ -7,10 +7,12 @@
 
 #include "engine_service_impl.h"
 #include "logging.h"
+#include "metrics.h"
 
 #include <sstream>
 #include <mutex>
 #include <chrono>
+#include <thread>
 
 namespace aipr {
 namespace server {
@@ -666,6 +668,8 @@ grpc::Status EngineServiceImpl::HealthCheck(
     response->set_healthy(true);
     response->set_version(engine_->getVersion());
     response->set_uptime_seconds(getUptimeSeconds());
+    response->set_metrics_enabled(true);
+    response->set_active_metric_streams(active_metric_streams_.load());
 
     // Add component status
     (*response->mutable_components())["engine"] = "healthy";
@@ -919,6 +923,80 @@ grpc::Status EngineServiceImpl::ConfigureStorage(
         response->set_message(std::string("Failed to configure storage: ") + e.what());
         return grpc::Status::OK;  // Return OK with error in response body
     }
+}
+
+//=============================================================================
+// Metrics Streaming
+//=============================================================================
+
+grpc::Status EngineServiceImpl::StreamEngineMetrics(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::EngineMetricsRequest* request,
+    grpc::ServerWriter<aipr::engine::v1::EngineMetricsSnapshot>* writer)
+{
+    uint32_t interval_ms = request->interval_ms();
+    if (interval_ms == 0) interval_ms = 1000;
+    if (interval_ms < 200) interval_ms = 200;
+
+    active_metric_streams_.fetch_add(1);
+    LOG_INFO("[Metrics] Stream subscriber connected (interval=" +
+             std::to_string(interval_ms) + "ms, active=" +
+             std::to_string(active_metric_streams_.load()) + ")");
+
+    auto cleanup = [this]() {
+        active_metric_streams_.fetch_sub(1);
+        LOG_INFO("[Metrics] Stream subscriber disconnected (active=" +
+                 std::to_string(active_metric_streams_.load()) + ")");
+    };
+
+    while (!context->IsCancelled()) {
+        // Collect snapshot from the metrics registry
+        auto snap = metrics::Registry::instance().snapshot();
+
+        aipr::engine::v1::EngineMetricsSnapshot proto;
+        proto.set_timestamp_ms(snap.timestamp_ms);
+        proto.set_uptime_s(snap.uptime_s);
+
+        for (const auto& [name, mv] : snap.metrics) {
+            aipr::engine::v1::MetricValueProto* mvp =
+                &(*proto.mutable_metrics())[name];
+
+            switch (mv.type) {
+                case metrics::MetricType::COUNTER:
+                    mvp->set_type(aipr::engine::v1::MetricValueProto::COUNTER);
+                    mvp->set_scalar(mv.scalar);
+                    break;
+                case metrics::MetricType::GAUGE:
+                    mvp->set_type(aipr::engine::v1::MetricValueProto::GAUGE);
+                    mvp->set_scalar(mv.scalar);
+                    break;
+                case metrics::MetricType::HISTOGRAM: {
+                    mvp->set_type(aipr::engine::v1::MetricValueProto::HISTOGRAM);
+                    auto* hp = mvp->mutable_histogram();
+                    hp->set_count(mv.histogram.count);
+                    hp->set_sum(mv.histogram.sum);
+                    hp->set_min_val(mv.histogram.min_val);
+                    hp->set_max_val(mv.histogram.max_val);
+                    hp->set_avg(mv.histogram.avg);
+                    hp->set_p50(mv.histogram.p50);
+                    hp->set_p90(mv.histogram.p90);
+                    hp->set_p95(mv.histogram.p95);
+                    hp->set_p99(mv.histogram.p99);
+                    break;
+                }
+            }
+        }
+
+        if (!writer->Write(proto)) {
+            cleanup();
+            return grpc::Status(grpc::StatusCode::CANCELLED, "Client disconnected");
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
+    }
+
+    cleanup();
+    return grpc::Status::OK;
 }
 
 } // namespace server

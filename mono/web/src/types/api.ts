@@ -459,3 +459,44 @@ export interface VCSTestResult {
   message?: string;
   error?: string;
 }
+
+// ── Engine Metrics ──────────────────────────────────
+
+export interface HistogramSnapshot {
+  count: number;
+  sum: number;
+  min_val: number;
+  max_val: number;
+  avg: number;
+  p50: number;
+  p90: number;
+  p95: number;
+  p99: number;
+}
+
+export interface MetricValue {
+  type: "counter" | "gauge" | "histogram";
+  scalar?: number;
+  histogram?: HistogramSnapshot;
+}
+
+export interface EngineMetricsSnapshot {
+  timestamp_ms: number;
+  metrics: Record<string, MetricValue>;
+  uptime_s: number;
+}
+
+export interface EngineMetricsWSEvent {
+  type: "engine_metrics";
+  data: EngineMetricsSnapshot;
+}
+
+export interface EngineHealthResponse {
+  healthy: boolean;
+  version: string;
+  uptime_seconds: number;
+  components: Record<string, string>;
+  metrics_enabled: boolean;
+  active_metric_streams: number;
+  has_latest_snapshot: boolean;
+}

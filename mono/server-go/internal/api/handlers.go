@@ -58,16 +58,17 @@ type Handler struct {
 	VCSRegistry  *vcs.PlatformRegistry
 	EngineClient *engine.Client
 
-	ReviewPipeline  *review.Pipeline
-	IndexingService *indexing.Service
-	AuditLogger     *audit.Logger
-	QuotaEnforcer   *quota.Enforcer
-	DeliveryRepo    *webhookq.Repository
-	PRSyncWorker    *prsync.Worker
-	ChatRepo        *store.ChatRepository
-	ChatService     *chat.Service
-	Vault           *vault.FileVault       // shared file vault — user-scoped via vault token
-	VCSPlatformRepo *store.VCSPlatformRepo // per-user VCS platform config (URLs, usernames)
+	ReviewPipeline   *review.Pipeline
+	IndexingService  *indexing.Service
+	AuditLogger      *audit.Logger
+	QuotaEnforcer    *quota.Enforcer
+	DeliveryRepo     *webhookq.Repository
+	PRSyncWorker     *prsync.Worker
+	ChatRepo         *store.ChatRepository
+	ChatService      *chat.Service
+	Vault            *vault.FileVault         // shared file vault — user-scoped via vault token
+	VCSPlatformRepo  *store.VCSPlatformRepo   // per-user VCS platform config (URLs, usernames)
+	MetricsCollector *engine.MetricsCollector // engine metrics stream consumer
 
 	// Runtime embedding configuration — guarded by embedMu.
 	embedMu     sync.RWMutex

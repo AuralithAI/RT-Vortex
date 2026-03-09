@@ -662,6 +662,7 @@ set(UTIL_SOURCES
     src/util/hashing.cpp
     src/util/fs.cpp
     src/util/perf_timer.cpp
+    src/util/metrics.cpp
 )
 
 # Main engine library

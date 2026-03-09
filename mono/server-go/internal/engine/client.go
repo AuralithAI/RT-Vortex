@@ -50,10 +50,12 @@ func (c *Client) ctx(parent context.Context) (context.Context, context.CancelFun
 
 // HealthStatus is the response from the engine health check.
 type HealthStatus struct {
-	Healthy       bool
-	Version       string
-	UptimeSeconds uint64
-	Components    map[string]string
+	Healthy             bool
+	Version             string
+	UptimeSeconds       uint64
+	Components          map[string]string
+	MetricsEnabled      bool
+	ActiveMetricStreams uint32
 }
 
 // HealthCheck calls the engine's HealthCheck RPC.
@@ -66,10 +68,12 @@ func (c *Client) HealthCheck(ctx context.Context) (*HealthStatus, error) {
 		return nil, fmt.Errorf("engine health check: %w", err)
 	}
 	return &HealthStatus{
-		Healthy:       resp.Healthy,
-		Version:       resp.Version,
-		UptimeSeconds: resp.UptimeSeconds,
-		Components:    resp.Components,
+		Healthy:             resp.Healthy,
+		Version:             resp.Version,
+		UptimeSeconds:       resp.UptimeSeconds,
+		Components:          resp.Components,
+		MetricsEnabled:      resp.MetricsEnabled,
+		ActiveMetricStreams: resp.ActiveMetricStreams,
 	}, nil
 }
 
