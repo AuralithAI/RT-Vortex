@@ -60,6 +60,10 @@ grpc::Status EngineServiceImpl::IndexRepository(
                     static_cast<size_t>(cfg.embedding_dimensions())
                 );
             }
+            // Pass transient VCS clone token for authenticated git clone.
+            if (!cfg.clone_token().empty()) {
+                engine_->setCloneToken(cfg.clone_token());
+            }
         }
 
         IndexStats stats = engine_->indexRepository(
@@ -144,6 +148,10 @@ grpc::Status EngineServiceImpl::IndexRepositoryStream(
                     cfg.embedding_api_key(),
                     static_cast<size_t>(cfg.embedding_dimensions())
                 );
+            }
+            // Pass transient VCS clone token for authenticated git clone.
+            if (!cfg.clone_token().empty()) {
+                engine_->setCloneToken(cfg.clone_token());
             }
         }
 

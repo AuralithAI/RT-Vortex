@@ -38,6 +38,8 @@ import type {
   VCSConfigureResult,
   VCSPlatformInfo,
   VCSTestResult,
+  VCSTokenCapability,
+  VCSCloneCheckResult,
 } from "@/types/api";
 
 // ── Error classes ───────────────────────────────────────────────────────────
@@ -553,6 +555,20 @@ export const vcsPlatforms = {
     request<VCSTestResult>(`/api/v1/vcs/platforms/${platform}/test`, {
       method: "POST",
     }),
+
+  checkClone: (platform: string, cloneUrl: string) =>
+    request<VCSCloneCheckResult>(`/api/v1/vcs/platforms/${platform}/check-clone`, {
+      method: "POST",
+      body: JSON.stringify({ clone_url: cloneUrl }),
+    }),
+
+  tokenCapabilities: async (platform?: string) => {
+    const qs = platform ? `?platform=${encodeURIComponent(platform)}` : "";
+    const res = await request<{ capabilities: Record<string, VCSTokenCapability[]> }>(
+      `/api/v1/vcs/token-capabilities${qs}`
+    );
+    return res.capabilities ?? {};
+  },
 };
 
 // ── Convenience export ──────────────────────────────────────────────────────

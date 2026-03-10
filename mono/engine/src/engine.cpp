@@ -355,6 +355,15 @@ public:
     }
 
     // =========================================================================
+    // Clone Token (transient, per-request)
+    // =========================================================================
+
+    void setCloneToken(const std::string& token) override {
+        std::lock_guard<std::mutex> lock(clone_token_mu_);
+        clone_token_ = token;
+    }
+
+    // =========================================================================
     // Indexing
     // =========================================================================
 
@@ -365,6 +374,14 @@ public:
     {
         auto start = std::chrono::steady_clock::now();
 
+        // Consume the transient clone token (if any) — clear after read.
+        std::string token;
+        {
+            std::lock_guard<std::mutex> lock(clone_token_mu_);
+            token = std::move(clone_token_);
+            clone_token_.clear();
+        }
+
         // Determine the local path to index.
         // If repo_path is a URL, git-clone it first.
         std::string local_path = repo_path;
@@ -374,9 +391,26 @@ public:
             local_path = config_.storage_path + "/repos/" + repo_id;
             if (progress) progress(0, 100, "Cloning repository...");
 
+            // Build the authenticated clone URL if a token was provided.
+            // Injects the token into the HTTPS URL: https://x-token:TOKEN@host/path
+            std::string auth_url = repo_path;
+            if (!token.empty() && repo_path.rfind("https://", 0) == 0) {
+                // https://github.com/org/repo.git → https://x-token:TOKEN@github.com/org/repo.git
+                auth_url = "https://x-token:" + token + "@" + repo_path.substr(8);
+            }
+
             if (fs::exists(local_path)) {
-                // Pull latest changes
-                std::string pull_cmd = "cd " + shellEscape(local_path) + " && git pull --ff-only 2>&1";
+                // Pull latest changes (use token for auth if available)
+                std::string pull_cmd;
+                if (!token.empty() && repo_path.rfind("https://", 0) == 0) {
+                    // Set remote URL with auth for this pull, then reset it after
+                    pull_cmd = "cd " + shellEscape(local_path) +
+                               " && git remote set-url origin " + shellEscape(auth_url) +
+                               " && git pull --ff-only 2>&1" +
+                               " && git remote set-url origin " + shellEscape(repo_path);
+                } else {
+                    pull_cmd = "cd " + shellEscape(local_path) + " && git pull --ff-only 2>&1";
+                }
                 int rc = std::system(pull_cmd.c_str());
                 if (rc != 0) {
                     // If pull fails, remove and re-clone
@@ -386,11 +420,18 @@ public:
 
             if (!fs::exists(local_path)) {
                 fs::create_directories(fs::path(local_path).parent_path());
-                std::string clone_cmd = "git clone --depth 1 " + shellEscape(repo_path) +
+                std::string clone_cmd = "git clone --depth 1 " + shellEscape(auth_url) +
                                         " " + shellEscape(local_path) + " 2>&1";
                 int rc = std::system(clone_cmd.c_str());
                 if (rc != 0) {
                     throw std::runtime_error("git clone failed for " + repo_path + " (exit code " + std::to_string(rc) + ")");
+                }
+                // If we used an auth URL, reset the remote to the clean URL
+                // so the token is not persisted in .git/config.
+                if (auth_url != repo_path) {
+                    std::string reset_cmd = "cd " + shellEscape(local_path) +
+                                            " && git remote set-url origin " + shellEscape(repo_path) + " 2>&1";
+                    std::system(reset_cmd.c_str());
                 }
                 cloned = true;
             }
@@ -740,6 +781,10 @@ private:
     EngineConfig config_;
     std::unique_ptr<tms::TMSMemorySystem> tms_;
     std::unique_ptr<ReviewSignals> review_signals_;
+
+    // Transient clone token — set per-request, consumed once, then cleared.
+    std::mutex clone_token_mu_;
+    std::string clone_token_;
 };
 
 // =============================================================================

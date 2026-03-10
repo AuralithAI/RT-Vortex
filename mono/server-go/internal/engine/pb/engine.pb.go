@@ -331,8 +331,11 @@ type IndexConfig struct {
 	EmbeddingModel string `protobuf:"bytes,10,opt,name=embedding_model,json=embeddingModel,proto3" json:"embedding_model,omitempty"`
 	// API key for the external embedding provider (passed at runtime, never stored in config files).
 	EmbeddingApiKey string `protobuf:"bytes,11,opt,name=embedding_api_key,json=embeddingApiKey,proto3" json:"embedding_api_key,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// VCS clone token — used for authenticated git clone of private repositories.
+	// Resolved server-side from the user's vault; never stored in the engine.
+	CloneToken    string `protobuf:"bytes,12,opt,name=clone_token,json=cloneToken,proto3" json:"clone_token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *IndexConfig) Reset() {
@@ -438,6 +441,13 @@ func (x *IndexConfig) GetEmbeddingModel() string {
 func (x *IndexConfig) GetEmbeddingApiKey() string {
 	if x != nil {
 		return x.EmbeddingApiKey
+	}
+	return ""
+}
+
+func (x *IndexConfig) GetCloneToken() string {
+	if x != nil {
+		return x.CloneToken
 	}
 	return ""
 }
@@ -3029,7 +3039,7 @@ const file_engine_proto_rawDesc = "" +
 	"\fIndexRequest\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12\x1b\n" +
 	"\trepo_path\x18\x02 \x01(\tR\brepoPath\x123\n" +
-	"\x06config\x18\x03 \x01(\v2\x1b.aipr.engine.v1.IndexConfigR\x06config\"\xe8\x03\n" +
+	"\x06config\x18\x03 \x01(\v2\x1b.aipr.engine.v1.IndexConfigR\x06config\"\x89\x04\n" +
 	"\vIndexConfig\x12'\n" +
 	"\x10max_file_size_kb\x18\x01 \x01(\rR\rmaxFileSizeKb\x12\x1d\n" +
 	"\n" +
@@ -3043,7 +3053,9 @@ const file_engine_proto_rawDesc = "" +
 	"\x12embedding_provider\x18\t \x01(\tR\x11embeddingProvider\x12'\n" +
 	"\x0fembedding_model\x18\n" +
 	" \x01(\tR\x0eembeddingModel\x12*\n" +
-	"\x11embedding_api_key\x18\v \x01(\tR\x0fembeddingApiKey\"\x99\x01\n" +
+	"\x11embedding_api_key\x18\v \x01(\tR\x0fembeddingApiKey\x12\x1f\n" +
+	"\vclone_token\x18\f \x01(\tR\n" +
+	"cloneToken\"\x99\x01\n" +
 	"\x17IncrementalIndexRequest\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12#\n" +
 	"\rchanged_files\x18\x02 \x03(\tR\fchangedFiles\x12\x1f\n" +

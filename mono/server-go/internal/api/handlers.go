@@ -1007,6 +1007,27 @@ func (h *Handler) TriggerIndex(w http.ResponseWriter, r *http.Request) {
 		engineCfg.EmbeddingAPIKey = ec.APIKey
 	}
 
+	// ── Resolve VCS clone token from the user's vault ───────────────────
+	// The C++ engine uses this to authenticate `git clone` for private repos.
+	// Token is resolved server-side and passed transiently — never persisted.
+	if h.Vault != nil && repo.Platform != "" {
+		userID, ok := auth.UserIDFromContext(r.Context())
+		if ok {
+			user, userErr := h.UserRepo.GetByID(r.Context(), userID)
+			if userErr == nil && user.VaultToken != "" {
+				userVault := vault.NewUserScopedVault(h.Vault, user.VaultToken)
+				// Look up the platform-specific token key.
+				tokenKey := "vcs." + repo.Platform + ".token"
+				if repo.Platform == "azure_devops" {
+					tokenKey = "vcs.azure_devops.pat"
+				}
+				if cloneToken, _ := userVault.Get(tokenKey); cloneToken != "" {
+					engineCfg.CloneToken = cloneToken
+				}
+			}
+		}
+	}
+
 	jobID, err := h.IndexingService.StartFullIndex(r.Context(), indexing.FullIndexRequest{
 		RepoID:   repoID.String(),
 		RepoPath: repo.CloneURL,

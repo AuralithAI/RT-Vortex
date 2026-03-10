@@ -89,6 +89,9 @@ message IndexConfig {
     string embedding_model = 10;
     // API key for the external embedding provider (passed at runtime, never stored in config files).
     string embedding_api_key = 11;
+    // VCS clone token — used for authenticated git clone of private repositories.
+    // Resolved server-side from the user's vault; never stored in the engine.
+    string clone_token = 12;
 }
 
 message IncrementalIndexRequest {

@@ -491,6 +491,27 @@ export interface VCSTestResult {
   error?: string;
 }
 
+// ── VCS Token Capabilities ──────────────────────────────────────────────────
+
+export interface VCSTokenCapability {
+  token_type: string;
+  label: string;
+  can_clone: boolean;
+  can_review: boolean;
+  can_webhook: boolean;
+  can_read_pr: boolean;
+  scopes: string[];
+  setup_guide: string;
+}
+
+export interface VCSCloneCheckResult {
+  platform: string;
+  can_clone: boolean;
+  reason: string;
+  has_token: boolean;
+  needs_different: boolean;
+}
+
 // ── Engine Metrics ──────────────────────────────────
 
 export interface HistogramSnapshot {

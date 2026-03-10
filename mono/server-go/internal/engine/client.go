@@ -218,6 +218,7 @@ type IndexConfig struct {
 	EmbeddingProvider   string // "LOCAL_ONNX", "HTTP", "CUSTOM"
 	EmbeddingModel      string // e.g. "text-embedding-3-small"
 	EmbeddingAPIKey     string // runtime API key — never persisted
+	CloneToken          string // VCS clone token for authenticated git clone — never persisted
 }
 
 // IndexResult is the outcome of an indexing operation.
@@ -262,6 +263,7 @@ func (c *Client) IndexRepository(ctx context.Context, repoID, repoPath string, c
 			EmbeddingProvider:   cfg.EmbeddingProvider,
 			EmbeddingModel:      cfg.EmbeddingModel,
 			EmbeddingApiKey:     cfg.EmbeddingAPIKey,
+			CloneToken:          cfg.CloneToken,
 		},
 	})
 	if err != nil {
@@ -310,6 +312,7 @@ func (c *Client) IndexRepositoryStream(ctx context.Context, repoID, repoPath str
 			EmbeddingProvider:   cfg.EmbeddingProvider,
 			EmbeddingModel:      cfg.EmbeddingModel,
 			EmbeddingApiKey:     cfg.EmbeddingAPIKey,
+			CloneToken:          cfg.CloneToken,
 		},
 	})
 	if err != nil {

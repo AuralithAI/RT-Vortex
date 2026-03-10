@@ -266,6 +266,21 @@ public:
         (void)provider; (void)endpoint; (void)model; (void)api_key; (void)dimensions;
     }
 
+    /**
+     * Set a transient VCS clone token for the next indexRepository call.
+     *
+     * The token is consumed once and cleared after use. It is injected
+     * into HTTPS clone URLs to authenticate git operations for private
+     * repositories. The token is NEVER persisted in the engine or in
+     * .git/config — the remote URL is reset to the clean URL after clone.
+     *
+     * @param token  VCS personal access token or OAuth token
+     */
+    virtual void setCloneToken(const std::string& token) {
+        // Default no-op — overridden by EngineImpl.
+        (void)token;
+    }
+
 protected:
     Engine() = default;
 };

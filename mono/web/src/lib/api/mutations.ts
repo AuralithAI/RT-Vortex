@@ -297,3 +297,10 @@ export function useTestVCS() {
     mutationFn: (platform: string) => api.vcsPlatforms.test(platform),
   });
 }
+
+export function useCheckClonePermission() {
+  return useMutation({
+    mutationFn: ({ platform, cloneUrl }: { platform: string; cloneUrl: string }) =>
+      api.vcsPlatforms.checkClone(platform, cloneUrl),
+  });
+}

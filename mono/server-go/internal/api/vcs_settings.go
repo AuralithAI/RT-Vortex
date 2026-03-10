@@ -538,3 +538,296 @@ func basicAuth(user, pass string) string {
 	creds := user + ":" + pass
 	return base64.StdEncoding.EncodeToString([]byte(creds))
 }
+
+// ── Token Capability Awareness ──────────────────────────────────────────────
+
+// tokenCapability describes what operations a particular token type supports.
+type tokenCapability struct {
+	TokenType   string   `json:"token_type"`
+	Label       string   `json:"label"`
+	CanClone    bool     `json:"can_clone"`
+	CanReview   bool     `json:"can_review"`   // post comments, approve PRs
+	CanWebhook  bool     `json:"can_webhook"`  // manage webhooks
+	CanReadPR   bool     `json:"can_read_pr"`  // list/read pull requests
+	Scopes      []string `json:"scopes"`       // required scopes/permissions
+	SetupGuide  string   `json:"setup_guide"`  // short instructions
+}
+
+// platformTokenCapabilities defines per-provider token types and their capabilities.
+var platformTokenCapabilities = map[string][]tokenCapability{
+	"github": {
+		{
+			TokenType:  "fine_grained_pat",
+			Label:      "Fine-Grained Personal Access Token (recommended)",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: true,
+			CanReadPR:  true,
+			Scopes:     []string{"Contents: Read", "Pull requests: Read & Write", "Webhooks: Read & Write"},
+			SetupGuide: "Settings → Developer settings → Personal access tokens → Fine-grained tokens. Select specific repositories and grant Contents, Pull requests, and Webhooks permissions.",
+		},
+		{
+			TokenType:  "classic_pat",
+			Label:      "Classic Personal Access Token",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: true,
+			CanReadPR:  true,
+			Scopes:     []string{"repo", "admin:repo_hook"},
+			SetupGuide: "Settings → Developer settings → Personal access tokens → Tokens (classic). Select 'repo' and 'admin:repo_hook' scopes.",
+		},
+		{
+			TokenType:  "github_app",
+			Label:      "GitHub App Installation Token",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: true,
+			CanReadPR:  true,
+			Scopes:     []string{"contents:read", "pull_requests:write", "webhooks"},
+			SetupGuide: "Install the RTVortex GitHub App on your organization. Tokens are managed automatically.",
+		},
+		{
+			TokenType:  "oauth_token",
+			Label:      "OAuth Token (SSO login)",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: false,
+			CanReadPR:  true,
+			Scopes:     []string{"repo"},
+			SetupGuide: "OAuth tokens are issued during GitHub SSO login. They may not include webhook management permissions.",
+		},
+	},
+	"gitlab": {
+		{
+			TokenType:  "personal_access_token",
+			Label:      "Personal Access Token",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: true,
+			CanReadPR:  true,
+			Scopes:     []string{"api", "read_repository", "write_repository"},
+			SetupGuide: "Preferences → Access Tokens → Add new token. Select 'api' scope for full access, or 'read_repository' + 'write_repository' for limited access.",
+		},
+		{
+			TokenType:  "project_access_token",
+			Label:      "Project Access Token",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: false,
+			CanReadPR:  true,
+			Scopes:     []string{"api"},
+			SetupGuide: "Project → Settings → Access Tokens. Scoped to a single project — cannot manage webhooks at the group level.",
+		},
+		{
+			TokenType:  "group_access_token",
+			Label:      "Group Access Token",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: true,
+			CanReadPR:  true,
+			Scopes:     []string{"api"},
+			SetupGuide: "Group → Settings → Access Tokens. Covers all projects in the group.",
+		},
+	},
+	"bitbucket": {
+		{
+			TokenType:  "app_password",
+			Label:      "App Password",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: true,
+			CanReadPR:  true,
+			Scopes:     []string{"Repositories: Read", "Repositories: Write", "Pull requests: Read", "Pull requests: Write", "Webhooks: Read and write"},
+			SetupGuide: "Personal settings → App passwords → Create app password. Select Repository (Read/Write), Pull requests (Read/Write), and Webhooks permissions.",
+		},
+		{
+			TokenType:  "oauth_consumer",
+			Label:      "OAuth Consumer",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: false,
+			CanReadPR:  true,
+			Scopes:     []string{"repository", "pullrequest"},
+			SetupGuide: "Workspace settings → OAuth consumers → Add consumer. Webhook management requires App passwords.",
+		},
+		{
+			TokenType:  "repository_access_token",
+			Label:      "Repository Access Token",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: false,
+			CanReadPR:  true,
+			Scopes:     []string{"repository:read", "repository:write", "pullrequest:read", "pullrequest:write"},
+			SetupGuide: "Repository → Repository settings → Access tokens. Scoped to one repository.",
+		},
+	},
+	"azure_devops": {
+		{
+			TokenType:  "personal_access_token",
+			Label:      "Personal Access Token (PAT)",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: true,
+			CanReadPR:  true,
+			Scopes:     []string{"Code (Read & Write)", "Pull Request Threads (Read & Write)", "Service Hooks (Read & Manage)"},
+			SetupGuide: "User settings → Personal access tokens → New Token. Select 'Code (Read & Write)', 'Pull Request Threads (Read & Write)', and 'Service Hooks (Read & Manage)' scopes.",
+		},
+		{
+			TokenType:  "service_principal",
+			Label:      "Azure AD Service Principal",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: true,
+			CanReadPR:  true,
+			Scopes:     []string{"vso.code_write", "vso.hooks_write"},
+			SetupGuide: "Azure Portal → App registrations → New registration. Grant Azure DevOps API permissions. Configure client_id, tenant_id, and client_secret.",
+		},
+	},
+}
+
+// ListVCSTokenCapabilities returns token type capabilities for each platform.
+// GET /api/v1/vcs/token-capabilities
+func (h *Handler) ListVCSTokenCapabilities(w http.ResponseWriter, r *http.Request) {
+	// Optional: filter by platform
+	platformFilter := r.URL.Query().Get("platform")
+
+	result := make(map[string][]tokenCapability)
+	for platform, caps := range platformTokenCapabilities {
+		if platformFilter != "" && platform != platformFilter {
+			continue
+		}
+		result[platform] = caps
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"capabilities": result,
+	})
+}
+
+// CheckClonePermission verifies that the user's stored VCS token can clone a specific repo.
+// POST /api/v1/vcs/platforms/{platform}/check-clone
+func (h *Handler) CheckClonePermission(w http.ResponseWriter, r *http.Request) {
+	platformName := chi.URLParam(r, "platform")
+	if _, ok := vcsPlatformDefs[platformName]; !ok {
+		writeError(w, http.StatusBadRequest, "unsupported platform: "+platformName)
+		return
+	}
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+
+	var req struct {
+		CloneURL string `json:"clone_url"`
+	}
+	if err := readJSON(r, &req); err != nil || req.CloneURL == "" {
+		writeError(w, http.StatusBadRequest, "clone_url is required")
+		return
+	}
+
+	user, err := h.UserRepo.GetByID(r.Context(), userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load user")
+		return
+	}
+
+	if h.Vault == nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"platform":   platformName,
+			"can_clone":  false,
+			"reason":     "Vault not configured. Cannot verify token.",
+			"has_token":  false,
+		})
+		return
+	}
+
+	userVault := vault.NewUserScopedVault(h.Vault, user.VaultToken)
+
+	// Resolve token
+	tokenKey := "vcs." + platformName + ".token"
+	if platformName == "azure_devops" {
+		tokenKey = "vcs.azure_devops.pat"
+	}
+	token, _ := userVault.Get(tokenKey)
+
+	if token == "" {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"platform":        platformName,
+			"can_clone":       false,
+			"reason":          "No token configured for " + platformName + ". Please add your credentials in VCS settings.",
+			"has_token":       false,
+			"needs_different": false,
+		})
+		return
+	}
+
+	// Quick check: try an authenticated lightweight API call to verify repo access.
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	canClone, reason := checkRepoAccess(ctx, platformName, token, req.CloneURL)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"platform":        platformName,
+		"can_clone":       canClone,
+		"reason":          reason,
+		"has_token":       true,
+		"needs_different": !canClone && token != "",
+	})
+}
+
+// checkRepoAccess makes a lightweight API call to verify the token has read access to the repository.
+func checkRepoAccess(ctx context.Context, platform, token, cloneURL string) (bool, string) {
+	// Parse owner/repo from the clone URL
+	parsed, err := parseRepoURL(cloneURL)
+	if err != nil {
+		return false, "Could not parse repository URL"
+	}
+
+	var apiURL, authHeader string
+	switch platform {
+	case "github":
+		apiURL = fmt.Sprintf("https://api.github.com/repos/%s/%s", parsed.owner, parsed.name)
+		authHeader = "Bearer " + token
+	case "gitlab":
+		// GitLab needs URL-encoded project path
+		project := parsed.owner + "/" + parsed.name
+		apiURL = fmt.Sprintf("https://gitlab.com/api/v4/projects/%s", strings.ReplaceAll(project, "/", "%%2F"))
+		authHeader = "Bearer " + token
+	case "bitbucket":
+		apiURL = fmt.Sprintf("https://api.bitbucket.org/2.0/repositories/%s/%s", parsed.owner, parsed.name)
+		authHeader = "Bearer " + token
+	case "azure_devops":
+		// For Azure DevOps the URL structure is different — do a basic auth check
+		apiURL = fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories?api-version=7.1", parsed.owner, parsed.name)
+		authHeader = "Basic " + basicAuth("", token)
+	default:
+		return false, "Unknown platform"
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	if err != nil {
+		return false, "Failed to create request"
+	}
+	httpReq.Header.Set("Authorization", authHeader)
+	httpReq.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return false, "Connection failed: " + err.Error()
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return true, "Token has access to this repository"
+	}
+	if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		return false, "Token does not have access to this repository. You may need a token with broader scope or access to this specific repo."
+	}
+	if resp.StatusCode == 404 {
+		return false, "Repository not found or token lacks read access. For private repos, ensure your token includes repository read permissions."
+	}
+	return false, fmt.Sprintf("Unexpected response (HTTP %d)", resp.StatusCode)
+}

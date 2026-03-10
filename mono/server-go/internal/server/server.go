@@ -295,6 +295,8 @@ func (s *Server) setupRouter() {
 				r.Put("/platforms/{platform}", h.ConfigureVCSPlatform)
 				r.Delete("/platforms/{platform}", h.DeleteVCSPlatform)
 				r.Post("/platforms/{platform}/test", h.TestVCSPlatform)
+				r.Post("/platforms/{platform}/check-clone", h.CheckClonePermission)
+				r.Get("/token-capabilities", h.ListVCSTokenCapabilities)
 			})
 
 			// Engine Metrics — Phase 0 observability

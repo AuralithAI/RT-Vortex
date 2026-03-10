@@ -269,3 +269,10 @@ export function useVCSPlatforms() {
     queryFn: () => api.vcsPlatforms.list(),
   });
 }
+
+export function useVCSTokenCapabilities(platform?: string) {
+  return useQuery({
+    queryKey: ["vcs", "token-capabilities", platform ?? "all"] as const,
+    queryFn: () => api.vcsPlatforms.tokenCapabilities(platform),
+  });
+}

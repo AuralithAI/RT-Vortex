@@ -1,7 +1,7 @@
 // ─── VCS Settings ────────────────────────────────────────────────────────────
 // Per-user version control system platform configuration.
-// Secrets (tokens, passwords) → encrypted file vault.
-// Non-secret config (URLs, usernames) → PostgreSQL.
+// Secrets (tokens, passwords) → encrypted file vault (AES-256-GCM).
+// Non-secret config (URLs, usernames) → application database.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -19,14 +19,19 @@ import {
   ShieldCheck,
   Globe,
   KeyRound,
+  Info,
+  AlertTriangle,
+  Copy,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
-import { useVCSPlatforms } from "@/lib/api/queries";
+import { useVCSPlatforms, useVCSTokenCapabilities } from "@/lib/api/queries";
 import {
   useConfigureVCS,
   useDeleteVCS,
   useTestVCS,
 } from "@/lib/api/mutations";
-import type { VCSPlatformInfo, VCSFieldInfo, VCSTestResult } from "@/types/api";
+import type { VCSPlatformInfo, VCSFieldInfo, VCSTestResult, VCSTokenCapability } from "@/types/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -69,6 +74,7 @@ const platformMeta: Record<
 
 export function VCSSettings() {
   const { data: platforms, isLoading } = useVCSPlatforms();
+  const { data: tokenCaps } = useVCSTokenCapabilities();
   const configureVCS = useConfigureVCS();
   const deleteVCS = useDeleteVCS();
   const testVCS = useTestVCS();
@@ -139,7 +145,7 @@ export function VCSSettings() {
         </CardDescription>
         <div className="flex items-center gap-1.5 pt-1 text-xs text-emerald-600 dark:text-emerald-400">
           <ShieldCheck className="h-3.5 w-3.5" />
-          AES-256-GCM encrypted secrets • Per-user vault isolation • URLs in PostgreSQL
+          AES-256-GCM encrypted secrets • Per-user vault isolation • Config in application database
         </div>
       </CardHeader>
       <CardContent>
@@ -160,6 +166,7 @@ export function VCSSettings() {
                 key={platform.name}
                 platform={platform}
                 meta={platformMeta[platform.name]}
+                tokenCapabilities={tokenCaps?.[platform.name] ?? []}
                 fieldValues={fieldValues[platform.name] ?? {}}
                 showSecrets={showSecrets[platform.name] ?? {}}
                 testResult={testResults[platform.name]}
@@ -194,6 +201,7 @@ export function VCSSettings() {
 interface PlatformCardProps {
   platform: VCSPlatformInfo;
   meta?: { icon: string; color: string; docsUrl: string };
+  tokenCapabilities: VCSTokenCapability[];
   fieldValues: Record<string, string>;
   showSecrets: Record<string, boolean>;
   testResult?: VCSTestResult;
@@ -210,6 +218,7 @@ interface PlatformCardProps {
 function PlatformCard({
   platform,
   meta,
+  tokenCapabilities,
   fieldValues,
   showSecrets,
   testResult,
@@ -223,6 +232,7 @@ function PlatformCard({
   onDelete,
 }: PlatformCardProps) {
   const hasChanges = Object.keys(fieldValues).some((k) => fieldValues[k] !== "");
+  const [showCapabilities, setShowCapabilities] = useState(false);
 
   // Separate secret fields from config fields for visual grouping
   const secretFields = platform.fields.filter((f) => f.secret);
@@ -277,6 +287,74 @@ function PlatformCard({
           )}
         </div>
       </div>
+
+      {/* Token Capability Info (collapsible) */}
+      {tokenCapabilities.length > 0 && (
+        <div className="rounded-md border bg-muted/30 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowCapabilities(!showCapabilities)}
+            className="flex items-center gap-2 w-full px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
+          >
+            {showCapabilities ? (
+              <ChevronDown className="h-3 w-3" />
+            ) : (
+              <ChevronRight className="h-3 w-3" />
+            )}
+            <Info className="h-3 w-3" />
+            Token types &amp; permissions guide
+          </button>
+          {showCapabilities && (
+            <div className="px-3 pb-3 space-y-2">
+              {tokenCapabilities.map((cap) => (
+                <div
+                  key={cap.token_type}
+                  className="rounded border bg-background p-2.5 space-y-1.5"
+                >
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-medium">{cap.label}</p>
+                    <div className="flex gap-1">
+                      {cap.can_clone && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                          Clone
+                        </Badge>
+                      )}
+                      {cap.can_review && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                          Review
+                        </Badge>
+                      )}
+                      {cap.can_webhook && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                          Webhooks
+                        </Badge>
+                      )}
+                      {cap.can_read_pr && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                          PRs
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {cap.scopes.map((scope) => (
+                      <code
+                        key={scope}
+                        className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono text-muted-foreground"
+                      >
+                        {scope}
+                      </code>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground/80 leading-relaxed">
+                    {cap.setup_guide}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Secret Fields (vault-stored) */}
       {secretFields.length > 0 && (
