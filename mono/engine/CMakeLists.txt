@@ -143,6 +143,23 @@ FetchContent_MakeAvailable(nlohmann_json)
 message(STATUS "nlohmann/json downloaded")
 
 # =============================================================================
+# miniz for gzip compression of LTM chunks.bin (optional)
+# =============================================================================
+option(AIPR_USE_MINIZ "Use miniz for LTM index compression" ON)
+
+if(AIPR_USE_MINIZ)
+    FetchContent_Declare(
+        miniz
+        GIT_REPOSITORY https://github.com/richgel999/miniz.git
+        GIT_TAG 3.0.2
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(miniz)
+    message(STATUS "miniz downloaded for LTM compression")
+    add_definitions(-DAIPR_HAS_MINIZ)
+endif()
+
+# =============================================================================
 # ONNX Runtime for local embeddings (optional fallback)
 # =============================================================================
 option(AIPR_USE_ONNX "Use ONNX Runtime for local embeddings" ON)
@@ -611,6 +628,8 @@ set(INDEXING_SOURCES
     src/indexing/chunker_fallback.cpp
     src/indexing/manifest.cpp
     src/indexing/embed_client.cpp
+    src/indexing/hierarchy_builder.cpp
+    src/indexing/chunk_prefixer.cpp
 )
 
 # Source files - Retrieval
@@ -688,6 +707,10 @@ target_link_libraries(aipr-engine PUBLIC
     CURL::libcurl
     nlohmann_json::nlohmann_json
 )
+
+if(AIPR_USE_MINIZ)
+    target_link_libraries(aipr-engine PUBLIC miniz)
+endif()
 
 if(FAISS_LIBRARIES)
     target_link_libraries(aipr-engine PUBLIC ${FAISS_LIBRARIES})

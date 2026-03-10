@@ -26,6 +26,11 @@
 #include <cctype>
 #include <codecvt>
 #include <locale>
+#include <functional>
+#include <thread>
+#include <chrono>
+
+#include "metrics.h"
 
 #ifdef AIPR_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
@@ -300,6 +305,48 @@ private:
 };
 
 //=============================================================================
+// Content-hash embedding cache
+//=============================================================================
+
+class EmbedContentCache {
+public:
+    /**
+     * Look up a cached embedding by content hash (SHA-256 hex string).
+     * Returns true if found.
+     */
+    bool get(const std::string& content_hash, std::vector<float>& out) const {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = cache_.find(content_hash);
+        if (it != cache_.end()) {
+            out = it->second;
+            metrics::Registry::instance().incCounter(metrics::EMBED_CACHE_HITS_TOTAL);
+            return true;
+        }
+        metrics::Registry::instance().incCounter(metrics::EMBED_CACHE_MISSES_TOTAL);
+        return false;
+    }
+
+    void put(const std::string& content_hash, const std::vector<float>& embedding) {
+        std::lock_guard<std::mutex> lock(mu_);
+        cache_[content_hash] = embedding;
+    }
+
+    size_t size() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return cache_.size();
+    }
+
+    void clear() {
+        std::lock_guard<std::mutex> lock(mu_);
+        cache_.clear();
+    }
+
+private:
+    mutable std::mutex mu_;
+    std::unordered_map<std::string, std::vector<float>> cache_;
+};
+
+//=============================================================================
 // Embedding Client Implementation
 //=============================================================================
 
@@ -415,6 +462,30 @@ public:
     EmbedProvider getProvider() const {
         return provider_;
     }
+
+    /**
+     * Get a cached embedding if the content_hash is known, otherwise embed
+     * the text and cache the result.
+     */
+    std::vector<float> embedSingleCached(const std::string& text,
+                                          const std::string& content_hash) {
+        if (!content_hash.empty()) {
+            std::vector<float> cached;
+            if (embed_cache_.get(content_hash, cached)) {
+                return cached;
+            }
+        }
+        auto vec = embedSingle(text);
+        if (!content_hash.empty()) {
+            embed_cache_.put(content_hash, vec);
+        }
+        return vec;
+    }
+
+    /**
+     * Access the content-hash cache.
+     */
+    EmbedContentCache& contentCache() { return embed_cache_; }
     
 private:
     EngineConfig config_;
@@ -425,6 +496,7 @@ private:
     size_t batch_size_;
     size_t timeout_seconds_;
     std::string api_key_;
+    EmbedContentCache embed_cache_;
     
 #ifdef AIPR_HAS_ONNX
     std::unique_ptr<Ort::Session> onnx_session_;
@@ -459,33 +531,60 @@ private:
         
         std::string request_body = request_json.dump();
         std::string response_body;
-        
-        CURL* curl = curl_easy_init();
-        if (!curl) {
-            throw std::runtime_error("Failed to initialize CURL");
-        }
-        
-        struct curl_slist* headers = nullptr;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-        std::string auth_header = "Authorization: Bearer " + api_key_;
-        headers = curl_slist_append(headers, auth_header.c_str());
-        
-        curl_easy_setopt(curl, CURLOPT_URL, endpoint_.c_str());
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body.c_str());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(timeout_seconds_));
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-        
-        CURLcode res = curl_easy_perform(curl);
-        
+
+        // Retry with exponential backoff (up to 3 attempts)
+        constexpr int max_retries = 3;
         long http_code = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-        
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
+        CURLcode res = CURLE_OK;
+
+        for (int attempt = 0; attempt < max_retries; ++attempt) {
+            response_body.clear();
+            
+            CURL* curl = curl_easy_init();
+            if (!curl) {
+                throw std::runtime_error("Failed to initialize CURL");
+            }
+            
+            struct curl_slist* headers = nullptr;
+            headers = curl_slist_append(headers, "Content-Type: application/json");
+            std::string auth_header = "Authorization: Bearer " + api_key_;
+            headers = curl_slist_append(headers, auth_header.c_str());
+            
+            curl_easy_setopt(curl, CURLOPT_URL, endpoint_.c_str());
+            curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, request_body.c_str());
+            curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+            curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+            curl_easy_setopt(curl, CURLOPT_TIMEOUT, static_cast<long>(timeout_seconds_));
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+            curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+            
+            res = curl_easy_perform(curl);
+            
+            http_code = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+            
+            curl_slist_free_all(headers);
+            curl_easy_cleanup(curl);
+
+            if (res == CURLE_OK && http_code == 200) {
+                break;
+            }
+
+            // Retry on transient errors (429, 500, 502, 503, 504) or CURL failures
+            bool transient = (res != CURLE_OK) ||
+                             (http_code == 429 || http_code >= 500);
+            if (!transient || attempt == max_retries - 1) {
+                break;
+            }
+
+            // Exponential backoff: 1s, 2s, 4s
+            int delay_ms = 1000 * (1 << attempt);
+            std::cerr << "[WARN] Embedding HTTP attempt " << (attempt + 1)
+                      << " failed (code=" << http_code << "), retrying in "
+                      << delay_ms << "ms\n";
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+        }
         
         if (res != CURLE_OK) {
             throw std::runtime_error("CURL error: " + std::string(curl_easy_strerror(res)));
@@ -597,23 +696,19 @@ private:
             return response;
         }
         
-        std::lock_guard<std::mutex> lock(onnx_mutex_);
-        
         Ort::AllocatorWithDefaultOptions allocator;
         constexpr int64_t MAX_SEQ_LEN = 128;
         
         for (const auto& text : texts) {
+            // Tokenization happens outside the ONNX mutex — it's CPU-only
+            // and does not touch the ORT session.
             std::vector<int64_t> input_ids;
             std::vector<int64_t> attention_mask;
             std::vector<int64_t> token_type_ids;
             
             if (tokenizer_.isLoaded()) {
-                // ---- Production path: real BERT WordPiece tokenizer ----
                 tokenizer_.encode(text, MAX_SEQ_LEN, input_ids, attention_mask, token_type_ids);
             } else {
-                // ---- Fallback: hash-based pseudo-tokenizer ----
-                // This produces valid-shaped input but poor quality embeddings
-                // because token IDs don't match the model's trained vocabulary.
                 constexpr int64_t CLS_TOKEN = 101;
                 constexpr int64_t SEP_TOKEN = 102;
                 constexpr int64_t VOCAB_SIZE = 30522;
@@ -628,19 +723,19 @@ private:
                 }
                 input_ids.push_back(SEP_TOKEN);
                 
-                int64_t seq_len = static_cast<int64_t>(input_ids.size());
+                int64_t seq_len_init = static_cast<int64_t>(input_ids.size());
                 while (static_cast<int64_t>(input_ids.size()) < MAX_SEQ_LEN) {
                     input_ids.push_back(0);
                 }
                 attention_mask.resize(static_cast<size_t>(MAX_SEQ_LEN), 0);
-                for (int64_t i = 0; i < seq_len; ++i) attention_mask[static_cast<size_t>(i)] = 1;
+                for (int64_t i = 0; i < seq_len_init; ++i) attention_mask[static_cast<size_t>(i)] = 1;
                 token_type_ids.resize(static_cast<size_t>(MAX_SEQ_LEN), 0);
             }
             
             int64_t seq_len = 0;
             for (auto v : attention_mask) seq_len += v;
             
-            // Create tensors
+            // Create tensors (stack-local, safe outside lock)
             std::array<int64_t, 2> shape = {1, MAX_SEQ_LEN};
             auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
             
@@ -651,7 +746,9 @@ private:
             auto type_tensor = Ort::Value::CreateTensor<int64_t>(
                 memory_info, token_type_ids.data(), token_type_ids.size(), shape.data(), shape.size());
             
-            // Get input/output names
+            // Lock only for session metadata queries + inference
+            std::lock_guard<std::mutex> lock(onnx_mutex_);
+
             size_t num_inputs = onnx_session_->GetInputCount();
             std::vector<std::string> input_names_str;
             std::vector<const char*> input_names;
@@ -691,8 +788,6 @@ private:
                 std::vector<float> embedding(dimensions_, 0.0f);
                 
                 if (output_shape.size() == 3) {
-                    // Shape: [1, seq_len, hidden_dim]
-                    // Proper mean pooling: only average over non-padding tokens
                     int64_t out_seq = output_shape[1];
                     int64_t hidden = output_shape[2];
                     int actual_dim = std::min(static_cast<int>(hidden), static_cast<int>(dimensions_));
@@ -711,7 +806,6 @@ private:
                         }
                     }
                 } else if (output_shape.size() == 2) {
-                    // Shape: [1, hidden_dim] — already pooled (e.g., CLS output)
                     int actual_dim = std::min(static_cast<int>(output_shape[1]), static_cast<int>(dimensions_));
                     for (int d = 0; d < actual_dim; ++d) {
                         embedding[static_cast<size_t>(d)] = output_data[d];

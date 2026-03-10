@@ -7,6 +7,8 @@
 #include "tms/tms_memory_system.h"
 #include "tms/repo_parser.h"
 #include "tms/embedding_engine.h"
+#include "hierarchy_builder.h"
+#include "chunk_prefixer.h"
 #include "logging.h"
 #include "metrics.h"
 #include <chrono>
@@ -215,6 +217,38 @@ void TMSMemorySystem::ingestRepository(
         return;
     }
     
+    // Hierarchical context enrichment (feature-gated)
+    if (config_.hierarchy_enabled) {
+        if (progress_callback) {
+            progress_callback(0.25f, "Building hierarchy...");
+        }
+
+        aipr::HierarchyBuilder hierarchy_builder;
+        aipr::RepoManifest manifest = hierarchy_builder.buildRepoManifest(repo_path);
+
+        // Generate file-summary chunks and append them
+        std::unordered_map<std::string, std::vector<CodeChunk*>> chunks_by_file;
+        for (auto& c : chunks) {
+            chunks_by_file[c.file_path].push_back(&c);
+        }
+
+        for (auto& [file_path, file_chunk_ptrs] : chunks_by_file) {
+            std::vector<CodeChunk> fc;
+            fc.reserve(file_chunk_ptrs.size());
+            for (auto* p : file_chunk_ptrs) fc.push_back(*p);
+
+            std::string lang = fc.empty() ? "" : fc[0].language;
+            auto summary = hierarchy_builder.summarizeFile(file_path, lang, fc, manifest);
+            chunks.push_back(hierarchy_builder.buildFileSummaryChunk(summary));
+        }
+
+        // Apply structural prefixes to all chunks
+        aipr::ChunkPrefixer prefixer;
+        size_t prefixed = prefixer.applyPrefixes(chunks, repo_id, manifest);
+        LOG_INFO("[TMS] hierarchy: prefixed " + std::to_string(prefixed) +
+                 " chunks, avg_prefix=" + std::to_string(static_cast<int>(prefixer.avgPrefixLength())) + " chars");
+    }
+
     // Phase 2: Compute embeddings
     if (progress_callback) {
         progress_callback(0.3f, "Computing embeddings...");

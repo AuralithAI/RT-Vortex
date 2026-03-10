@@ -58,6 +58,12 @@ constexpr const char* FAISS_LOADED          = "faiss_loaded";
 // LLM avoided rate (heuristic-only reviews / total reviews)
 constexpr const char* LLM_AVOIDED_RATE      = "llm_avoided_rate";
 
+// Hierarchical chunking
+constexpr const char* AVG_PREFIX_LENGTH_CHARS   = "avg_prefix_length_chars";
+constexpr const char* HIERARCHY_CHUNKS_TOTAL    = "hierarchy_chunks_total";
+constexpr const char* EMBED_CACHE_HITS_TOTAL    = "embed_cache_hits_total";
+constexpr const char* EMBED_CACHE_MISSES_TOTAL  = "embed_cache_misses_total";
+
 // ── Histogram snapshot ─────────────────────────────────────────────────────
 
 struct HistogramSnapshot {

@@ -8,26 +8,26 @@
  * ┌─────────────────────────────────────────────────────────────────────────┐
  * │                    TMS Cognitive Memory System                          │
  * │                                                                         │
- * │  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────────────┐│
- * │  │    LTM    │  │    STM    │  │    MTM    │  │  Compute Controller   ││
- * │  │  (FAISS)  │◄─┤  (Ring)   │◄─┤  (Graph)  │◄─┤  (Strategy Selector)  ││
- * │  │           │  │           │  │           │  │                       ││
- * │  │ Permanent │  │ Session   │  │ Patterns  │  │ FAST/BALANCED/THOROUGH││
- * │  │ Knowledge │  │ Context   │  │ Strategies│  │                       ││
- * │  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └───────────┬───────────┘│
- * │        │              │              │                    │            │
- * │        └──────────────┴──────────────┴────────────────────┘            │
- * │                              │                                         │
- * │                    ┌─────────▼─────────┐                               │
- * │                    │ Cross-Memory      │                               │
- * │                    │ Attention Module  │                               │
- * │                    │ (Multi-Head Attn) │                               │
- * │                    └─────────┬─────────┘                               │
- * │                              │                                         │
- * │                    ┌─────────▼─────────┐                               │
- * │                    │  Fused Context    │                               │
- * │                    │  (For LLM Input)  │                               │
- * │                    └───────────────────┘                               │
+ * │  ┌───────────┐  ┌───────────┐  ┌───────────┐  ┌───────────────────────┐ │
+ * │  │    LTM    │  │    STM    │  │    MTM    │  │  Compute Controller   │ │
+ * │  │  (FAISS)  │◄─┤  (Ring)   │◄─┤  (Graph)  │◄─┤  (Strategy Selector)  │ │
+ * │  │           │  │           │  │           │  │                       │ │
+ * │  │ Permanent │  │ Session   │  │ Patterns  │  │ FAST/BALANCED/THOROUGH│ │
+ * │  │ Knowledge │  │ Context   │  │ Strategies│  │                       │ │
+ * │  └─────┬─────┘  └─────┬─────┘  └─────┬─────┘  └───────────┬───────────┘ │
+ * │        │              │              │                    │             │
+ * │        └──────────────┴──────────────┴────────────────────┘             │
+ * │                              │                                          │
+ * │                    ┌─────────▼─────────┐                                │
+ * │                    │ Cross-Memory      │                                │
+ * │                    │ Attention Module  │                                │
+ * │                    │ (Multi-Head Attn) │                                │
+ * │                    └─────────┬─────────┘                                │
+ * │                              │                                          │
+ * │                    ┌─────────▼─────────┐                                │
+ * │                    │  Fused Context    │                                │
+ * │                    │  (For LLM Input)  │                                │
+ * │                    └───────────────────┘                                │
  * └─────────────────────────────────────────────────────────────────────────┘
  */
 
@@ -126,6 +126,7 @@ struct ChunkingConfig {
     bool extract_dependencies = true;       // Parse import/include statements
     bool extract_call_graph = true;         // Build function call relationships
     bool generate_file_summaries = true;    // Create file-level summary chunks
+    bool hierarchy_enabled = false;         // Enable hierarchical context prefixing
     
     // Language-specific settings
     std::map<std::string, size_t> language_chunk_sizes;  // Override per language
@@ -330,6 +331,9 @@ struct TMSConfig {
     std::string storage_path = "./tms_data";
     bool persist_stm = false;               // STM is usually ephemeral
     bool persist_mtm = true;
+
+    // Hierarchical chunking
+    bool hierarchy_enabled = false;         // Enable hierarchical context prefixing
 };
 
 // =============================================================================

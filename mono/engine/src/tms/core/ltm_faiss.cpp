@@ -13,6 +13,11 @@
 #include <cmath>
 #include <filesystem>
 #include <numeric>
+#include <cstring>
+
+#ifdef AIPR_HAS_MINIZ
+#include <miniz.h>
+#endif
 
 #ifdef AIPR_HAS_FAISS
 #include <faiss/IndexFlat.h>
@@ -801,64 +806,99 @@ void LTMFaiss::save(const std::string& path) {
     
     // Save chunks (binary format for efficiency)
     {
-        std::ofstream chunk_file(path + "/chunks.bin", std::ios::binary);
-        if (chunk_file.is_open()) {
-            const uint32_t magic = 0x4C544D43; // "LTMC"
-            const uint32_t version = 1;
-            chunk_file.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
-            chunk_file.write(reinterpret_cast<const char*>(&version), sizeof(version));
+        // Serialize to an in-memory buffer first, then optionally gzip
+        std::ostringstream buf(std::ios::binary);
 
-            uint64_t count = chunks_.size();
-            chunk_file.write(reinterpret_cast<const char*>(&count), sizeof(count));
+        const uint32_t magic = 0x4C544D43; // "LTMC"
+        const uint32_t version = 2;        // v2: gzip-compressed payload
+        buf.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+        buf.write(reinterpret_cast<const char*>(&version), sizeof(version));
 
-            // Write next_faiss_id
-            chunk_file.write(reinterpret_cast<const char*>(&next_faiss_id_), sizeof(next_faiss_id_));
+        uint64_t count = chunks_.size();
+        buf.write(reinterpret_cast<const char*>(&count), sizeof(count));
+        buf.write(reinterpret_cast<const char*>(&next_faiss_id_), sizeof(next_faiss_id_));
 
-            for (const auto& [chunk_id, chunk] : chunks_) {
-                // Helper lambda to write a string
-                auto write_str = [&](const std::string& s) {
-                    uint32_t len = static_cast<uint32_t>(s.size());
-                    chunk_file.write(reinterpret_cast<const char*>(&len), sizeof(len));
-                    chunk_file.write(s.data(), len);
-                };
+        for (const auto& [chunk_id, chunk] : chunks_) {
+            auto write_str = [&](const std::string& s) {
+                uint32_t len = static_cast<uint32_t>(s.size());
+                buf.write(reinterpret_cast<const char*>(&len), sizeof(len));
+                buf.write(s.data(), len);
+            };
 
-                write_str(chunk_id);
-                write_str(chunk.id);
-                // Extract repo_id from tags (format: "repo:<id>")
-                std::string repo_id;
-                for (const auto& tag : chunk.tags) {
-                    if (tag.rfind("repo:", 0) == 0) {
-                        repo_id = tag.substr(5);
-                        break;
-                    }
-                }
-                write_str(repo_id);
-                write_str(chunk.file_path);
-                write_str(chunk.language);
-                write_str(chunk.name);
-                write_str(chunk.type);
-                write_str(chunk.content);
-
-                // Write FAISS ID mapping
-                int64_t faiss_id = -1;
-                auto fid_it = chunk_id_to_faiss_id_.find(chunk_id);
-                if (fid_it != chunk_id_to_faiss_id_.end()) {
-                    faiss_id = fid_it->second;
-                }
-                chunk_file.write(reinterpret_cast<const char*>(&faiss_id), sizeof(faiss_id));
-
-                // Write metadata if present
-                bool has_meta = metadata_.count(chunk_id) > 0;
-                chunk_file.write(reinterpret_cast<const char*>(&has_meta), sizeof(has_meta));
-                if (has_meta) {
-                    const auto& meta = metadata_.at(chunk_id);
-                    chunk_file.write(reinterpret_cast<const char*>(&meta.importance_score), sizeof(meta.importance_score));
-                    chunk_file.write(reinterpret_cast<const char*>(&meta.access_count), sizeof(meta.access_count));
-                    chunk_file.write(reinterpret_cast<const char*>(&meta.decay_factor), sizeof(meta.decay_factor));
+            write_str(chunk_id);
+            write_str(chunk.id);
+            std::string repo_id;
+            for (const auto& tag : chunk.tags) {
+                if (tag.rfind("repo:", 0) == 0) {
+                    repo_id = tag.substr(5);
+                    break;
                 }
             }
+            write_str(repo_id);
+            write_str(chunk.file_path);
+            write_str(chunk.language);
+            write_str(chunk.name);
+            write_str(chunk.type);
+            write_str(chunk.content);
+
+            int64_t faiss_id = -1;
+            auto fid_it = chunk_id_to_faiss_id_.find(chunk_id);
+            if (fid_it != chunk_id_to_faiss_id_.end()) {
+                faiss_id = fid_it->second;
+            }
+            buf.write(reinterpret_cast<const char*>(&faiss_id), sizeof(faiss_id));
+
+            bool has_meta = metadata_.count(chunk_id) > 0;
+            buf.write(reinterpret_cast<const char*>(&has_meta), sizeof(has_meta));
+            if (has_meta) {
+                const auto& meta = metadata_.at(chunk_id);
+                buf.write(reinterpret_cast<const char*>(&meta.importance_score), sizeof(meta.importance_score));
+                buf.write(reinterpret_cast<const char*>(&meta.access_count), sizeof(meta.access_count));
+                buf.write(reinterpret_cast<const char*>(&meta.decay_factor), sizeof(meta.decay_factor));
+            }
+        }
+
+        std::string raw = buf.str();
+
+#ifdef AIPR_HAS_MINIZ
+        // gzip compress the payload
+        mz_ulong compressed_len = mz_compressBound(static_cast<mz_ulong>(raw.size()));
+        std::vector<uint8_t> compressed(compressed_len);
+        int rc = mz_compress2(compressed.data(), &compressed_len,
+                              reinterpret_cast<const uint8_t*>(raw.data()),
+                              static_cast<mz_ulong>(raw.size()),
+                              MZ_BEST_SPEED);
+        if (rc == MZ_OK) {
+            std::ofstream chunk_file(path + "/chunks.bin", std::ios::binary);
+            if (chunk_file.is_open()) {
+                // Write a tiny envelope: magic(4) + version(4) + uncompressed_size(8) + compressed payload
+                const uint32_t gz_magic = 0x4C544D43;
+                const uint32_t gz_version = 2;
+                uint64_t uncompressed_size = raw.size();
+                chunk_file.write(reinterpret_cast<const char*>(&gz_magic), sizeof(gz_magic));
+                chunk_file.write(reinterpret_cast<const char*>(&gz_version), sizeof(gz_version));
+                chunk_file.write(reinterpret_cast<const char*>(&uncompressed_size), sizeof(uncompressed_size));
+                chunk_file.write(reinterpret_cast<const char*>(compressed.data()),
+                                 static_cast<std::streamsize>(compressed_len));
+                chunk_file.close();
+            }
+        } else {
+            // Compression failed — fall back to raw write
+            LOG_WARN("[LTM] miniz compression failed (rc=" + std::to_string(rc) + "), writing uncompressed");
+            std::ofstream chunk_file(path + "/chunks.bin", std::ios::binary);
+            if (chunk_file.is_open()) {
+                chunk_file.write(raw.data(), static_cast<std::streamsize>(raw.size()));
+                chunk_file.close();
+            }
+        }
+#else
+        // No compression available — write raw
+        std::ofstream chunk_file(path + "/chunks.bin", std::ios::binary);
+        if (chunk_file.is_open()) {
+            chunk_file.write(raw.data(), static_cast<std::streamsize>(raw.size()));
             chunk_file.close();
         }
+#endif
     }
     
     additions_since_save_ = 0;
@@ -878,75 +918,118 @@ void LTMFaiss::load(const std::string& path) {
     
     // Load chunks from binary
     std::string chunk_path = path + "/chunks.bin";
-    if (std::filesystem::exists(chunk_path)) {
-        std::ifstream chunk_file(chunk_path, std::ios::binary);
-        if (chunk_file.is_open()) {
-            uint32_t magic = 0, version = 0;
-            chunk_file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
-            chunk_file.read(reinterpret_cast<char*>(&version), sizeof(version));
+    if (!std::filesystem::exists(chunk_path)) return;
 
-            if (magic == 0x4C544D43 && version == 1) {
-                uint64_t count = 0;
-                chunk_file.read(reinterpret_cast<char*>(&count), sizeof(count));
-                chunk_file.read(reinterpret_cast<char*>(&next_faiss_id_), sizeof(next_faiss_id_));
+    std::ifstream chunk_file(chunk_path, std::ios::binary);
+    if (!chunk_file.is_open()) return;
 
-                auto read_str = [&]() -> std::string {
-                    uint32_t len = 0;
-                    chunk_file.read(reinterpret_cast<char*>(&len), sizeof(len));
-                    if (len > 100'000'000) return ""; // sanity
-                    std::string s(len, '\0');
-                    chunk_file.read(s.data(), len);
-                    return s;
-                };
+    uint32_t magic = 0, version = 0;
+    chunk_file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+    chunk_file.read(reinterpret_cast<char*>(&version), sizeof(version));
 
-                chunks_.clear();
-                chunk_id_to_faiss_id_.clear();
-                faiss_id_to_chunk_id_.clear();
-                repo_to_chunks_.clear();
-                metadata_.clear();
+    if (magic != 0x4C544D43) return;
 
-                for (uint64_t i = 0; i < count && chunk_file.good(); ++i) {
-                    std::string chunk_id = read_str();
-                    CodeChunk chunk;
-                    chunk.id = read_str();
-                    std::string repo_id = read_str();  // Read serialized repo_id
-                    if (!repo_id.empty()) {
-                        chunk.tags.push_back("repo:" + repo_id);
-                    }
-                    chunk.file_path = read_str();
-                    chunk.language = read_str();
-                    chunk.name = read_str();
-                    chunk.type = read_str();
-                    chunk.content = read_str();
+    // Prepare the byte stream to parse from.
+    // v1 → read directly from chunk_file
+    // v2 → read uncompressed_size, decompress, then parse from std::istringstream
+    std::unique_ptr<std::istream> stream_owner;
+    std::istream* in = &chunk_file;
 
-                    int64_t faiss_id = -1;
-                    chunk_file.read(reinterpret_cast<char*>(&faiss_id), sizeof(faiss_id));
+    if (version == 2) {
+#ifdef AIPR_HAS_MINIZ
+        uint64_t uncompressed_size = 0;
+        chunk_file.read(reinterpret_cast<char*>(&uncompressed_size), sizeof(uncompressed_size));
 
-                    if (faiss_id >= 0) {
-                        chunk_id_to_faiss_id_[chunk_id] = faiss_id;
-                        faiss_id_to_chunk_id_[faiss_id] = chunk_id;
-                    }
+        // Read remaining bytes as compressed payload
+        std::string compressed_data((std::istreambuf_iterator<char>(chunk_file)),
+                                    std::istreambuf_iterator<char>());
+        chunk_file.close();
 
-                    // Rebuild repo index
-                    if (!repo_id.empty()) {
-                        repo_to_chunks_[repo_id].push_back(chunk_id);
-                    }
-
-                    bool has_meta = false;
-                    chunk_file.read(reinterpret_cast<char*>(&has_meta), sizeof(has_meta));
-                    if (has_meta) {
-                        MemoryMetadata meta;
-                        chunk_file.read(reinterpret_cast<char*>(&meta.importance_score), sizeof(meta.importance_score));
-                        chunk_file.read(reinterpret_cast<char*>(&meta.access_count), sizeof(meta.access_count));
-                        chunk_file.read(reinterpret_cast<char*>(&meta.decay_factor), sizeof(meta.decay_factor));
-                        meta.last_accessed = std::chrono::system_clock::now();
-                        metadata_[chunk_id] = meta;
-                    }
-
-                    chunks_[chunk_id] = std::move(chunk);
-                }
-            }
+        std::string decompressed(uncompressed_size, '\0');
+        mz_ulong dest_len = static_cast<mz_ulong>(uncompressed_size);
+        int rc = mz_uncompress(reinterpret_cast<uint8_t*>(decompressed.data()), &dest_len,
+                               reinterpret_cast<const uint8_t*>(compressed_data.data()),
+                               static_cast<mz_ulong>(compressed_data.size()));
+        if (rc != MZ_OK) {
+            LOG_WARN("[LTM] failed to decompress chunks.bin (rc=" + std::to_string(rc) + ")");
+            return;
         }
+
+        // Re-parse magic + version from decompressed buffer
+        auto iss = std::make_unique<std::istringstream>(decompressed, std::ios::binary);
+        uint32_t inner_magic = 0, inner_version = 0;
+        iss->read(reinterpret_cast<char*>(&inner_magic), sizeof(inner_magic));
+        iss->read(reinterpret_cast<char*>(&inner_version), sizeof(inner_version));
+        in = iss.get();
+        stream_owner = std::move(iss);
+#else
+        LOG_WARN("[LTM] chunks.bin is v2 (compressed) but AIPR_HAS_MINIZ is not defined");
+        return;
+#endif
+    } else if (version != 1) {
+        LOG_WARN("[LTM] unknown chunks.bin version " + std::to_string(version));
+        return;
+    }
+
+    // From here, 'in' points to the byte stream at the position right after
+    // magic + version (same for both v1 and v2).
+    uint64_t count = 0;
+    in->read(reinterpret_cast<char*>(&count), sizeof(count));
+    in->read(reinterpret_cast<char*>(&next_faiss_id_), sizeof(next_faiss_id_));
+
+    auto read_str = [&]() -> std::string {
+        uint32_t len = 0;
+        in->read(reinterpret_cast<char*>(&len), sizeof(len));
+        if (len > 100'000'000) return "";
+        std::string s(len, '\0');
+        in->read(s.data(), len);
+        return s;
+    };
+
+    chunks_.clear();
+    chunk_id_to_faiss_id_.clear();
+    faiss_id_to_chunk_id_.clear();
+    repo_to_chunks_.clear();
+    metadata_.clear();
+
+    for (uint64_t i = 0; i < count && in->good(); ++i) {
+        std::string chunk_id = read_str();
+        CodeChunk chunk;
+        chunk.id = read_str();
+        std::string repo_id = read_str();
+        if (!repo_id.empty()) {
+            chunk.tags.push_back("repo:" + repo_id);
+        }
+        chunk.file_path = read_str();
+        chunk.language = read_str();
+        chunk.name = read_str();
+        chunk.type = read_str();
+        chunk.content = read_str();
+
+        int64_t faiss_id = -1;
+        in->read(reinterpret_cast<char*>(&faiss_id), sizeof(faiss_id));
+
+        if (faiss_id >= 0) {
+            chunk_id_to_faiss_id_[chunk_id] = faiss_id;
+            faiss_id_to_chunk_id_[faiss_id] = chunk_id;
+        }
+
+        if (!repo_id.empty()) {
+            repo_to_chunks_[repo_id].push_back(chunk_id);
+        }
+
+        bool has_meta = false;
+        in->read(reinterpret_cast<char*>(&has_meta), sizeof(has_meta));
+        if (has_meta) {
+            MemoryMetadata meta;
+            in->read(reinterpret_cast<char*>(&meta.importance_score), sizeof(meta.importance_score));
+            in->read(reinterpret_cast<char*>(&meta.access_count), sizeof(meta.access_count));
+            in->read(reinterpret_cast<char*>(&meta.decay_factor), sizeof(meta.decay_factor));
+            meta.last_accessed = std::chrono::system_clock::now();
+            metadata_[chunk_id] = meta;
+        }
+
+        chunks_[chunk_id] = std::move(chunk);
     }
 }
 
