@@ -126,7 +126,8 @@ private:
     void extractChunksFromNode(TSNode node, const std::string& content,
                                 const std::string& file_path,
                                 const std::string& language,
-                                std::vector<CodeChunk>& chunks) {
+                                std::vector<CodeChunk>& chunks,
+                                const std::string& parent_chunk_id = "") {
         const char* type = ts_node_type(node);
         std::string node_type(type ? type : "");
 
@@ -141,6 +142,9 @@ private:
                          node_type == "class_specifier" ||
                          node_type == "struct_specifier" ||
                          node_type == "impl_item");
+
+        // Track current chunk ID so children can reference it as parent
+        std::string current_chunk_id = parent_chunk_id;
 
         if (is_function || is_class) {
             uint32_t start_byte = ts_node_start_byte(node);
@@ -159,7 +163,12 @@ private:
             chunk.start_byte = static_cast<int>(start_byte);
             chunk.end_byte = static_cast<int>(end_byte);
 
-            // Try to extract name from first child
+            // Set parent_chunk_id if this chunk is nested inside another
+            if (!parent_chunk_id.empty()) {
+                chunk.parent_chunk_id = parent_chunk_id;
+            }
+
+            // Extract name from first identifier child
             uint32_t child_count = ts_node_child_count(node);
             for (uint32_t i = 0; i < child_count; ++i) {
                 TSNode child = ts_node_child(node, i);
@@ -173,13 +182,78 @@ private:
                 }
             }
 
+            // Populate symbols: the chunk defines its own name as a symbol
+            if (!chunk.name.empty()) {
+                chunk.symbols.push_back(chunk.name);
+            }
+
+            // For classes, also extract member names as symbols
+            if (is_class) {
+                extractMemberSymbols(node, content, chunk.symbols);
+            }
+
+            current_chunk_id = chunk.id;
             chunks.push_back(std::move(chunk));
         }
 
-        // Recurse into children
+        // Recurse into children, passing current scope as parent
         uint32_t child_count = ts_node_child_count(node);
         for (uint32_t i = 0; i < child_count; ++i) {
-            extractChunksFromNode(ts_node_child(node, i), content, file_path, language, chunks);
+            extractChunksFromNode(ts_node_child(node, i), content, file_path,
+                                  language, chunks, current_chunk_id);
+        }
+    }
+
+    // Extract member function/field names from a class/struct node
+    void extractMemberSymbols(TSNode class_node, const std::string& content,
+                               std::vector<std::string>& symbols) {
+        uint32_t child_count = ts_node_child_count(class_node);
+        for (uint32_t i = 0; i < child_count; ++i) {
+            TSNode child = ts_node_child(class_node, i);
+            const char* ct = ts_node_type(child);
+            if (!ct) continue;
+            std::string ctype(ct);
+
+            // Look for body/block nodes that contain members
+            bool is_body = (ctype == "class_body" || ctype == "declaration_list" ||
+                            ctype == "field_declaration_list" || ctype == "block" ||
+                            ctype == "impl_body");
+            if (!is_body) continue;
+
+            uint32_t body_count = ts_node_child_count(child);
+            for (uint32_t j = 0; j < body_count; ++j) {
+                TSNode member = ts_node_child(child, j);
+                const char* mt = ts_node_type(member);
+                if (!mt) continue;
+                std::string mtype(mt);
+
+                // Only grab names from declarations (not full recursion)
+                bool is_member = (mtype == "function_definition" ||
+                                  mtype == "method_definition" ||
+                                  mtype == "method_declaration" ||
+                                  mtype == "field_declaration" ||
+                                  mtype == "property_definition");
+                if (!is_member) continue;
+
+                // Find the identifier child
+                uint32_t mc = ts_node_child_count(member);
+                for (uint32_t k = 0; k < mc; ++k) {
+                    TSNode id_node = ts_node_child(member, k);
+                    const char* idt = ts_node_type(id_node);
+                    if (idt && (std::string(idt) == "identifier" ||
+                                std::string(idt) == "field_identifier" ||
+                                std::string(idt) == "property_identifier" ||
+                                std::string(idt) == "name")) {
+                        uint32_t s = ts_node_start_byte(id_node);
+                        uint32_t e = ts_node_end_byte(id_node);
+                        std::string sym = content.substr(s, e - s);
+                        if (sym.size() >= 2) {
+                            symbols.push_back(std::move(sym));
+                        }
+                        break;
+                    }
+                }
+            }
         }
     }
 #endif
@@ -295,6 +369,16 @@ std::vector<CodeChunk> RepoParser::parseRepository(
                 auto parsed = parseFile(file, repo_path);
                 auto file_chunks = chunkFile(parsed);
 
+                // Propagate file-level imports into each chunk's dependencies
+                // so the KG edge inference can create IMPORTS edges.
+                if (!parsed.imports.empty()) {
+                    for (auto& c : file_chunks) {
+                        if (c.dependencies.empty()) {
+                            c.dependencies = parsed.imports;
+                        }
+                    }
+                }
+
                 std::lock_guard<std::mutex> lock(chunks_mutex);
                 for (auto& c : file_chunks) {
                     all_chunks.push_back(std::move(c));
@@ -336,6 +420,14 @@ std::vector<CodeChunk> RepoParser::parseFiles(
     for (const auto& fp : file_paths) {
         auto parsed = parseFile(fp, repo_root);
         auto file_chunks = chunkFile(parsed);
+        // Propagate imports → chunk dependencies
+        if (!parsed.imports.empty()) {
+            for (auto& c : file_chunks) {
+                if (c.dependencies.empty()) {
+                    c.dependencies = parsed.imports;
+                }
+            }
+        }
         all_chunks.insert(all_chunks.end(),
                           std::make_move_iterator(file_chunks.begin()),
                           std::make_move_iterator(file_chunks.end()));
