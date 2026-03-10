@@ -806,8 +806,17 @@ EmbeddingEngine::EmbeddingEngine(const EmbeddingConfig& config)
     cache_ = std::make_unique<EmbeddingCache>(config.cache_size);
     rate_limiter_ = std::make_unique<RateLimiter>(
         config.max_requests_per_minute, config.max_tokens_per_minute);
-    backend_->initialize();
-    aipr::metrics::Registry::instance().setGauge(aipr::metrics::MINILM_READY, 1.0);
+    bool ok = backend_->initialize();
+
+    // Only report MiniLM as ready when the ONNX backend actually loaded
+    // successfully (model file found, tokenizer parsed, session created).
+    if (config.backend == EmbeddingBackend::ONNX_RUNTIME && ok) {
+        aipr::metrics::Registry::instance().setGauge(aipr::metrics::MINILM_READY, 1.0);
+    } else if (config.backend == EmbeddingBackend::ONNX_RUNTIME && !ok) {
+        aipr::metrics::Registry::instance().setGauge(aipr::metrics::MINILM_READY, 0.0);
+        std::cerr << "[EMBED] WARNING: ONNX backend failed to initialize, "
+                     "embeddings will fall back to mock vectors" << std::endl;
+    }
 }
 
 EmbeddingEngine::~EmbeddingEngine() = default;

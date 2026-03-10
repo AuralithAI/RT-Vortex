@@ -156,6 +156,15 @@ void TMSMemorySystem::initialize() {
     // set component health gauges
     metrics::Registry::instance().setGauge(metrics::FAISS_LOADED, 1.0);
 
+    // Set the active embedding backend gauge so the dashboard shows the
+    // correct label from the very first metrics snapshot.
+    {
+        double backend_id = 0.0; // mock
+        if (config_.embedding_backend == "onnx")  backend_id = 1.0;
+        else if (config_.embedding_backend == "http") backend_id = 2.0;
+        metrics::Registry::instance().setGauge(metrics::EMBED_ACTIVE_BACKEND, backend_id);
+    }
+
     // Initialize Knowledge Graph (optional)
     if (config_.knowledge_graph_enabled) {
         try {

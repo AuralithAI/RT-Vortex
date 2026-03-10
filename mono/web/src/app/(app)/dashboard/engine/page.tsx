@@ -208,7 +208,18 @@ export default function EnginePerformancePage() {
             />
             <StatsCard
               title="Components"
-              value={miniLMReady && faissLoaded ? "All Ready" : "Degraded"}
+              value={
+                // ONNX backend: requires MiniLM ready + FAISS
+                // HTTP backend: just FAISS (API connectivity checked elsewhere)
+                // Mock backend: always "ready" (no external deps)
+                embedBackend === 1
+                  ? miniLMReady && faissLoaded
+                    ? "All Ready"
+                    : "Degraded"
+                  : faissLoaded
+                    ? "All Ready"
+                    : "Degraded"
+              }
               description={`Embed: ${embedBackendLabel} · FAISS: ${faissLoaded ? "✓" : "✗"} · KG: ${kgEnabled ? `${kgNodes}n/${kgEdges}e` : "off"}`}
               icon={Activity}
             />
