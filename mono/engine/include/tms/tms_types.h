@@ -340,6 +340,11 @@ struct TMSConfig {
 
     // Memory Accounts (domain-aware query routing)
     bool memory_accounts_enabled = true;    // Enable DEV/OPS/SECURITY/HISTORY routing
+
+    // Confidence Gate (Zero-LLM Engine)
+    bool confidence_gate_enabled = false;   // When true, skip LLM if retrieval is high-confidence
+    float confidence_gate_threshold = 0.85f; // Min max-retrieval score to skip LLM
+    int query_timeout_seconds = 5;          // Hard timeout for forward() queries
 };
 
 // =============================================================================
@@ -384,6 +389,11 @@ struct TMSResponse {
     size_t ltm_items_scanned;
     size_t stm_items_scanned;
     size_t mtm_items_scanned;
+    
+    // Confidence gate (Zero-LLM Engine)
+    bool requires_llm = true;               // False when gate fires → caller may skip LLM
+    float max_retrieval_score = 0.0f;        // Highest similarity in retrieval results
+    std::string llm_skip_reason;             // Human-readable reason when requires_llm == false
     
     // Explainability
     std::vector<std::string> reasoning_trace;

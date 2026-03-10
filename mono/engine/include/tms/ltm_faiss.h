@@ -68,6 +68,9 @@ struct LTMConfig {
     // Search defaults
     int default_top_k = 12;
     float similarity_threshold = 0.0f;  // Minimum similarity (0 = no threshold)
+
+    // Cosine similarity: normalize embeddings on insert and use Inner Product
+    bool use_cosine_similarity = true;
     
     // Persistence
     std::string storage_path;
@@ -325,6 +328,7 @@ private:
         int top_k = -1
     );
     void maybeAutoSave();
+    static std::vector<float> normalizeQuery(const std::vector<float>& v);
 };
 
 } // namespace aipr::tms

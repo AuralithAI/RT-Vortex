@@ -72,6 +72,18 @@ struct RetrievalCacheEntry {
 };
 
 /**
+ * Canonical Answer Entry — pre-computed high-confidence retrieval that
+ * can bypass LLM entirely when the confidence gate fires.
+ */
+struct CanonicalAnswer {
+    std::string chunk_id;
+    std::string content;
+    std::vector<float> embedding;
+    float score = 0.0f;                     // Similarity score at computation time
+    std::chrono::system_clock::time_point computed_at;
+};
+
+/**
  * STM Configuration
  */
 struct STMConfig {
@@ -248,6 +260,32 @@ public:
      * Clear retrieval cache
      */
     void clearCache();
+
+    // =========================================================================
+    // Canonical Answers (Zero-LLM Fast Path)
+    // =========================================================================
+
+    /**
+     * Pre-compute canonical answers from recent high-score retrieval results.
+     * Called after ingest to warm the canonical cache.
+     * @param retrieval_results  Scored chunks from retrieval
+     * @param embeddings         Corresponding embeddings (same order/size as retrieval_results)
+     * @param min_score          Only cache entries above this similarity
+     */
+    void precomputeCanonical(
+        const std::vector<RetrievedChunk>& retrieval_results,
+        const std::vector<std::vector<float>>& embeddings,
+        float min_score = 0.85f
+    );
+
+    /**
+     * Lookup canonical answer for a query embedding.
+     * Returns the best match above threshold, or std::nullopt.
+     */
+    std::optional<CanonicalAnswer> lookupCanonical(
+        const std::vector<float>& query_embedding,
+        float threshold = 0.85f
+    ) const;
     
     // =========================================================================
     // Maintenance
@@ -310,6 +348,9 @@ private:
     std::unordered_map<std::string, RetrievalCacheEntry> retrieval_cache_;
     size_t cache_hits_ = 0;
     size_t cache_misses_ = 0;
+
+    // Canonical answer cache (for confidence gate)
+    std::vector<CanonicalAnswer> canonical_cache_;
     
     // Thread safety
     mutable std::mutex mutex_;

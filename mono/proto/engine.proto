@@ -176,6 +176,9 @@ message SearchConfig {
 message SearchResponse {
     repeated ContextChunk chunks = 1;
     SearchMetrics metrics = 2;
+    bool requires_llm = 3;             // False when confidence gate fires
+    float max_retrieval_score = 4;      // Highest similarity score in results
+    string llm_skip_reason = 5;         // Human-readable gate reason (empty when requires_llm=true)
 }
 
 message ContextChunk {

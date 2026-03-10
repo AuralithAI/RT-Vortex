@@ -590,4 +590,71 @@ float STM::cosineSimilarity(const std::vector<float>& a, const std::vector<float
     return denom > 0 ? dot / denom : 0.0f;
 }
 
+// =============================================================================
+// Canonical Answers (Zero-LLM Fast Path)
+// =============================================================================
+
+void STM::precomputeCanonical(
+    const std::vector<RetrievedChunk>& retrieval_results,
+    const std::vector<std::vector<float>>& embeddings,
+    float min_score
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    for (size_t idx = 0; idx < retrieval_results.size(); ++idx) {
+        const auto& rc = retrieval_results[idx];
+        if (rc.similarity_score < min_score) continue;
+
+        // Avoid duplicates — deduplicate by chunk ID
+        bool exists = false;
+        for (const auto& ca : canonical_cache_) {
+            if (ca.chunk_id == rc.chunk.id) { exists = true; break; }
+        }
+        if (exists) continue;
+
+        CanonicalAnswer ca;
+        ca.chunk_id = rc.chunk.id;
+        ca.content = rc.chunk.content;
+        ca.embedding = (idx < embeddings.size()) ? embeddings[idx] : std::vector<float>{};
+        ca.score = rc.similarity_score;
+        ca.computed_at = std::chrono::system_clock::now();
+        canonical_cache_.push_back(std::move(ca));
+    }
+
+    // Cap at a reasonable size (LRU-style: keep most recent)
+    constexpr size_t kMaxCanonical = 500;
+    if (canonical_cache_.size() > kMaxCanonical) {
+        canonical_cache_.erase(
+            canonical_cache_.begin(),
+            canonical_cache_.begin() +
+                static_cast<long>(canonical_cache_.size() - kMaxCanonical));
+    }
+}
+
+std::optional<CanonicalAnswer> STM::lookupCanonical(
+    const std::vector<float>& query_embedding,
+    float threshold
+) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    float best_sim = 0.0f;
+    const CanonicalAnswer* best = nullptr;
+
+    for (const auto& ca : canonical_cache_) {
+        if (ca.embedding.empty()) continue;
+        float sim = cosineSimilarity(query_embedding, ca.embedding);
+        if (sim > best_sim) {
+            best_sim = sim;
+            best = &ca;
+        }
+    }
+
+    if (best && best_sim >= threshold) {
+        CanonicalAnswer result = *best;
+        result.score = best_sim;
+        return result;
+    }
+    return std::nullopt;
+}
+
 } // namespace aipr::tms

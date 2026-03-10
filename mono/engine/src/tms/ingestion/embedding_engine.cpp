@@ -176,6 +176,76 @@ private:
 };
 
 // =============================================================================
+// CircuitBreaker — prevents cascading failures to external HTTP embedding APIs.
+//
+// States: CLOSED (normal) → OPEN (after N failures) → HALF_OPEN (after timeout)
+//         HALF_OPEN allows one probe request; success → CLOSED, failure → OPEN.
+// =============================================================================
+
+class CircuitBreaker {
+public:
+    enum class State { CLOSED, OPEN, HALF_OPEN };
+
+    explicit CircuitBreaker(int failure_threshold = 5,
+                            std::chrono::seconds open_duration = std::chrono::seconds(60))
+        : failure_threshold_(failure_threshold)
+        , open_duration_(open_duration) {}
+
+    /// Returns true if the request is allowed through.
+    bool allowRequest() {
+        std::lock_guard<std::mutex> lock(mu_);
+        switch (state_) {
+            case State::CLOSED:
+                return true;
+            case State::OPEN: {
+                auto now = std::chrono::steady_clock::now();
+                if (now - opened_at_ >= open_duration_) {
+                    state_ = State::HALF_OPEN;
+                    return true;  // allow probe
+                }
+                return false;
+            }
+            case State::HALF_OPEN:
+                return false;  // only one probe at a time
+        }
+        return true;
+    }
+
+    void recordSuccess() {
+        std::lock_guard<std::mutex> lock(mu_);
+        consecutive_failures_ = 0;
+        state_ = State::CLOSED;
+    }
+
+    void recordFailure() {
+        std::lock_guard<std::mutex> lock(mu_);
+        ++consecutive_failures_;
+        if (consecutive_failures_ >= failure_threshold_) {
+            if (state_ != State::OPEN) {
+                state_ = State::OPEN;
+                opened_at_ = std::chrono::steady_clock::now();
+                metrics::Registry::instance().incCounter(metrics::CIRCUIT_BREAKER_TRIPS);
+                std::cerr << "[EMBED] Circuit breaker OPEN after "
+                          << consecutive_failures_ << " consecutive failures" << std::endl;
+            }
+        }
+    }
+
+    State getState() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return state_;
+    }
+
+private:
+    int failure_threshold_;
+    std::chrono::seconds open_duration_;
+    mutable std::mutex mu_;
+    int consecutive_failures_ = 0;
+    State state_ = State::CLOSED;
+    std::chrono::steady_clock::time_point opened_at_;
+};
+
+// =============================================================================
 // BackendImpl (pimpl)
 // =============================================================================
 
@@ -247,6 +317,7 @@ public:
 private:
     EmbeddingConfig config_;
     bool initialized_;
+    CircuitBreaker circuit_breaker_;  // HTTP embedding circuit breaker
 
 #ifdef AIPR_HAS_ONNX
     std::unique_ptr<Ort::Env> ort_env_;
@@ -314,6 +385,15 @@ private:
     // ── HTTP backend (production — libcurl + OpenAI-compatible API) ──
     std::vector<std::vector<float>> embedBatchHttp(const std::vector<std::string>& texts) {
 #ifdef AIPR_HAS_CURL
+        // Circuit breaker: when OPEN, fall back to ONNX (if available) or mock
+        if (!circuit_breaker_.allowRequest()) {
+            std::cerr << "[EMBED] Circuit breaker OPEN — falling back to local backend" << std::endl;
+#ifdef AIPR_HAS_ONNX
+            if (ort_session_) return embedBatchOnnx(texts);
+#endif
+            return embedBatchMock(texts);
+        }
+
         if (config_.api_endpoint.empty()) {
             std::cerr << "[EMBED] HTTP endpoint not configured, falling back to mock" << std::endl;
             return embedBatchMock(texts);
@@ -447,6 +527,7 @@ private:
             if (!success) {
                 std::cerr << "[EMBED] HTTP API failed after retries: " << last_error << std::endl;
                 metrics::Registry::instance().incCounter("embed_http_errors");
+                circuit_breaker_.recordFailure();
                 // Fill this batch with zero vectors.
                 for (size_t i = offset; i < end; ++i) {
                     all_embeddings.push_back(std::vector<float>(config_.embedding_dimension, 0.0f));
@@ -457,6 +538,7 @@ private:
             // Parse response.
             try {
                 auto resp = nlohmann::json::parse(response_body);
+                circuit_breaker_.recordSuccess();
 
                 if (is_cohere) {
                     // Cohere response: { embeddings: [[...], [...]], ... }

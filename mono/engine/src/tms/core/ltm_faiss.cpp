@@ -377,8 +377,12 @@ void LTMFaiss::add(const CodeChunk& chunk, const std::vector<float>& embedding) 
     // Assign FAISS ID
     int64_t faiss_id = next_faiss_id_++;
     
-    // Store in FAISS
-    faiss_impl_->add(faiss_id, embedding);
+    // Store in FAISS — normalise for cosine similarity when enabled
+    if (config_.use_cosine_similarity && !embedding.empty()) {
+        faiss_impl_->add(faiss_id, normalizeQuery(embedding));
+    } else {
+        faiss_impl_->add(faiss_id, embedding);
+    }
     
     // Store metadata
     chunks_[chunk.id] = chunk;
@@ -434,8 +438,21 @@ void LTMFaiss::addBatch(
         int64_t faiss_id = next_faiss_id_++;
         faiss_ids.push_back(faiss_id);
         
-        flat_embeddings.insert(flat_embeddings.end(), 
-                               embeddings[i].begin(), embeddings[i].end());
+        // If cosine similarity is enabled, L2-normalise the embedding so that
+        // Inner Product (IP) distance becomes cosine similarity.
+        if (config_.use_cosine_similarity && !embeddings[i].empty()) {
+            std::vector<float> normed = embeddings[i];
+            float norm = 0.0f;
+            for (float v : normed) norm += v * v;
+            norm = std::sqrt(norm);
+            if (norm > 1e-12f) {
+                for (float& v : normed) v /= norm;
+            }
+            flat_embeddings.insert(flat_embeddings.end(), normed.begin(), normed.end());
+        } else {
+            flat_embeddings.insert(flat_embeddings.end(),
+                                   embeddings[i].begin(), embeddings[i].end());
+        }
         
         // Store metadata
         const auto& chunk = chunks[i];
@@ -520,7 +537,9 @@ std::vector<RetrievedChunk> LTMFaiss::search(
                   " search_k=" + std::to_string(search_k));
     }
     
-    auto [ids, distances] = faiss_impl_->search(query_embedding, search_k);
+    auto [ids, distances] = faiss_impl_->search(
+        config_.use_cosine_similarity ? normalizeQuery(query_embedding) : query_embedding,
+        search_k);
     
     return convertResults(ids, distances, repo_filter, top_k);
 }
@@ -545,9 +564,11 @@ std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
         over_fetch_k = static_cast<int>(chunks_.size());
     }
     
-    // Vector search
+    // Vector search (normalize query when using cosine similarity)
     int vector_k = over_fetch_k;
-    auto [v_ids, v_distances] = faiss_impl_->search(query_embedding, vector_k);
+    auto [v_ids, v_distances] = faiss_impl_->search(
+        config_.use_cosine_similarity ? normalizeQuery(query_embedding) : query_embedding,
+        vector_k);
     
     // Lexical search
     auto lexical_results = lexical_index_->search(query_text, vector_k);
@@ -1118,9 +1139,11 @@ size_t LTMFaiss::getRepoChunkCount(const std::string& repo_id) const {
 FAISSIndexType LTMFaiss::selectIndexType(size_t expected_size) {
     if (expected_size < 10000) {
         return FAISSIndexType::FLAT_L2;
-    } else if (expected_size < 100000) {
-        return FAISSIndexType::HNSW_FLAT;
     } else if (expected_size < 1000000) {
+        // HNSW is effective up to ~1M vectors; keeps recall high without
+        // the training overhead of IVF.
+        return FAISSIndexType::HNSW_FLAT;
+    } else if (expected_size < 10000000) {
         return FAISSIndexType::IVF_FLAT;
     } else {
         return FAISSIndexType::IVF_PQ;
@@ -1162,9 +1185,15 @@ std::vector<RetrievedChunk> LTMFaiss::convertResults(
         RetrievedChunk result;
         result.chunk = chunk_it->second;
         
-        // Convert L2 distance to similarity score (0-1)
-        // similarity = 1 / (1 + distance)
-        result.similarity_score = 1.0f / (1.0f + std::sqrt(distances[i]));
+        // Convert distance to similarity score (0-1).
+        // When using cosine similarity (normalised embeddings + IP), the
+        // distance IS the cosine similarity already in [0,1].  Otherwise
+        // convert L2 distance: similarity = 1 / (1 + sqrt(d)).
+        if (config_.use_cosine_similarity) {
+            result.similarity_score = std::clamp(distances[i], 0.0f, 1.0f);
+        } else {
+            result.similarity_score = 1.0f / (1.0f + std::sqrt(distances[i]));
+        }
         result.combined_score = result.similarity_score;
         result.memory_source = "LTM";
         
@@ -1196,6 +1225,17 @@ void LTMFaiss::maybeAutoSave() {
             // Log but don't throw — auto-save is best-effort
         }
     }
+}
+
+std::vector<float> LTMFaiss::normalizeQuery(const std::vector<float>& v) {
+    std::vector<float> normed = v;
+    float norm = 0.0f;
+    for (float x : normed) norm += x * x;
+    norm = std::sqrt(norm);
+    if (norm > 1e-12f) {
+        for (float& x : normed) x /= norm;
+    }
+    return normed;
 }
 
 } // namespace aipr::tms

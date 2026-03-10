@@ -83,6 +83,18 @@ constexpr const char* ACCOUNT_QUERIES_OPS_TOTAL      = "aipr_account_queries_ops
 constexpr const char* ACCOUNT_QUERIES_SECURITY_TOTAL = "aipr_account_queries_security_total";
 constexpr const char* ACCOUNT_QUERIES_HISTORY_TOTAL  = "aipr_account_queries_history_total";
 
+// Confidence gate (Zero-LLM Engine)
+constexpr const char* LLM_AVOIDED_TOTAL     = "aipr_llm_avoided_total";
+constexpr const char* LLM_USED_TOTAL        = "aipr_llm_used_total";
+constexpr const char* CONFIDENCE_GATE_SCORE = "aipr_confidence_gate_score";
+constexpr const char* FAISS_RECALL_AT_10    = "aipr_faiss_recall_at_10";
+
+// Embedding circuit breaker
+constexpr const char* CIRCUIT_BREAKER_TRIPS = "aipr_circuit_breaker_trips";
+
+// Query timeout
+constexpr const char* QUERY_TIMEOUT_TOTAL   = "aipr_query_timeout_total";
+
 // ── Histogram snapshot ─────────────────────────────────────────────────────
 
 struct HistogramSnapshot {

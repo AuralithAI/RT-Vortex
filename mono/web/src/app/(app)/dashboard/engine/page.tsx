@@ -41,6 +41,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { MemoryAccountsChart } from "@/components/dashboard/engine-metrics/memory-accounts-chart";
+import { FaissRecallChart } from "@/components/dashboard/engine-metrics/faiss-recall-chart";
 
 // ── Well-known metric names (match C++ metrics.h constants) ─────────────────
 
@@ -64,6 +65,13 @@ const EMBED_ACTIVE_BACKEND = "embed_active_backend";
 const EMBED_HTTP_REQUESTS = "embed_http_requests";
 const EMBED_HTTP_ERRORS = "embed_http_errors";
 const EMBED_HTTP_TOKENS = "embed_http_tokens_used";
+
+// Confidence gate (Zero-LLM Engine)
+const LLM_AVOIDED_TOTAL = "aipr_llm_avoided_total";
+const LLM_USED_TOTAL = "aipr_llm_used_total";
+const CONFIDENCE_GATE_SCORE = "aipr_confidence_gate_score";
+const CIRCUIT_BREAKER_TRIPS = "aipr_circuit_breaker_trips";
+const QUERY_TIMEOUT_TOTAL = "aipr_query_timeout_total";
 
 const EMBED_BACKEND_LABELS: Record<number, string> = {
   0: "Mock",
@@ -99,6 +107,13 @@ export default function EnginePerformancePage() {
   const embedHttpRequests = getMetricScalar(latest, EMBED_HTTP_REQUESTS);
   const embedHttpErrors = getMetricScalar(latest, EMBED_HTTP_ERRORS);
   const embedHttpTokens = getMetricScalar(latest, EMBED_HTTP_TOKENS);
+
+  // Confidence gate metrics
+  const llmAvoidedTotal = getMetricScalar(latest, LLM_AVOIDED_TOTAL);
+  const llmUsedTotal = getMetricScalar(latest, LLM_USED_TOTAL);
+  const confidenceGateScore = getMetricScalar(latest, CONFIDENCE_GATE_SCORE);
+  const circuitBreakerTrips = getMetricScalar(latest, CIRCUIT_BREAKER_TRIPS);
+  const queryTimeouts = getMetricScalar(latest, QUERY_TIMEOUT_TOTAL);
 
   // ── Chart data from history ───────────────────────────────────────────
   const latencyChartData = history.map((snap, i) => {
@@ -204,7 +219,7 @@ export default function EnginePerformancePage() {
             <StatsCard
               title="LLM Avoided Rate"
               value={`${(llmAvoided * 100).toFixed(1)}%`}
-              description="Reviews using heuristics only"
+              description={`${llmAvoidedTotal.toLocaleString()} avoided / ${(llmAvoidedTotal + llmUsedTotal).toLocaleString()} total · gate: ${confidenceGateScore.toFixed(2)}`}
               icon={Gauge}
             />
             <StatsCard
@@ -388,6 +403,34 @@ export default function EnginePerformancePage() {
       {/* Memory Accounts Query Distribution */}
       <div className="mt-6">
         <MemoryAccountsChart history={history} />
+      </div>
+
+      {/* FAISS Recall + Reliability */}
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+        <FaissRecallChart history={history} />
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">
+              Reliability
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+              <div className="text-center">
+                <div className="text-xs text-muted-foreground">Circuit Breaker Trips</div>
+                <div className="text-sm font-semibold">{circuitBreakerTrips.toLocaleString()}</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xs text-muted-foreground">Query Timeouts</div>
+                <div className="text-sm font-semibold">{queryTimeouts.toLocaleString()}</div>
+              </div>
+              <div className="text-center">
+                <div className="text-xs text-muted-foreground">Confidence Gate Score</div>
+                <div className="text-sm font-semibold">{confidenceGateScore.toFixed(3)}</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </>
   );

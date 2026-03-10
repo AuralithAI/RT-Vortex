@@ -405,6 +405,17 @@ grpc::Status EngineServiceImpl::Search(
         auto* metrics = response->mutable_metrics();
         metrics->set_total_candidates(static_cast<uint32_t>(chunks.size()));
 
+        // Confidence gate fields (populated when TMS forward is wired)
+        // For now, propagate defaults — requires_llm=true.
+        response->set_requires_llm(true);
+        if (!chunks.empty()) {
+            float max_score = 0.0f;
+            for (const auto& c : chunks) {
+                max_score = std::max(max_score, c.relevance_score);
+            }
+            response->set_max_retrieval_score(max_score);
+        }
+
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {

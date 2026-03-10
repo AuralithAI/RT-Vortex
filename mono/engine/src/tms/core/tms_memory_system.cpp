@@ -20,6 +20,7 @@
 #include <iostream>
 #include <filesystem>
 #include <unordered_set>
+#include <future>
 
 namespace aipr::tms {
 
@@ -338,6 +339,24 @@ void TMSMemorySystem::ingestRepository(
             LOG_ERROR("[TMS] KG build failed: " + std::string(e.what()));
         }
     }
+
+    // Pre-compute canonical STM entries from ingested embeddings.
+    // This warms the canonical cache so that the confidence gate can
+    // fire on exact or near-exact matches without an LLM round-trip.
+    if (config_.confidence_gate_enabled && !embeddings.empty()) {
+        std::vector<RetrievedChunk> seed_results;
+        seed_results.reserve(embeddings.size());
+        for (size_t i = 0; i < chunks.size() && i < embeddings.size(); ++i) {
+            RetrievedChunk rc;
+            rc.chunk = chunks[i];
+            rc.similarity_score = 1.0f;  // self-similarity
+            seed_results.push_back(std::move(rc));
+        }
+        stm_->precomputeCanonical(seed_results, embeddings,
+                                  config_.confidence_gate_threshold);
+        LOG_INFO("[TMS] canonical STM warmed with " +
+                 std::to_string(seed_results.size()) + " entries");
+    }
     
     // Phase 4: Persist to disk
     if (progress_callback) {
@@ -477,6 +496,13 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     auto start_time = std::chrono::steady_clock::now();
     TMSResponse response;
 
+    // Query timeout helper — returns true if we've exceeded the budget.
+    const auto timeout = std::chrono::seconds(config_.query_timeout_seconds);
+    auto isTimedOut = [&]() -> bool {
+        if (config_.query_timeout_seconds <= 0) return false;
+        return (std::chrono::steady_clock::now() - start_time) >= timeout;
+    };
+
     LOG_DEBUG("[TMS] forward: query_len=" + std::to_string(query.query_text.size()) +
               " repo=" + query.repo_filter +
               " session=" + query.session_id +
@@ -586,18 +612,78 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     
     // Step 4: Retrieve from STM
     std::vector<RetrievedChunk> stm_results;
-    if (!query.session_id.empty() && decision.stm_top_k > 0) {
+    if (!query.session_id.empty() && decision.stm_top_k > 0 && !isTimedOut()) {
         stm_results = stm_->search(query.session_id, query_embedding, decision.stm_top_k);
         response.reasoning_trace.push_back("STM: Retrieved " + std::to_string(stm_results.size()) + " items");
         response.stm_items_scanned = stm_results.size();
         LOG_DEBUG("[TMS] STM search: retrieved=" + std::to_string(stm_results.size()) +
                   " session=" + query.session_id);
     }
+
+    // Step 4b: Confidence Gate (Zero-LLM Engine)
+    //
+    // If retrieval produced a high-confidence result, mark the response so
+    // the caller can skip the expensive LLM round-trip.  The gate is
+    // feature-flagged: confidence_gate_enabled defaults to false.
+    {
+        float max_score = 0.0f;
+        for (const auto& rc : ltm_results) {
+            max_score = std::max(max_score, rc.similarity_score);
+        }
+        for (const auto& rc : stm_results) {
+            max_score = std::max(max_score, rc.similarity_score);
+        }
+        response.max_retrieval_score = max_score;
+
+        // Also check canonical STM cache
+        auto canonical_hit = stm_->lookupCanonical(
+            query_embedding, config_.confidence_gate_threshold);
+        if (canonical_hit) {
+            max_score = std::max(max_score, canonical_hit->score);
+            response.max_retrieval_score = max_score;
+        }
+
+        metrics::Registry::instance().setGauge(
+            metrics::CONFIDENCE_GATE_SCORE, static_cast<double>(max_score));
+
+        if (config_.confidence_gate_enabled &&
+            max_score >= config_.confidence_gate_threshold) {
+            response.requires_llm = false;
+            response.llm_skip_reason =
+                "confidence_gate: max_retrieval_score=" +
+                std::to_string(max_score) +
+                " >= threshold=" +
+                std::to_string(config_.confidence_gate_threshold);
+            metrics::Registry::instance().incCounter(metrics::LLM_AVOIDED_TOTAL);
+
+            // Compute the running avoided rate
+            double avoided = metrics::Registry::instance().getCounter(metrics::LLM_AVOIDED_TOTAL);
+            double used    = metrics::Registry::instance().getCounter(metrics::LLM_USED_TOTAL);
+            if (avoided + used > 0) {
+                metrics::Registry::instance().setGauge(
+                    metrics::LLM_AVOIDED_RATE, avoided / (avoided + used));
+            }
+
+            response.reasoning_trace.push_back(
+                "ConfidenceGate: FIRED — " + response.llm_skip_reason);
+            LOG_INFO("[TMS] confidence gate fired: " + response.llm_skip_reason);
+        } else {
+            response.requires_llm = true;
+            metrics::Registry::instance().incCounter(metrics::LLM_USED_TOTAL);
+
+            double avoided = metrics::Registry::instance().getCounter(metrics::LLM_AVOIDED_TOTAL);
+            double used    = metrics::Registry::instance().getCounter(metrics::LLM_USED_TOTAL);
+            if (avoided + used > 0) {
+                metrics::Registry::instance().setGauge(
+                    metrics::LLM_AVOIDED_RATE, avoided / (avoided + used));
+            }
+        }
+    }
     
     // Step 5: Match patterns and strategies from MTM
     std::vector<PatternEntry> patterns;
     std::vector<StrategyEntry> strategies;
-    if (decision.mtm_top_k > 0) {
+    if (decision.mtm_top_k > 0 && !isTimedOut()) {
         patterns = mtm_->matchPatterns(query_embedding, decision.mtm_top_k);
         
         // Get strategies that apply to detected patterns
@@ -618,7 +704,7 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     response.suggested_strategies = strategies;
     
     // Step 6: Cross-Memory Attention (if enabled)
-    if (decision.enable_cross_attention) {
+    if (decision.enable_cross_attention && !isTimedOut()) {
         response.attention_output = runCrossMemoryAttention(
             query_embedding,
             ltm_results,
@@ -668,10 +754,21 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     auto end_time = std::chrono::steady_clock::now();
     response.total_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
+    // Track query timeouts
+    if (isTimedOut()) {
+        metrics::Registry::instance().incCounter(metrics::QUERY_TIMEOUT_TOTAL);
+        response.reasoning_trace.push_back(
+            "Timeout: query exceeded " +
+            std::to_string(config_.query_timeout_seconds) + "s budget");
+        LOG_WARN("[TMS] forward timed out after " +
+                 std::to_string(response.total_time.count()) + "ms");
+    }
+
     LOG_DEBUG("[TMS] forward complete: total_ms=" + std::to_string(response.total_time.count()) +
               " fused_chunks=" + std::to_string(response.attention_output.fused_chunks.size()) +
               " fused_context_len=" + std::to_string(response.attention_output.fused_context.size()) +
-              " confidence=" + std::to_string(response.attention_output.confidence_score));
+              " confidence=" + std::to_string(response.attention_output.confidence_score) +
+              " requires_llm=" + std::to_string(response.requires_llm));
 
     // record CMA confidence score
     metrics::Registry::instance().setGauge(
