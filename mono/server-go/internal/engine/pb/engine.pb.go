@@ -1166,11 +1166,14 @@ func (x *SearchConfig) GetLanguageFilters() []string {
 }
 
 type SearchResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Chunks        []*ContextChunk        `protobuf:"bytes,1,rep,name=chunks,proto3" json:"chunks,omitempty"`
-	Metrics       *SearchMetrics         `protobuf:"bytes,2,opt,name=metrics,proto3" json:"metrics,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	Chunks            []*ContextChunk        `protobuf:"bytes,1,rep,name=chunks,proto3" json:"chunks,omitempty"`
+	Metrics           *SearchMetrics         `protobuf:"bytes,2,opt,name=metrics,proto3" json:"metrics,omitempty"`
+	RequiresLlm       bool                   `protobuf:"varint,3,opt,name=requires_llm,json=requiresLlm,proto3" json:"requires_llm,omitempty"`                      // False when confidence gate fires
+	MaxRetrievalScore float32                `protobuf:"fixed32,4,opt,name=max_retrieval_score,json=maxRetrievalScore,proto3" json:"max_retrieval_score,omitempty"` // Highest similarity score in results
+	LlmSkipReason     string                 `protobuf:"bytes,5,opt,name=llm_skip_reason,json=llmSkipReason,proto3" json:"llm_skip_reason,omitempty"`               // Human-readable gate reason (empty when requires_llm=true)
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *SearchResponse) Reset() {
@@ -1215,6 +1218,27 @@ func (x *SearchResponse) GetMetrics() *SearchMetrics {
 		return x.Metrics
 	}
 	return nil
+}
+
+func (x *SearchResponse) GetRequiresLlm() bool {
+	if x != nil {
+		return x.RequiresLlm
+	}
+	return false
+}
+
+func (x *SearchResponse) GetMaxRetrievalScore() float32 {
+	if x != nil {
+		return x.MaxRetrievalScore
+	}
+	return 0
+}
+
+func (x *SearchResponse) GetLlmSkipReason() string {
+	if x != nil {
+		return x.LlmSkipReason
+	}
+	return ""
 }
 
 type ContextChunk struct {
@@ -3122,10 +3146,13 @@ const file_engine_proto_rawDesc = "" +
 	"\rvector_weight\x18\x03 \x01(\x02R\fvectorWeight\x12,\n" +
 	"\x12graph_expand_depth\x18\x04 \x01(\rR\x10graphExpandDepth\x12!\n" +
 	"\ffile_filters\x18\x05 \x03(\tR\vfileFilters\x12)\n" +
-	"\x10language_filters\x18\x06 \x03(\tR\x0flanguageFilters\"\x7f\n" +
+	"\x10language_filters\x18\x06 \x03(\tR\x0flanguageFilters\"\xfa\x01\n" +
 	"\x0eSearchResponse\x124\n" +
 	"\x06chunks\x18\x01 \x03(\v2\x1c.aipr.engine.v1.ContextChunkR\x06chunks\x127\n" +
-	"\ametrics\x18\x02 \x01(\v2\x1d.aipr.engine.v1.SearchMetricsR\ametrics\"\x8d\x02\n" +
+	"\ametrics\x18\x02 \x01(\v2\x1d.aipr.engine.v1.SearchMetricsR\ametrics\x12!\n" +
+	"\frequires_llm\x18\x03 \x01(\bR\vrequiresLlm\x12.\n" +
+	"\x13max_retrieval_score\x18\x04 \x01(\x02R\x11maxRetrievalScore\x12&\n" +
+	"\x0fllm_skip_reason\x18\x05 \x01(\tR\rllmSkipReason\"\x8d\x02\n" +
 	"\fContextChunk\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tfile_path\x18\x02 \x01(\tR\bfilePath\x12\x1d\n" +
