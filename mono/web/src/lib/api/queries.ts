@@ -37,6 +37,8 @@ export const queryKeys = {
   chatMessages: (repoId: string, sessionId: string) =>
     ["repos", repoId, "chat", "sessions", sessionId, "messages"] as const,
   vcsPlatforms: ["vcs", "platforms"] as const,
+  branches: (repoId: string) =>
+    ["repos", repoId, "branches"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -117,6 +119,15 @@ export function useIndexStatus(repoId: string, enabled = true) {
       // For pending/other active states, poll less aggressively
       return status && status !== "completed" && status !== "failed" ? 5000 : false;
     },
+  });
+}
+
+export function useBranches(repoId: string, enabled = false) {
+  return useQuery({
+    queryKey: queryKeys.branches(repoId),
+    queryFn: () => api.repos.branches(repoId),
+    enabled: !!repoId && enabled,
+    staleTime: 60 * 1000, // branches don't change that often
   });
 }
 

@@ -372,6 +372,16 @@ public:
         const std::string& repo_path,
         ProgressCallback progress) override
     {
+        return indexRepositoryWithAction(repo_id, repo_path, "index", "", progress);
+    }
+
+    IndexStats indexRepositoryWithAction(
+        const std::string& repo_id,
+        const std::string& repo_path,
+        const std::string& action,       // "index" | "reindex" | "reclone"
+        const std::string& target_branch, // optional branch to checkout
+        ProgressCallback progress)
+    {
         auto start = std::chrono::steady_clock::now();
 
         // Consume the transient clone token (if any) — clear after read.
@@ -383,42 +393,50 @@ public:
         }
 
         // Determine the local path to index.
-        // If repo_path is a URL, git-clone it first.
+        // If repo_path is a URL, git-clone it first — unless action says otherwise.
         std::string local_path = repo_path;
         bool cloned = false;
 
         if (isRemoteURL(repo_path)) {
             local_path = config_.storage_path + "/repos/" + repo_id;
-            if (progress) progress(0, 100, "Cloning repository...");
 
-            // Build the git auth argument.
-            // Instead of mangling the URL (which breaks on Bitbucket Server),
-            // use git's http.extraHeader to inject an Authorization header.
-            // This works universally: GitHub, GitLab, Bitbucket Cloud/Server, Azure DevOps.
-            std::string git_auth_flag;
-            if (!token.empty() && repo_path.rfind("https://", 0) == 0) {
-                git_auth_flag = " -c http.extraHeader=" +
-                                shellEscape("Authorization: Bearer " + token);
-                std::cerr << "[ENGINE] Using Bearer token for authenticated git operation" << std::endl;
+            if (action == "reindex") {
+                // ── Reindex mode: skip all git operations ───────────────────
+                // Use existing local clone as-is. If it doesn't exist, fall
+                // through to a normal clone so we don't fail on a missing dir.
+                if (fs::exists(local_path)) {
+                    std::cerr << "[ENGINE] reindex: using existing local clone at "
+                              << local_path << std::endl;
+                    if (progress) progress(10, 100, "Reindexing existing clone...");
+                } else {
+                    std::cerr << "[ENGINE] reindex: no local clone found, "
+                              << "falling back to clone" << std::endl;
+                    // Fall through to clone below
+                }
             }
 
-            if (fs::exists(local_path)) {
-                // Pull latest changes
-                std::string pull_cmd;
-                if (!git_auth_flag.empty()) {
-                    pull_cmd = "git" + git_auth_flag + " -C " + shellEscape(local_path) +
-                               " pull --ff-only 2>&1";
-                } else {
-                    pull_cmd = "cd " + shellEscape(local_path) + " && git pull --ff-only 2>&1";
-                }
-                int rc = std::system(pull_cmd.c_str());
-                if (rc != 0) {
-                    // If pull fails, remove and re-clone
+            if (action == "reclone") {
+                // ── Reclone mode: force fresh clone ─────────────────────────
+                if (fs::exists(local_path)) {
+                    std::cerr << "[ENGINE] reclone: removing existing clone at "
+                              << local_path << std::endl;
                     fs::remove_all(local_path);
                 }
             }
 
+            // Only perform git operations if local path doesn't exist yet
+            // (reindex with existing files skips this entire block)
             if (!fs::exists(local_path)) {
+                if (progress) progress(0, 100, "Cloning repository...");
+
+                // Build the git auth argument.
+                std::string git_auth_flag;
+                if (!token.empty() && repo_path.rfind("https://", 0) == 0) {
+                    git_auth_flag = " -c http.extraHeader=" +
+                                    shellEscape("Authorization: Bearer " + token);
+                    std::cerr << "[ENGINE] Using Bearer token for authenticated git operation" << std::endl;
+                }
+
                 fs::create_directories(fs::path(local_path).parent_path());
                 std::string clone_cmd = "git" + git_auth_flag +
                                         " clone --depth 1 " + shellEscape(repo_path) +
@@ -428,9 +446,55 @@ public:
                     throw std::runtime_error("git clone failed for " + repo_path + " (exit code " + std::to_string(rc) + ")");
                 }
                 cloned = true;
+                if (progress) progress(10, 100, "Repository cloned, scanning files...");
+            } else if (action != "reindex") {
+                // ── Default "index" mode with existing clone: pull updates ──
+                if (progress) progress(0, 100, "Pulling latest changes...");
+
+                std::string git_auth_flag;
+                if (!token.empty() && repo_path.rfind("https://", 0) == 0) {
+                    git_auth_flag = " -c http.extraHeader=" +
+                                    shellEscape("Authorization: Bearer " + token);
+                }
+
+                std::string pull_cmd;
+                if (!git_auth_flag.empty()) {
+                    pull_cmd = "git" + git_auth_flag + " -C " + shellEscape(local_path) +
+                               " pull --ff-only 2>&1";
+                } else {
+                    pull_cmd = "cd " + shellEscape(local_path) + " && git pull --ff-only 2>&1";
+                }
+                int rc = std::system(pull_cmd.c_str());
+                if (rc != 0) {
+                    std::cerr << "[ENGINE] pull failed (rc=" << rc
+                              << "), continuing with existing files" << std::endl;
+                    // Don't delete & re-clone on pull failure — just reindex
+                    // what we have. This fixes the "every reindex re-clones" bug.
+                }
+                if (progress) progress(10, 100, "Repository updated, scanning files...");
             }
 
-            if (progress) progress(10, 100, "Repository cloned, scanning files...");
+            // ── Branch checkout (if target_branch specified) ────────────────
+            if (!target_branch.empty() && fs::exists(local_path)) {
+                std::string git_auth_flag;
+                if (!token.empty() && repo_path.rfind("https://", 0) == 0) {
+                    git_auth_flag = " -c http.extraHeader=" +
+                                    shellEscape("Authorization: Bearer " + token);
+                }
+                // Fetch the branch then checkout
+                std::string fetch_cmd = "git" + git_auth_flag + " -C " + shellEscape(local_path) +
+                                        " fetch origin " + shellEscape(target_branch) +
+                                        " --depth 1 2>&1";
+                std::system(fetch_cmd.c_str());
+
+                std::string checkout_cmd = "git -C " + shellEscape(local_path) +
+                                          " checkout " + shellEscape(target_branch) + " 2>&1";
+                int rc = std::system(checkout_cmd.c_str());
+                if (rc != 0) {
+                    std::cerr << "[ENGINE] checkout of branch " << target_branch
+                              << " failed (rc=" << rc << "), using current branch" << std::endl;
+                }
+            }
         }
 
         // Wrap the Engine ProgressCallback into the TMS progress callback

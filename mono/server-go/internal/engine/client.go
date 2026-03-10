@@ -219,6 +219,8 @@ type IndexConfig struct {
 	EmbeddingModel      string // e.g. "text-embedding-3-small"
 	EmbeddingAPIKey     string // runtime API key — never persisted
 	CloneToken          string // VCS clone token for authenticated git clone — never persisted
+	IndexAction         string // "index" (default), "reindex" (skip git), "reclone" (force fresh clone)
+	TargetBranch        string // branch to checkout before indexing (empty = default)
 }
 
 // IndexResult is the outcome of an indexing operation.
@@ -264,6 +266,8 @@ func (c *Client) IndexRepository(ctx context.Context, repoID, repoPath string, c
 			EmbeddingModel:      cfg.EmbeddingModel,
 			EmbeddingApiKey:     cfg.EmbeddingAPIKey,
 			CloneToken:          cfg.CloneToken,
+			IndexAction:         cfg.IndexAction,
+			TargetBranch:        cfg.TargetBranch,
 		},
 	})
 	if err != nil {
@@ -313,6 +317,8 @@ func (c *Client) IndexRepositoryStream(ctx context.Context, repoID, repoPath str
 			EmbeddingModel:      cfg.EmbeddingModel,
 			EmbeddingApiKey:     cfg.EmbeddingAPIKey,
 			CloneToken:          cfg.CloneToken,
+			IndexAction:         cfg.IndexAction,
+			TargetBranch:        cfg.TargetBranch,
 		},
 	})
 	if err != nil {

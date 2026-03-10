@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -965,12 +966,39 @@ func (h *Handler) RemoveRepoMember(w http.ResponseWriter, r *http.Request) {
 
 // TriggerIndex triggers indexing of a repository.
 // POST /api/v1/repos/{repoID}/index
+// Accepts optional JSON body: {"action": "index"|"reindex"|"reclone", "target_branch": "..."}
 func (h *Handler) TriggerIndex(w http.ResponseWriter, r *http.Request) {
 	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid repo ID")
 		return
 	}
+
+	// Parse optional request body for action & target_branch.
+	type triggerBody struct {
+		Action       string `json:"action"`        // "index" (default), "reindex", "reclone"
+		TargetBranch string `json:"target_branch"` // optional branch override
+	}
+	var body triggerBody
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+	// Default action
+	if body.Action == "" {
+		body.Action = "index"
+	}
+	// Validate action
+	switch body.Action {
+	case "index", "reindex", "reclone":
+		// valid
+	default:
+		writeError(w, http.StatusBadRequest, "invalid action: must be index, reindex, or reclone")
+		return
+	}
+
 	repo, err := h.RepoRepo.GetByID(r.Context(), repoID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -1037,6 +1065,12 @@ func (h *Handler) TriggerIndex(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Set the action and optional branch on the engine config.
+	engineCfg.IndexAction = body.Action
+	if body.TargetBranch != "" {
+		engineCfg.TargetBranch = body.TargetBranch
+	}
+
 	jobID, err := h.IndexingService.StartFullIndex(r.Context(), indexing.FullIndexRequest{
 		RepoID:   repoID.String(),
 		RepoPath: repo.CloneURL,
@@ -1046,8 +1080,88 @@ func (h *Handler) TriggerIndex(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to start indexing")
 		return
 	}
-	slog.Info("indexing triggered", "repo_id", repoID, "job_id", jobID)
-	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": jobID, "status": "accepted"})
+	slog.Info("indexing triggered", "repo_id", repoID, "job_id", jobID, "action", body.Action)
+	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": jobID, "status": "accepted", "action": body.Action})
+}
+
+// ListBranches returns the remote branches of a repository via git ls-remote.
+// GET /api/v1/repos/{repoID}/branches
+func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
+	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repo ID")
+		return
+	}
+	repo, err := h.RepoRepo.GetByID(r.Context(), repoID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "repository not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	// Resolve VCS clone token for authenticated ls-remote
+	var cloneToken string
+	platform := repo.Platform
+	if platform == "" && repo.CloneURL != "" {
+		platform = detectPlatformFromURL(repo.CloneURL)
+	}
+	if h.Vault != nil && platform != "" {
+		userID, ok := auth.UserIDFromContext(r.Context())
+		if ok {
+			user, userErr := h.UserRepo.GetByID(r.Context(), userID)
+			if userErr == nil && user.VaultToken != "" {
+				userVault := vault.NewUserScopedVault(h.Vault, user.VaultToken)
+				tokenKey := "vcs." + platform + ".token"
+				if platform == "azure_devops" {
+					tokenKey = "vcs.azure_devops.pat"
+				}
+				cloneToken, _ = userVault.Get(tokenKey)
+			}
+		}
+	}
+
+	// Run git ls-remote --heads to list remote branches
+	var gitCmd string
+	if cloneToken != "" && strings.HasPrefix(repo.CloneURL, "https://") {
+		gitCmd = fmt.Sprintf("git -c http.extraHeader='Authorization: Bearer %s' ls-remote --heads %s",
+			cloneToken, repo.CloneURL)
+	} else {
+		gitCmd = fmt.Sprintf("git ls-remote --heads %s", repo.CloneURL)
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	// Execute git ls-remote
+	cmd := exec.CommandContext(ctx, "sh", "-c", gitCmd)
+	output, err := cmd.Output()
+	if err != nil {
+		slog.Error("failed to list branches", "repo_id", repoID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to list remote branches")
+		return
+	}
+
+	var branches []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			ref := parts[1]
+			branch := strings.TrimPrefix(ref, "refs/heads/")
+			branches = append(branches, branch)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"branches":       branches,
+		"default_branch": repo.DefaultBranch,
+		"count":          len(branches),
+	})
 }
 
 // GetIndexStatus returns the indexing status of a repository.

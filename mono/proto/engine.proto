@@ -104,6 +104,15 @@ message IndexConfig {
     bool auto_detect_repo_type = 16;
     // Explicit repo type override (takes precedence over auto-detection).
     RepoType repo_type = 17;
+
+    // Index action: controls clone/index behaviour.
+    //   "index"   — (default) clone if needed, pull updates, then index.
+    //   "reindex" — skip git operations, re-parse existing local files.
+    //   "reclone" — delete local clone, re-clone from remote, then index.
+    string index_action = 18;
+
+    // Target branch to checkout before indexing (empty = use default).
+    string target_branch = 19;
 }
 
 // Repository type classification — used for tuning chunking/retrieval heuristics.

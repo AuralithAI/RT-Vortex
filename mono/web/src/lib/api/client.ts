@@ -305,11 +305,17 @@ export const repos = {
   delete: (id: string) =>
     request<void>(`/api/v1/repos/${id}`, { method: "DELETE" }),
 
-  triggerIndex: (id: string) =>
-    request<void>(`/api/v1/repos/${id}/index`, { method: "POST" }),
+  triggerIndex: (id: string, body?: { action?: string; target_branch?: string }) =>
+    request<void>(`/api/v1/repos/${id}/index`, {
+      method: "POST",
+      body: body ? JSON.stringify(body) : undefined,
+    }),
 
   indexStatus: (id: string) =>
     request<IndexStatus>(`/api/v1/repos/${id}/index/status`),
+
+  branches: (id: string) =>
+    request<{ branches: string[]; default_branch: string; count: number }>(`/api/v1/repos/${id}/branches`),
 };
 
 // ── Reviews ─────────────────────────────────────────────────────────────────

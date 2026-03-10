@@ -415,7 +415,15 @@ type IndexConfig struct {
 	// Auto-detect repo type (web_app, microservice, etc.) from manifest.
 	AutoDetectRepoType bool `protobuf:"varint,16,opt,name=auto_detect_repo_type,json=autoDetectRepoType,proto3" json:"auto_detect_repo_type,omitempty"`
 	// Explicit repo type override (takes precedence over auto-detection).
-	RepoType      RepoType `protobuf:"varint,17,opt,name=repo_type,json=repoType,proto3,enum=aipr.engine.v1.RepoType" json:"repo_type,omitempty"`
+	RepoType RepoType `protobuf:"varint,17,opt,name=repo_type,json=repoType,proto3,enum=aipr.engine.v1.RepoType" json:"repo_type,omitempty"`
+	// Index action: controls clone/index behaviour.
+	//
+	//	"index"   — (default) clone if needed, pull updates, then index.
+	//	"reindex" — skip git operations, re-parse existing local files.
+	//	"reclone" — delete local clone, re-clone from remote, then index.
+	IndexAction string `protobuf:"bytes,18,opt,name=index_action,json=indexAction,proto3" json:"index_action,omitempty"`
+	// Target branch to checkout before indexing (empty = use default).
+	TargetBranch  string `protobuf:"bytes,19,opt,name=target_branch,json=targetBranch,proto3" json:"target_branch,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -567,6 +575,20 @@ func (x *IndexConfig) GetRepoType() RepoType {
 		return x.RepoType
 	}
 	return RepoType_REPO_TYPE_UNKNOWN
+}
+
+func (x *IndexConfig) GetIndexAction() string {
+	if x != nil {
+		return x.IndexAction
+	}
+	return ""
+}
+
+func (x *IndexConfig) GetTargetBranch() string {
+	if x != nil {
+		return x.TargetBranch
+	}
+	return ""
 }
 
 type IncrementalIndexRequest struct {
@@ -3205,7 +3227,7 @@ const file_engine_proto_rawDesc = "" +
 	"\fIndexRequest\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12\x1b\n" +
 	"\trepo_path\x18\x02 \x01(\tR\brepoPath\x123\n" +
-	"\x06config\x18\x03 \x01(\v2\x1b.aipr.engine.v1.IndexConfigR\x06config\"\xfb\x05\n" +
+	"\x06config\x18\x03 \x01(\v2\x1b.aipr.engine.v1.IndexConfigR\x06config\"\xc3\x06\n" +
 	"\vIndexConfig\x12'\n" +
 	"\x10max_file_size_kb\x18\x01 \x01(\rR\rmaxFileSizeKb\x12\x1d\n" +
 	"\n" +
@@ -3226,7 +3248,9 @@ const file_engine_proto_rawDesc = "" +
 	"\x17memory_account_override\x18\x0e \x01(\tR\x15memoryAccountOverride\x12)\n" +
 	"\x10hierarchy_levels\x18\x0f \x01(\rR\x0fhierarchyLevels\x121\n" +
 	"\x15auto_detect_repo_type\x18\x10 \x01(\bR\x12autoDetectRepoType\x125\n" +
-	"\trepo_type\x18\x11 \x01(\x0e2\x18.aipr.engine.v1.RepoTypeR\brepoType\"\x99\x01\n" +
+	"\trepo_type\x18\x11 \x01(\x0e2\x18.aipr.engine.v1.RepoTypeR\brepoType\x12!\n" +
+	"\findex_action\x18\x12 \x01(\tR\vindexAction\x12#\n" +
+	"\rtarget_branch\x18\x13 \x01(\tR\ftargetBranch\"\x99\x01\n" +
 	"\x17IncrementalIndexRequest\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12#\n" +
 	"\rchanged_files\x18\x02 \x03(\tR\fchangedFiles\x12\x1f\n" +

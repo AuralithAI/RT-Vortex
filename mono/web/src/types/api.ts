@@ -66,6 +66,22 @@ export interface Repo {
   updated_at: string;
 }
 
+// Index action — controls clone/git behaviour.
+export type IndexAction = "index" | "reindex" | "reclone";
+
+// Request body for POST /repos/{id}/index
+export interface TriggerIndexRequest {
+  action?: IndexAction;
+  target_branch?: string;
+}
+
+// Response from GET /repos/{id}/branches
+export interface BranchListResponse {
+  branches: string[];
+  default_branch: string;
+  count: number;
+}
+
 export interface IndexStatus {
   repo_id: string;
   status: "idle" | "indexing" | "completed" | "failed";

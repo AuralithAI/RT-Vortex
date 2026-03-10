@@ -67,9 +67,11 @@ grpc::Status EngineServiceImpl::IndexRepository(
             }
         }
 
-        IndexStats stats = engine_->indexRepository(
+        IndexStats stats = engine_->indexRepositoryWithAction(
             request->repo_id(),
             request->repo_path(),
+            request->has_config() ? request->config().index_action() : "index",
+            request->has_config() ? request->config().target_branch() : "",
             nullptr  // Progress callback - could wire to streaming in future
         );
 
@@ -217,9 +219,11 @@ grpc::Status EngineServiceImpl::IndexRepositoryStream(
             }
         };
 
-        IndexStats stats = engine_->indexRepository(
+        IndexStats stats = engine_->indexRepositoryWithAction(
             repo_id,
             request->repo_path(),
+            request->has_config() ? request->config().index_action() : "index",
+            request->has_config() ? request->config().target_branch() : "",
             progress_cb
         );
 

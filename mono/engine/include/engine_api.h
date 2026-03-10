@@ -153,6 +153,24 @@ public:
         const std::string& repo_path,
         ProgressCallback progress = nullptr
     ) = 0;
+
+    /**
+     * Index a repository with explicit action control.
+     *
+     * @param repo_id    Unique repository identifier
+     * @param repo_path  Path or URL to the repository
+     * @param action     "index" (default), "reindex" (skip git), "reclone" (force fresh clone)
+     * @param target_branch  Optional branch to checkout before indexing
+     * @param progress   Optional progress callback
+     * @return Index statistics
+     */
+    virtual IndexStats indexRepositoryWithAction(
+        const std::string& repo_id,
+        const std::string& repo_path,
+        const std::string& action,
+        const std::string& target_branch,
+        ProgressCallback progress = nullptr
+    ) { return indexRepository(repo_id, repo_path, progress); }
     
     /**
      * Update index incrementally based on changed files

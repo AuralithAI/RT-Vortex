@@ -214,6 +214,7 @@ func (s *Server) setupRouter() {
 					r.Delete("/", h.DeleteRepo)
 					r.Post("/index", h.TriggerIndex)
 					r.Get("/index/status", h.GetIndexStatus)
+					r.Get("/branches", h.ListBranches)
 					r.Get("/members", h.ListRepoMembers)
 					r.Post("/members", h.AddRepoMember)
 					r.Delete("/members/{userID}", h.RemoveRepoMember)
