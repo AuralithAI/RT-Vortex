@@ -1010,19 +1010,28 @@ func (h *Handler) TriggerIndex(w http.ResponseWriter, r *http.Request) {
 	// ── Resolve VCS clone token from the user's vault ───────────────────
 	// The C++ engine uses this to authenticate `git clone` for private repos.
 	// Token is resolved server-side and passed transiently — never persisted.
-	if h.Vault != nil && repo.Platform != "" {
+	platform := repo.Platform
+	if platform == "" && repo.CloneURL != "" {
+		// Auto-detect platform from clone URL for repos registered without an
+		// explicit platform field. Enables token lookup for self-hosted instances.
+		platform = detectPlatformFromURL(repo.CloneURL)
+	}
+	if h.Vault != nil && platform != "" {
 		userID, ok := auth.UserIDFromContext(r.Context())
 		if ok {
 			user, userErr := h.UserRepo.GetByID(r.Context(), userID)
 			if userErr == nil && user.VaultToken != "" {
 				userVault := vault.NewUserScopedVault(h.Vault, user.VaultToken)
 				// Look up the platform-specific token key.
-				tokenKey := "vcs." + repo.Platform + ".token"
-				if repo.Platform == "azure_devops" {
+				tokenKey := "vcs." + platform + ".token"
+				if platform == "azure_devops" {
 					tokenKey = "vcs.azure_devops.pat"
 				}
 				if cloneToken, _ := userVault.Get(tokenKey); cloneToken != "" {
 					engineCfg.CloneToken = cloneToken
+					slog.Info("resolved VCS clone token from vault",
+						"platform", platform, "repo_id", repoID,
+						"token_len", len(cloneToken))
 				}
 			}
 		}
@@ -2267,7 +2276,10 @@ type repoURLParts struct {
 }
 
 // parseRepoURL extracts owner and repo name from a clone URL.
-// Supports HTTPS (https://github.com/owner/repo.git) and SSH (git@github.com:owner/repo.git).
+// Supports:
+//   - HTTPS:            https://github.com/owner/repo.git
+//   - SSH:              git@github.com:owner/repo.git
+//   - Bitbucket Server: https://bb.example.com/scm/PROJECT/repo.git
 func parseRepoURL(rawURL string) (repoURLParts, error) {
 	// Handle SSH URLs like git@github.com:owner/repo.git
 	if strings.Contains(rawURL, ":") && !strings.Contains(rawURL, "://") {
@@ -2276,7 +2288,7 @@ func parseRepoURL(rawURL string) (repoURLParts, error) {
 		path = strings.TrimSuffix(path, ".git")
 		parts := strings.Split(path, "/")
 		if len(parts) >= 2 {
-			return repoURLParts{owner: parts[0], name: parts[1]}, nil
+			return repoURLParts{owner: parts[len(parts)-2], name: parts[len(parts)-1]}, nil
 		}
 	}
 
@@ -2288,8 +2300,37 @@ func parseRepoURL(rawURL string) (repoURLParts, error) {
 	path := strings.Trim(u.Path, "/")
 	path = strings.TrimSuffix(path, ".git")
 	parts := strings.Split(path, "/")
+
+	// Bitbucket Server clone URLs: /scm/{project}/{repo}
+	// Skip the "scm" prefix to get project + repo.
+	if len(parts) >= 3 && parts[0] == "scm" {
+		return repoURLParts{owner: parts[1], name: parts[2]}, nil
+	}
+
+	// Standard: /{owner}/{repo} (last two segments)
 	if len(parts) >= 2 {
-		return repoURLParts{owner: parts[0], name: parts[1]}, nil
+		return repoURLParts{owner: parts[len(parts)-2], name: parts[len(parts)-1]}, nil
 	}
 	return repoURLParts{}, fmt.Errorf("cannot extract owner/name from URL")
+}
+
+// detectPlatformFromURL infers the VCS platform from a clone URL.
+// Used as a fallback when the repository record has no explicit platform field.
+func detectPlatformFromURL(cloneURL string) string {
+	lower := strings.ToLower(cloneURL)
+	switch {
+	case strings.Contains(lower, "github.com"):
+		return "github"
+	case strings.Contains(lower, "gitlab.com") || strings.Contains(lower, "gitlab"):
+		return "gitlab"
+	case strings.Contains(lower, "bitbucket.org") || strings.Contains(lower, "bitbucket"):
+		return "bitbucket"
+	case strings.Contains(lower, "/scm/"):
+		// Bitbucket Server clone URLs use /scm/ path prefix
+		return "bitbucket"
+	case strings.Contains(lower, "dev.azure.com") || strings.Contains(lower, "visualstudio.com"):
+		return "azure_devops"
+	default:
+		return ""
+	}
 }

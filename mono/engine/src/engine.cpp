@@ -391,23 +391,23 @@ public:
             local_path = config_.storage_path + "/repos/" + repo_id;
             if (progress) progress(0, 100, "Cloning repository...");
 
-            // Build the authenticated clone URL if a token was provided.
-            // Injects the token into the HTTPS URL: https://x-token:TOKEN@host/path
-            std::string auth_url = repo_path;
+            // Build the git auth argument.
+            // Instead of mangling the URL (which breaks on Bitbucket Server),
+            // use git's http.extraHeader to inject an Authorization header.
+            // This works universally: GitHub, GitLab, Bitbucket Cloud/Server, Azure DevOps.
+            std::string git_auth_flag;
             if (!token.empty() && repo_path.rfind("https://", 0) == 0) {
-                // https://github.com/org/repo.git → https://x-token:TOKEN@github.com/org/repo.git
-                auth_url = "https://x-token:" + token + "@" + repo_path.substr(8);
+                git_auth_flag = " -c http.extraHeader=" +
+                                shellEscape("Authorization: Bearer " + token);
+                std::cerr << "[ENGINE] Using Bearer token for authenticated git operation" << std::endl;
             }
 
             if (fs::exists(local_path)) {
-                // Pull latest changes (use token for auth if available)
+                // Pull latest changes
                 std::string pull_cmd;
-                if (!token.empty() && repo_path.rfind("https://", 0) == 0) {
-                    // Set remote URL with auth for this pull, then reset it after
-                    pull_cmd = "cd " + shellEscape(local_path) +
-                               " && git remote set-url origin " + shellEscape(auth_url) +
-                               " && git pull --ff-only 2>&1" +
-                               " && git remote set-url origin " + shellEscape(repo_path);
+                if (!git_auth_flag.empty()) {
+                    pull_cmd = "git" + git_auth_flag + " -C " + shellEscape(local_path) +
+                               " pull --ff-only 2>&1";
                 } else {
                     pull_cmd = "cd " + shellEscape(local_path) + " && git pull --ff-only 2>&1";
                 }
@@ -420,18 +420,12 @@ public:
 
             if (!fs::exists(local_path)) {
                 fs::create_directories(fs::path(local_path).parent_path());
-                std::string clone_cmd = "git clone --depth 1 " + shellEscape(auth_url) +
+                std::string clone_cmd = "git" + git_auth_flag +
+                                        " clone --depth 1 " + shellEscape(repo_path) +
                                         " " + shellEscape(local_path) + " 2>&1";
                 int rc = std::system(clone_cmd.c_str());
                 if (rc != 0) {
                     throw std::runtime_error("git clone failed for " + repo_path + " (exit code " + std::to_string(rc) + ")");
-                }
-                // If we used an auth URL, reset the remote to the clean URL
-                // so the token is not persisted in .git/config.
-                if (auth_url != repo_path) {
-                    std::string reset_cmd = "cd " + shellEscape(local_path) +
-                                            " && git remote set-url origin " + shellEscape(repo_path) + " 2>&1";
-                    std::system(reset_cmd.c_str());
                 }
                 cloned = true;
             }

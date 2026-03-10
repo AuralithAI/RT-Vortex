@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -495,8 +496,20 @@ func testVCSToken(ctx context.Context, platform, token string, dbConfig *model.U
 
 	case "bitbucket":
 		base := getURL("api_url", "https://api.bitbucket.org/2.0")
-		apiURL = strings.TrimSuffix(base, "/") + "/user"
-		authHeader = "Bearer " + token
+		isBBServer := !strings.Contains(base, "bitbucket.org")
+		if isBBServer {
+			// Bitbucket Server / Data Center REST API
+			// base should be the full base URL (e.g. https://bb.example.com)
+			// The REST endpoint is /rest/api/1.0/users on the base host.
+			serverBase := getURL("base_url", base)
+			apiURL = strings.TrimSuffix(serverBase, "/") + "/rest/api/1.0/users?limit=1"
+			// Bitbucket Server HTTP Access Tokens use Bearer auth.
+			authHeader = "Bearer " + token
+		} else {
+			// Bitbucket Cloud
+			apiURL = strings.TrimSuffix(base, "/") + "/user"
+			authHeader = "Bearer " + token
+		}
 
 	case "azure_devops":
 		org := getDBFieldValue(dbConfig, "organization")
@@ -543,14 +556,14 @@ func basicAuth(user, pass string) string {
 
 // tokenCapability describes what operations a particular token type supports.
 type tokenCapability struct {
-	TokenType   string   `json:"token_type"`
-	Label       string   `json:"label"`
-	CanClone    bool     `json:"can_clone"`
-	CanReview   bool     `json:"can_review"`   // post comments, approve PRs
-	CanWebhook  bool     `json:"can_webhook"`  // manage webhooks
-	CanReadPR   bool     `json:"can_read_pr"`  // list/read pull requests
-	Scopes      []string `json:"scopes"`       // required scopes/permissions
-	SetupGuide  string   `json:"setup_guide"`  // short instructions
+	TokenType  string   `json:"token_type"`
+	Label      string   `json:"label"`
+	CanClone   bool     `json:"can_clone"`
+	CanReview  bool     `json:"can_review"`  // post comments, approve PRs
+	CanWebhook bool     `json:"can_webhook"` // manage webhooks
+	CanReadPR  bool     `json:"can_read_pr"` // list/read pull requests
+	Scopes     []string `json:"scopes"`      // required scopes/permissions
+	SetupGuide string   `json:"setup_guide"` // short instructions
 }
 
 // platformTokenCapabilities defines per-provider token types and their capabilities.
@@ -631,8 +644,18 @@ var platformTokenCapabilities = map[string][]tokenCapability{
 	},
 	"bitbucket": {
 		{
+			TokenType:  "http_access_token",
+			Label:      "HTTP Access Token (Bitbucket Server / Data Center)",
+			CanClone:   true,
+			CanReview:  true,
+			CanWebhook: false,
+			CanReadPR:  true,
+			Scopes:     []string{"Repository Read", "Repository Write"},
+			SetupGuide: "Bitbucket Server → Manage account → HTTP access tokens → Create token. Grant 'Repository Read' and 'Repository Write' permissions. Set the Base URL to your Bitbucket Server URL (e.g. https://bitbucket.example.com).",
+		},
+		{
 			TokenType:  "app_password",
-			Label:      "App Password",
+			Label:      "App Password (Bitbucket Cloud)",
 			CanClone:   true,
 			CanReview:  true,
 			CanWebhook: true,
@@ -642,7 +665,7 @@ var platformTokenCapabilities = map[string][]tokenCapability{
 		},
 		{
 			TokenType:  "oauth_consumer",
-			Label:      "OAuth Consumer",
+			Label:      "OAuth Consumer (Bitbucket Cloud)",
 			CanClone:   true,
 			CanReview:  true,
 			CanWebhook: false,
@@ -652,7 +675,7 @@ var platformTokenCapabilities = map[string][]tokenCapability{
 		},
 		{
 			TokenType:  "repository_access_token",
-			Label:      "Repository Access Token",
+			Label:      "Repository Access Token (Bitbucket Cloud)",
 			CanClone:   true,
 			CanReview:  true,
 			CanWebhook: false,
@@ -735,10 +758,10 @@ func (h *Handler) CheckClonePermission(w http.ResponseWriter, r *http.Request) {
 
 	if h.Vault == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"platform":   platformName,
-			"can_clone":  false,
-			"reason":     "Vault not configured. Cannot verify token.",
-			"has_token":  false,
+			"platform":  platformName,
+			"can_clone": false,
+			"reason":    "Vault not configured. Cannot verify token.",
+			"has_token": false,
 		})
 		return
 	}
@@ -797,8 +820,24 @@ func checkRepoAccess(ctx context.Context, platform, token, cloneURL string) (boo
 		apiURL = fmt.Sprintf("https://gitlab.com/api/v4/projects/%s", strings.ReplaceAll(project, "/", "%%2F"))
 		authHeader = "Bearer " + token
 	case "bitbucket":
-		apiURL = fmt.Sprintf("https://api.bitbucket.org/2.0/repositories/%s/%s", parsed.owner, parsed.name)
-		authHeader = "Bearer " + token
+		// Detect Bitbucket Server vs Cloud from the clone URL host.
+		isBBServer := !strings.Contains(cloneURL, "bitbucket.org")
+		if isBBServer {
+			// Bitbucket Server REST API: /rest/api/1.0/projects/{PROJECT}/repos/{SLUG}
+			// Extract the base URL from the clone URL itself.
+			u, _ := url.Parse(cloneURL)
+			if u != nil && u.Host != "" {
+				serverBase := u.Scheme + "://" + u.Host
+				apiURL = fmt.Sprintf("%s/rest/api/1.0/projects/%s/repos/%s",
+					serverBase, strings.ToUpper(parsed.owner), parsed.name)
+			} else {
+				return false, "Could not determine Bitbucket Server base URL from clone URL"
+			}
+			authHeader = "Bearer " + token
+		} else {
+			apiURL = fmt.Sprintf("https://api.bitbucket.org/2.0/repositories/%s/%s", parsed.owner, parsed.name)
+			authHeader = "Bearer " + token
+		}
 	case "azure_devops":
 		// For Azure DevOps the URL structure is different — do a basic auth check
 		apiURL = fmt.Sprintf("https://dev.azure.com/%s/%s/_apis/git/repositories?api-version=7.1", parsed.owner, parsed.name)
