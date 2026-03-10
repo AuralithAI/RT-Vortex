@@ -1,7 +1,7 @@
 // ─── Memory Accounts Chart ───────────────────────────────────────────────────
-// Stacked BarChart showing cumulative query distribution across memory
-// accounts.  Uses running totals so the bars persist after activity stops.
+// Stacked BarChart showing query distribution across memory accounts.
 // Data sourced from counters: aipr_account_queries_*_total
+// Derives per-snapshot deltas → queries/min per account.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -33,6 +33,14 @@ function scalar(snap: EngineMetricsSnapshot, key: string): number {
   return snap.metrics[key]?.scalar ?? 0;
 }
 
+function delta(
+  curr: EngineMetricsSnapshot,
+  prev: EngineMetricsSnapshot,
+  key: string,
+): number {
+  return Math.max(0, scalar(curr, key) - scalar(prev, key));
+}
+
 function formatTime(ms: number): string {
   const d = new Date(ms);
   return `${d.getHours().toString().padStart(2, "0")}:${d
@@ -42,7 +50,7 @@ function formatTime(ms: number): string {
 }
 
 export function MemoryAccountsChart({ history }: MemoryAccountsChartProps) {
-  if (history.length < 1) {
+  if (history.length < 2) {
     return (
       <Card>
         <CardHeader>
@@ -59,19 +67,27 @@ export function MemoryAccountsChart({ history }: MemoryAccountsChartProps) {
     );
   }
 
-  // Use cumulative totals so bars persist after queries stop
-  const accountData = history.map((snap) => ({
-    time: formatTime(snap.timestamp_ms),
-    dev: scalar(snap, ACCOUNT_DEV),
-    ops: scalar(snap, ACCOUNT_OPS),
-    security: scalar(snap, ACCOUNT_SECURITY),
-    history: scalar(snap, ACCOUNT_HISTORY),
-  }));
+  const accountData = history.slice(1).map((snap, i) => {
+    const prev = history[i]; // previous snapshot
+    return {
+      time: formatTime(snap.timestamp_ms),
+      dev: delta(snap, prev, ACCOUNT_DEV),
+      ops: delta(snap, prev, ACCOUNT_OPS),
+      security: delta(snap, prev, ACCOUNT_SECURITY),
+      history: delta(snap, prev, ACCOUNT_HISTORY),
+    };
+  });
 
-  // Check if there's any data at all (from the latest snapshot)
-  const latest = accountData[accountData.length - 1];
-  const hasData =
-    latest.dev + latest.ops + latest.security + latest.history > 0;
+  // Check if queries have EVER been routed (cumulative totals from
+  // latest snapshot).  This keeps the chart visible between bursts of
+  // activity instead of flipping back to the empty-state placeholder.
+  const latest = history[history.length - 1];
+  const hasEverRouted =
+    scalar(latest, ACCOUNT_DEV) +
+      scalar(latest, ACCOUNT_OPS) +
+      scalar(latest, ACCOUNT_SECURITY) +
+      scalar(latest, ACCOUNT_HISTORY) >
+    0;
 
   return (
     <Card>
@@ -81,7 +97,7 @@ export function MemoryAccountsChart({ history }: MemoryAccountsChartProps) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {hasData ? (
+        {hasEverRouted ? (
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={accountData}>
               <CartesianGrid
