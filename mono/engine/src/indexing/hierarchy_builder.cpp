@@ -20,6 +20,24 @@ using json = nlohmann::json;
 
 namespace aipr {
 
+// ── repoTypeName ───────────────────────────────────────────────────────────
+
+const char* repoTypeName(RepoType t) {
+    switch (t) {
+        case RepoType::UNKNOWN:        return "unknown";
+        case RepoType::GENERIC:        return "generic";
+        case RepoType::WEB_APP:        return "web_app";
+        case RepoType::MICROSERVICE:   return "microservice";
+        case RepoType::ML_PIPELINE:    return "ml_pipeline";
+        case RepoType::MOBILE_APP:     return "mobile_app";
+        case RepoType::DATA_PIPELINE:  return "data_pipeline";
+        case RepoType::CLI_TOOL:       return "cli_tool";
+        case RepoType::LIBRARY:        return "library";
+        case RepoType::MONOLITH:       return "monolith";
+    }
+    return "unknown";
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 static std::string readFile(const std::string& path) {
@@ -119,7 +137,164 @@ RepoManifest HierarchyBuilder::buildRepoManifest(const std::string& repo_root) c
              " targets=" + std::to_string(m.targets.size()) +
              " modules=" + std::to_string(m.module_to_files.size()));
 
+    // Auto-detect repo type from manifest signals
+    m.repo_type = detectRepoType(m, repo_root);
+    LOG_INFO("[HierarchyBuilder] repo_type=" + std::string(repoTypeName(m.repo_type)));
+
     return m;
+}
+
+// ── detectRepoType ─────────────────────────────────────────────────────────
+
+RepoType HierarchyBuilder::detectRepoType(const RepoManifest& manifest,
+                                           const std::string& repo_root) {
+    const auto& lang = manifest.primary_language;
+    const auto& bs   = manifest.build_system;
+    bool has_docker   = fs::exists(fs::path(repo_root) / "Dockerfile");
+
+    // ── Helpers: check for marker files ────────────────────────────────────
+    auto has_file = [&](const std::string& name) {
+        return fs::exists(fs::path(repo_root) / name);
+    };
+
+    // Count top-level directories as a monolith signal
+    int top_dirs = 0;
+    int top_build_files = 0;
+    try {
+        for (auto& entry : fs::directory_iterator(repo_root)) {
+            if (entry.is_directory()) {
+                auto dir_name = entry.path().filename().string();
+                if (dir_name[0] != '.') top_dirs++;
+            }
+            auto ext = entry.path().extension().string();
+            auto fname = entry.path().filename().string();
+            if (fname == "pom.xml" || fname == "build.gradle" ||
+                fname == "build.gradle.kts" || fname == "package.json" ||
+                fname == "go.mod" || fname == "Cargo.toml" ||
+                fname == "CMakeLists.txt") {
+                top_build_files++;
+            }
+        }
+    } catch (...) {}
+
+    // ── ML / Data Pipeline ─────────────────────────────────────────────────
+    if (lang == "python") {
+        bool ml_signal = has_file("requirements.txt") || has_file("setup.py") ||
+                         has_file("pyproject.toml");
+        // Look for ML-specific markers
+        if (ml_signal) {
+            // Check for ML framework deps in pyproject.toml or requirements.txt
+            for (const auto& name : {"requirements.txt", "pyproject.toml", "setup.py"}) {
+                auto path = (fs::path(repo_root) / name).string();
+                std::ifstream f(path);
+                if (!f.good()) continue;
+                std::string content((std::istreambuf_iterator<char>(f)),
+                                     std::istreambuf_iterator<char>());
+                auto lower_content = content;
+                std::transform(lower_content.begin(), lower_content.end(),
+                               lower_content.begin(), ::tolower);
+                if (lower_content.find("torch") != std::string::npos ||
+                    lower_content.find("tensorflow") != std::string::npos ||
+                    lower_content.find("keras") != std::string::npos ||
+                    lower_content.find("scikit") != std::string::npos ||
+                    lower_content.find("transformers") != std::string::npos ||
+                    lower_content.find("onnx") != std::string::npos) {
+                    return RepoType::ML_PIPELINE;
+                }
+                if (lower_content.find("airflow") != std::string::npos ||
+                    lower_content.find("luigi") != std::string::npos ||
+                    lower_content.find("dagster") != std::string::npos ||
+                    lower_content.find("prefect") != std::string::npos ||
+                    lower_content.find("pyspark") != std::string::npos) {
+                    return RepoType::DATA_PIPELINE;
+                }
+            }
+        }
+    }
+
+    // ── Mobile App ─────────────────────────────────────────────────────────
+    if (lang == "swift" || lang == "kotlin" || lang == "dart") {
+        if (has_file("Package.swift") || has_file("Podfile") ||
+            has_file("pubspec.yaml") || has_file("app/build.gradle") ||
+            has_file("app/build.gradle.kts")) {
+            return RepoType::MOBILE_APP;
+        }
+    }
+
+    // ── Web App (frontend frameworks) ──────────────────────────────────────
+    // npm build system already implies a JS/TS-ecosystem project (vue, svelte,
+    // etc. files don't appear in the ext_to_lang map, so primary_language can
+    // be "unknown" for framework-centric repos).  Gate only on build system.
+    if (bs == "npm") {
+        auto pkg_path = (fs::path(repo_root) / "package.json").string();
+        std::ifstream f(pkg_path);
+        if (f.good()) {
+            std::string content((std::istreambuf_iterator<char>(f)),
+                                 std::istreambuf_iterator<char>());
+            if (content.find("\"next\"") != std::string::npos ||
+                content.find("\"react\"") != std::string::npos ||
+                content.find("\"vue\"") != std::string::npos ||
+                content.find("\"angular\"") != std::string::npos ||
+                content.find("\"svelte\"") != std::string::npos ||
+                content.find("\"nuxt\"") != std::string::npos) {
+                return RepoType::WEB_APP;
+            }
+        }
+        // Pure CLI tool (no framework, has "bin" field)
+        std::ifstream f2(pkg_path);
+        if (f2.good()) {
+            std::string content((std::istreambuf_iterator<char>(f2)),
+                                 std::istreambuf_iterator<char>());
+            if (content.find("\"bin\"") != std::string::npos) {
+                return RepoType::CLI_TOOL;
+            }
+        }
+    }
+
+    // ── Microservice ───────────────────────────────────────────────────────
+    if (has_docker && (bs == "go" || bs == "cargo" || bs == "python" ||
+                       bs == "maven" || bs == "gradle")) {
+        // Small codebase + Dockerfile + single binary → microservice
+        if (manifest.targets.size() <= 2) {
+            return RepoType::MICROSERVICE;
+        }
+    }
+
+    // ── Monolith (Java/Spring with many modules, or large multi-module) ───
+    if ((bs == "maven" || bs == "gradle") && manifest.module_to_files.size() > 3) {
+        return RepoType::MONOLITH;
+    }
+    // Multi-workspace npm monorepo
+    if (bs == "npm" && manifest.module_to_files.size() > 3) {
+        return RepoType::MONOLITH;
+    }
+
+    // ── Library ────────────────────────────────────────────────────────────
+    if (bs == "cmake" || bs == "cargo") {
+        // Library if the primary target is a library type
+        for (const auto& t : manifest.targets) {
+            if (t.type == "library" || t.type == "package") {
+                return RepoType::LIBRARY;
+            }
+        }
+    }
+
+    // ── CLI Tool ───────────────────────────────────────────────────────────
+    if (!has_docker && (bs == "go" || bs == "cargo" || bs == "cmake")) {
+        // Go modules are recorded with type "module" by parseGoMod, not
+        // "executable", so we also match on "module" for Go repos.
+        for (const auto& t : manifest.targets) {
+            if (t.type == "executable" || (bs == "go" && t.type == "module")) {
+                if (manifest.targets.size() <= 2) {
+                    return RepoType::CLI_TOOL;
+                }
+            }
+        }
+    }
+
+    // ── Fallback ───────────────────────────────────────────────────────────
+    if (bs == "unknown") return RepoType::UNKNOWN;
+    return RepoType::GENERIC;
 }
 
 // ── summarizeFile ──────────────────────────────────────────────────────────

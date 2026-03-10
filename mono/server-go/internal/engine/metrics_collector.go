@@ -42,9 +42,12 @@ type MetricValue struct {
 
 // EngineMetricsSnapshot is the Go representation of a metrics push from the C++ engine.
 type EngineMetricsSnapshot struct {
-	TimestampMs uint64                 `json:"timestamp_ms"`
-	Metrics     map[string]MetricValue `json:"metrics"`
-	UptimeS     uint64                 `json:"uptime_s"`
+	TimestampMs         uint64                 `json:"timestamp_ms"`
+	Metrics             map[string]MetricValue `json:"metrics"`
+	UptimeS             uint64                 `json:"uptime_s"`
+	IndexSizesBytes     map[string]uint64      `json:"index_sizes_bytes,omitempty"`
+	KnowledgeGraphNodes uint64                 `json:"knowledge_graph_nodes,omitempty"`
+	KnowledgeGraphEdges uint64                 `json:"knowledge_graph_edges,omitempty"`
 }
 
 // MetricsWSEvent is the JSON envelope sent over the WebSocket.
@@ -178,9 +181,19 @@ func (mc *MetricsCollector) stream(ctx context.Context) error {
 
 func convertMetricsSnapshot(msg *pb.EngineMetricsSnapshot) *EngineMetricsSnapshot {
 	snap := &EngineMetricsSnapshot{
-		TimestampMs: msg.TimestampMs,
-		UptimeS:     msg.UptimeS,
-		Metrics:     make(map[string]MetricValue, len(msg.Metrics)),
+		TimestampMs:         msg.TimestampMs,
+		UptimeS:             msg.UptimeS,
+		Metrics:             make(map[string]MetricValue, len(msg.Metrics)),
+		KnowledgeGraphNodes: msg.KnowledgeGraphNodes,
+		KnowledgeGraphEdges: msg.KnowledgeGraphEdges,
+	}
+
+	// Per-repo index sizes
+	if len(msg.IndexSizesBytes) > 0 {
+		snap.IndexSizesBytes = make(map[string]uint64, len(msg.IndexSizesBytes))
+		for k, v := range msg.IndexSizesBytes {
+			snap.IndexSizesBytes[k] = v
+		}
 	}
 
 	for name, mv := range msg.Metrics {

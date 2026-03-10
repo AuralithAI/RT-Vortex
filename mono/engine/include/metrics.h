@@ -95,6 +95,9 @@ constexpr const char* CIRCUIT_BREAKER_TRIPS = "aipr_circuit_breaker_trips";
 // Query timeout
 constexpr const char* QUERY_TIMEOUT_TOTAL   = "aipr_query_timeout_total";
 
+// Per-repo index sizes (populated by metrics stream scanner)
+constexpr const char* INDEX_SIZES_PREFIX    = "aipr_index_size_bytes:";
+
 // ── Histogram snapshot ─────────────────────────────────────────────────────
 
 struct HistogramSnapshot {

@@ -56,7 +56,8 @@ struct FileFilter {
         "*.xml",
         "Makefile", "CMakeLists.txt", "BUILD", "BUILD.bazel",
         "Dockerfile", "docker-compose.yml",
-        "*.md", "*.rst"
+        "*.md", "*.rst",
+        "*.properties", "*.conf", "*.env", "*.ini", "*.cfg", "*.resources"
     };
     
     // Exclude patterns

@@ -30,6 +30,7 @@ set(TEST_SOURCES
     test_chunk_prefixer.cpp
     test_knowledge_graph.cpp
     test_memory_accounts.cpp
+    test_repo_type.cpp
 )
 
 # Create test executable

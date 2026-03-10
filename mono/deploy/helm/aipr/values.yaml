@@ -144,6 +144,9 @@ config:
     port: 50051
     timeoutSeconds: 300
     maxRetries: 3
+    defaultModel: ""                  # Default LLM model for reviews (e.g. "gpt-4o-mini")
+    autoDetectRepoType: true          # Auto-classify repos (web_app, microservice, etc.)
+    hierarchyLevels: 0                # Max hierarchy scan depth (0 = unlimited)
   
   # LLM configuration
   llm:

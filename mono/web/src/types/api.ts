@@ -536,6 +536,9 @@ export interface EngineMetricsSnapshot {
   timestamp_ms: number;
   metrics: Record<string, MetricValue>;
   uptime_s: number;
+  index_sizes_bytes?: Record<string, number>;
+  knowledge_graph_nodes?: number;
+  knowledge_graph_edges?: number;
 }
 
 export interface EngineMetricsWSEvent {

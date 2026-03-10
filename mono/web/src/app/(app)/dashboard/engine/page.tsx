@@ -42,6 +42,7 @@ import {
 } from "recharts";
 import { MemoryAccountsChart } from "@/components/dashboard/engine-metrics/memory-accounts-chart";
 import { FaissRecallChart } from "@/components/dashboard/engine-metrics/faiss-recall-chart";
+import { IndexSizesChart } from "@/components/dashboard/engine-metrics/index-sizes-chart";
 
 // ── Well-known metric names (match C++ metrics.h constants) ─────────────────
 
@@ -403,6 +404,11 @@ export default function EnginePerformancePage() {
       {/* Memory Accounts Query Distribution */}
       <div className="mt-6">
         <MemoryAccountsChart history={history} />
+      </div>
+
+      {/* Per-Repo Index Sizes */}
+      <div className="mt-6">
+        <IndexSizesChart latest={latest} />
       </div>
 
       {/* FAISS Recall + Reliability */}

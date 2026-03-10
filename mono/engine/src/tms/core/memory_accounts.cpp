@@ -55,6 +55,15 @@ static const std::vector<std::string> OPS_PATH_PATTERNS = {
     "ci/", "cd/", ".buildkite/",
 };
 
+// Config files in these paths are OPS; otherwise they're DEV.
+static const std::vector<std::string> OPS_CONFIG_PATTERNS = {
+    "application.properties", "application.yml", "application.yaml",
+    "bootstrap.properties", "bootstrap.yml",
+    "logback.xml", "log4j",
+    "nginx.conf", "httpd.conf", "haproxy.cfg",
+    "prometheus.yml", "grafana",
+};
+
 static const std::vector<std::string> OPS_EXT_PATTERNS = {
     ".yml", ".yaml",  // CI pipelines, k8s manifests
 };
@@ -92,6 +101,10 @@ MemoryAccount MemoryAccountClassifier::classify(const CodeChunk& chunk) const {
 
     // --- OPS check ---
     if (containsAny(path_lower, OPS_PATH_PATTERNS)) {
+        return MemoryAccount::OPS;
+    }
+    // Infrastructure config files → OPS
+    if (containsAny(path_lower, OPS_CONFIG_PATTERNS)) {
         return MemoryAccount::OPS;
     }
     // YAML files: only OPS if content looks like CI/infra

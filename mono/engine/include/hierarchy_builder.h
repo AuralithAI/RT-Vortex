@@ -26,6 +26,24 @@
 
 namespace aipr {
 
+// ── Repo type classification ───────────────────────────────────────────────
+
+enum class RepoType {
+    UNKNOWN        = 0,
+    GENERIC        = 1,
+    WEB_APP        = 2,
+    MICROSERVICE   = 3,
+    ML_PIPELINE    = 4,
+    MOBILE_APP     = 5,
+    DATA_PIPELINE  = 6,
+    CLI_TOOL       = 7,
+    LIBRARY        = 8,
+    MONOLITH       = 9,
+};
+
+/** Human-readable label for a RepoType. */
+const char* repoTypeName(RepoType t);
+
 // ── Build-system descriptor ────────────────────────────────────────────────
 
 struct BuildTarget {
@@ -38,6 +56,7 @@ struct RepoManifest {
     std::string repo_root;
     std::string primary_language;          // majority language
     std::string build_system;              // see supported list above
+    RepoType    repo_type = RepoType::UNKNOWN;  // auto-detected classification
     std::vector<BuildTarget> targets;
 
     // module → list of relative source paths that belong to it
@@ -83,6 +102,13 @@ public:
      * Turn a FileSummary into a FILE_SUMMARY CodeChunk ready for embedding.
      */
     tms::CodeChunk buildFileSummaryChunk(const FileSummary& summary) const;
+
+    /**
+     * Classify a repo into a RepoType based on its manifest signals.
+     * Called automatically at the end of buildRepoManifest().
+     */
+    static RepoType detectRepoType(const RepoManifest& manifest,
+                                   const std::string& repo_root);
 
 private:
     // Manifest parsers — one per build system

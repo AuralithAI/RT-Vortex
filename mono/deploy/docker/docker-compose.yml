@@ -30,6 +30,9 @@ services:
       - ENGINE_HOST=0.0.0.0
       - ENGINE_PORT=50051
       - ENGINE_TLS_ENABLED=false
+      - ENGINE_DEFAULT_MODEL=${ENGINE_DEFAULT_MODEL:-}
+      - ENGINE_AUTO_DETECT_REPO_TYPE=${ENGINE_AUTO_DETECT_REPO_TYPE:-true}
+      - ENGINE_HIERARCHY_LEVELS=${ENGINE_HIERARCHY_LEVELS:-0}
     volumes:
       - rtvortex-data:/app/data
       - rtvortex-temp:/app/temp

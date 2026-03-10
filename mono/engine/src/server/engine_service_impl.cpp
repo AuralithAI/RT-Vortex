@@ -9,6 +9,7 @@
 #include "logging.h"
 #include "metrics.h"
 
+#include <filesystem>
 #include <sstream>
 #include <mutex>
 #include <chrono>
@@ -1035,6 +1036,30 @@ grpc::Status EngineServiceImpl::StreamEngineMetrics(
                     hp->set_p95(mv.histogram.p95);
                     hp->set_p99(mv.histogram.p99);
                     break;
+                }
+            }
+        }
+
+        // ── Populate structured KG fields from existing gauges ────
+        {
+            auto kg_it = snap.metrics.find(metrics::KG_NODES_TOTAL);
+            if (kg_it != snap.metrics.end()) {
+                proto.set_knowledge_graph_nodes(static_cast<uint64_t>(kg_it->second.scalar));
+            }
+            auto ke_it = snap.metrics.find(metrics::KG_EDGES_TOTAL);
+            if (ke_it != snap.metrics.end()) {
+                proto.set_knowledge_graph_edges(static_cast<uint64_t>(ke_it->second.scalar));
+            }
+        }
+
+        // ── Scan per-repo index sizes from metrics prefix ─────────
+        {
+            const std::string prefix = metrics::INDEX_SIZES_PREFIX;
+            for (const auto& [name, mv] : snap.metrics) {
+                if (name.compare(0, prefix.size(), prefix) == 0) {
+                    std::string repo_id = name.substr(prefix.size());
+                    (*proto.mutable_index_sizes_bytes())[repo_id] =
+                        static_cast<uint64_t>(mv.scalar);
                 }
             }
         }
