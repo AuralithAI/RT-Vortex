@@ -73,6 +73,7 @@ constexpr const char* EMBED_CACHE_HITS_TOTAL    = "embed_cache_hits_total";
 constexpr const char* EMBED_CACHE_MISSES_TOTAL  = "embed_cache_misses_total";
 
 // Knowledge Graph
+constexpr const char* KG_ENABLED                = "aipr_kg_enabled";
 constexpr const char* KG_NODES_TOTAL            = "aipr_kg_nodes_total";
 constexpr const char* KG_EDGES_TOTAL            = "aipr_kg_edges_total";
 

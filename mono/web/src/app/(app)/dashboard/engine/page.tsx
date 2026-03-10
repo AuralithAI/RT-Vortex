@@ -57,6 +57,7 @@ const FAISS_LOADED = "faiss_loaded";
 const LLM_AVOIDED_RATE = "llm_avoided_rate";
 const KG_NODES_TOTAL = "aipr_kg_nodes_total";
 const KG_EDGES_TOTAL = "aipr_kg_edges_total";
+const KG_ENABLED = "aipr_kg_enabled";
 
 // Embedding provider observability
 const EMBED_ACTIVE_BACKEND = "embed_active_backend";
@@ -90,7 +91,7 @@ export default function EnginePerformancePage() {
   const uptime = latest?.uptime_s ?? 0;
   const kgNodes = getMetricScalar(latest, KG_NODES_TOTAL);
   const kgEdges = getMetricScalar(latest, KG_EDGES_TOTAL);
-  const kgEnabled = kgNodes > 0 || kgEdges > 0;
+  const kgEnabled = getMetricScalar(latest, KG_ENABLED) === 1;
 
   // Embedding provider metrics
   const embedBackend = getMetricScalar(latest, EMBED_ACTIVE_BACKEND);
@@ -220,7 +221,7 @@ export default function EnginePerformancePage() {
                     ? "All Ready"
                     : "Degraded"
               }
-              description={`Embed: ${embedBackendLabel} · FAISS: ${faissLoaded ? "✓" : "✗"} · KG: ${kgEnabled ? `${kgNodes}n/${kgEdges}e` : "off"}`}
+              description={`Embed: ${embedBackendLabel} · FAISS: ${faissLoaded ? "✓" : "✗"} · KG: ${kgEnabled ? (kgNodes > 0 || kgEdges > 0 ? `${kgNodes}n/${kgEdges}e` : "✓ (empty)") : "off"}`}
               icon={Activity}
             />
           </>

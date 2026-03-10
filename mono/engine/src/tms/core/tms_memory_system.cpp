@@ -169,6 +169,7 @@ void TMSMemorySystem::initialize() {
     if (config_.knowledge_graph_enabled) {
         try {
             kg_handle_ = std::make_unique<KnowledgeGraphHandle>(config_.storage_path);
+            metrics::Registry::instance().setGauge(metrics::KG_ENABLED, 1.0);
             LOG_INFO("[TMS] Knowledge Graph initialized");
         } catch (const std::exception& e) {
             LOG_ERROR("[TMS] Failed to initialize Knowledge Graph: " + std::string(e.what()));
