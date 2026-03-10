@@ -322,6 +322,10 @@ private:
     std::unique_ptr<RepoParser> repo_parser_;
     std::unique_ptr<EmbeddingEngine> embedding_engine_;
     std::unique_ptr<EmbeddingIngestor> ingestor_;
+
+    // Knowledge Graph (optional, gated by knowledge_graph_enabled)
+    class KnowledgeGraphHandle;
+    std::unique_ptr<KnowledgeGraphHandle> kg_handle_;
     
     // State
     std::atomic<bool> initialized_{false};

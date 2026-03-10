@@ -28,6 +28,8 @@ set(TEST_SOURCES
     test_heuristics.cpp
     test_hierarchy_builder.cpp
     test_chunk_prefixer.cpp
+    test_knowledge_graph.cpp
+    test_memory_accounts.cpp
 )
 
 # Create test executable

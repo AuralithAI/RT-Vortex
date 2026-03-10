@@ -40,6 +40,7 @@ import {
   Tooltip,
   ResponsiveContainer,
 } from "recharts";
+import { MemoryAccountsChart } from "@/components/dashboard/engine-metrics/memory-accounts-chart";
 
 // ── Well-known metric names (match C++ metrics.h constants) ─────────────────
 
@@ -54,6 +55,8 @@ const CMA_SCORE = "cma_score";
 const MINILM_READY = "minilm_ready";
 const FAISS_LOADED = "faiss_loaded";
 const LLM_AVOIDED_RATE = "llm_avoided_rate";
+const KG_NODES_TOTAL = "aipr_kg_nodes_total";
+const KG_EDGES_TOTAL = "aipr_kg_edges_total";
 
 export default function EnginePerformancePage() {
   const { connected, latest, history, error } = useEngineMetrics({
@@ -73,6 +76,9 @@ export default function EnginePerformancePage() {
   const faissLoaded = getMetricScalar(latest, FAISS_LOADED) === 1;
   const llmAvoided = getMetricScalar(latest, LLM_AVOIDED_RATE);
   const uptime = latest?.uptime_s ?? 0;
+  const kgNodes = getMetricScalar(latest, KG_NODES_TOTAL);
+  const kgEdges = getMetricScalar(latest, KG_EDGES_TOTAL);
+  const kgEnabled = kgNodes > 0 || kgEdges > 0;
 
   // ── Chart data from history ───────────────────────────────────────────
   const latencyChartData = history.map((snap, i) => {
@@ -184,7 +190,7 @@ export default function EnginePerformancePage() {
             <StatsCard
               title="Components"
               value={miniLMReady && faissLoaded ? "All Ready" : "Degraded"}
-              description={`MiniLM: ${miniLMReady ? "✓" : "✗"} · FAISS: ${faissLoaded ? "✓" : "✗"}`}
+              description={`MiniLM: ${miniLMReady ? "✓" : "✗"} · FAISS: ${faissLoaded ? "✓" : "✗"} · KG: ${kgEnabled ? `${kgNodes}n/${kgEdges}e` : "off"}`}
               icon={Activity}
             />
           </>
@@ -323,6 +329,11 @@ export default function EnginePerformancePage() {
           </Card>
         </div>
       )}
+
+      {/* Memory Accounts Query Distribution */}
+      <div className="mt-6">
+        <MemoryAccountsChart history={history} />
+      </div>
     </>
   );
 }

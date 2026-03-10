@@ -7,8 +7,10 @@
 #include "tms/tms_memory_system.h"
 #include "tms/repo_parser.h"
 #include "tms/embedding_engine.h"
+#include "tms/memory_accounts.h"
 #include "hierarchy_builder.h"
 #include "chunk_prefixer.h"
+#include "knowledge_graph.h"
 #include "logging.h"
 #include "metrics.h"
 #include <chrono>
@@ -20,6 +22,22 @@
 #include <unordered_set>
 
 namespace aipr::tms {
+
+// ── KnowledgeGraphHandle (pimpl for optional KG) ───────────────────────────
+
+class TMSMemorySystem::KnowledgeGraphHandle {
+public:
+    explicit KnowledgeGraphHandle(const std::string& storage_path)
+        : kg_(storage_path + "/graph/knowledge_graph.db") {
+        kg_.open();
+    }
+    ~KnowledgeGraphHandle() {
+        try { kg_.close(); } catch (...) {}
+    }
+    aipr::KnowledgeGraph& get() { return kg_; }
+private:
+    aipr::KnowledgeGraph kg_;
+};
 
 // =============================================================================
 // Constructor / Destructor
@@ -137,6 +155,16 @@ void TMSMemorySystem::initialize() {
 
     // set component health gauges
     metrics::Registry::instance().setGauge(metrics::FAISS_LOADED, 1.0);
+
+    // Initialize Knowledge Graph (optional)
+    if (config_.knowledge_graph_enabled) {
+        try {
+            kg_handle_ = std::make_unique<KnowledgeGraphHandle>(config_.storage_path);
+            LOG_INFO("[TMS] Knowledge Graph initialized");
+        } catch (const std::exception& e) {
+            LOG_ERROR("[TMS] Failed to initialize Knowledge Graph: " + std::string(e.what()));
+        }
+    }
 }
 
 void TMSMemorySystem::shutdown() {
@@ -268,12 +296,38 @@ void TMSMemorySystem::ingestRepository(
         embeddings = std::move(result.embeddings);
     }
     
+    // Memory account classification (feature-gated)
+    if (config_.memory_accounts_enabled) {
+        if (progress_callback) {
+            progress_callback(0.78f, "Classifying memory accounts...");
+        }
+        MemoryAccountClassifier classifier;
+        for (auto& chunk : chunks) {
+            auto account = classifier.classify(chunk);
+            chunk.tags.push_back(MemoryAccountClassifier::accountTag(account));
+        }
+        LOG_INFO("[TMS] account tags applied to " + std::to_string(chunks.size()) + " chunks");
+    }
+
     // Phase 3: Store in LTM
     if (progress_callback) {
         progress_callback(0.8f, "Storing in LTM...");
     }
     
     ingestChunksWithEmbeddings(repo_id, chunks, embeddings);
+
+    // Knowledge Graph build (feature-gated)
+    if (config_.knowledge_graph_enabled && kg_handle_) {
+        if (progress_callback) {
+            progress_callback(0.9f, "Building knowledge graph...");
+        }
+        try {
+            kg_handle_->get().buildFromChunks(repo_id, chunks);
+            LOG_INFO("[TMS] knowledge graph built for " + repo_id);
+        } catch (const std::exception& e) {
+            LOG_ERROR("[TMS] KG build failed: " + std::string(e.what()));
+        }
+    }
     
     // Phase 4: Persist to disk
     if (progress_callback) {
@@ -455,13 +509,68 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     std::vector<RetrievedChunk> ltm_results;
     if (decision.strategy != ComputeStrategy::FAST || decision.ltm_top_k > 0) {
         auto ltm_start = std::chrono::steady_clock::now();
-        ltm_results = ltm_->search(query_embedding, decision.ltm_top_k, query.repo_filter);
+
+        if (config_.memory_accounts_enabled) {
+            // Account-aware routing: classify query → top-2 accounts → RRF merge
+            MemoryAccountClassifier classifier;
+            auto ranked_accounts = classifier.classifyQuery(query.query_text);
+
+            // Search top-2 accounts, split budget
+            int per_account_k = std::max(decision.ltm_top_k / 2, 4);
+            std::unordered_map<std::string, float> rrf_scores;
+            std::unordered_map<std::string, RetrievedChunk> chunk_map;
+            const float rrf_k = 60.0f;
+
+            int accounts_to_search = std::min(2, static_cast<int>(ranked_accounts.size()));
+            for (int ai = 0; ai < accounts_to_search; ++ai) {
+                auto tag = MemoryAccountClassifier::accountTag(ranked_accounts[ai]);
+                auto account_results = ltm_->hybridSearchByAccount(
+                    query.query_text, query_embedding, tag,
+                    per_account_k, query.repo_filter);
+
+                for (size_t rank = 0; rank < account_results.size(); ++rank) {
+                    const auto& rc = account_results[rank];
+                    float score = 1.0f / (rrf_k + rank + 1);
+                    // Boost primary account
+                    if (ai == 0) score *= 1.5f;
+                    rrf_scores[rc.chunk.id] += score;
+                    if (chunk_map.find(rc.chunk.id) == chunk_map.end()) {
+                        chunk_map[rc.chunk.id] = rc;
+                    }
+                }
+            }
+
+            // Sort by RRF score and take top_k
+            std::vector<std::pair<std::string, float>> sorted_ids(
+                rrf_scores.begin(), rrf_scores.end());
+            std::sort(sorted_ids.begin(), sorted_ids.end(),
+                      [](const auto& a, const auto& b) { return a.second > b.second; });
+
+            for (size_t i = 0; i < std::min(static_cast<size_t>(decision.ltm_top_k),
+                                             sorted_ids.size()); ++i) {
+                auto it = chunk_map.find(sorted_ids[i].first);
+                if (it != chunk_map.end()) {
+                    auto rc = it->second;
+                    rc.combined_score = sorted_ids[i].second;
+                    ltm_results.push_back(std::move(rc));
+                }
+            }
+
+            response.reasoning_trace.push_back(
+                "LTM: Account-routed [" + std::string(accountName(ranked_accounts[0])) +
+                ", " + std::string(accountName(ranked_accounts[1])) +
+                "] → " + std::to_string(ltm_results.size()) + " chunks");
+        } else {
+            ltm_results = ltm_->search(query_embedding, decision.ltm_top_k, query.repo_filter);
+        }
+
         auto ltm_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - ltm_start).count();
         response.reasoning_trace.push_back("LTM: Retrieved " + std::to_string(ltm_results.size()) + " chunks");
         response.ltm_items_scanned = ltm_results.size();
         LOG_DEBUG("[TMS] LTM search: retrieved=" + std::to_string(ltm_results.size()) +
                   " top_k=" + std::to_string(decision.ltm_top_k) +
+                  " accounts_enabled=" + std::to_string(config_.memory_accounts_enabled) +
                   " ltm_ms=" + std::to_string(ltm_ms));
     }
     

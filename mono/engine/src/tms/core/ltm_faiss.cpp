@@ -626,6 +626,40 @@ std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
     return results;
 }
 
+std::vector<RetrievedChunk> LTMFaiss::hybridSearchByAccount(
+    const std::string& query_text,
+    const std::vector<float>& query_embedding,
+    const std::string& account_tag,
+    int top_k,
+    const std::string& repo_filter
+) {
+    if (top_k <= 0) top_k = config_.default_top_k;
+
+    // Over-fetch 4× then filter by account tag
+    auto candidates = hybridSearch(query_text, query_embedding,
+                                   top_k * 4, 0.7f, repo_filter);
+
+    std::vector<RetrievedChunk> filtered;
+    filtered.reserve(static_cast<size_t>(top_k));
+
+    for (auto& rc : candidates) {
+        bool has_tag = false;
+        for (const auto& tag : rc.chunk.tags) {
+            if (tag == account_tag) { has_tag = true; break; }
+        }
+        if (has_tag) {
+            filtered.push_back(std::move(rc));
+            if (static_cast<int>(filtered.size()) >= top_k) break;
+        }
+    }
+
+    LOG_DEBUG("[LTM] hybridSearchByAccount: account=" + account_tag +
+              " candidates=" + std::to_string(candidates.size()) +
+              " filtered=" + std::to_string(filtered.size()));
+
+    return filtered;
+}
+
 // =============================================================================
 // CRUD Operations
 // =============================================================================

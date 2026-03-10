@@ -334,6 +334,12 @@ struct TMSConfig {
 
     // Hierarchical chunking
     bool hierarchy_enabled = false;         // Enable hierarchical context prefixing
+
+    // Knowledge Graph (persistent architectural understanding)
+    bool knowledge_graph_enabled = true;    // SQLite-backed KG for structural edges
+
+    // Memory Accounts (domain-aware query routing)
+    bool memory_accounts_enabled = true;    // Enable DEV/OPS/SECURITY/HISTORY routing
 };
 
 // =============================================================================

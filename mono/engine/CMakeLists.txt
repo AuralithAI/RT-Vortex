@@ -160,6 +160,35 @@ if(AIPR_USE_MINIZ)
 endif()
 
 # =============================================================================
+# SQLite3 amalgamation for Knowledge Graph (optional)
+# =============================================================================
+option(AIPR_USE_SQLITE "Use SQLite for Knowledge Graph" ON)
+
+if(AIPR_USE_SQLITE)
+    FetchContent_Declare(
+        sqlite3
+        URL https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip
+        URL_HASH SHA256=5592243caf28b2cdef41e6ab58d25d653dfc53deded8450eb66072c929f030c4
+    )
+    FetchContent_MakeAvailable(sqlite3)
+
+    # Build the amalgamation as a static library
+    add_library(sqlite3_lib STATIC
+        ${sqlite3_SOURCE_DIR}/sqlite3.c
+    )
+    target_include_directories(sqlite3_lib PUBLIC ${sqlite3_SOURCE_DIR})
+    target_compile_definitions(sqlite3_lib PRIVATE
+        SQLITE_THREADSAFE=1
+        SQLITE_ENABLE_WAL=1
+    )
+    if(UNIX)
+        target_link_libraries(sqlite3_lib PUBLIC dl pthread)
+    endif()
+    message(STATUS "SQLite3 amalgamation downloaded for Knowledge Graph")
+    add_definitions(-DAIPR_HAS_SQLITE)
+endif()
+
+# =============================================================================
 # ONNX Runtime for local embeddings (optional fallback)
 # =============================================================================
 option(AIPR_USE_ONNX "Use ONNX Runtime for local embeddings" ON)
@@ -671,8 +700,14 @@ set(TMS_SOURCES
     src/tms/core/mtm_graph.cpp
     src/tms/core/compute_controller.cpp
     src/tms/core/cross_memory_attention.cpp
+    src/tms/core/memory_accounts.cpp
     src/tms/ingestion/embedding_engine.cpp
     src/tms/ingestion/repo_parser.cpp
+)
+
+# Source files - Knowledge Graph
+set(GRAPH_SOURCES
+    src/graph/knowledge_graph.cpp
 )
 
 # Source files - Utilities
@@ -693,6 +728,7 @@ add_library(aipr-engine STATIC
     ${STORAGE_SOURCES}
     ${MEMORY_SOURCES}
     ${TMS_SOURCES}
+    ${GRAPH_SOURCES}
     ${UTIL_SOURCES}
 )
 
@@ -710,6 +746,10 @@ target_link_libraries(aipr-engine PUBLIC
 
 if(AIPR_USE_MINIZ)
     target_link_libraries(aipr-engine PUBLIC miniz)
+endif()
+
+if(AIPR_USE_SQLITE)
+    target_link_libraries(aipr-engine PUBLIC sqlite3_lib)
 endif()
 
 if(FAISS_LIBRARIES)

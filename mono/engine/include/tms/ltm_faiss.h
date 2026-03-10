@@ -150,6 +150,27 @@ public:
         float alpha = 0.7f,
         const std::string& repo_filter = ""
     );
+
+    /**
+     * Hybrid search filtered by memory account tag.
+     *
+     * Runs hybridSearch then post-filters to chunks carrying the
+     * "account:<name>" tag.  Over-fetches to ensure top_k results
+     * survive the filter.
+     *
+     * @param query_text  Original query text
+     * @param query_embedding  Query embedding
+     * @param account_tag  Tag string, e.g. "account:ops"
+     * @param top_k  Desired result count
+     * @param repo_filter  Optional repo filter
+     */
+    std::vector<RetrievedChunk> hybridSearchByAccount(
+        const std::string& query_text,
+        const std::vector<float>& query_embedding,
+        const std::string& account_tag,
+        int top_k = -1,
+        const std::string& repo_filter = ""
+    );
     
     // =========================================================================
     // CRUD Operations
