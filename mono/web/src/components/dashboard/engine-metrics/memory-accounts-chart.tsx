@@ -1,7 +1,7 @@
 // ─── Memory Accounts Chart ───────────────────────────────────────────────────
-// Stacked BarChart showing query distribution across memory accounts.
+// Stacked BarChart showing cumulative query distribution across memory
+// accounts.  Uses running totals so the bars persist after activity stops.
 // Data sourced from counters: aipr_account_queries_*_total
-// Derives per-snapshot deltas → queries/min per account.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -33,14 +33,6 @@ function scalar(snap: EngineMetricsSnapshot, key: string): number {
   return snap.metrics[key]?.scalar ?? 0;
 }
 
-function delta(
-  curr: EngineMetricsSnapshot,
-  prev: EngineMetricsSnapshot,
-  key: string,
-): number {
-  return Math.max(0, scalar(curr, key) - scalar(prev, key));
-}
-
 function formatTime(ms: number): string {
   const d = new Date(ms);
   return `${d.getHours().toString().padStart(2, "0")}:${d
@@ -50,7 +42,7 @@ function formatTime(ms: number): string {
 }
 
 export function MemoryAccountsChart({ history }: MemoryAccountsChartProps) {
-  if (history.length < 2) {
+  if (history.length < 1) {
     return (
       <Card>
         <CardHeader>
@@ -67,21 +59,19 @@ export function MemoryAccountsChart({ history }: MemoryAccountsChartProps) {
     );
   }
 
-  const accountData = history.slice(1).map((snap, i) => {
-    const prev = history[i]; // previous snapshot
-    return {
-      time: formatTime(snap.timestamp_ms),
-      dev: delta(snap, prev, ACCOUNT_DEV),
-      ops: delta(snap, prev, ACCOUNT_OPS),
-      security: delta(snap, prev, ACCOUNT_SECURITY),
-      history: delta(snap, prev, ACCOUNT_HISTORY),
-    };
-  });
+  // Use cumulative totals so bars persist after queries stop
+  const accountData = history.map((snap) => ({
+    time: formatTime(snap.timestamp_ms),
+    dev: scalar(snap, ACCOUNT_DEV),
+    ops: scalar(snap, ACCOUNT_OPS),
+    security: scalar(snap, ACCOUNT_SECURITY),
+    history: scalar(snap, ACCOUNT_HISTORY),
+  }));
 
-  // Check if there's any data at all
-  const hasData = accountData.some(
-    (d) => d.dev + d.ops + d.security + d.history > 0,
-  );
+  // Check if there's any data at all (from the latest snapshot)
+  const latest = accountData[accountData.length - 1];
+  const hasData =
+    latest.dev + latest.ops + latest.security + latest.history > 0;
 
   return (
     <Card>
