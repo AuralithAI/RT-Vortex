@@ -119,7 +119,7 @@ export default function EnginePerformancePage() {
     <>
       <PageHeader
         title="Engine Performance"
-        description="Real-time C++ engine metrics and TMS observability"
+        description="Live metrics, embedding health, and memory system insights"
       />
 
       {/* Connection status */}
