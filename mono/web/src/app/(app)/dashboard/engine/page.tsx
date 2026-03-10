@@ -58,6 +58,18 @@ const LLM_AVOIDED_RATE = "llm_avoided_rate";
 const KG_NODES_TOTAL = "aipr_kg_nodes_total";
 const KG_EDGES_TOTAL = "aipr_kg_edges_total";
 
+// Embedding provider observability
+const EMBED_ACTIVE_BACKEND = "embed_active_backend";
+const EMBED_HTTP_REQUESTS = "embed_http_requests";
+const EMBED_HTTP_ERRORS = "embed_http_errors";
+const EMBED_HTTP_TOKENS = "embed_http_tokens_used";
+
+const EMBED_BACKEND_LABELS: Record<number, string> = {
+  0: "Mock",
+  1: "MiniLM (ONNX)",
+  2: "HTTP API",
+};
+
 export default function EnginePerformancePage() {
   const { connected, latest, history, error } = useEngineMetrics({
     historySize: 60,
@@ -79,6 +91,13 @@ export default function EnginePerformancePage() {
   const kgNodes = getMetricScalar(latest, KG_NODES_TOTAL);
   const kgEdges = getMetricScalar(latest, KG_EDGES_TOTAL);
   const kgEnabled = kgNodes > 0 || kgEdges > 0;
+
+  // Embedding provider metrics
+  const embedBackend = getMetricScalar(latest, EMBED_ACTIVE_BACKEND);
+  const embedBackendLabel = EMBED_BACKEND_LABELS[embedBackend] ?? "Unknown";
+  const embedHttpRequests = getMetricScalar(latest, EMBED_HTTP_REQUESTS);
+  const embedHttpErrors = getMetricScalar(latest, EMBED_HTTP_ERRORS);
+  const embedHttpTokens = getMetricScalar(latest, EMBED_HTTP_TOKENS);
 
   // ── Chart data from history ───────────────────────────────────────────
   const latencyChartData = history.map((snap, i) => {
@@ -190,12 +209,36 @@ export default function EnginePerformancePage() {
             <StatsCard
               title="Components"
               value={miniLMReady && faissLoaded ? "All Ready" : "Degraded"}
-              description={`MiniLM: ${miniLMReady ? "✓" : "✗"} · FAISS: ${faissLoaded ? "✓" : "✗"} · KG: ${kgEnabled ? `${kgNodes}n/${kgEdges}e` : "off"}`}
+              description={`Embed: ${embedBackendLabel} · FAISS: ${faissLoaded ? "✓" : "✗"} · KG: ${kgEnabled ? `${kgNodes}n/${kgEdges}e` : "off"}`}
               icon={Activity}
             />
           </>
         )}
       </div>
+
+      {/* Embedding Provider Stats (shown when HTTP backend is active) */}
+      {embedBackend === 2 && (
+        <div className="mt-4 grid gap-4 md:grid-cols-3">
+          <StatsCard
+            title="HTTP API Requests"
+            value={embedHttpRequests.toLocaleString()}
+            description={`Errors: ${embedHttpErrors.toLocaleString()} · ${embedHttpRequests > 0 ? ((1 - embedHttpErrors / embedHttpRequests) * 100).toFixed(1) : 100}% success`}
+            icon={Zap}
+          />
+          <StatsCard
+            title="API Tokens Used"
+            value={embedHttpTokens.toLocaleString()}
+            description="Total tokens consumed by external embedding API"
+            icon={Sparkles}
+          />
+          <StatsCard
+            title="Active Backend"
+            value={embedBackendLabel}
+            description="Embedding vectors produced via cloud API"
+            icon={Activity}
+          />
+        </div>
+      )}
 
       {/* Latency Charts */}
       <div className="mt-6 grid gap-6 lg:grid-cols-2">

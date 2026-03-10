@@ -955,4 +955,49 @@ CrossMemoryOutput TMSMemorySystem::runCrossMemoryAttention(
     return result;
 }
 
+void TMSMemorySystem::reconfigureEmbedding(
+    const std::string& backend,
+    const std::string& endpoint,
+    const std::string& model,
+    const std::string& api_key,
+    size_t dims)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    EmbeddingConfig embed_config;
+    embed_config.model_name = model;
+    embed_config.embedding_dimension = dims > 0 ? dims : config_.embedding_dimension;
+    embed_config.cache_path = config_.storage_path + "/embedding_cache";
+
+    if (backend == "onnx") {
+        embed_config.backend = EmbeddingBackend::ONNX_RUNTIME;
+        embed_config.onnx_model_path = config_.onnx_model_path;
+        embed_config.tokenizer_path = config_.onnx_tokenizer_path;
+    } else if (backend == "http") {
+        embed_config.backend = EmbeddingBackend::HTTP_API;
+        embed_config.api_endpoint = endpoint;
+        embed_config.api_key = api_key;
+    } else {
+        embed_config.backend = EmbeddingBackend::MOCK;
+    }
+
+    std::cerr << "[TMS] reconfigureEmbedding: backend=" << backend
+              << " model=" << model
+              << " endpoint=" << endpoint
+              << " dims=" << dims << std::endl;
+
+    embedding_engine_ = std::make_unique<EmbeddingEngine>(embed_config);
+
+    // Update the ingestor to use the new embedding engine.
+    EmbeddingIngestor::Config ingest_cfg;
+    ingestor_ = std::make_unique<EmbeddingIngestor>(
+        *embedding_engine_, *ltm_, mtm_.get(), ingest_cfg);
+
+    // Update metrics for the new backend.
+    double backend_id = 0.0; // mock
+    if (backend == "onnx") backend_id = 1.0;
+    else if (backend == "http") backend_id = 2.0;
+    metrics::Registry::instance().setGauge(metrics::EMBED_ACTIVE_BACKEND, backend_id);
+}
+
 } // namespace aipr::tms

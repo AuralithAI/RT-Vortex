@@ -307,6 +307,28 @@ public:
     MTMGraph& mtm() { return *mtm_; }
     CrossMemoryAttention& attention() { return *attention_; }
     ComputeController& controller() { return *controller_; }
+    EmbeddingEngine& embeddingEngine() { return *embedding_engine_; }
+    
+    /**
+     * Reconfigure the embedding engine at runtime.
+     *
+     * Used when the gRPC layer receives a per-request embedding config
+     * from the Go server (e.g. user switched from MiniLM to OpenAI).
+     * The API key is held only in memory and is NOT persisted.
+     *
+     * @param backend  "onnx", "http", or "mock"
+     * @param endpoint API URL (for HTTP backends)
+     * @param model    Model name
+     * @param api_key  Transient API key
+     * @param dims     Embedding dimension
+     */
+    void reconfigureEmbedding(
+        const std::string& backend,
+        const std::string& endpoint,
+        const std::string& model,
+        const std::string& api_key,
+        size_t dims
+    );
     
 private:
     TMSConfig config_;

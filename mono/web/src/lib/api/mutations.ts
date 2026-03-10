@@ -5,7 +5,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./client";
 import { queryKeys } from "./queries";
-import type { User, Org, EmbeddingsUpdateRequest } from "@/types/api";
+import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest } from "@/types/api";
 
 // ── User ────────────────────────────────────────────────────────────────────
 
@@ -178,6 +178,19 @@ export function useUpdateEmbeddings() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.embeddingsConfig });
     },
+  });
+}
+
+export function useTestEmbedding() {
+  return useMutation({
+    mutationFn: (data: EmbeddingTestRequest) => api.embeddings.test(data),
+  });
+}
+
+export function useCheckEmbeddingCredits() {
+  return useMutation({
+    mutationFn: (data: { provider: string; endpoint?: string; api_key?: string }) =>
+      api.embeddings.credits(data),
   });
 }
 

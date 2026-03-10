@@ -241,6 +241,30 @@ public:
      * Run self-diagnostics
      */
     virtual DiagnosticResult runDiagnostics() = 0;
+    
+    /**
+     * Configure embedding provider at runtime (per-request override).
+     *
+     * Called by the gRPC layer before indexing to push the user's
+     * provider choice from the Go server. The API key is passed
+     * transiently — it is NOT persisted in the C++ engine.
+     *
+     * @param provider   "http", "onnx", or "mock"
+     * @param endpoint   API URL (for HTTP providers)
+     * @param model      Model name (e.g. "text-embedding-3-small")
+     * @param api_key    Transient API key — used for the current operation only
+     * @param dimensions Embedding vector dimensionality
+     */
+    virtual void configureEmbedding(
+        const std::string& provider,
+        const std::string& endpoint,
+        const std::string& model,
+        const std::string& api_key,
+        size_t dimensions
+    ) {
+        // Default no-op — overridden by EngineImpl.
+        (void)provider; (void)endpoint; (void)model; (void)api_key; (void)dimensions;
+    }
 
 protected:
     Engine() = default;

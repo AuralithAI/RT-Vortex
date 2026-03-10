@@ -334,6 +334,27 @@ public:
     }
 
     // =========================================================================
+    // Embedding Runtime Configuration
+    // =========================================================================
+
+    void configureEmbedding(
+        const std::string& provider,
+        const std::string& endpoint,
+        const std::string& model,
+        const std::string& api_key,
+        size_t dimensions) override
+    {
+        if (provider.empty()) return; // no-op if not specified
+
+        std::cerr << "[ENGINE] configureEmbedding: provider=" << provider
+                  << " model=" << model
+                  << " endpoint=" << endpoint
+                  << " dims=" << dimensions << std::endl;
+
+        tms_->reconfigureEmbedding(provider, endpoint, model, api_key, dimensions);
+    }
+
+    // =========================================================================
     // Indexing
     // =========================================================================
 

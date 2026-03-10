@@ -18,10 +18,15 @@
 #include <random>
 #include <functional>
 #include <unordered_map>
+#include <thread>
 #include <nlohmann/json.hpp>
 
 #ifdef AIPR_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
+#endif
+
+#ifdef AIPR_HAS_CURL
+#include <curl/curl.h>
 #endif
 
 namespace aipr::tms {
@@ -306,11 +311,236 @@ private:
         return !config_.model_name.empty();
     }
 
-    // ── HTTP backend (stub — falls back to mock for now) ──
+    // ── HTTP backend (production — libcurl + OpenAI-compatible API) ──
     std::vector<std::vector<float>> embedBatchHttp(const std::vector<std::string>& texts) {
-        // TODO: implement real HTTP API call to OpenAI-compatible endpoint
-        std::cerr << "[EMBED] HTTP backend not yet implemented, falling back to mock" << std::endl;
+#ifdef AIPR_HAS_CURL
+        if (config_.api_endpoint.empty()) {
+            std::cerr << "[EMBED] HTTP endpoint not configured, falling back to mock" << std::endl;
+            return embedBatchMock(texts);
+        }
+        if (config_.api_key.empty()) {
+            std::cerr << "[EMBED] HTTP API key not set, falling back to mock" << std::endl;
+            return embedBatchMock(texts);
+        }
+
+        // Detect provider type from endpoint for request/response format differences.
+        // - OpenAI / Voyage / ollama: POST { model, input: [...] }
+        // - Cohere:                  POST { model, texts: [...], input_type }
+        const bool is_cohere = config_.api_endpoint.find("cohere") != std::string::npos;
+
+        std::vector<std::vector<float>> all_embeddings;
+        all_embeddings.reserve(texts.size());
+
+        // Process in batches to stay within API limits.
+        const size_t api_batch = std::min(static_cast<size_t>(config_.batch_size), size_t(2048));
+
+        for (size_t offset = 0; offset < texts.size(); offset += api_batch) {
+            size_t end = std::min(offset + api_batch, texts.size());
+
+            // Build JSON payload.
+            nlohmann::json payload;
+            payload["model"] = config_.model_name;
+
+            if (is_cohere) {
+                // Cohere Embed v3 uses "texts" array + "input_type".
+                nlohmann::json text_arr = nlohmann::json::array();
+                for (size_t i = offset; i < end; ++i) {
+                    text_arr.push_back(texts[i]);
+                }
+                payload["texts"] = text_arr;
+                payload["input_type"] = "search_document";
+                payload["truncate"] = "END";
+            } else {
+                // OpenAI-compatible (OpenAI, Voyage, ollama, vLLM, etc.)
+                nlohmann::json input_arr = nlohmann::json::array();
+                for (size_t i = offset; i < end; ++i) {
+                    input_arr.push_back(texts[i]);
+                }
+                payload["input"] = input_arr;
+                // Send dimensions only if explicitly configured and > 0.
+                if (config_.embedding_dimension > 0) {
+                    payload["dimensions"] = config_.embedding_dimension;
+                }
+            }
+
+            std::string body = payload.dump();
+
+            // Execute HTTP request with retry logic.
+            std::string response_body;
+            bool success = false;
+            std::string last_error;
+
+            for (int attempt = 0; attempt <= config_.max_retries; ++attempt) {
+                if (attempt > 0) {
+                    int delay = config_.retry_delay_ms * (1 << (attempt - 1)); // exponential backoff
+                    std::cerr << "[EMBED] HTTP retry " << attempt << "/" << config_.max_retries
+                              << " after " << delay << "ms" << std::endl;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(delay));
+                }
+
+                response_body.clear();
+                long http_code = 0;
+
+                CURL* curl = curl_easy_init();
+                if (!curl) {
+                    last_error = "curl_easy_init failed";
+                    continue;
+                }
+
+                // Response write callback.
+                auto write_cb = +[](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
+                    auto* buf = static_cast<std::string*>(userdata);
+                    buf->append(ptr, size * nmemb);
+                    return size * nmemb;
+                };
+
+                struct curl_slist* headers = nullptr;
+                headers = curl_slist_append(headers, "Content-Type: application/json");
+
+                // Authorization header — Cohere uses "Bearer" same as OpenAI/Voyage.
+                std::string auth_header = "Authorization: Bearer " + config_.api_key;
+                headers = curl_slist_append(headers, auth_header.c_str());
+
+                curl_easy_setopt(curl, CURLOPT_URL, config_.api_endpoint.c_str());
+                curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+                curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+                curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+                curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_cb);
+                curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_body);
+                curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(config_.timeout_ms));
+                curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+                // Accept gzip/deflate for faster transfers.
+                curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "");
+
+                CURLcode res = curl_easy_perform(curl);
+                curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+                curl_slist_free_all(headers);
+                curl_easy_cleanup(curl);
+
+                if (res != CURLE_OK) {
+                    last_error = std::string("curl error: ") + curl_easy_strerror(res);
+                    continue;
+                }
+
+                if (http_code == 429) {
+                    // Rate limited — retry with backoff.
+                    last_error = "rate limited (429)";
+                    metrics::Registry::instance().incCounter("embed_http_rate_limits");
+                    continue;
+                }
+                if (http_code >= 500) {
+                    // Server error — retry.
+                    last_error = "server error (" + std::to_string(http_code) + ")";
+                    continue;
+                }
+                if (http_code != 200) {
+                    last_error = "HTTP " + std::to_string(http_code) + ": " + response_body.substr(0, 200);
+                    std::cerr << "[EMBED] HTTP API error: " << last_error << std::endl;
+                    metrics::Registry::instance().incCounter("embed_http_errors");
+                    break; // 4xx client errors don't benefit from retry.
+                }
+
+                success = true;
+                break;
+            }
+
+            if (!success) {
+                std::cerr << "[EMBED] HTTP API failed after retries: " << last_error << std::endl;
+                metrics::Registry::instance().incCounter("embed_http_errors");
+                // Fill this batch with zero vectors.
+                for (size_t i = offset; i < end; ++i) {
+                    all_embeddings.push_back(std::vector<float>(config_.embedding_dimension, 0.0f));
+                }
+                continue;
+            }
+
+            // Parse response.
+            try {
+                auto resp = nlohmann::json::parse(response_body);
+
+                if (is_cohere) {
+                    // Cohere response: { embeddings: [[...], [...]], ... }
+                    // or Cohere v2:    { embeddings: { float: [[...], ...] }, ... }
+                    nlohmann::json embed_data;
+                    if (resp.contains("embeddings") && resp["embeddings"].is_array()) {
+                        embed_data = resp["embeddings"];
+                    } else if (resp.contains("embeddings") && resp["embeddings"].is_object()
+                               && resp["embeddings"].contains("float")) {
+                        embed_data = resp["embeddings"]["float"];
+                    } else {
+                        throw std::runtime_error("unexpected Cohere response format");
+                    }
+
+                    for (auto& emb : embed_data) {
+                        std::vector<float> vec;
+                        vec.reserve(emb.size());
+                        for (auto& v : emb) {
+                            vec.push_back(v.get<float>());
+                        }
+                        all_embeddings.push_back(std::move(vec));
+                    }
+
+                    // Token usage (Cohere).
+                    if (resp.contains("meta") && resp["meta"].contains("billed_units")
+                        && resp["meta"]["billed_units"].contains("input_tokens")) {
+                        int tokens = resp["meta"]["billed_units"]["input_tokens"].get<int>();
+                        metrics::Registry::instance().incCounter("embed_http_tokens_used", tokens);
+                    }
+                } else {
+                    // OpenAI-compatible response: { data: [{ embedding: [...], index: N }], usage: {...} }
+                    if (!resp.contains("data") || !resp["data"].is_array()) {
+                        throw std::runtime_error("missing 'data' array in response");
+                    }
+
+                    // Sort by index to ensure correct order.
+                    auto& data_arr = resp["data"];
+                    std::vector<std::pair<int, std::vector<float>>> indexed_embeddings;
+                    indexed_embeddings.reserve(data_arr.size());
+
+                    for (auto& item : data_arr) {
+                        int idx = item.value("index", static_cast<int>(indexed_embeddings.size()));
+                        std::vector<float> vec;
+                        auto& emb = item["embedding"];
+                        vec.reserve(emb.size());
+                        for (auto& v : emb) {
+                            vec.push_back(v.get<float>());
+                        }
+                        indexed_embeddings.emplace_back(idx, std::move(vec));
+                    }
+
+                    std::sort(indexed_embeddings.begin(), indexed_embeddings.end(),
+                              [](const auto& a, const auto& b) { return a.first < b.first; });
+
+                    for (auto& [_, vec] : indexed_embeddings) {
+                        all_embeddings.push_back(std::move(vec));
+                    }
+
+                    // Token usage (OpenAI / Voyage).
+                    if (resp.contains("usage") && resp["usage"].contains("total_tokens")) {
+                        int tokens = resp["usage"]["total_tokens"].get<int>();
+                        metrics::Registry::instance().incCounter("embed_http_tokens_used", tokens);
+                    }
+                }
+
+                metrics::Registry::instance().incCounter("embed_http_requests");
+
+            } catch (const std::exception& e) {
+                std::cerr << "[EMBED] Failed to parse HTTP response: " << e.what() << std::endl;
+                metrics::Registry::instance().incCounter("embed_http_errors");
+                // Fill remaining with zero vectors.
+                for (size_t i = offset; i < end; ++i) {
+                    if (all_embeddings.size() <= i) {
+                        all_embeddings.push_back(std::vector<float>(config_.embedding_dimension, 0.0f));
+                    }
+                }
+            }
+        }
+
+        return all_embeddings;
+#else
+        std::cerr << "[EMBED] libcurl not compiled in (AIPR_HAS_CURL not defined), falling back to mock" << std::endl;
         return embedBatchMock(texts);
+#endif
     }
 
     // ── ONNX Runtime backend (real inference) ──

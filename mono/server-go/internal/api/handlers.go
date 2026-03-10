@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -1399,34 +1400,89 @@ func (h *Handler) GetEmbeddingsConfig(w http.ResponseWriter, r *http.Request) {
 		ec = DefaultEmbeddingConfig()
 	}
 
-	// Check which external providers are configured based on the LLM registry API keys.
+	// Check vault for dedicated embedding API keys.
+	embedKeySet := func(provider string) bool {
+		if h.Vault != nil {
+			if key, err := h.Vault.Get("embed_key." + provider); err == nil && key != "" {
+				return true
+			}
+		}
+		return h.isLLMKeySet(provider)
+	}
+
+	// Available models per provider (model catalog).
 	externalProviders := []map[string]interface{}{
 		{
 			"name": "openai", "display_name": "OpenAI Embeddings",
 			"model": "text-embedding-3-small", "dimensions": 1536,
 			"endpoint":     "https://api.openai.com/v1/embeddings",
-			"configured":   h.isLLMKeySet("openai"),
+			"configured":   embedKeySet("openai"),
 			"requires_key": true,
+			"available_models": []map[string]interface{}{
+				{"name": "text-embedding-3-small", "dimensions": 1536, "description": "Cost-effective, high-quality embeddings"},
+				{"name": "text-embedding-3-large", "dimensions": 3072, "description": "Highest quality, larger vectors"},
+				{"name": "text-embedding-ada-002", "dimensions": 1536, "description": "Legacy model, widely deployed"},
+			},
 		},
 		{
 			"name": "cohere", "display_name": "Cohere Embed",
 			"model": "embed-english-v3.0", "dimensions": 1024,
 			"endpoint":     "https://api.cohere.ai/v1/embed",
-			"configured":   false,
+			"configured":   embedKeySet("cohere"),
 			"requires_key": true,
+			"available_models": []map[string]interface{}{
+				{"name": "embed-english-v3.0", "dimensions": 1024, "description": "English-optimised, best for code"},
+				{"name": "embed-multilingual-v3.0", "dimensions": 1024, "description": "Multilingual support"},
+				{"name": "embed-english-light-v3.0", "dimensions": 384, "description": "Lightweight, faster inference"},
+			},
 		},
 		{
 			"name": "voyage", "display_name": "Voyage AI",
 			"model": "voyage-code-3", "dimensions": 1024,
 			"endpoint":     "https://api.voyageai.com/v1/embeddings",
-			"configured":   false,
+			"configured":   embedKeySet("voyage"),
 			"requires_key": true,
+			"available_models": []map[string]interface{}{
+				{"name": "voyage-code-3", "dimensions": 1024, "description": "Optimised for code retrieval"},
+				{"name": "voyage-3", "dimensions": 1024, "description": "General-purpose, high quality"},
+				{"name": "voyage-3-lite", "dimensions": 512, "description": "Lightweight, cost-effective"},
+			},
 		},
+		{
+			"name": "custom", "display_name": "Custom / Self-hosted (Ollama, vLLM)",
+			"model": "nomic-embed-text", "dimensions": 768,
+			"endpoint":     "http://localhost:11434/api/embeddings",
+			"configured":   false,
+			"requires_key": false,
+			"available_models": []map[string]interface{}{
+				{"name": "nomic-embed-text", "dimensions": 768, "description": "Ollama default embedding model"},
+				{"name": "mxbai-embed-large", "dimensions": 1024, "description": "High-quality open-source embeddings"},
+				{"name": "all-minilm", "dimensions": 384, "description": "Lightweight, fast local model"},
+			},
+		},
+	}
+
+	// If a provider is actively selected, update its default model to match.
+	if ec.Provider != "" {
+		for i := range externalProviders {
+			if externalProviders[i]["name"] == ec.Provider {
+				if ec.Model != "" {
+					externalProviders[i]["model"] = ec.Model
+				}
+				if ec.Dimensions > 0 {
+					externalProviders[i]["dimensions"] = ec.Dimensions
+				}
+				if ec.Endpoint != "" {
+					externalProviders[i]["endpoint"] = ec.Endpoint
+				}
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"use_builtin":     ec.UseBuiltin,
 		"active_provider": ec.Provider,
+		"active_model":    ec.Model,
 		"builtin_model": map[string]interface{}{
 			"name":        "MiniLM-L6-v2",
 			"provider":    "Sentence Transformers (HuggingFace)",
@@ -1448,7 +1504,7 @@ func (h *Handler) isLLMKeySet(name string) bool {
 func (h *Handler) UpdateEmbeddingsConfig(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		UseBuiltin bool   `json:"use_builtin"`
-		Provider   string `json:"provider"`   // "openai", "cohere", "voyage"
+		Provider   string `json:"provider"`   // "openai", "cohere", "voyage", "custom"
 		Endpoint   string `json:"endpoint"`   // embedding API URL
 		Model      string `json:"model"`      // e.g. "text-embedding-3-small"
 		Dimensions uint32 `json:"dimensions"` // e.g. 1536
@@ -1459,12 +1515,27 @@ func (h *Handler) UpdateEmbeddingsConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// If no dedicated embedding API key was provided, try to inherit from the
-	// LLM registry (e.g. OpenAI embeddings share the same key as OpenAI LLM).
+	// Resolve API key: dedicated embedding key → vault → LLM registry fallback.
 	apiKey := req.APIKey
+
+	// If the user provided a new API key, store it in the vault.
+	if apiKey != "" && h.Vault != nil && req.Provider != "" {
+		if err := h.Vault.Set("embed_key."+req.Provider, apiKey); err != nil {
+			slog.Warn("failed to store embedding API key in vault", "provider", req.Provider, "error", err)
+		}
+	}
+
+	// If no key was provided, try vault first, then LLM registry.
 	if apiKey == "" && req.Provider != "" {
-		if meta, ok := h.LLMRegistry.GetMeta(req.Provider); ok && meta.Configured {
-			apiKey = meta.APIKey
+		if h.Vault != nil {
+			if key, err := h.Vault.Get("embed_key." + req.Provider); err == nil && key != "" {
+				apiKey = key
+			}
+		}
+		if apiKey == "" {
+			if meta, ok := h.LLMRegistry.GetMeta(req.Provider); ok && meta.Configured {
+				apiKey = meta.APIKey
+			}
 		}
 	}
 
@@ -1491,7 +1562,253 @@ func (h *Handler) UpdateEmbeddingsConfig(w http.ResponseWriter, r *http.Request)
 		"provider":    req.Provider,
 		"model":       req.Model,
 		"dimensions":  req.Dimensions,
+		"configured":  apiKey != "" || req.UseBuiltin || req.Provider == "custom",
 	})
+}
+
+// TestEmbeddingProvider tests connectivity to an embedding API provider.
+// POST /api/v1/embeddings/test
+func (h *Handler) TestEmbeddingProvider(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Provider string `json:"provider"`
+		Endpoint string `json:"endpoint"`
+		Model    string `json:"model"`
+		APIKey   string `json:"api_key"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Endpoint == "" {
+		writeError(w, http.StatusBadRequest, "endpoint is required")
+		return
+	}
+
+	// Resolve API key from request → vault → LLM registry.
+	apiKey := req.APIKey
+	if apiKey == "" && req.Provider != "" {
+		if h.Vault != nil {
+			if key, err := h.Vault.Get("embed_key." + req.Provider); err == nil && key != "" {
+				apiKey = key
+			}
+		}
+		if apiKey == "" {
+			if meta, ok := h.LLMRegistry.GetMeta(req.Provider); ok && meta.Configured {
+				apiKey = meta.APIKey
+			}
+		}
+	}
+
+	// Determine if this is a Cohere-style API.
+	isCohere := strings.Contains(req.Endpoint, "cohere")
+
+	// Build a minimal embedding request with a short test string.
+	var payload map[string]interface{}
+	if isCohere {
+		payload = map[string]interface{}{
+			"model":      req.Model,
+			"texts":      []string{"test embedding connection"},
+			"input_type": "search_document",
+			"truncate":   "END",
+		}
+	} else {
+		payload = map[string]interface{}{
+			"model": req.Model,
+			"input": []string{"test embedding connection"},
+		}
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, req.Endpoint, bytes.NewReader(payloadBytes))
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": req.Provider, "healthy": false, "error": "invalid endpoint URL",
+		})
+		return
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": req.Provider, "healthy": false, "error": err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+
+	if resp.StatusCode != 200 {
+		errMsg := string(body)
+		if len(errMsg) > 200 {
+			errMsg = errMsg[:200]
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider":    req.Provider,
+			"healthy":     false,
+			"error":       fmt.Sprintf("HTTP %d: %s", resp.StatusCode, errMsg),
+			"status_code": resp.StatusCode,
+		})
+		return
+	}
+
+	// Parse response to confirm we got real embeddings back.
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": req.Provider, "healthy": false, "error": "invalid JSON response",
+		})
+		return
+	}
+
+	// Extract dimension count from response.
+	dims := 0
+	if isCohere {
+		if embs, ok := result["embeddings"].([]interface{}); ok && len(embs) > 0 {
+			if first, ok := embs[0].([]interface{}); ok {
+				dims = len(first)
+			}
+		}
+	} else {
+		if data, ok := result["data"].([]interface{}); ok && len(data) > 0 {
+			if item, ok := data[0].(map[string]interface{}); ok {
+				if emb, ok := item["embedding"].([]interface{}); ok {
+					dims = len(emb)
+				}
+			}
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"provider":   req.Provider,
+		"healthy":    true,
+		"model":      req.Model,
+		"dimensions": dims,
+	})
+}
+
+// CheckEmbeddingCredits checks credit / billing status for an embedding provider.
+// POST /api/v1/embeddings/credits
+func (h *Handler) CheckEmbeddingCredits(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Provider string `json:"provider"`
+		Endpoint string `json:"endpoint"`
+		APIKey   string `json:"api_key"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Resolve API key.
+	apiKey := req.APIKey
+	if apiKey == "" && req.Provider != "" {
+		if h.Vault != nil {
+			if key, err := h.Vault.Get("embed_key." + req.Provider); err == nil && key != "" {
+				apiKey = key
+			}
+		}
+		if apiKey == "" {
+			if meta, ok := h.LLMRegistry.GetMeta(req.Provider); ok && meta.Configured {
+				apiKey = meta.APIKey
+			}
+		}
+	}
+
+	if apiKey == "" {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": req.Provider, "status": "not_configured",
+			"message": "No API key configured for this provider.",
+		})
+		return
+	}
+
+	// Provider-specific credit checks.
+	switch req.Provider {
+	case "openai":
+		// OpenAI doesn't expose a balance API; test with a tiny call.
+		h.checkEmbeddingHealthViaTest(r.Context(), w, req.Provider, "https://api.openai.com/v1/embeddings",
+			"text-embedding-3-small", apiKey, false)
+	case "cohere":
+		h.checkEmbeddingHealthViaTest(r.Context(), w, req.Provider, "https://api.cohere.ai/v1/embed",
+			"embed-english-v3.0", apiKey, true)
+	case "voyage":
+		h.checkEmbeddingHealthViaTest(r.Context(), w, req.Provider, "https://api.voyageai.com/v1/embeddings",
+			"voyage-code-3", apiKey, false)
+	default:
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": req.Provider, "status": "unknown",
+			"message": "Credit checking is not supported for this provider.",
+		})
+	}
+}
+
+// checkEmbeddingHealthViaTest infers billing status from a lightweight embedding call.
+func (h *Handler) checkEmbeddingHealthViaTest(ctx context.Context, w http.ResponseWriter,
+	provider, endpoint, model, apiKey string, isCohere bool) {
+
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var payload map[string]interface{}
+	if isCohere {
+		payload = map[string]interface{}{
+			"model": model, "texts": []string{"credit check"}, "input_type": "search_document", "truncate": "END",
+		}
+	} else {
+		payload = map[string]interface{}{"model": model, "input": []string{"credit check"}}
+	}
+
+	payloadBytes, _ := json.Marshal(payload)
+	httpReq, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payloadBytes))
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": provider, "status": "error", "message": err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
+
+	switch {
+	case resp.StatusCode == 200:
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": provider, "status": "ok", "message": "API key is valid and billing is active.",
+		})
+	case resp.StatusCode == 401:
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": provider, "status": "error", "message": "Invalid API key (401 Unauthorized).",
+		})
+	case resp.StatusCode == 429:
+		errMsg := string(body)
+		if strings.Contains(errMsg, "insufficient_quota") || strings.Contains(errMsg, "billing") {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"provider": provider, "status": "low_balance",
+				"message": "Quota exhausted or billing issue detected.",
+			})
+		} else {
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"provider": provider, "status": "rate_limited",
+				"message": "Rate limited — credits appear available.",
+			})
+		}
+	default:
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"provider": provider, "status": "error",
+			"message": fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body)[:min(len(body), 200)]),
+		})
+	}
 }
 
 // CheckLLMBalance checks the credit/token balance for a cloud LLM provider.

@@ -231,6 +231,12 @@ export interface BuiltinEmbeddingModel {
   description: string;
 }
 
+export interface EmbeddingModelOption {
+  name: string;
+  dimensions: number;
+  description: string;
+}
+
 export interface ExternalEmbeddingProvider {
   name: string;
   display_name: string;
@@ -239,11 +245,13 @@ export interface ExternalEmbeddingProvider {
   endpoint: string;
   configured: boolean;
   requires_key: boolean;
+  available_models?: EmbeddingModelOption[];
 }
 
 export interface EmbeddingsConfig {
   use_builtin: boolean;
   active_provider: string;
+  active_model: string;
   builtin_model: BuiltinEmbeddingModel;
   external_providers: ExternalEmbeddingProvider[];
 }
@@ -262,6 +270,29 @@ export interface EmbeddingsUpdateResult {
   provider: string;
   model: string;
   dimensions: number;
+  configured: boolean;
+}
+
+export interface EmbeddingTestRequest {
+  provider: string;
+  endpoint: string;
+  model: string;
+  api_key?: string;
+}
+
+export interface EmbeddingTestResult {
+  provider: string;
+  healthy: boolean;
+  error?: string;
+  model?: string;
+  dimensions?: number;
+  status_code?: number;
+}
+
+export interface EmbeddingCreditsResult {
+  provider: string;
+  status: "ok" | "low_balance" | "rate_limited" | "not_configured" | "error" | "unknown";
+  message?: string;
 }
 
 // ── Admin ───────────────────────────────────────────────────────────────────

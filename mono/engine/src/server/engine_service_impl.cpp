@@ -13,6 +13,7 @@
 #include <mutex>
 #include <chrono>
 #include <thread>
+#include <algorithm>
 
 namespace aipr {
 namespace server {
@@ -42,9 +43,24 @@ grpc::Status EngineServiceImpl::IndexRepository(
     }
 
     try {
-        // Note: IndexConfig settings from request are not yet supported
-        // in the core engine API. The request proto config fields are
-        // reserved for future use.
+        // Apply per-request embedding configuration from the gRPC IndexConfig.
+        // The API key is passed transiently — it is NOT stored in the engine.
+        if (request->has_config()) {
+            const auto& cfg = request->config();
+            if (!cfg.embedding_provider().empty()) {
+                std::string provider = cfg.embedding_provider();
+                // Normalise: the Go server sends "HTTP" but the engine expects "http".
+                std::transform(provider.begin(), provider.end(), provider.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+                engine_->configureEmbedding(
+                    provider,
+                    cfg.embedding_endpoint(),
+                    cfg.embedding_model(),
+                    cfg.embedding_api_key(),
+                    static_cast<size_t>(cfg.embedding_dimensions())
+                );
+            }
+        }
 
         IndexStats stats = engine_->indexRepository(
             request->repo_id(),
@@ -113,6 +129,23 @@ grpc::Status EngineServiceImpl::IndexRepositoryStream(
 
     try {
         auto start_time = std::chrono::steady_clock::now();
+
+        // Apply per-request embedding configuration from the gRPC IndexConfig.
+        if (request->has_config()) {
+            const auto& cfg = request->config();
+            if (!cfg.embedding_provider().empty()) {
+                std::string provider = cfg.embedding_provider();
+                std::transform(provider.begin(), provider.end(), provider.begin(),
+                               [](unsigned char c) { return std::tolower(c); });
+                engine_->configureEmbedding(
+                    provider,
+                    cfg.embedding_endpoint(),
+                    cfg.embedding_model(),
+                    cfg.embedding_api_key(),
+                    static_cast<size_t>(cfg.embedding_dimensions())
+                );
+            }
+        }
 
         // gRPC ServerWriter::Write() is NOT thread-safe, but the engine's
         // repo_parser calls our progress callback from a thread-pool.

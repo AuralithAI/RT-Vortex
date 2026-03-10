@@ -38,6 +38,14 @@ constexpr const char* EMBED_BATCH_SIZE      = "embed_batch_size";
 constexpr const char* EMBED_CACHE_HIT_RATE  = "embed_cache_hit_rate";
 constexpr const char* EMBED_TOTAL_CALLS     = "embed_total_calls";
 
+// Embedding provider observability
+constexpr const char* EMBED_ACTIVE_BACKEND  = "embed_active_backend";   // 0=mock,1=onnx,2=http
+constexpr const char* EMBED_HTTP_REQUESTS   = "embed_http_requests";    // total API calls
+constexpr const char* EMBED_HTTP_ERRORS     = "embed_http_errors";      // failed API calls
+constexpr const char* EMBED_HTTP_TOKENS     = "embed_http_tokens_used"; // total tokens consumed
+constexpr const char* EMBED_HTTP_RATE_LIMITS = "embed_http_rate_limits"; // 429 responses
+constexpr const char* EMBED_HTTP_LATENCY_S  = "embed_http_latency_s";  // HTTP round-trip time
+
 // Search / retrieval
 constexpr const char* SEARCH_LATENCY_S      = "search_latency_s";
 constexpr const char* SEARCH_CHUNKS_RETURNED = "search_chunks_returned";

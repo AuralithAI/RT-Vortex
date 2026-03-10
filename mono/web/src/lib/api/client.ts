@@ -11,9 +11,12 @@ import type {
   ChatMessage,
   ChatSession,
   DetailedHealth,
+  EmbeddingCreditsResult,
   EmbeddingsConfig,
   EmbeddingsUpdateRequest,
   EmbeddingsUpdateResult,
+  EmbeddingTestRequest,
+  EmbeddingTestResult,
   IndexStatus,
   LLMBalanceResult,
   LLMConfigureRequest,
@@ -381,6 +384,18 @@ export const embeddings = {
   update: (data: EmbeddingsUpdateRequest) =>
     request<EmbeddingsUpdateResult>("/api/v1/embeddings/config", {
       method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  test: (data: EmbeddingTestRequest) =>
+    request<EmbeddingTestResult>("/api/v1/embeddings/test", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  credits: (data: { provider: string; endpoint?: string; api_key?: string }) =>
+    request<EmbeddingCreditsResult>("/api/v1/embeddings/credits", {
+      method: "POST",
       body: JSON.stringify(data),
     }),
 };

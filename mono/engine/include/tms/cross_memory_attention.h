@@ -11,9 +11,9 @@
  * 
  * Architecture:
  * ```
- *                   ┌─────────────────────────────────────────────┐
- *                   │         Cross-Memory Attention              │
- *                   │                                             │
+ *                   ┌────────────────────────────────────────────┐
+ *                   │         Cross-Memory Attention             │
+ *                   │                                            │
  *     Query ───────►│  ┌─────────┐  ┌─────────┐  ┌─────────┐     │
  *                   │  │ LTM KV  │  │ STM KV  │  │ MTM KV  │     │
  *                   │  │ Cache   │  │ Cache   │  │ Cache   │     │

@@ -285,6 +285,8 @@ func (s *Server) setupRouter() {
 			r.Route("/embeddings", func(r chi.Router) {
 				r.Get("/config", h.GetEmbeddingsConfig)
 				r.Put("/config", h.UpdateEmbeddingsConfig)
+				r.Post("/test", h.TestEmbeddingProvider)
+				r.Post("/credits", h.CheckEmbeddingCredits)
 			})
 
 			// VCS Platform Settings (per-user credentials stored in vault)
