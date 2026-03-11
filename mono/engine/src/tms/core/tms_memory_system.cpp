@@ -289,6 +289,18 @@ void TMSMemorySystem::ingestRepository(
     size_t files_processed = 0;
 
     // =========================================================================
+    // Clear existing KG data for this repo (once, before batches)
+    // =========================================================================
+    if (config_.knowledge_graph_enabled && kg_handle_) {
+        try {
+            kg_handle_->get().removeRepo(repo_id);
+            std::cerr << "[TMS] cleared existing KG data for repo " << repo_id << std::endl;
+        } catch (const std::exception& e) {
+            LOG_ERROR("[TMS] KG removeRepo failed: " + std::string(e.what()));
+        }
+    }
+
+    // =========================================================================
     // Phase 1–3: Batched parse → enrich → embed → store
     // =========================================================================
     for (size_t batch_idx = 0; batch_idx < num_batches; ++batch_idx) {
@@ -378,12 +390,12 @@ void TMSMemorySystem::ingestRepository(
         batch_progress(0.85f, "Batch " + std::to_string(batch_idx + 1) + " — storing in LTM...");
         ingestChunksWithEmbeddings(repo_id, chunks, embeddings);
 
-        // ── Knowledge Graph (per-batch append) ──────────────────────────
+        // ── Knowledge Graph (per-batch append — nodes + CONTAINS only) ────
         if (config_.knowledge_graph_enabled && kg_handle_) {
             try {
-                kg_handle_->get().buildFromChunks(repo_id, chunks);
+                kg_handle_->get().appendBatchChunks(repo_id, chunks);
             } catch (const std::exception& e) {
-                LOG_ERROR("[TMS] KG build failed (batch " + std::to_string(batch_idx + 1) + "): " + e.what());
+                LOG_ERROR("[TMS] KG append failed (batch " + std::to_string(batch_idx + 1) + "): " + e.what());
             }
         }
 
@@ -400,6 +412,22 @@ void TMSMemorySystem::ingestRepository(
         std::cerr << "[TMS] batch " << (batch_idx + 1) << " complete: "
                   << files_processed << "/" << total_files << " files, "
                   << total_chunks_ingested << " total chunks" << std::endl;
+    }
+
+    // =========================================================================
+    // Finalize KG cross-batch edges (IMPORTS, REFERENCES)
+    // =========================================================================
+    if (config_.knowledge_graph_enabled && kg_handle_) {
+        if (progress_callback) {
+            progress_callback(0.91f, "Finalizing knowledge graph edges...");
+        }
+        try {
+            kg_handle_->get().finalizeEdges(repo_id);
+            std::cerr << "[TMS] KG cross-batch edge finalization complete" << std::endl;
+        } catch (const std::exception& e) {
+            LOG_ERROR("[TMS] KG finalizeEdges failed: " + std::string(e.what()));
+            std::cerr << "[TMS] WARNING: KG edge finalization failed: " << e.what() << std::endl;
+        }
     }
 
     // =========================================================================

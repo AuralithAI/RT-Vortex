@@ -94,6 +94,27 @@ public:
                          const std::vector<tms::CodeChunk>& chunks);
 
     /**
+     * Append a batch of chunks to the graph without deleting existing data.
+     * Used during streaming batched ingestion.
+     *
+     * Steps:
+     *  1. INSERT OR REPLACE nodes for this batch
+     *  2. Infer intra-batch CONTAINS edges only (cheap, structural)
+     *
+     * Call finalizeEdges() after all batches are appended to infer
+     * cross-batch IMPORTS and REFERENCES edges.
+     */
+    void appendBatchChunks(const std::string& repo_id,
+                           const std::vector<tms::CodeChunk>& chunks);
+
+    /**
+     * Infer cross-batch IMPORTS and REFERENCES edges using SQL.
+     * Called once after all batches have been appended via appendBatchChunks().
+     * Operates entirely on already-persisted node data — no in-memory chunks needed.
+     */
+    void finalizeEdges(const std::string& repo_id);
+
+    /**
      * Associate a FAISS vector id with a KG node.
      * Called after addBatch() to link KG ↔ LTM.
      */
@@ -140,13 +161,17 @@ private:
     void prepareStatements();
     void finalizeStatements();
 
-    // Edge inference helpers
+    // Edge inference helpers (in-memory, per-batch)
     void inferContainsEdges(const std::string& repo_id,
                             const std::vector<tms::CodeChunk>& chunks);
     void inferImportsEdges(const std::string& repo_id,
                            const std::vector<tms::CodeChunk>& chunks);
     void inferReferenceEdges(const std::string& repo_id,
                              const std::vector<tms::CodeChunk>& chunks);
+
+    // Cross-batch edge inference (SQL-based, no in-memory chunks)
+    void inferImportsEdgesSQL(const std::string& repo_id);
+    void inferReferenceEdgesSQL(const std::string& repo_id);
 };
 
 } // namespace aipr

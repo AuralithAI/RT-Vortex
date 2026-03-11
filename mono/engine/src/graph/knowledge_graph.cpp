@@ -17,6 +17,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <nlohmann/json.hpp>
 
 namespace aipr {
 
@@ -96,6 +97,7 @@ void KnowledgeGraph::ensureSchema() {
         CREATE INDEX IF NOT EXISTS idx_nodes_repo ON kg_nodes(repo_id);
         CREATE INDEX IF NOT EXISTS idx_nodes_type ON kg_nodes(node_type);
         CREATE INDEX IF NOT EXISTS idx_nodes_file ON kg_nodes(file_path);
+        CREATE INDEX IF NOT EXISTS idx_nodes_name ON kg_nodes(name);
 
         CREATE TABLE IF NOT EXISTS kg_edges (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -217,6 +219,299 @@ void KnowledgeGraph::buildFromChunks(
 }
 
 // ── Edge inference ─────────────────────────────────────────────────────────
+
+// ── Batch-append (streaming ingestion) ─────────────────────────────────────
+
+void KnowledgeGraph::appendBatchChunks(
+    const std::string& repo_id,
+    const std::vector<tms::CodeChunk>& chunks)
+{
+    if (!db_) throw std::runtime_error("KG not open");
+    if (chunks.empty()) return;
+
+    exec("BEGIN TRANSACTION");
+
+    try {
+        // Insert nodes (INSERT OR REPLACE handles duplicates safely)
+        // Persist dependencies + symbols in the metadata column as JSON
+        // so cross-batch edge inference can use them later via SQL.
+        for (const auto& chunk : chunks) {
+            sqlite3_reset(stmt_insert_node_);
+            sqlite3_bind_text(stmt_insert_node_, 1, chunk.id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt_insert_node_, 2, chunk.type.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt_insert_node_, 3, chunk.name.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt_insert_node_, 4, chunk.file_path.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt_insert_node_, 5, chunk.language.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_int64(stmt_insert_node_, 6, -1);
+            sqlite3_bind_text(stmt_insert_node_, 7, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+
+            // Build metadata JSON with dependencies and symbols
+            if (!chunk.dependencies.empty() || !chunk.symbols.empty()) {
+                nlohmann::json meta;
+                if (!chunk.dependencies.empty())
+                    meta["deps"] = chunk.dependencies;
+                if (!chunk.symbols.empty())
+                    meta["syms"] = chunk.symbols;
+                std::string meta_str = meta.dump();
+                sqlite3_bind_text(stmt_insert_node_, 8, meta_str.c_str(), -1, SQLITE_TRANSIENT);
+            } else {
+                sqlite3_bind_null(stmt_insert_node_, 8);
+            }
+
+            int rc = sqlite3_step(stmt_insert_node_);
+            if (rc != SQLITE_DONE) {
+                throwOnSqlError(rc, db_, "insert node " + chunk.id);
+            }
+        }
+
+        // Only infer CONTAINS edges per-batch (cheap, intra-file structural)
+        inferContainsEdges(repo_id, chunks);
+
+        exec("COMMIT");
+
+    } catch (...) {
+        exec("ROLLBACK");
+        throw;
+    }
+
+    LOG_INFO("[KG] appended batch for repo=" + repo_id +
+             " nodes_in_batch=" + std::to_string(chunks.size()) +
+             " total_nodes=" + std::to_string(nodeCount(repo_id)));
+}
+
+// ── Finalize cross-batch edges ─────────────────────────────────────────────
+
+void KnowledgeGraph::finalizeEdges(const std::string& repo_id) {
+    if (!db_) throw std::runtime_error("KG not open");
+
+    LOG_INFO("[KG] finalizing cross-batch edges for repo=" + repo_id +
+             " (nodes=" + std::to_string(nodeCount(repo_id)) + ")");
+
+    inferImportsEdgesSQL(repo_id);
+    inferReferenceEdgesSQL(repo_id);
+
+    // Update metrics
+    metrics::Registry::instance().setGauge(
+        metrics::KG_NODES_TOTAL, static_cast<double>(nodeCount(repo_id)));
+    metrics::Registry::instance().setGauge(
+        metrics::KG_EDGES_TOTAL, static_cast<double>(edgeCount(repo_id)));
+
+    LOG_INFO("[KG] finalized graph for repo=" + repo_id +
+             " nodes=" + std::to_string(nodeCount(repo_id)) +
+             " edges=" + std::to_string(edgeCount(repo_id)));
+}
+
+// ── SQL-based cross-batch edge inference ───────────────────────────────────
+
+void KnowledgeGraph::inferImportsEdgesSQL(const std::string& repo_id) {
+    // Cross-batch IMPORTS inference using dependencies stored in node metadata.
+    // Each node's metadata JSON may contain a "deps" array of import paths.
+    // We match each dependency against file_path suffixes of file_summary nodes
+    // (or any node) in the same repo to create IMPORTS edges.
+
+    LOG_INFO("[KG] inferring cross-batch IMPORTS edges via SQL...");
+
+    // Step 1: Load all nodes that have dependencies in their metadata
+    const char* sql_with_deps =
+        "SELECT id, file_path, metadata FROM kg_nodes "
+        "WHERE repo_id = ? AND metadata IS NOT NULL AND metadata LIKE '%deps%'";
+
+    sqlite3_stmt* stmt_deps = nullptr;
+    int rc = sqlite3_prepare_v2(db_, sql_with_deps, -1, &stmt_deps, nullptr);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("[KG] failed to prepare deps query: " + std::string(sqlite3_errmsg(db_)));
+        return;
+    }
+    sqlite3_bind_text(stmt_deps, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    struct NodeWithDeps {
+        std::string id;
+        std::string file_path;
+        std::vector<std::string> deps;
+    };
+    std::vector<NodeWithDeps> nodes_with_deps;
+    while (sqlite3_step(stmt_deps) == SQLITE_ROW) {
+        auto id_ptr   = sqlite3_column_text(stmt_deps, 0);
+        auto fp_ptr   = sqlite3_column_text(stmt_deps, 1);
+        auto meta_ptr = sqlite3_column_text(stmt_deps, 2);
+        if (!id_ptr || !meta_ptr) continue;
+
+        try {
+            auto meta = nlohmann::json::parse(reinterpret_cast<const char*>(meta_ptr));
+            if (meta.contains("deps") && meta["deps"].is_array()) {
+                NodeWithDeps n;
+                n.id = reinterpret_cast<const char*>(id_ptr);
+                n.file_path = fp_ptr ? reinterpret_cast<const char*>(fp_ptr) : "";
+                for (const auto& d : meta["deps"]) {
+                    if (d.is_string()) n.deps.push_back(d.get<std::string>());
+                }
+                if (!n.deps.empty()) nodes_with_deps.push_back(std::move(n));
+            }
+        } catch (...) {
+            // Skip nodes with malformed metadata
+        }
+    }
+    sqlite3_finalize(stmt_deps);
+
+    LOG_INFO("[KG] found " + std::to_string(nodes_with_deps.size()) +
+             " nodes with dependencies for IMPORTS inference");
+
+    if (nodes_with_deps.empty()) return;
+
+    // Step 2: Build file_path → representative node_id map from DB
+    // Prefer file_summary nodes, fall back to first node per file
+    const char* sql_files =
+        "SELECT id, file_path, node_type FROM kg_nodes "
+        "WHERE repo_id = ? AND file_path IS NOT NULL "
+        "ORDER BY CASE WHEN node_type = 'file_summary' THEN 0 ELSE 1 END";
+
+    sqlite3_stmt* stmt_files = nullptr;
+    rc = sqlite3_prepare_v2(db_, sql_files, -1, &stmt_files, nullptr);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("[KG] failed to prepare files query: " + std::string(sqlite3_errmsg(db_)));
+        return;
+    }
+    sqlite3_bind_text(stmt_files, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    std::unordered_map<std::string, std::string> file_to_node;
+    while (sqlite3_step(stmt_files) == SQLITE_ROW) {
+        auto id_ptr = sqlite3_column_text(stmt_files, 0);
+        auto fp_ptr = sqlite3_column_text(stmt_files, 1);
+        if (!id_ptr || !fp_ptr) continue;
+        std::string fp = reinterpret_cast<const char*>(fp_ptr);
+        // Only keep the first entry per file_path (file_summary preferred due to ORDER BY)
+        if (file_to_node.find(fp) == file_to_node.end()) {
+            file_to_node[fp] = reinterpret_cast<const char*>(id_ptr);
+        }
+    }
+    sqlite3_finalize(stmt_files);
+
+    // Step 3: For each node's dependencies, match against file paths (suffix match)
+    exec("BEGIN TRANSACTION");
+    size_t edges_added = 0;
+
+    try {
+        for (const auto& node : nodes_with_deps) {
+            for (const auto& dep : node.deps) {
+                if (dep.empty()) continue;
+                for (const auto& [fp, nid] : file_to_node) {
+                    // Suffix match: "utils.h" matches "src/utils.h"
+                    if (fp.size() >= dep.size() &&
+                        fp.compare(fp.size() - dep.size(), dep.size(), dep) == 0) {
+                        sqlite3_reset(stmt_insert_edge_);
+                        sqlite3_bind_text(stmt_insert_edge_, 1, node.id.c_str(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_text(stmt_insert_edge_, 2, nid.c_str(), -1, SQLITE_TRANSIENT);
+                        sqlite3_bind_text(stmt_insert_edge_, 3, "IMPORTS", -1, SQLITE_STATIC);
+                        sqlite3_bind_double(stmt_insert_edge_, 4, 1.0);
+                        sqlite3_bind_text(stmt_insert_edge_, 5, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+                        sqlite3_step(stmt_insert_edge_);
+                        ++edges_added;
+                        break;  // one edge per (node, dep) pair
+                    }
+                }
+            }
+        }
+        exec("COMMIT");
+    } catch (...) {
+        exec("ROLLBACK");
+        throw;
+    }
+
+    LOG_INFO("[KG] added " + std::to_string(edges_added) + " cross-batch IMPORTS edges");
+}
+
+void KnowledgeGraph::inferReferenceEdgesSQL(const std::string& repo_id) {
+    // Cross-batch REFERENCES via SQL:
+    // For each unique (name, node_type) that looks like a symbol definition
+    // (function, class, method, struct, enum, interface), find other nodes
+    // in the same repo whose file_path differs and whose name matches.
+    // This catches cross-file symbol usage/calls.
+
+    LOG_INFO("[KG] inferring cross-batch REFERENCES edges via SQL...");
+
+    // Step 1: Get all "defining" nodes (functions, classes, etc.) with names >= 4 chars
+    const char* sql_defs =
+        "SELECT id, name, file_path FROM kg_nodes "
+        "WHERE repo_id = ? "
+        "AND node_type IN ('function', 'class', 'method', 'struct', 'enum', 'interface') "
+        "AND LENGTH(name) >= 4";
+
+    sqlite3_stmt* stmt_defs = nullptr;
+    int rc = sqlite3_prepare_v2(db_, sql_defs, -1, &stmt_defs, nullptr);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("[KG] failed to prepare defs query: " + std::string(sqlite3_errmsg(db_)));
+        return;
+    }
+    sqlite3_bind_text(stmt_defs, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    struct DefNode {
+        std::string id;
+        std::string name;
+        std::string file_path;
+    };
+    std::vector<DefNode> defs;
+    while (sqlite3_step(stmt_defs) == SQLITE_ROW) {
+        DefNode d;
+        d.id        = reinterpret_cast<const char*>(sqlite3_column_text(stmt_defs, 0));
+        d.name      = reinterpret_cast<const char*>(sqlite3_column_text(stmt_defs, 1));
+        auto fp     = sqlite3_column_text(stmt_defs, 2);
+        d.file_path = fp ? reinterpret_cast<const char*>(fp) : "";
+        defs.push_back(std::move(d));
+    }
+    sqlite3_finalize(stmt_defs);
+
+    LOG_INFO("[KG] found " + std::to_string(defs.size()) + " defining symbols for cross-ref");
+
+    if (defs.empty()) return;
+
+    // For each defining symbol, find nodes in OTHER files that have
+    // the same name (exact match on name — catches usages/calls).
+    // We batch this into a single large transaction.
+    const char* sql_refs =
+        "SELECT id FROM kg_nodes "
+        "WHERE repo_id = ? AND name = ? AND file_path != ? AND id != ?";
+
+    sqlite3_stmt* stmt_refs = nullptr;
+    rc = sqlite3_prepare_v2(db_, sql_refs, -1, &stmt_refs, nullptr);
+    if (rc != SQLITE_OK) {
+        LOG_ERROR("[KG] failed to prepare refs query: " + std::string(sqlite3_errmsg(db_)));
+        return;
+    }
+
+    exec("BEGIN TRANSACTION");
+    size_t edges_added = 0;
+
+    try {
+        for (const auto& def : defs) {
+            sqlite3_reset(stmt_refs);
+            sqlite3_bind_text(stmt_refs, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt_refs, 2, def.name.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt_refs, 3, def.file_path.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt_refs, 4, def.id.c_str(), -1, SQLITE_TRANSIENT);
+
+            while (sqlite3_step(stmt_refs) == SQLITE_ROW) {
+                auto ref_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt_refs, 0));
+
+                sqlite3_reset(stmt_insert_edge_);
+                sqlite3_bind_text(stmt_insert_edge_, 1, ref_id, -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(stmt_insert_edge_, 2, def.id.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(stmt_insert_edge_, 3, "REFERENCES", -1, SQLITE_STATIC);
+                sqlite3_bind_double(stmt_insert_edge_, 4, 0.5);
+                sqlite3_bind_text(stmt_insert_edge_, 5, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_step(stmt_insert_edge_);
+                ++edges_added;
+            }
+        }
+        exec("COMMIT");
+    } catch (...) {
+        exec("ROLLBACK");
+        throw;
+    }
+
+    sqlite3_finalize(stmt_refs);
+
+    LOG_INFO("[KG] added " + std::to_string(edges_added) + " cross-batch REFERENCES edges");
+}
 
 void KnowledgeGraph::inferContainsEdges(
     const std::string& repo_id,
