@@ -132,7 +132,10 @@ func (s *Service) runFullIndex(jobID string, req FullIndexRequest) {
 
 	s.updateJobProgress(jobID, JobStateRunning, 5, "cloning", "Initializing indexing pipeline", "", 0, 0, -1)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	// Large repos (100K+ files, millions of chunks) can take many hours to
+	// embed.  Use a 24-hour deadline so the streaming RPC isn't killed early.
+	// The real guard is job cancellation, not this timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 24*time.Hour)
 	defer cancel()
 
 	// Use streaming RPC for real-time progress from the C++ engine
@@ -242,7 +245,7 @@ func (s *Service) runIncrementalIndex(jobID string, req IncrementalIndexRequest)
 
 	s.updateJobProgress(jobID, JobStateRunning, 10, "scanning", "Starting incremental index", "", 0, 0, -1)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 
 	result, err := s.engineClient.IncrementalIndex(ctx, req.RepoID, req.ChangedFiles, req.BaseCommit, req.HeadCommit)

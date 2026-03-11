@@ -246,9 +246,7 @@ type IndexStats struct {
 
 // IndexRepository triggers a full repository indexing on the C++ engine.
 func (c *Client) IndexRepository(ctx context.Context, repoID, repoPath string, cfg IndexConfig) (*IndexResult, error) {
-	// Indexing can be very long-running — use a generous timeout.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
+	// Caller controls the deadline (service.go sets 24h for full index).
 
 	resp, err := c.stub().IndexRepository(ctx, &pb.IndexRequest{
 		RepoId:   repoID,
@@ -298,8 +296,7 @@ type ProgressFunc func(update IndexProgressUpdate)
 // The onProgress callback is invoked for each update from the engine.
 // This method blocks until indexing completes or fails.
 func (c *Client) IndexRepositoryStream(ctx context.Context, repoID, repoPath string, cfg IndexConfig, onProgress ProgressFunc) (*IndexResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-	defer cancel()
+	// Caller controls the deadline (service.go sets 24h for full index).
 
 	stream, err := c.stub().IndexRepositoryStream(ctx, &pb.IndexRequest{
 		RepoId:   repoID,
@@ -378,8 +375,7 @@ func (c *Client) IndexRepositoryStream(ctx context.Context, repoID, repoPath str
 
 // IncrementalIndex updates an existing index with changed files.
 func (c *Client) IncrementalIndex(ctx context.Context, repoID string, changedFiles []string, baseCommit, headCommit string) (*IndexResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
+	// Caller controls the deadline (service.go sets 2h for incremental).
 
 	resp, err := c.stub().IncrementalIndex(ctx, &pb.IncrementalIndexRequest{
 		RepoId:       repoID,
