@@ -62,6 +62,12 @@ struct EmbeddingConfig {
     std::string tokenizer_path;
     bool use_gpu = false;
     int gpu_device_id = 0;
+    int onnx_intra_op_threads = 0;  // 0 = auto (cores / num_workers)
+    
+    // Parallel embedding workers (ONNX only)
+    // Each worker owns its own ONNX session and runs on separate threads.
+    // 0 = auto-detect based on CPU cores (cores / 4, clamped to [1, 8]).
+    int num_parallel_workers = 0;
     
     // Batching
     int batch_size = 100;           // Embeddings per API call
@@ -229,6 +235,10 @@ private:
     // Backend implementation (pimpl)
     class BackendImpl;
     std::unique_ptr<BackendImpl> backend_;
+    
+    // Parallel ONNX worker pool (each has its own session)
+    std::vector<std::unique_ptr<BackendImpl>> worker_pool_;
+    int num_workers_ = 1;
     
     // Cache
     class EmbeddingCache;

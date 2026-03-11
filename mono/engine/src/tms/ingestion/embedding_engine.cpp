@@ -19,6 +19,7 @@
 #include <functional>
 #include <unordered_map>
 #include <thread>
+#include <future>
 #include <nlohmann/json.hpp>
 
 #ifdef AIPR_HAS_ONNX
@@ -360,12 +361,15 @@ private:
             ort_env_ = std::make_unique<Ort::Env>(ORT_LOGGING_LEVEL_WARNING, "rtvortex-embed");
 
             Ort::SessionOptions session_opts;
-            session_opts.SetIntraOpNumThreads(4);
+            int intra_threads = config_.onnx_intra_op_threads > 0
+                                    ? config_.onnx_intra_op_threads : 4;
+            session_opts.SetIntraOpNumThreads(intra_threads);
             session_opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
 
             ort_session_ = std::make_unique<Ort::Session>(*ort_env_, config_.onnx_model_path.c_str(), session_opts);
 
-            std::cerr << "[EMBED] ONNX Runtime initialized: " << config_.onnx_model_path << std::endl;
+            std::cerr << "[EMBED] ONNX Runtime initialized: " << config_.onnx_model_path
+                      << " (intra_threads=" << intra_threads << ")" << std::endl;
             std::cerr << "[EMBED] Embedding dimension: " << config_.embedding_dimension << std::endl;
             return true;
         } catch (const Ort::Exception& e) {
@@ -884,11 +888,58 @@ private:
 
 EmbeddingEngine::EmbeddingEngine(const EmbeddingConfig& config)
     : config_(config) {
-    backend_ = std::make_unique<BackendImpl>(config);
+    // Determine number of parallel workers for ONNX backend
+    num_workers_ = 1;
+    if (config.backend == EmbeddingBackend::ONNX_RUNTIME) {
+        int hw_cores = static_cast<int>(std::thread::hardware_concurrency());
+        if (hw_cores <= 0) hw_cores = 4;
+
+        if (config.num_parallel_workers > 0) {
+            num_workers_ = config.num_parallel_workers;
+        } else {
+            // Auto: cores / 4, clamped to [1, 8]
+            num_workers_ = std::max(1, std::min(hw_cores / 4, 8));
+        }
+
+        // Compute intra-op threads per worker so total ≈ hw_cores
+        int intra_threads = config.onnx_intra_op_threads;
+        if (intra_threads <= 0) {
+            intra_threads = std::max(2, hw_cores / num_workers_);
+        }
+
+        // Create a mutable config copy with tuned thread count
+        EmbeddingConfig worker_config = config;
+        worker_config.onnx_intra_op_threads = intra_threads;
+
+        std::cerr << "[EMBED] Parallel ONNX workers: " << num_workers_
+                  << " × " << intra_threads << " intra-op threads"
+                  << " (hw_cores=" << hw_cores << ")" << std::endl;
+
+        // Primary backend (also used for single-text embed)
+        backend_ = std::make_unique<BackendImpl>(worker_config);
+
+        // Additional worker backends
+        for (int i = 1; i < num_workers_; ++i) {
+            auto worker = std::make_unique<BackendImpl>(worker_config);
+            worker_pool_.push_back(std::move(worker));
+        }
+    } else {
+        backend_ = std::make_unique<BackendImpl>(config);
+    }
+
     cache_ = std::make_unique<EmbeddingCache>(config.cache_size);
     rate_limiter_ = std::make_unique<RateLimiter>(
         config.max_requests_per_minute, config.max_tokens_per_minute);
+    
     bool ok = backend_->initialize();
+
+    // Initialize worker pool backends
+    for (auto& worker : worker_pool_) {
+        bool wok = worker->initialize();
+        if (!wok) {
+            std::cerr << "[EMBED] WARNING: Worker backend failed to initialize" << std::endl;
+        }
+    }
 
     // Only report MiniLM as ready when the ONNX backend actually loaded
     // successfully (model file found, tokenizer parsed, session created).
@@ -992,33 +1043,132 @@ BatchEmbeddingResult EmbeddingEngine::embedBatch(
         }
     }
 
-    for (size_t offset = 0; offset < uncached_texts.size();
-         offset += static_cast<size_t>(config_.batch_size)) {
-        size_t end_idx = std::min(offset + static_cast<size_t>(config_.batch_size),
-                                  uncached_texts.size());
-        std::vector<std::string> batch(uncached_texts.begin() + offset,
-                                        uncached_texts.begin() + end_idx);
-        try {
-            auto batch_embs = backend_->embedBatch(batch);
-            for (size_t j = 0; j < batch_embs.size(); ++j) {
-                size_t orig_idx = uncached_indices[offset + j];
-                result.embeddings[orig_idx] = batch_embs[j];
-                result.successful_count++;
-                if (config_.enable_cache) {
-                    cache_->put(computeHash(uncached_texts[offset + j]), batch_embs[j]);
+    // Collect all backends (primary + workers) for parallel dispatch
+    std::vector<BackendImpl*> backends;
+    backends.push_back(backend_.get());
+    for (auto& w : worker_pool_) {
+        if (w && w->isInitialized()) {
+            backends.push_back(w.get());
+        }
+    }
+    const int active_workers = static_cast<int>(backends.size());
+
+    if (active_workers <= 1 || uncached_texts.size() < 64) {
+        // ── Sequential path (single worker or small batch) ──────────────
+        for (size_t offset = 0; offset < uncached_texts.size();
+             offset += static_cast<size_t>(config_.batch_size)) {
+            size_t end_idx = std::min(offset + static_cast<size_t>(config_.batch_size),
+                                      uncached_texts.size());
+            std::vector<std::string> batch(uncached_texts.begin() + offset,
+                                            uncached_texts.begin() + end_idx);
+            try {
+                auto batch_embs = backend_->embedBatch(batch);
+                for (size_t j = 0; j < batch_embs.size(); ++j) {
+                    size_t orig_idx = uncached_indices[offset + j];
+                    result.embeddings[orig_idx] = batch_embs[j];
+                    result.successful_count++;
+                    if (config_.enable_cache) {
+                        cache_->put(computeHash(uncached_texts[offset + j]), batch_embs[j]);
+                    }
+                }
+            } catch (const std::exception& e) {
+                for (size_t j = 0; j < batch.size(); ++j) {
+                    size_t orig_idx = uncached_indices[offset + j];
+                    result.errors[orig_idx] = e.what();
+                    result.failed_count++;
                 }
             }
-        } catch (const std::exception& e) {
-            for (size_t j = 0; j < batch.size(); ++j) {
-                size_t orig_idx = uncached_indices[offset + j];
-                result.errors[orig_idx] = e.what();
-                result.failed_count++;
+
+            if (progress) {
+                int completed = static_cast<int>(std::min(offset + batch.size(), uncached_texts.size()));
+                progress(completed, static_cast<int>(uncached_texts.size()), "Embedding...");
             }
         }
+    } else {
+        // ── Parallel path: split uncached texts across workers ──────────
+        //
+        // Each worker gets a contiguous slice of uncached_texts.
+        // Workers run concurrently via std::async, each calling
+        // its own ONNX session (thread-safe since sessions are separate).
+        //
+        size_t total_uncached = uncached_texts.size();
+        size_t per_worker = (total_uncached + active_workers - 1) / active_workers;
 
-        if (progress) {
-            int completed = static_cast<int>(std::min(offset + batch.size(), uncached_texts.size()));
-            progress(completed, static_cast<int>(uncached_texts.size()), "Embedding...");
+        struct WorkerResult {
+            std::vector<std::vector<float>> embeddings;
+            std::vector<std::string> errors;  // per-item error (empty = ok)
+        };
+
+        std::vector<std::future<WorkerResult>> futures;
+        std::atomic<size_t> global_completed{0};
+
+        for (int w = 0; w < active_workers; ++w) {
+            size_t w_start = w * per_worker;
+            size_t w_end = std::min(w_start + per_worker, total_uncached);
+            if (w_start >= total_uncached) break;
+
+            BackendImpl* be = backends[w];
+            int batch_sz = config_.batch_size;
+
+            futures.push_back(std::async(std::launch::async,
+                [be, &uncached_texts, w_start, w_end, batch_sz,
+                 &global_completed, &progress, total_uncached]() -> WorkerResult {
+                    WorkerResult wr;
+                    size_t slice_size = w_end - w_start;
+                    wr.embeddings.reserve(slice_size);
+                    wr.errors.resize(slice_size);
+
+                    for (size_t offset = 0; offset < slice_size;
+                         offset += static_cast<size_t>(batch_sz)) {
+                        size_t end_idx = std::min(offset + static_cast<size_t>(batch_sz),
+                                                  slice_size);
+                        std::vector<std::string> batch(
+                            uncached_texts.begin() + static_cast<long>(w_start + offset),
+                            uncached_texts.begin() + static_cast<long>(w_start + end_idx));
+                        try {
+                            auto batch_embs = be->embedBatch(batch);
+                            for (auto& emb : batch_embs) {
+                                wr.embeddings.push_back(std::move(emb));
+                            }
+                        } catch (const std::exception& e) {
+                            // Fill failed items
+                            for (size_t j = 0; j < batch.size(); ++j) {
+                                wr.embeddings.push_back({});
+                                wr.errors[offset + j] = e.what();
+                            }
+                        }
+
+                        size_t done = global_completed.fetch_add(batch.size()) + batch.size();
+                        if (progress) {
+                            progress(static_cast<int>(done),
+                                     static_cast<int>(total_uncached),
+                                     "Embedding...");
+                        }
+                    }
+                    return wr;
+                }));
+        }
+
+        // Gather results from all workers
+        size_t global_offset = 0;
+        for (auto& fut : futures) {
+            auto wr = fut.get();
+            for (size_t j = 0; j < wr.embeddings.size(); ++j) {
+                size_t orig_idx = uncached_indices[global_offset + j];
+                if (wr.errors[j].empty() && !wr.embeddings[j].empty()) {
+                    result.embeddings[orig_idx] = std::move(wr.embeddings[j]);
+                    result.successful_count++;
+                    if (config_.enable_cache) {
+                        cache_->put(computeHash(uncached_texts[global_offset + j]),
+                                    result.embeddings[orig_idx]);
+                    }
+                } else {
+                    result.errors[orig_idx] = wr.errors[j].empty()
+                        ? "empty embedding" : wr.errors[j];
+                    result.failed_count++;
+                }
+            }
+            global_offset += wr.embeddings.size();
         }
     }
 
