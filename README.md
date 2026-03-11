@@ -214,51 +214,6 @@ make server    # builds into rt_home/bin/RTVortexGo
 | `coder/websocket` | WebSocket support |
 | `prometheus/client_golang` | Metrics export |
 
-## Repository Structure
-
-```
-RT-AI-PR-Reviewer/
-├── Makefile                    # Unified build controller
-├── mono/
-│   ├── engine/                 # C++ indexing/retrieval engine (gRPC server)
-│   ├── server-go/              # Go API server (RTVortexGo)
-│   │   ├── cmd/rtvortex-server/  # Entry point (main.go)
-│   │   ├── internal/
-│   │   │   ├── api/            # HTTP handlers (32+ endpoints)
-│   │   │   ├── auth/           # JWT + OAuth2 (6 providers)
-│   │   │   ├── audit/          # Security audit logging
-│   │   │   ├── config/         # XML config parser
-│   │   │   ├── crypto/         # AES-256-GCM token encryption
-│   │   │   ├── engine/         # gRPC client + connection pool
-│   │   │   ├── llm/            # OpenAI, Anthropic, Ollama + SSE streaming
-│   │   │   ├── metrics/        # Prometheus counters/histograms/gauges
-│   │   │   ├── review/         # 12-step review pipeline
-│   │   │   ├── server/         # Chi router + middleware wiring
-│   │   │   ├── session/        # Redis sessions + rate limiting
-│   │   │   ├── store/          # PostgreSQL repositories
-│   │   │   ├── vcs/            # GitHub, GitLab, Bitbucket, Azure DevOps
-│   │   │   └── ws/             # WebSocket hub + handler
-│   │   ├── api/                # OpenAPI 3.0 spec (embedded)
-│   │   └── db/sql/             # PostgreSQL schema scripts
-│   ├── cli/                    # Command-line interface
-│   ├── sdks/                   # Client SDKs
-│   ├── config/                 # Configuration templates
-│   │   ├── rtserverprops.xml   # Server configuration
-│   │   ├── vcsplatforms.xml    # Platform OAuth config
-│   │   └── certificates/       # TLS certificates (dev)
-│   └── proto/                  # gRPC protocol definitions
-│
-├── rt_home/                    # Build output (created by make)
-├── docs/
-│   ├── architecture.md         # System architecture
-│   ├── go-server-architecture.md # Go server internals
-│   └── setup.md                # Setup, CI/CD, distribution
-│
-├── .github/workflows/          # CI/CD workflows
-├── LICENSE                     # Apache 2.0
-└── README.md                   # This file
-```
-
 ## Make Targets
 
 | Target | Description |
