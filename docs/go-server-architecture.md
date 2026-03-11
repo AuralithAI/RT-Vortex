@@ -290,6 +290,40 @@ Each platform client implements:
 - Events include: step name, index, total, status, message, metadata
 - Connections are auto-cleaned on disconnect
 
+## Repository Management
+
+The Go server includes a web UI for managing repository indexing.
+
+### Indexing Modes
+
+| Action | Proto Field (`index_action`) | Behavior |
+|--------|------------------------------|----------|
+| **Index** | `INDEX` | Clone repo (if needed) and build full index |
+| **Reindex** | `REINDEX` | Re-embed existing local clone without re-cloning |
+| **Reclone** | `RECLONE` | Delete local clone, fresh `git clone`, and reindex |
+
+### Branch Listing
+
+`GET /api/v1/repos/{id}/branches` runs `git ls-remote` against the repo's clone URL
+and returns all remote branch names. The Web UI renders these in a dropdown so users
+can select which branch to index.
+
+### Metrics Dashboard
+
+The Web UI streams real-time engine metrics via Server-Sent Events:
+
+```
+Browser                  Go Server              C++ Engine
+  │   GET /metrics/sse     │   StreamMetrics()    │
+  │ ◀────────────────────  │ ◀─────────────────── │
+  │   event: metrics       │   (1s poll, gRPC)    │
+  │   data: {json}         │                      │
+  │                        │                      │
+```
+
+Displayed metrics include: FAISS index status, MiniLM model readiness,
+embedding backend type, confidence gate scores, and LLM avoidance rate.
+
 ## Token Encryption
 
 OAuth tokens (access + refresh) are encrypted at rest using AES-256-GCM:

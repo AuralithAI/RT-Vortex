@@ -84,3 +84,18 @@ onnx_model_path: models/all-MiniLM-L6-v2.onnx
 
 # Path to the ONNX tokenizer file
 onnx_tokenizer_path: models/tokenizer.json
+
+# Number of parallel ONNX sessions for embedding.
+# 0 = auto (cores / 4, max 8). Each session gets its own thread pool.
+# Increase for throughput on high-core-count machines; decrease to limit RAM.
+onnx_parallel_workers: 0
+
+# Intra-op thread count per ONNX session.
+# 0 = auto (cores / workers). Controls SIMD parallelism within each session.
+onnx_intra_op_threads: 0
+
+# --- Ingestion ---------------------------------------------------------------
+# Number of files processed per batch during repository ingestion.
+# Lower values reduce peak RAM; higher values reduce overhead.
+# Default: 5000. For machines with <16 GB RAM, try 2000.
+ingest_batch_size: 5000

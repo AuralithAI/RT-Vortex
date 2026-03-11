@@ -44,18 +44,36 @@ Clients (Webhooks, CLI, Web UI, SDKs)
 
 ## Features
 
+### Core Platform
 - **Platform Agnostic**: GitHub, GitLab, Bitbucket, and Azure DevOps (cloud & self-hosted)
 - **CI/CD Integration**: GitHub Actions, GitLab CI, Jenkins, Bitbucket Pipelines, Azure Pipelines
 - **High Performance**: C++ engine for code indexing and analysis via gRPC
 - **LLM Powered**: OpenAI, Anthropic, and Ollama with SSE streaming support
 - **Multi-Cloud Storage**: Local, AWS S3, GCS, Azure Blob, OCI Object Storage, MinIO
 - **Real-Time Updates**: WebSocket progress streaming for review status
-- **Observability**: Prometheus metrics, structured logging, health checks
 - **Security**: AES-256-GCM token encryption, JWT auth, OAuth2 (6 providers), rate limiting
 - **Self-Hostable**: Deploy on your infrastructure with full control
 - **TLS/mTLS Support**: Secure gRPC communication with included dev certificates
 - **API Documentation**: Full OpenAPI 3.0 spec at `/api/v1/docs/openapi.yaml`
 - **Unified Configuration**: XML configs (`rtserverprops.xml` + `vcsplatforms.xml`) drive both components
+
+### Ingestion Pipeline (TMS)
+- **Batched Streaming**: Processes repositories in 5,000-file batches — indexes 130 GB / 9.5M-chunk repos at ~5 GB RSS
+- **Parallel ONNX Embedding**: Multiple ONNX sessions run concurrently (auto-tunes to `cores/4` workers), saturating all available CPU cores
+- **Hierarchical Chunking**: File-summary chunks with structural context (module path, imports, exports) for better retrieval
+- **Knowledge Graph**: SQLite-backed IMPORTS / CALLS / CONTAINS edge graph extracted from parsed code
+- **Memory Accounts**: Classifies chunks into dev / ops / security / history accounts for targeted retrieval
+- **Confidence Gate**: Zero-LLM fast path — high-confidence retrievals skip the LLM round-trip entirely
+
+### Observability
+- **Prometheus Metrics**: 20+ counters, histograms, and gauges across both components
+- **Real-Time Metrics Dashboard**: Live engine metrics (FAISS status, MiniLM readiness, embedding throughput, LLM avoidance rate) via SSE
+- **Structured Logging**: JSON-structured logs with request tracing
+
+### Repository Management
+- **Web UI**: Index / reindex / reclone controls with branch selector and confirmation dialogs
+- **Three Indexing Modes**: `index` (first-time clone + index), `reindex` (re-embed existing clone), `reclone` (fresh clone + reindex)
+- **Branch Targeting**: Select any remote branch for indexing via `git ls-remote`
 
 ## Prerequisites
 
@@ -302,6 +320,9 @@ The Go server exposes 32+ endpoints at port 8080. Full OpenAPI spec at `/api/v1/
 | `/api/v1/reviews/{id}` | GET | Get review result |
 | `/api/v1/reviews/{id}/ws` | GET | WebSocket review progress |
 | `/api/v1/repos/{id}/index` | POST | Trigger repository indexing |
+| `/api/v1/repos/{id}/branches` | GET | List remote branches (`git ls-remote`) |
+| `/api/v1/repos/{id}/reindex` | POST | Re-embed existing local clone |
+| `/api/v1/repos/{id}/reclone` | POST | Fresh clone + reindex |
 | `/api/v1/webhooks/github` | POST | GitHub webhook receiver |
 | `/api/v1/webhooks/gitlab` | POST | GitLab webhook receiver |
 | `/api/v1/webhooks/bitbucket` | POST | Bitbucket webhook receiver |

@@ -492,6 +492,76 @@ The Go server exports 16 metrics at `GET /metrics`:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+### Ingestion Pipeline
+
+Repository indexing uses a **batched streaming architecture** to handle repositories
+of any size without exhausting system memory.
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                   ingestRepository() — Batched Pipeline              │
+│                                                                      │
+│  Phase 0: listFiles()                                                │
+│  ─────────────────                                                   │
+│  walkDirectory() → filter by extensions/excludes/size                │
+│  Output: vector<string> of file paths (lightweight, ~few MB)         │
+│                                                                      │
+│  Split into batches of 5,000 files                                   │
+│                                                                      │
+│  ┌─── For each batch ────────────────────────────────────────────┐   │
+│  │                                                               │   │
+│  │  Phase 1: parseFiles()                                        │   │
+│  │  ─ tree-sitter AST parsing (8 languages)                      │   │
+│  │  ─ fallback line-based chunking (~512 tokens/chunk)           │   │
+│  │  ─ import/dependency extraction                               │   │
+│  │                                                               │   │
+│  │  Phase 2: Enrich                                              │   │
+│  │  ─ HierarchyBuilder: file summaries + structural prefixes     │   │
+│  │  ─ MemoryAccountClassifier: dev/ops/security/history tags     │   │
+│  │                                                               │   │
+│  │  Phase 3: embedChunks() — Parallel ONNX Workers               │   │
+│  │  ─ N workers (auto: cores/4), each with own ONNX session      │   │
+│  │  ─ MiniLM-L6-v2 (384-dim), mini-batch of 32 per inference     │   │
+│  │  ─ Embedding cache (content-hash → vector) avoids recompute   │   │
+│  │                                                               │   │
+│  │  Phase 4: Store                                               │   │
+│  │  ─ ingestChunksWithEmbeddings() → FAISS IVF index (LTM)       │   │
+│  │  ─ KnowledgeGraph::buildFromChunks() → SQLite graph           │   │
+│  │                                                               │   │
+│  │  Release: clear + shrink_to_fit → return memory to OS         │   │
+│  └───────────────────────────────────────────────────────────────┘   │
+│                                                                      │
+│  Phase 5: save() → persist FAISS index + MTM + cache to disk         │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Why batched?** A 130 GB repository can produce 200K+ files and 9.5M chunks. Loading all
+chunks + embeddings simultaneously would consume ~61 GB of RAM. The batched pipeline keeps
+peak working memory under ~3-6 GB regardless of repository size.
+
+**Parallel embedding:** Each ONNX worker runs its own inference session on separate CPU
+threads. On a 24-core machine this auto-configures to 6 workers × 4 intra-op threads,
+fully saturating all cores during embedding.
+
+| Repository Size | Files | Chunks | Batches | Peak RSS | Est. Time |
+|-----------------|-------|--------|---------|----------|-----------|
+| Small (<1 GB) | <5K | <100K | 1 | ~1 GB | <5 min |
+| Medium (1-10 GB) | 5-50K | 100K-1M | 1-10 | ~2-4 GB | 5-30 min |
+| Large (10-50 GB) | 50-200K | 1-5M | 10-40 | ~4-6 GB | 1-4 hrs |
+| Massive (50+ GB) | 200K+ | 5-10M+ | 40+ | ~5-8 GB | 4-10 hrs |
+
+### Indexing Modes
+
+The engine supports three indexing actions via the `index_action` proto field:
+
+| Action | Behavior | Use Case |
+|--------|----------|----------|
+| `index` | Clone + full index (default) | First-time indexing |
+| `reindex` | Re-parse existing local clone | Code changed, re-embed |
+| `reclone` | Delete clone, re-clone, full index | Branch switch, corrupted clone |
+
+The Go server's Web UI exposes these as buttons with a branch selector dropdown.
+
 ### Build Dependencies (C++)
 
 | Dependency | Purpose | How Resolved |

@@ -8,6 +8,7 @@ Complete guide for local development, CI/CD integration, and distribution.
 2. [Quick Start](#quick-start)
 3. [Building](#building)
 4. [Configuration](#configuration)
+   - [Ingestion Pipeline Tuning](#ingestion-pipeline-tuning)
 5. [Platform Authentication](#platform-authentication)
 6. [CI/CD Integration](#cicd-integration)
 7. [Distribution Package](#distribution-package)
@@ -292,6 +293,29 @@ All XML attributes support `${ENV_VAR:default}` syntax. Key variables:
 | `GITHUB_CLIENT_ID` | GitHub OAuth app client ID |
 | `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret |
 | `GITHUB_WEBHOOK_SECRET` | GitHub webhook HMAC secret |
+
+### Ingestion Pipeline Tuning
+
+The C++ engine processes repositories in batches to control memory usage. These
+settings live in `config/default.yml`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ingest_batch_size` | `5000` | Files per batch. Lower = less RAM, more overhead |
+| `onnx_parallel_workers` | `0` (auto) | Parallel ONNX sessions. Auto = `cores / 4`, max 8 |
+| `onnx_intra_op_threads` | `0` (auto) | Threads per ONNX session. Auto = `cores / workers` |
+
+**Sizing guidelines:**
+
+| Machine | RAM | Cores | Recommended `ingest_batch_size` | Expected Peak RSS |
+|---------|-----|-------|---------------------------------|-------------------|
+| Small | 8 GB | 4 | 1000 | ~2 GB |
+| Medium | 32 GB | 8 | 5000 | ~4 GB |
+| Large | 64 GB | 24 | 5000 | ~6 GB |
+| Massive | 128 GB+ | 48+ | 10000 | ~10 GB |
+
+The engine auto-detects hardware and picks sensible worker counts.
+For most deployments, the defaults work well.
 
 ---
 
