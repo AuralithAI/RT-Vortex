@@ -228,143 +228,191 @@ void TMSMemorySystem::ingestRepository(
     }
     
     auto start_time = std::chrono::steady_clock::now();
-    
-    // Phase 1: Parse repository
-    if (progress_callback) {
-        progress_callback(0.0f, "Parsing repository...");
-    }
-    
-    std::vector<CodeChunk> chunks;
-    {
-        ParseProgressCallback parser_progress = nullptr;
-        if (progress_callback) {
-            parser_progress = [&](float p, const std::string& file, const std::string& status) {
-                progress_callback(p * 0.3f, "Parsing: " + file);  // 0-30%
-            };
-        }
-        
-        chunks = repo_parser_->parseRepository(repo_path, parser_progress);
-    }
-    
-    std::cerr << "[TMS] ingestRepository: repo_path=" << repo_path
-              << " chunks=" << chunks.size() << std::endl;
 
-    if (chunks.empty()) {
+    // =========================================================================
+    // Phase 0: Discover files (lightweight — only collects paths, no content)
+    // =========================================================================
+    if (progress_callback) {
+        progress_callback(0.0f, "Scanning repository...");
+    }
+
+    auto all_files = repo_parser_->listFiles(repo_path);
+    const size_t total_files = all_files.size();
+
+    std::cerr << "[TMS] ingestRepository: repo_path=" << repo_path
+              << " total_files=" << total_files << std::endl;
+
+    if (total_files == 0) {
         if (progress_callback) {
-            progress_callback(1.0f, "No chunks extracted");
+            progress_callback(1.0f, "No indexable files found");
         }
         return;
     }
-    
-    // Hierarchical context enrichment (feature-gated)
+
+    // =========================================================================
+    // Determine batch size based on available system memory.
+    // Goal: keep peak RSS well under physical RAM.
+    //
+    // Rough per-file memory budget:
+    //   ~45 chunks/file (9.5M chunks / 208K files from logs)
+    //   ~5 KB per chunk (content + metadata + embedding vector)
+    //   ~225 KB per file in aggregate
+    //
+    // For a 2 GB working-set budget → ~8000 files per batch.
+    // Use 5000 as a conservative default, capped at total_files.
+    // =========================================================================
+    constexpr size_t kDefaultBatchFiles = 5000;
+    const size_t batch_file_count = std::min(kDefaultBatchFiles, total_files);
+    const size_t num_batches = (total_files + batch_file_count - 1) / batch_file_count;
+
+    std::cerr << "[TMS] batched ingestion: " << num_batches << " batches, "
+              << batch_file_count << " files/batch" << std::endl;
+
+    // Build hierarchy manifest once (it's small — just dependency graph metadata)
+    std::unique_ptr<aipr::HierarchyBuilder> hierarchy_builder;
+    aipr::RepoManifest manifest;
     if (config_.hierarchy_enabled) {
         if (progress_callback) {
-            progress_callback(0.25f, "Building hierarchy...");
+            progress_callback(0.02f, "Building hierarchy manifest...");
         }
-
-        aipr::HierarchyBuilder hierarchy_builder;
-        aipr::RepoManifest manifest = hierarchy_builder.buildRepoManifest(repo_path);
-
-        // Generate file-summary chunks and append them
-        std::unordered_map<std::string, std::vector<CodeChunk*>> chunks_by_file;
-        for (auto& c : chunks) {
-            chunks_by_file[c.file_path].push_back(&c);
-        }
-
-        for (auto& [file_path, file_chunk_ptrs] : chunks_by_file) {
-            std::vector<CodeChunk> fc;
-            fc.reserve(file_chunk_ptrs.size());
-            for (auto* p : file_chunk_ptrs) fc.push_back(*p);
-
-            std::string lang = fc.empty() ? "" : fc[0].language;
-            auto summary = hierarchy_builder.summarizeFile(file_path, lang, fc, manifest);
-            chunks.push_back(hierarchy_builder.buildFileSummaryChunk(summary));
-        }
-
-        // Apply structural prefixes to all chunks
-        aipr::ChunkPrefixer prefixer;
-        size_t prefixed = prefixer.applyPrefixes(chunks, repo_id, manifest);
-        LOG_INFO("[TMS] hierarchy: prefixed " + std::to_string(prefixed) +
-                 " chunks, avg_prefix=" + std::to_string(static_cast<int>(prefixer.avgPrefixLength())) + " chars");
+        hierarchy_builder = std::make_unique<aipr::HierarchyBuilder>();
+        manifest = hierarchy_builder->buildRepoManifest(repo_path);
     }
 
-    // Phase 2: Compute embeddings
-    if (progress_callback) {
-        progress_callback(0.3f, "Computing embeddings...");
-    }
-    
-    std::vector<std::vector<float>> embeddings;
-    {
-        EmbeddingProgressCallback embed_progress = nullptr;
-        if (progress_callback) {
-            embed_progress = [&](int completed, int total, const std::string& status) {
-                float p = 0.3f + (static_cast<float>(completed) / total) * 0.5f;  // 30-80%
-                progress_callback(p, "Embedding: " + std::to_string(completed) + "/" + std::to_string(total));
-            };
-        }
-        
-        auto result = embedding_engine_->embedChunks(chunks, embed_progress);
-        embeddings = std::move(result.embeddings);
-    }
-    
-    // Memory account classification (feature-gated)
+    // Classify chunks into memory accounts if enabled
+    std::unique_ptr<MemoryAccountClassifier> classifier;
     if (config_.memory_accounts_enabled) {
-        if (progress_callback) {
-            progress_callback(0.78f, "Classifying memory accounts...");
-        }
-        MemoryAccountClassifier classifier;
-        for (auto& chunk : chunks) {
-            auto account = classifier.classify(chunk);
-            chunk.tags.push_back(MemoryAccountClassifier::accountTag(account));
-        }
-        LOG_INFO("[TMS] account tags applied to " + std::to_string(chunks.size()) + " chunks");
+        classifier = std::make_unique<MemoryAccountClassifier>();
     }
 
-    // Phase 3: Store in LTM
-    if (progress_callback) {
-        progress_callback(0.8f, "Storing in LTM...");
-    }
-    
-    ingestChunksWithEmbeddings(repo_id, chunks, embeddings);
+    size_t total_chunks_ingested = 0;
+    size_t files_processed = 0;
 
-    // Knowledge Graph build (feature-gated)
-    if (config_.knowledge_graph_enabled && kg_handle_) {
-        if (progress_callback) {
-            progress_callback(0.9f, "Building knowledge graph...");
+    // =========================================================================
+    // Phase 1–3: Batched parse → enrich → embed → store
+    // =========================================================================
+    for (size_t batch_idx = 0; batch_idx < num_batches; ++batch_idx) {
+        size_t start_file = batch_idx * batch_file_count;
+        size_t end_file = std::min(start_file + batch_file_count, total_files);
+        size_t batch_size = end_file - start_file;
+
+        float batch_start_pct = static_cast<float>(start_file) / total_files;
+        float batch_end_pct   = static_cast<float>(end_file) / total_files;
+        // Map 0-1 batch range into 0.05-0.90 overall progress
+        auto batch_progress = [&](float local_pct, const std::string& msg) {
+            if (progress_callback) {
+                float global_pct = 0.05f + (batch_start_pct + local_pct * (batch_end_pct - batch_start_pct)) * 0.85f;
+                progress_callback(global_pct, msg);
+            }
+        };
+
+        batch_progress(0.0f, "Batch " + std::to_string(batch_idx + 1) + "/" +
+                             std::to_string(num_batches) + " — parsing " +
+                             std::to_string(batch_size) + " files...");
+
+        // Slice file list for this batch
+        std::vector<std::string> batch_files(all_files.begin() + start_file,
+                                             all_files.begin() + end_file);
+
+        // ── Parse this batch ────────────────────────────────────────────
+        std::vector<CodeChunk> chunks = repo_parser_->parseFiles(repo_path, batch_files);
+
+        if (chunks.empty()) {
+            files_processed += batch_size;
+            continue;
         }
-        try {
-            kg_handle_->get().buildFromChunks(repo_id, chunks);
-            LOG_INFO("[TMS] knowledge graph built for " + repo_id);
-        } catch (const std::exception& e) {
-            LOG_ERROR("[TMS] KG build failed: " + std::string(e.what()));
+
+        std::cerr << "[TMS] batch " << (batch_idx + 1) << "/" << num_batches
+                  << ": " << chunks.size() << " chunks from " << batch_size
+                  << " files" << std::endl;
+
+        // ── Hierarchy enrichment (per-batch) ────────────────────────────
+        if (hierarchy_builder) {
+            batch_progress(0.15f, "Batch " + std::to_string(batch_idx + 1) + " — enriching hierarchy...");
+
+            std::unordered_map<std::string, std::vector<CodeChunk*>> chunks_by_file;
+            for (auto& c : chunks) {
+                chunks_by_file[c.file_path].push_back(&c);
+            }
+            for (auto& [file_path, file_chunk_ptrs] : chunks_by_file) {
+                std::vector<CodeChunk> fc;
+                fc.reserve(file_chunk_ptrs.size());
+                for (auto* p : file_chunk_ptrs) fc.push_back(*p);
+
+                std::string lang = fc.empty() ? "" : fc[0].language;
+                auto summary = hierarchy_builder->summarizeFile(file_path, lang, fc, manifest);
+                chunks.push_back(hierarchy_builder->buildFileSummaryChunk(summary));
+            }
+
+            aipr::ChunkPrefixer prefixer;
+            prefixer.applyPrefixes(chunks, repo_id, manifest);
         }
+
+        // ── Memory account classification ───────────────────────────────
+        if (classifier) {
+            for (auto& chunk : chunks) {
+                auto account = classifier->classify(chunk);
+                chunk.tags.push_back(MemoryAccountClassifier::accountTag(account));
+            }
+        }
+
+        // ── Embed this batch ────────────────────────────────────────────
+        batch_progress(0.3f, "Batch " + std::to_string(batch_idx + 1) + " — computing embeddings...");
+
+        std::vector<std::vector<float>> embeddings;
+        {
+            EmbeddingProgressCallback embed_progress = nullptr;
+            if (progress_callback) {
+                embed_progress = [&](int completed, int total, const std::string& /*status*/) {
+                    float local = 0.3f + (static_cast<float>(completed) / std::max(total, 1)) * 0.5f;
+                    batch_progress(local, "Batch " + std::to_string(batch_idx + 1) +
+                                          " — embedding " + std::to_string(completed) +
+                                          "/" + std::to_string(total));
+                };
+            }
+            auto result = embedding_engine_->embedChunks(chunks, embed_progress);
+            embeddings = std::move(result.embeddings);
+        }
+
+        // ── Store in LTM ────────────────────────────────────────────────
+        batch_progress(0.85f, "Batch " + std::to_string(batch_idx + 1) + " — storing in LTM...");
+        ingestChunksWithEmbeddings(repo_id, chunks, embeddings);
+
+        // ── Knowledge Graph (per-batch append) ──────────────────────────
+        if (config_.knowledge_graph_enabled && kg_handle_) {
+            try {
+                kg_handle_->get().buildFromChunks(repo_id, chunks);
+            } catch (const std::exception& e) {
+                LOG_ERROR("[TMS] KG build failed (batch " + std::to_string(batch_idx + 1) + "): " + e.what());
+            }
+        }
+
+        total_chunks_ingested += chunks.size();
+        files_processed += batch_size;
+
+        // ── Release batch memory ────────────────────────────────────────
+        // Explicit clear + shrink to return memory to the OS immediately.
+        chunks.clear();
+        chunks.shrink_to_fit();
+        embeddings.clear();
+        embeddings.shrink_to_fit();
+
+        std::cerr << "[TMS] batch " << (batch_idx + 1) << " complete: "
+                  << files_processed << "/" << total_files << " files, "
+                  << total_chunks_ingested << " total chunks" << std::endl;
     }
 
-    // Pre-compute canonical STM entries from ingested embeddings.
-    // This warms the canonical cache so that the confidence gate can
-    // fire on exact or near-exact matches without an LLM round-trip.
-    if (config_.confidence_gate_enabled && !embeddings.empty()) {
-        std::vector<RetrievedChunk> seed_results;
-        seed_results.reserve(embeddings.size());
-        for (size_t i = 0; i < chunks.size() && i < embeddings.size(); ++i) {
-            RetrievedChunk rc;
-            rc.chunk = chunks[i];
-            rc.similarity_score = 1.0f;  // self-similarity
-            seed_results.push_back(std::move(rc));
-        }
-        stm_->precomputeCanonical(seed_results, embeddings,
-                                  config_.confidence_gate_threshold);
-        LOG_INFO("[TMS] canonical STM warmed with " +
-                 std::to_string(seed_results.size()) + " entries");
-    }
-    
+    // =========================================================================
     // Phase 4: Persist to disk
+    // =========================================================================
     if (progress_callback) {
-        progress_callback(0.95f, "Persisting index to disk...");
+        progress_callback(0.92f, "Persisting index to disk...");
     }
     try {
         save();
-        std::cerr << "[TMS] Index persisted to disk after ingesting " << chunks.size() << " chunks" << std::endl;
+        std::cerr << "[TMS] Index persisted to disk after ingesting "
+                  << total_chunks_ingested << " chunks from "
+                  << total_files << " files" << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "[TMS] WARNING: Failed to persist index: " << e.what() << std::endl;
     }
@@ -372,12 +420,20 @@ void TMSMemorySystem::ingestRepository(
     // Done
     auto end_time = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
-    
+
     if (progress_callback) {
         std::ostringstream status;
-        status << "Ingested " << chunks.size() << " chunks in " << duration.count() << "s";
+        status << "Ingested " << total_chunks_ingested << " chunks from "
+               << total_files << " files in " << duration.count() << "s"
+               << " (" << num_batches << " batches)";
         progress_callback(1.0f, status.str());
     }
+
+    LOG_INFO("[TMS] ingestRepository complete: " +
+             std::to_string(total_chunks_ingested) + " chunks, " +
+             std::to_string(total_files) + " files, " +
+             std::to_string(duration.count()) + "s, " +
+             std::to_string(num_batches) + " batches");
 }
 
 void TMSMemorySystem::ingestChunks(

@@ -412,6 +412,10 @@ std::vector<CodeChunk> RepoParser::parseRepository(
     return all_chunks;
 }
 
+std::vector<std::string> RepoParser::listFiles(const std::string& repo_path) {
+    return walkDirectory(repo_path);
+}
+
 std::vector<CodeChunk> RepoParser::parseFiles(
     const std::string& repo_root,
     const std::vector<std::string>& file_paths

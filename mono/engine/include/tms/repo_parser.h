@@ -212,6 +212,12 @@ public:
         const std::string& repo_root,
         const std::vector<std::string>& file_paths
     );
+
+    /**
+     * List all indexable files in a repository (without parsing).
+     * Uses the same filter rules as parseRepository.
+     */
+    std::vector<std::string> listFiles(const std::string& repo_path);
     
     /**
      * Parse a single file
