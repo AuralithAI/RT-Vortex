@@ -116,7 +116,7 @@ export default function ReposPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => triggerIndex.mutate(repo.id)}
+                          onClick={() => triggerIndex.mutate({ repoId: repo.id, action: "reindex" })}
                           disabled={triggerIndex.isPending}
                           title="Re-index"
                         >

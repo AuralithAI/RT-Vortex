@@ -103,21 +103,129 @@ nano rt_home/config/rtserverprops.xml   # Database, LLM, engine settings
 # Initialize database
 make db-install
 
-# Run both components
+# Run all three (engine + server + web dashboard)
 make run
 ```
 
-The `make` command builds both the C++ engine and Go server into the `rt_home/` output directory:
+The `make` command builds the C++ engine, Go server, and Next.js dashboard into the `rt_home/` output directory:
 
 ```
 rt_home/
 ├── bin/
-│   ├── rtvortex          ← C++ engine (gRPC, indexing, retrieval)
-│   └── RTVortexGo        ← Go API server (REST, webhooks, auth)
+│   ├── rtvortex          ← C++ engine (gRPC, port 50051)
+│   └── RTVortexGo        ← Go API server (REST, port 8080)
 ├── config/               ← XML configuration files + TLS certs
 ├── data/sql/             ← PostgreSQL schema scripts
-├── models/               ← ONNX model weights
+├── models/               ← ONNX model weights (all-MiniLM-L6-v2)
+├── swarm/                ← Python agent swarm (optional, `make swarm`)
+│   └── venv/             ← Isolated virtualenv
+├── webApps/dashboard/    ← Next.js production build (port 3000)
 └── temp/                 ← Logs + ephemeral scratch
+```
+
+## Build Targets
+
+There are five independently buildable components. Use the targets below to
+build them individually or all at once.
+
+| Target | What it builds | Output |
+|--------|---------------|--------|
+| `make` | Everything (engine + server + web + config + models) | `rt_home/` |
+| `make engine` | C++ engine (CMake → gRPC server binary) | `rt_home/bin/rtvortex` |
+| `make proto` | Regenerate all protobuf stubs (Go + Python) | `server-go/internal/engine/pb/`, `swarm/proto/` |
+| `make server` | Go API server (auto-runs `proto-go` first) | `rt_home/bin/RTVortexGo` |
+| `make build-web` | Next.js dashboard (production build) | `rt_home/webApps/dashboard/` |
+| `make swarm` | Python agent swarm (auto-runs `proto-python` first) | `rt_home/swarm/` |
+
+### Build order matters
+
+If you're building components individually (not using `make` which handles everything), follow this order:
+
+```
+1. make engine       ← must be first (builds protoc + the C++ engine)
+2. make proto        ← uses the protoc binary built in step 1
+3. make server       ← depends on generated Go proto stubs
+4. make build-web    ← independent, can run anytime
+5. make swarm        ← depends on generated Python proto stubs
+```
+
+> **Why engine first?** The `engine` target builds gRPC from source via CMake
+> FetchContent, which produces the `build/bin/protoc` binary. All proto generation
+> targets (`proto-go`, `proto-python`) use this protoc so both sides use the same
+> protobuf version.
+
+## Starting the System
+
+RTVortex has three runtime components. Start them in this order:
+
+### 1. C++ Engine (gRPC — port 50051)
+
+```bash
+make run-engine
+# or manually:
+RTVORTEX_HOME=rt_home rt_home/bin/rtvortex
+```
+
+The engine must be running before the Go server starts — the Go server connects
+to it via gRPC at startup to push configuration and check health.
+
+### 2. Go API Server (REST — port 8080)
+
+```bash
+make run-server
+# or manually:
+RTVORTEX_HOME=rt_home rt_home/bin/RTVortexGo
+```
+
+The Go server handles all external traffic: REST API, webhooks, OAuth2 login,
+WebSocket streaming, and LLM orchestration. It connects to PostgreSQL, Redis,
+and the C++ engine.
+
+### 3. Web Dashboard (Next.js — port 3000)
+
+```bash
+make run-web
+# or manually:
+cd rt_home/webApps/dashboard && HOSTNAME=0.0.0.0 PORT=3000 node server.js
+```
+
+The dashboard talks to the Go server's REST API. It provides the web UI for
+repository management, review history, indexing controls, and OAuth login.
+
+### 4. Agent Swarm (optional)
+
+The agent swarm is an **optional** component — the core review pipeline works
+without it. Agents handle async background tasks (automated fixes, follow-up
+analysis, etc.) via Redis Streams or HTTP polling.
+
+```bash
+make swarm   # one-time: installs into rt_home/swarm/venv
+RTVORTEX_HOME=rt_home rt_home/swarm/venv/bin/python -m rtvortex_swarm
+```
+
+The swarm connects to:
+- **C++ engine** (gRPC, port 50051) — for code search and embedding
+- **Go server** (HTTP, port 8080) — to pick up and report on tasks
+- **Redis** — for task queue streaming (falls back to polling if unavailable)
+
+You don't need to start the swarm unless you're using agentic features.
+
+### All-in-one
+
+```bash
+make run     # builds everything, starts engine → server → web (foreground)
+```
+
+### Quick reference
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Start order:  engine (1) → server (2) → web (3) → swarm (4)      │
+│                                                                     │
+│  Ports:        50051 (gRPC)    8080 (REST)    3000 (Web UI)        │
+│                                                                     │
+│  Environment:  RTVORTEX_HOME=rt_home  (required for all components)│
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Building the C++ Engine
@@ -214,20 +322,41 @@ make server    # builds into rt_home/bin/RTVortexGo
 | `coder/websocket` | WebSocket support |
 | `prometheus/client_golang` | Metrics export |
 
-## Make Targets
+## All Make Targets
 
 | Target | Description |
 |--------|-------------|
-| `make` | Build everything (C++ engine + Go server + config + models) |
+| **Build** | |
+| `make` | Build everything (engine + server + web + config + models) |
 | `make engine` | Build only the C++ engine |
-| `make server` | Build only the Go API server |
-| `make run` | Build and run both components |
-| `make run-engine` | Build and run only the engine |
-| `make run-server` | Build and run only the Go server |
-| `make test` | Run all tests (C++ + Go) |
-| `make db-install` | Create database + initialize schema |
+| `make server` | Build only the Go API server (runs `proto-go` first) |
+| `make build-web` | Build Next.js dashboard for production |
+| `make swarm` | Build Python agent swarm (runs `proto-python` first) |
+| `make proto` | Regenerate all protobuf stubs (Go + Python) |
+| `make models` | Download ONNX embedding model |
+| `make config` | Copy configuration files to `rt_home/` |
+| **Run** | |
+| `make run` | Build and run everything (engine + server + web) |
+| `make run-engine` | Build and run only the C++ engine |
+| `make run-server` | Build and run only the Go API server |
+| `make run-web` | Build and run the Next.js dashboard |
+| **Test** | |
+| `make test` | Run engine + server tests |
+| `make test-all` | Run all tests (engine + server + CLI + SDKs + web) |
+| `make test-web` | Run Next.js dashboard tests |
+| **Database** | |
+| `make db-install` | Build + create database + initialize schema |
+| `make db-create` | Create PostgreSQL role and database |
+| `make db-init` | Initialize schema tables |
+| **SDKs & CLI** | |
+| `make cli` | Install CLI in development mode |
+| `make sdks` | Install all SDKs (Python, Node.js, Java) |
+| `make build-sdks` | Build all SDK distributables |
+| **Utility** | |
 | `make clean` | Remove `rt_home/` |
+| `make clean-all` | Remove `rt_home/` + `build/` (CMake cache) |
 | `make status` | Show what's in `rt_home/` |
+| `make version` | Show version info |
 | `make help` | Show all targets |
 
 ## Configuration

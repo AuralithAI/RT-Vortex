@@ -104,8 +104,8 @@ export function IndexSizesChart({ latest }: IndexSizesChartProps) {
                 borderRadius: "var(--radius)",
                 fontSize: 12,
               }}
-              formatter={(value: number, _name: string, props: Record<string, unknown>) => {
-                const payload = (props as { payload?: { fullRepo?: string; sizeBytes?: number } }).payload;
+              formatter={(value, _name, props) => {
+                const payload = (props as unknown as { payload?: { fullRepo?: string; sizeBytes?: number } }).payload;
                 return [
                   formatBytes(payload?.sizeBytes ?? 0),
                   payload?.fullRepo ?? "",
