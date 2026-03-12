@@ -3219,6 +3219,126 @@ func (x *EngineMetricsSnapshot) GetKnowledgeGraphEdges() uint64 {
 	return 0
 }
 
+type FileContentRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RepoId        string                 `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`       // Repository identifier
+	FilePath      string                 `protobuf:"bytes,2,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"` // Path within the repository
+	Ref           string                 `protobuf:"bytes,3,opt,name=ref,proto3" json:"ref,omitempty"`                           // Git ref (branch, tag, commit); empty = HEAD
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileContentRequest) Reset() {
+	*x = FileContentRequest{}
+	mi := &file_engine_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileContentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileContentRequest) ProtoMessage() {}
+
+func (x *FileContentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileContentRequest.ProtoReflect.Descriptor instead.
+func (*FileContentRequest) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *FileContentRequest) GetRepoId() string {
+	if x != nil {
+		return x.RepoId
+	}
+	return ""
+}
+
+func (x *FileContentRequest) GetFilePath() string {
+	if x != nil {
+		return x.FilePath
+	}
+	return ""
+}
+
+func (x *FileContentRequest) GetRef() string {
+	if x != nil {
+		return x.Ref
+	}
+	return ""
+}
+
+type FileContentResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`                    // File content (UTF-8 text)
+	Encoding      string                 `protobuf:"bytes,2,opt,name=encoding,proto3" json:"encoding,omitempty"`                  // "utf-8" or "base64" for binary files
+	IsBinary      bool                   `protobuf:"varint,3,opt,name=is_binary,json=isBinary,proto3" json:"is_binary,omitempty"` // True if file was detected as binary
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileContentResponse) Reset() {
+	*x = FileContentResponse{}
+	mi := &file_engine_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileContentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileContentResponse) ProtoMessage() {}
+
+func (x *FileContentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileContentResponse.ProtoReflect.Descriptor instead.
+func (*FileContentResponse) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *FileContentResponse) GetContent() string {
+	if x != nil {
+		return x.Content
+	}
+	return ""
+}
+
+func (x *FileContentResponse) GetEncoding() string {
+	if x != nil {
+		return x.Encoding
+	}
+	return ""
+}
+
+func (x *FileContentResponse) GetIsBinary() bool {
+	if x != nil {
+		return x.IsBinary
+	}
+	return false
+}
+
 var File_engine_proto protoreflect.FileDescriptor
 
 const file_engine_proto_rawDesc = "" +
@@ -3517,7 +3637,15 @@ const file_engine_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2 .aipr.engine.v1.MetricValueProtoR\x05value:\x028\x01\x1aB\n" +
 	"\x14IndexSizesBytesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01*x\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\\\n" +
+	"\x12FileContentRequest\x12\x17\n" +
+	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12\x1b\n" +
+	"\tfile_path\x18\x02 \x01(\tR\bfilePath\x12\x10\n" +
+	"\x03ref\x18\x03 \x01(\tR\x03ref\"h\n" +
+	"\x13FileContentResponse\x12\x18\n" +
+	"\acontent\x18\x01 \x01(\tR\acontent\x12\x1a\n" +
+	"\bencoding\x18\x02 \x01(\tR\bencoding\x12\x1b\n" +
+	"\tis_binary\x18\x03 \x01(\bR\bisBinary*x\n" +
 	"\bSeverity\x12\x18\n" +
 	"\x14SEVERITY_UNSPECIFIED\x10\x00\x12\x11\n" +
 	"\rSEVERITY_INFO\x10\x01\x12\x14\n" +
@@ -3551,7 +3679,7 @@ const file_engine_proto_rawDesc = "" +
 	"\x16STORAGE_PROVIDER_AZURE\x10\x03\x12\x18\n" +
 	"\x14STORAGE_PROVIDER_OCI\x10\x04\x12\x1a\n" +
 	"\x16STORAGE_PROVIDER_MINIO\x10\x05\x12\x1b\n" +
-	"\x17STORAGE_PROVIDER_CUSTOM\x10\x062\x81\n" +
+	"\x17STORAGE_PROVIDER_CUSTOM\x10\x062\xdc\n" +
 	"\n" +
 	"\rEngineService\x12N\n" +
 	"\x0fIndexRepository\x12\x1c.aipr.engine.v1.IndexRequest\x1a\x1d.aipr.engine.v1.IndexResponse\x12\\\n" +
@@ -3566,7 +3694,8 @@ const file_engine_proto_rawDesc = "" +
 	"\rRunHeuristics\x12!.aipr.engine.v1.HeuristicsRequest\x1a\".aipr.engine.v1.HeuristicsResponse\x12_\n" +
 	"\x10ConfigureStorage\x12$.aipr.engine.v1.StorageConfigRequest\x1a%.aipr.engine.v1.StorageConfigResponse\x12V\n" +
 	"\vHealthCheck\x12\".aipr.engine.v1.HealthCheckRequest\x1a#.aipr.engine.v1.HealthCheckResponse\x12Y\n" +
-	"\x0eGetDiagnostics\x12\".aipr.engine.v1.DiagnosticsRequest\x1a#.aipr.engine.v1.DiagnosticsResponse\x12d\n" +
+	"\x0eGetDiagnostics\x12\".aipr.engine.v1.DiagnosticsRequest\x1a#.aipr.engine.v1.DiagnosticsResponse\x12Y\n" +
+	"\x0eGetFileContent\x12\".aipr.engine.v1.FileContentRequest\x1a#.aipr.engine.v1.FileContentResponse\x12d\n" +
 	"\x13StreamEngineMetrics\x12$.aipr.engine.v1.EngineMetricsRequest\x1a%.aipr.engine.v1.EngineMetricsSnapshot0\x01B^\n" +
 	"\x13ai.aipr.engine.grpcB\vEngineProtoP\x01Z8github.com/AuralithAI/rtvortex-server/internal/engine/pbb\x06proto3"
 
@@ -3583,7 +3712,7 @@ func file_engine_proto_rawDescGZIP() []byte {
 }
 
 var file_engine_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
+var file_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
 var file_engine_proto_goTypes = []any{
 	(Severity)(0),                    // 0: aipr.engine.v1.Severity
 	(CheckCategory)(0),               // 1: aipr.engine.v1.CheckCategory
@@ -3625,11 +3754,13 @@ var file_engine_proto_goTypes = []any{
 	(*MetricValueProto)(nil),         // 37: aipr.engine.v1.MetricValueProto
 	(*HistogramProto)(nil),           // 38: aipr.engine.v1.HistogramProto
 	(*EngineMetricsSnapshot)(nil),    // 39: aipr.engine.v1.EngineMetricsSnapshot
-	nil,                              // 40: aipr.engine.v1.IndexStats.FilesByLanguageEntry
-	nil,                              // 41: aipr.engine.v1.HealthCheckResponse.ComponentsEntry
-	nil,                              // 42: aipr.engine.v1.DiagnosticsResponse.ConfigEntry
-	nil,                              // 43: aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
-	nil,                              // 44: aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
+	(*FileContentRequest)(nil),       // 40: aipr.engine.v1.FileContentRequest
+	(*FileContentResponse)(nil),      // 41: aipr.engine.v1.FileContentResponse
+	nil,                              // 42: aipr.engine.v1.IndexStats.FilesByLanguageEntry
+	nil,                              // 43: aipr.engine.v1.HealthCheckResponse.ComponentsEntry
+	nil,                              // 44: aipr.engine.v1.DiagnosticsResponse.ConfigEntry
+	nil,                              // 45: aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
+	nil,                              // 46: aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
 }
 var file_engine_proto_depIdxs = []int32{
 	6,  // 0: aipr.engine.v1.IndexRequest.config:type_name -> aipr.engine.v1.IndexConfig
@@ -3637,7 +3768,7 @@ var file_engine_proto_depIdxs = []int32{
 	12, // 2: aipr.engine.v1.IndexResponse.stats:type_name -> aipr.engine.v1.IndexStats
 	12, // 3: aipr.engine.v1.IndexProgressUpdate.final_stats:type_name -> aipr.engine.v1.IndexStats
 	12, // 4: aipr.engine.v1.IndexStatsResponse.stats:type_name -> aipr.engine.v1.IndexStats
-	40, // 5: aipr.engine.v1.IndexStats.files_by_language:type_name -> aipr.engine.v1.IndexStats.FilesByLanguageEntry
+	42, // 5: aipr.engine.v1.IndexStats.files_by_language:type_name -> aipr.engine.v1.IndexStats.FilesByLanguageEntry
 	16, // 6: aipr.engine.v1.SearchRequest.config:type_name -> aipr.engine.v1.SearchConfig
 	18, // 7: aipr.engine.v1.SearchResponse.chunks:type_name -> aipr.engine.v1.ContextChunk
 	19, // 8: aipr.engine.v1.SearchResponse.metrics:type_name -> aipr.engine.v1.SearchMetrics
@@ -3648,15 +3779,15 @@ var file_engine_proto_depIdxs = []int32{
 	27, // 13: aipr.engine.v1.HeuristicsResponse.findings:type_name -> aipr.engine.v1.HeuristicFinding
 	1,  // 14: aipr.engine.v1.HeuristicFinding.category:type_name -> aipr.engine.v1.CheckCategory
 	0,  // 15: aipr.engine.v1.HeuristicFinding.severity:type_name -> aipr.engine.v1.Severity
-	41, // 16: aipr.engine.v1.HealthCheckResponse.components:type_name -> aipr.engine.v1.HealthCheckResponse.ComponentsEntry
+	43, // 16: aipr.engine.v1.HealthCheckResponse.components:type_name -> aipr.engine.v1.HealthCheckResponse.ComponentsEntry
 	32, // 17: aipr.engine.v1.DiagnosticsResponse.memory:type_name -> aipr.engine.v1.MemoryStats
 	33, // 18: aipr.engine.v1.DiagnosticsResponse.indices:type_name -> aipr.engine.v1.IndexInfo
-	42, // 19: aipr.engine.v1.DiagnosticsResponse.config:type_name -> aipr.engine.v1.DiagnosticsResponse.ConfigEntry
+	44, // 19: aipr.engine.v1.DiagnosticsResponse.config:type_name -> aipr.engine.v1.DiagnosticsResponse.ConfigEntry
 	3,  // 20: aipr.engine.v1.StorageConfigRequest.provider:type_name -> aipr.engine.v1.StorageProvider
 	4,  // 21: aipr.engine.v1.MetricValueProto.type:type_name -> aipr.engine.v1.MetricValueProto.MetricType
 	38, // 22: aipr.engine.v1.MetricValueProto.histogram:type_name -> aipr.engine.v1.HistogramProto
-	43, // 23: aipr.engine.v1.EngineMetricsSnapshot.metrics:type_name -> aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
-	44, // 24: aipr.engine.v1.EngineMetricsSnapshot.index_sizes_bytes:type_name -> aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
+	45, // 23: aipr.engine.v1.EngineMetricsSnapshot.metrics:type_name -> aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
+	46, // 24: aipr.engine.v1.EngineMetricsSnapshot.index_sizes_bytes:type_name -> aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
 	37, // 25: aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry.value:type_name -> aipr.engine.v1.MetricValueProto
 	5,  // 26: aipr.engine.v1.EngineService.IndexRepository:input_type -> aipr.engine.v1.IndexRequest
 	5,  // 27: aipr.engine.v1.EngineService.IndexRepositoryStream:input_type -> aipr.engine.v1.IndexRequest
@@ -3671,23 +3802,25 @@ var file_engine_proto_depIdxs = []int32{
 	34, // 36: aipr.engine.v1.EngineService.ConfigureStorage:input_type -> aipr.engine.v1.StorageConfigRequest
 	28, // 37: aipr.engine.v1.EngineService.HealthCheck:input_type -> aipr.engine.v1.HealthCheckRequest
 	30, // 38: aipr.engine.v1.EngineService.GetDiagnostics:input_type -> aipr.engine.v1.DiagnosticsRequest
-	36, // 39: aipr.engine.v1.EngineService.StreamEngineMetrics:input_type -> aipr.engine.v1.EngineMetricsRequest
-	8,  // 40: aipr.engine.v1.EngineService.IndexRepository:output_type -> aipr.engine.v1.IndexResponse
-	9,  // 41: aipr.engine.v1.EngineService.IndexRepositoryStream:output_type -> aipr.engine.v1.IndexProgressUpdate
-	8,  // 42: aipr.engine.v1.EngineService.IncrementalIndex:output_type -> aipr.engine.v1.IndexResponse
-	11, // 43: aipr.engine.v1.EngineService.GetIndexStats:output_type -> aipr.engine.v1.IndexStatsResponse
-	14, // 44: aipr.engine.v1.EngineService.DeleteIndex:output_type -> aipr.engine.v1.DeleteIndexResponse
-	17, // 45: aipr.engine.v1.EngineService.Search:output_type -> aipr.engine.v1.SearchResponse
-	18, // 46: aipr.engine.v1.EngineService.SearchStream:output_type -> aipr.engine.v1.ContextChunk
-	21, // 47: aipr.engine.v1.EngineService.BuildReviewContext:output_type -> aipr.engine.v1.ReviewContextResponse
-	22, // 48: aipr.engine.v1.EngineService.BuildReviewContextStream:output_type -> aipr.engine.v1.PREmbedProgressUpdate
-	26, // 49: aipr.engine.v1.EngineService.RunHeuristics:output_type -> aipr.engine.v1.HeuristicsResponse
-	35, // 50: aipr.engine.v1.EngineService.ConfigureStorage:output_type -> aipr.engine.v1.StorageConfigResponse
-	29, // 51: aipr.engine.v1.EngineService.HealthCheck:output_type -> aipr.engine.v1.HealthCheckResponse
-	31, // 52: aipr.engine.v1.EngineService.GetDiagnostics:output_type -> aipr.engine.v1.DiagnosticsResponse
-	39, // 53: aipr.engine.v1.EngineService.StreamEngineMetrics:output_type -> aipr.engine.v1.EngineMetricsSnapshot
-	40, // [40:54] is the sub-list for method output_type
-	26, // [26:40] is the sub-list for method input_type
+	40, // 39: aipr.engine.v1.EngineService.GetFileContent:input_type -> aipr.engine.v1.FileContentRequest
+	36, // 40: aipr.engine.v1.EngineService.StreamEngineMetrics:input_type -> aipr.engine.v1.EngineMetricsRequest
+	8,  // 41: aipr.engine.v1.EngineService.IndexRepository:output_type -> aipr.engine.v1.IndexResponse
+	9,  // 42: aipr.engine.v1.EngineService.IndexRepositoryStream:output_type -> aipr.engine.v1.IndexProgressUpdate
+	8,  // 43: aipr.engine.v1.EngineService.IncrementalIndex:output_type -> aipr.engine.v1.IndexResponse
+	11, // 44: aipr.engine.v1.EngineService.GetIndexStats:output_type -> aipr.engine.v1.IndexStatsResponse
+	14, // 45: aipr.engine.v1.EngineService.DeleteIndex:output_type -> aipr.engine.v1.DeleteIndexResponse
+	17, // 46: aipr.engine.v1.EngineService.Search:output_type -> aipr.engine.v1.SearchResponse
+	18, // 47: aipr.engine.v1.EngineService.SearchStream:output_type -> aipr.engine.v1.ContextChunk
+	21, // 48: aipr.engine.v1.EngineService.BuildReviewContext:output_type -> aipr.engine.v1.ReviewContextResponse
+	22, // 49: aipr.engine.v1.EngineService.BuildReviewContextStream:output_type -> aipr.engine.v1.PREmbedProgressUpdate
+	26, // 50: aipr.engine.v1.EngineService.RunHeuristics:output_type -> aipr.engine.v1.HeuristicsResponse
+	35, // 51: aipr.engine.v1.EngineService.ConfigureStorage:output_type -> aipr.engine.v1.StorageConfigResponse
+	29, // 52: aipr.engine.v1.EngineService.HealthCheck:output_type -> aipr.engine.v1.HealthCheckResponse
+	31, // 53: aipr.engine.v1.EngineService.GetDiagnostics:output_type -> aipr.engine.v1.DiagnosticsResponse
+	41, // 54: aipr.engine.v1.EngineService.GetFileContent:output_type -> aipr.engine.v1.FileContentResponse
+	39, // 55: aipr.engine.v1.EngineService.StreamEngineMetrics:output_type -> aipr.engine.v1.EngineMetricsSnapshot
+	41, // [41:56] is the sub-list for method output_type
+	26, // [26:41] is the sub-list for method input_type
 	26, // [26:26] is the sub-list for extension type_name
 	26, // [26:26] is the sub-list for extension extendee
 	0,  // [0:26] is the sub-list for field type_name
@@ -3704,7 +3837,7 @@ func file_engine_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_engine_proto_rawDesc), len(file_engine_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   40,
+			NumMessages:   42,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
