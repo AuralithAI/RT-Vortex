@@ -54,7 +54,6 @@ func (s *ELOService) RecordFeedback(ctx context.Context, agentID uuid.UUID, rati
 	_, err = s.db.Exec(ctx, `
 		UPDATE swarm_agents
 		SET elo_score = $1,
-		    tasks_done = tasks_done + 1,
 		    tasks_rated = tasks_rated + 1,
 		    avg_rating = $2
 		WHERE id = $3`,

@@ -494,13 +494,17 @@ func main() {
 	swarmTaskMgr := swarm.NewTaskManager(db.Pool, redisClient.Client(), swarmTeamMgr)
 	swarmLLMProxy := swarm.NewLLMProxy(llmRegistry)
 	swarmELO := swarm.NewELOService(db.Pool)
+	swarmWSHub := swarm.NewWSHub(wsHub)
+	swarmPRCreator := swarm.NewPRCreator(db.Pool, vcsResolver, swarmTaskMgr, swarmWSHub)
 
 	swarmHandler := &swarm.Handler{
-		AuthSvc:  swarmAuthSvc,
-		TaskMgr:  swarmTaskMgr,
-		TeamMgr:  swarmTeamMgr,
-		LLMProxy: swarmLLMProxy,
-		ELO:      swarmELO,
+		AuthSvc:   swarmAuthSvc,
+		TaskMgr:   swarmTaskMgr,
+		TeamMgr:   swarmTeamMgr,
+		LLMProxy:  swarmLLMProxy,
+		ELO:       swarmELO,
+		WS:        swarmWSHub,
+		PRCreator: swarmPRCreator,
 	}
 
 	// Start the swarm task assignment loop.

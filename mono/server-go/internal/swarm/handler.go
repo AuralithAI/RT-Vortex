@@ -1,6 +1,7 @@
 package swarm
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -15,12 +16,13 @@ import (
 
 // Handler holds all dependencies needed by swarm HTTP endpoints.
 type Handler struct {
-	AuthSvc  *swarmauth.Service
-	TaskMgr  *TaskManager
-	TeamMgr  *TeamManager
-	LLMProxy *LLMProxy
-	ELO      *ELOService
-	WS       *WSHub
+	AuthSvc   *swarmauth.Service
+	TaskMgr   *TaskManager
+	TeamMgr   *TeamManager
+	LLMProxy  *LLMProxy
+	ELO       *ELOService
+	WS        *WSHub
+	PRCreator *PRCreator
 }
 
 // ── Agent Auth endpoints ────────────────────────────────────────────────────
@@ -256,6 +258,14 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Increment tasks_done for all contributing agents (without a rating).
+	if h.ELO != nil {
+		agentIDs, _ := h.TaskMgr.AgentsForTask(r.Context(), taskID)
+		for _, agentID := range agentIDs {
+			_ = h.ELO.IncrementTasksDone(r.Context(), agentID)
+		}
+	}
+
 	// Emit WebSocket event.
 	if h.WS != nil {
 		h.WS.BroadcastTaskEvent("completed", taskID.String(), map[string]interface{}{
@@ -473,6 +483,14 @@ func (h *Handler) DiffAction(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 			return
 		}
+		// Trigger async PR creation.
+		if h.PRCreator != nil {
+			go func() {
+				if prErr := h.PRCreator.CreatePR(context.Background(), taskID); prErr != nil {
+					slog.Error("swarm: async PR creation failed", "task_id", taskID, "error", prErr)
+				}
+			}()
+		}
 	case "request_changes":
 		if err := h.TaskMgr.UpdateStatus(r.Context(), taskID, StatusImplementing); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
@@ -517,6 +535,30 @@ func (h *Handler) RateTaskUser(w http.ResponseWriter, r *http.Request) {
 	if err := h.TaskMgr.RateTask(r.Context(), taskID, body.Rating, body.Comment); err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
+	}
+
+	// Update ELO scores for all agents that worked on this task.
+	if h.ELO != nil {
+		task, tErr := h.TaskMgr.GetTask(r.Context(), taskID)
+		if tErr == nil {
+			// Use assigned agents from the task, or fall back to diff-contributing agents.
+			agentIDs := task.AssignedAgents
+			if len(agentIDs) == 0 {
+				agentIDs, _ = h.TaskMgr.AgentsForTask(r.Context(), taskID)
+			}
+			for _, agentID := range agentIDs {
+				if eloErr := h.ELO.RecordFeedback(r.Context(), agentID, body.Rating); eloErr != nil {
+					slog.Error("swarm: ELO update failed", "agent_id", agentID, "error", eloErr)
+				}
+			}
+			if len(agentIDs) > 0 {
+				slog.Info("swarm: ELO updated for task agents",
+					"task_id", taskID,
+					"rating", body.Rating,
+					"agents", len(agentIDs),
+				)
+			}
+		}
 	}
 
 	w.WriteHeader(http.StatusNoContent)

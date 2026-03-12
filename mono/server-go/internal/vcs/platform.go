@@ -75,6 +75,30 @@ type WebhookPayload struct {
 	RawBody   []byte       `json:"-"`
 }
 
+// ── Branch / Commit / PR Creation ───────────────────────────────────────────
+
+// CreateBranchRequest holds the parameters for creating a new branch.
+type CreateBranchRequest struct {
+	BranchName string `json:"branch_name"` // e.g. "swarm/task-<uuid>"
+	FromSHA    string `json:"from_sha"`    // the commit SHA to branch from
+}
+
+// FileCommit represents a single file to create or update in a commit.
+type FileCommit struct {
+	Path    string `json:"path"`    // file path relative to repo root
+	Content string `json:"content"` // full file content (base64 for binary)
+	Message string `json:"message"` // commit message for this file
+}
+
+// CreatePullRequestRequest holds the parameters for opening a new PR.
+type CreatePullRequestRequest struct {
+	Title        string `json:"title"`
+	Body         string `json:"body"`
+	SourceBranch string `json:"source_branch"` // head branch
+	TargetBranch string `json:"target_branch"` // base branch (e.g. "main")
+	Draft        bool   `json:"draft"`
+}
+
 // ── Platform Interface ──────────────────────────────────────────────────────
 
 // Platform defines the contract for interacting with a VCS provider.
@@ -103,6 +127,24 @@ type Platform interface {
 
 	// ValidateWebhookSignature verifies the webhook payload is authentic.
 	ValidateWebhookSignature(payload []byte, signature string) bool
+
+	// ── Phase 2: PR creation methods ────────────────────────────────
+
+	// CreateBranch creates a new branch from the given SHA.
+	CreateBranch(ctx context.Context, owner, repo string, req *CreateBranchRequest) error
+
+	// CreateOrUpdateFile creates or updates a file on a branch and commits it.
+	// Returns the new commit SHA.
+	CreateOrUpdateFile(ctx context.Context, owner, repo, branch string, file *FileCommit) (commitSHA string, err error)
+
+	// CreatePullRequest opens a new pull request and returns it.
+	CreatePullRequest(ctx context.Context, owner, repo string, req *CreatePullRequestRequest) (*PullRequest, error)
+
+	// GetDefaultBranch returns the repo's default branch name (e.g. "main").
+	GetDefaultBranch(ctx context.Context, owner, repo string) (string, error)
+
+	// GetBranchSHA returns the HEAD commit SHA for a branch.
+	GetBranchSHA(ctx context.Context, owner, repo, branch string) (string, error)
 }
 
 // ── Platform Registry ───────────────────────────────────────────────────────

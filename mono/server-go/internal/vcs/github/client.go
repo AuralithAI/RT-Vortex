@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -288,7 +289,142 @@ func (c *Client) ValidateWebhookSignature(payload []byte, signature string) bool
 	return hmac.Equal([]byte(sig), []byte(expected))
 }
 
-// ── HTTP Helper ─────────────────────────────────────────────────────────────
+// ── Branch / Commit / PR Creation (Phase 2) ─────────────────────────────────
+
+// GetDefaultBranch returns the default branch for a GitHub repo (e.g. "main").
+func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s", c.baseURL, owner, repo)
+	var repoInfo struct {
+		DefaultBranch string `json:"default_branch"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &repoInfo); err != nil {
+		return "", fmt.Errorf("get default branch: %w", err)
+	}
+	return repoInfo.DefaultBranch, nil
+}
+
+// GetBranchSHA returns the HEAD commit SHA for a branch.
+func (c *Client) GetBranchSHA(ctx context.Context, owner, repo, branch string) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/git/ref/heads/%s", c.baseURL, owner, repo, branch)
+	var ref struct {
+		Object struct {
+			SHA string `json:"sha"`
+		} `json:"object"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &ref); err != nil {
+		return "", fmt.Errorf("get branch SHA: %w", err)
+	}
+	return ref.Object.SHA, nil
+}
+
+// CreateBranch creates a new branch from the given commit SHA.
+func (c *Client) CreateBranch(ctx context.Context, owner, repo string, req *vcs.CreateBranchRequest) error {
+	url := fmt.Sprintf("%s/repos/%s/%s/git/refs", c.baseURL, owner, repo)
+	body := map[string]interface{}{
+		"ref": "refs/heads/" + req.BranchName,
+		"sha": req.FromSHA,
+	}
+	if err := c.doJSON(ctx, http.MethodPost, url, body, nil); err != nil {
+		return fmt.Errorf("create branch %s: %w", req.BranchName, err)
+	}
+	slog.Info("github: created branch", "owner", owner, "repo", repo, "branch", req.BranchName)
+	return nil
+}
+
+// CreateOrUpdateFile creates or updates a single file on a branch and commits it.
+// It uses the GitHub Contents API (PUT /repos/{owner}/{repo}/contents/{path}).
+// Returns the new commit SHA.
+func (c *Client) CreateOrUpdateFile(ctx context.Context, owner, repo, branch string, file *vcs.FileCommit) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/contents/%s", c.baseURL, owner, repo, file.Path)
+
+	body := map[string]interface{}{
+		"message": file.Message,
+		"content": base64Encode([]byte(file.Content)),
+		"branch":  branch,
+	}
+
+	// Check if the file already exists to get its SHA (required for updates).
+	existingContent, err := c.GetFileContent(ctx, owner, repo, file.Path, branch)
+	if err == nil && len(existingContent) > 0 {
+		// File exists — we need the blob SHA for the update.
+		blobSHA, shaErr := c.getFileBlobSHA(ctx, owner, repo, file.Path, branch)
+		if shaErr == nil && blobSHA != "" {
+			body["sha"] = blobSHA
+		}
+	}
+
+	var result struct {
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := c.doJSON(ctx, http.MethodPut, url, body, &result); err != nil {
+		return "", fmt.Errorf("create/update file %s: %w", file.Path, err)
+	}
+	slog.Info("github: committed file", "owner", owner, "repo", repo, "path", file.Path, "sha", result.Commit.SHA)
+	return result.Commit.SHA, nil
+}
+
+// getFileBlobSHA returns the blob SHA for a file on a branch (needed for updates).
+func (c *Client) getFileBlobSHA(ctx context.Context, owner, repo, path, ref string) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/contents/%s?ref=%s", c.baseURL, owner, repo, path, ref)
+	var info struct {
+		SHA string `json:"sha"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &info); err != nil {
+		return "", err
+	}
+	return info.SHA, nil
+}
+
+// CreatePullRequest opens a new pull request and returns it.
+func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, req *vcs.CreatePullRequestRequest) (*vcs.PullRequest, error) {
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls", c.baseURL, owner, repo)
+	body := map[string]interface{}{
+		"title": req.Title,
+		"body":  req.Body,
+		"head":  req.SourceBranch,
+		"base":  req.TargetBranch,
+		"draft": req.Draft,
+	}
+
+	var ghPR ghPullRequest
+	if err := c.doJSON(ctx, http.MethodPost, url, body, &ghPR); err != nil {
+		return nil, fmt.Errorf("create PR: %w", err)
+	}
+
+	state := ghPR.State
+	if ghPR.Merged {
+		state = "merged"
+	}
+
+	pr := &vcs.PullRequest{
+		ID:           fmt.Sprintf("%d", ghPR.Number),
+		Number:       ghPR.Number,
+		Title:        ghPR.Title,
+		Description:  ghPR.Body,
+		Author:       ghPR.User.Login,
+		SourceBranch: ghPR.Head.Ref,
+		TargetBranch: ghPR.Base.Ref,
+		State:        state,
+		URL:          ghPR.URL,
+		HeadSHA:      ghPR.Head.SHA,
+		BaseSHA:      ghPR.Base.SHA,
+		Draft:        ghPR.Draft,
+		CreatedAt:    ghPR.CreatedAt,
+		UpdatedAt:    ghPR.UpdatedAt,
+	}
+
+	slog.Info("github: created pull request", "owner", owner, "repo", repo, "number", ghPR.Number, "url", ghPR.URL)
+	return pr, nil
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+// base64Encode encodes bytes to a standard base64 string.
+func base64Encode(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
+}
 
 func (c *Client) doJSON(ctx context.Context, method, url string, body interface{}, dest interface{}) error {
 	var reqBody io.Reader

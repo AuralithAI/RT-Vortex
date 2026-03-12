@@ -378,6 +378,27 @@ func (m *TaskManager) RateTask(ctx context.Context, taskID uuid.UUID, rating int
 	return err
 }
 
+// AgentsForTask returns the unique agent IDs that submitted diffs for a task.
+func (m *TaskManager) AgentsForTask(ctx context.Context, taskID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := m.db.Query(ctx, `
+		SELECT DISTINCT agent_id FROM swarm_task_diffs
+		WHERE task_id = $1 AND agent_id IS NOT NULL`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("agents for task: %w", err)
+	}
+	defer rows.Close()
+
+	var agents []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		agents = append(agents, id)
+	}
+	return agents, nil
+}
+
 // ── Assign Loop ─────────────────────────────────────────────────────────────
 
 // assignLoop runs every AssignLoopInterval, reading from the Redis stream and
