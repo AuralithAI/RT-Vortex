@@ -20,6 +20,20 @@ const (
 	githubAPIBase = "https://api.github.com"
 )
 
+func init() {
+	vcs.RegisterFactory(vcs.PlatformGitHub, func(creds *vcs.ResolvedCreds) vcs.Platform {
+		baseURL := creds.APIURL
+		if baseURL == "" {
+			baseURL = creds.BaseURL
+		}
+		return New(Config{
+			Token:         creds.Token,
+			WebhookSecret: creds.WebhookSecret,
+			BaseURL:       baseURL,
+		})
+	})
+}
+
 // Config holds GitHub-specific configuration.
 type Config struct {
 	Token         string

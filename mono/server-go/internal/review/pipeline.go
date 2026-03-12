@@ -39,7 +39,7 @@ type Pipeline struct {
 	reviewRepo   *store.ReviewRepository
 	repoRepo     *store.RepositoryRepo
 	llmRegistry  *llm.Registry
-	vcsRegistry  *vcs.PlatformRegistry
+	vcsResolver  *vcs.Resolver
 	engineClient *engine.Client
 	config       PipelineConfig
 	onProgress   ProgressFunc
@@ -50,7 +50,7 @@ func NewPipeline(
 	reviewRepo *store.ReviewRepository,
 	repoRepo *store.RepositoryRepo,
 	llmRegistry *llm.Registry,
-	vcsRegistry *vcs.PlatformRegistry,
+	vcsResolver *vcs.Resolver,
 	engineClient *engine.Client,
 	cfg PipelineConfig,
 ) *Pipeline {
@@ -67,7 +67,7 @@ func NewPipeline(
 		reviewRepo:   reviewRepo,
 		repoRepo:     repoRepo,
 		llmRegistry:  llmRegistry,
-		vcsRegistry:  vcsRegistry,
+		vcsResolver:  vcsResolver,
 		engineClient: engineClient,
 		config:       cfg,
 	}
@@ -121,9 +121,9 @@ func (p *Pipeline) Execute(ctx context.Context, req Request) (*Result, error) {
 
 	// 2. Get the VCS platform client.
 	p.emitProgress(uuid.Nil, "get_vcs_client", 2, "started", "Resolving VCS platform: "+repo.Platform, nil)
-	platform, ok := p.vcsRegistry.Get(vcs.PlatformType(repo.Platform))
-	if !ok {
-		return nil, fmt.Errorf("unsupported platform: %s", repo.Platform)
+	platform, err := p.vcsResolver.ForRepoDirect(ctx, repo.OrgID, vcs.PlatformType(repo.Platform), repo.WebhookSecret)
+	if err != nil {
+		return nil, fmt.Errorf("resolve VCS client: %w", err)
 	}
 	p.emitProgress(uuid.Nil, "get_vcs_client", 2, "completed", "VCS platform ready", nil)
 

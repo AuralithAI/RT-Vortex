@@ -55,7 +55,7 @@ Clients (Webhooks, CLI, Web UI, SDKs)
 - **Self-Hostable**: Deploy on your infrastructure with full control
 - **TLS/mTLS Support**: Secure gRPC communication with included dev certificates
 - **API Documentation**: Full OpenAPI 3.0 spec at `/api/v1/docs/openapi.yaml`
-- **Unified Configuration**: XML configs (`rtserverprops.xml` + `vcsplatforms.xml`) drive both components
+- **Unified Configuration**: XML config (`rtserverprops.xml`) drives server settings; VCS credentials are configured per-user via the dashboard UI
 
 ### Ingestion Pipeline (TMS)
 - **Batched Streaming**: Processes repositories in 5,000-file batches — indexes 130 GB / 9.5M-chunk repos at ~5 GB RSS
@@ -98,7 +98,7 @@ make
 
 # Configure
 nano rt_home/config/rtserverprops.xml   # Database, LLM, engine settings
-nano rt_home/config/vcsplatforms.xml    # GitHub/GitLab/Bitbucket/Azure OAuth
+# VCS platform OAuth is configured per-user via the dashboard UI
 
 # Initialize database
 make db-install
@@ -251,14 +251,6 @@ All configuration is centralized in two XML files. The Go server reads both file
 <storage type="s3">
     <s3 bucket="my-bucket" region="us-east-1"/>
 </storage>
-```
-
-**`config/vcsplatforms.xml`** — Platform OAuth:
-```xml
-<github enabled="true" client-id="your_id" client-secret="your_secret"/>
-<gitlab enabled="true" application-id="your_id" application-secret="your_secret"/>
-<bitbucket enabled="true" client-id="your_id" client-secret="your_secret"/>
-<azure-devops enabled="true" client-id="your_id" tenant-id="your_tenant"/>
 ```
 
 ## REST API Highlights

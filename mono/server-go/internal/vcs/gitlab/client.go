@@ -15,6 +15,16 @@ import (
 
 const gitlabAPIBase = "https://gitlab.com/api/v4"
 
+func init() {
+	vcs.RegisterFactory(vcs.PlatformGitLab, func(creds *vcs.ResolvedCreds) vcs.Platform {
+		return New(Config{
+			Token:         creds.Token,
+			WebhookSecret: creds.WebhookSecret,
+			BaseURL:       creds.BaseURL,
+		})
+	})
+}
+
 // Config holds GitLab-specific configuration.
 type Config struct {
 	Token         string

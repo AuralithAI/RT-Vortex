@@ -57,7 +57,7 @@ type Handler struct {
 	OAuthReg     *auth.ProviderRegistry
 	TokenEnc     *rtcrypto.TokenEncryptor
 	LLMRegistry  *llm.Registry
-	VCSRegistry  *vcs.PlatformRegistry
+	VCSResolver  *vcs.Resolver
 	EngineClient *engine.Client
 
 	ReviewPipeline   *review.Pipeline
@@ -2119,7 +2119,7 @@ func (h *Handler) GetSystemStats(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"engine": engineDiag, "llm_providers": h.LLMRegistry.ListProviders(),
-		"vcs_platforms": h.VCSRegistry.List(),
+		"vcs_platforms": []string{"github", "gitlab", "bitbucket", "azure_devops"},
 	})
 }
 
@@ -2149,6 +2149,10 @@ func (h *Handler) GetDetailedHealth(w http.ResponseWriter, r *http.Request) {
 
 // HandleGitHubWebhook processes incoming GitHub webhook events.
 // POST /api/v1/webhooks/github
+//
+// Webhook signature validation uses the per-repo webhook secret stored in the
+// repositories table.  The repo is identified from the payload before
+// validation so that each repo can have its own secret.
 func (h *Handler) HandleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	body, err := io.ReadAll(io.LimitReader(r.Body, 5<<20))
@@ -2159,16 +2163,6 @@ func (h *Handler) HandleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	evt := &model.WebhookEvent{Platform: "github", EventType: r.Header.Get("X-GitHub-Event"), Payload: body}
 	_ = h.WebhookRepo.RecordEvent(ctx, evt)
 
-	signature := r.Header.Get("X-Hub-Signature-256")
-	ghPlatform, ok := h.VCSRegistry.Get(vcs.PlatformGitHub)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "GitHub platform not configured")
-		return
-	}
-	if !ghPlatform.ValidateWebhookSignature(body, signature) {
-		writeError(w, http.StatusUnauthorized, "invalid webhook signature")
-		return
-	}
 	event := r.Header.Get("X-GitHub-Event")
 	if event != "pull_request" {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "event": event})
@@ -2179,10 +2173,8 @@ func (h *Handler) HandleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "failed to parse payload")
 		return
 	}
-	if payload.Action != "opened" && payload.Action != "synchronize" {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "action": payload.Action})
-		return
-	}
+
+	// Look up the repo to get its per-repo webhook secret.
 	repo, err := h.RepoRepo.GetByPlatformAndExternalID(ctx, "github", fmt.Sprintf("%d", payload.Repository.ID))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -2190,6 +2182,23 @@ func (h *Handler) HandleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	// Validate signature using the per-repo webhook secret.
+	signature := r.Header.Get("X-Hub-Signature-256")
+	whSecret := repo.WebhookSecret
+	if whSecret == "" {
+		// Fallback: try the org owner's vault webhook secret.
+		whSecret = h.VCSResolver.ResolveWebhookSecretForOrg(ctx, repo.OrgID, vcs.PlatformGitHub)
+	}
+	if !vcs.ValidateWebhookHMAC(body, signature, whSecret) {
+		writeError(w, http.StatusUnauthorized, "invalid webhook signature")
+		return
+	}
+
+	if payload.Action != "opened" && payload.Action != "synchronize" {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "action": payload.Action})
 		return
 	}
 	go func() {
@@ -2231,16 +2240,6 @@ func (h *Handler) HandleGitLabWebhook(w http.ResponseWriter, r *http.Request) {
 	evt := &model.WebhookEvent{Platform: "gitlab", EventType: r.Header.Get("X-Gitlab-Event"), Payload: body}
 	_ = h.WebhookRepo.RecordEvent(ctx, evt)
 
-	token := r.Header.Get("X-Gitlab-Token")
-	glPlatform, ok := h.VCSRegistry.Get(vcs.PlatformGitLab)
-	if !ok {
-		writeError(w, http.StatusInternalServerError, "GitLab platform not configured")
-		return
-	}
-	if !glPlatform.ValidateWebhookSignature(body, token) {
-		writeError(w, http.StatusUnauthorized, "invalid webhook token")
-		return
-	}
 	eventType := r.Header.Get("X-Gitlab-Event")
 	if eventType != "Merge Request Hook" {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "event": eventType})
@@ -2251,10 +2250,8 @@ func (h *Handler) HandleGitLabWebhook(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "failed to parse payload")
 		return
 	}
-	if payload.ObjectAttributes.Action != "open" && payload.ObjectAttributes.Action != "update" {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "action": payload.ObjectAttributes.Action})
-		return
-	}
+
+	// Look up the repo to get its per-repo webhook secret.
 	repo, err := h.RepoRepo.GetByPlatformAndExternalID(ctx, "gitlab", fmt.Sprintf("%d", payload.Project.ID))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -2262,6 +2259,22 @@ func (h *Handler) HandleGitLabWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "database error")
+		return
+	}
+
+	// Validate token using per-repo or org-owner webhook secret.
+	token := r.Header.Get("X-Gitlab-Token")
+	whSecret := repo.WebhookSecret
+	if whSecret == "" {
+		whSecret = h.VCSResolver.ResolveWebhookSecretForOrg(ctx, repo.OrgID, vcs.PlatformGitLab)
+	}
+	if !vcs.ValidateWebhookToken(token, whSecret) {
+		writeError(w, http.StatusUnauthorized, "invalid webhook token")
+		return
+	}
+
+	if payload.ObjectAttributes.Action != "open" && payload.ObjectAttributes.Action != "update" {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ignored", "action": payload.ObjectAttributes.Action})
 		return
 	}
 	go func() {
@@ -2308,6 +2321,18 @@ func (h *Handler) HandleBitbucketWebhook(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+
+	// Validate HMAC signature using per-repo webhook secret.
+	signature := r.Header.Get("X-Hub-Signature")
+	whSecret := repo.WebhookSecret
+	if whSecret == "" {
+		whSecret = h.VCSResolver.ResolveWebhookSecretForOrg(ctx, repo.OrgID, vcs.PlatformBitbucket)
+	}
+	if !vcs.ValidateWebhookHMAC(body, signature, whSecret) {
+		writeError(w, http.StatusUnauthorized, "invalid webhook signature")
+		return
+	}
+
 	go func() {
 		reviewCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -2351,6 +2376,18 @@ func (h *Handler) HandleAzureDevOpsWebhook(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusInternalServerError, "database error")
 		return
 	}
+
+	// Validate token using per-repo webhook secret.
+	token := r.Header.Get("X-Vss-Token")
+	whSecret := repo.WebhookSecret
+	if whSecret == "" {
+		whSecret = h.VCSResolver.ResolveWebhookSecretForOrg(ctx, repo.OrgID, vcs.PlatformAzureDevOps)
+	}
+	if !vcs.ValidateWebhookToken(token, whSecret) {
+		writeError(w, http.StatusUnauthorized, "invalid webhook token")
+		return
+	}
+
 	go func() {
 		reviewCtx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()

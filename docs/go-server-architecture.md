@@ -415,17 +415,20 @@ SIGINT/SIGTERM received
 
 ## Configuration Loading
 
-The Go server reads two XML files at startup:
+The Go server reads `rtserverprops.xml` at startup for server, database, Redis,
+engine, and LLM settings. VCS platform credentials (OAuth tokens, webhook secrets)
+are configured per-user via the dashboard UI and resolved at runtime from the
+encrypted vault and database.
 
 ```
-rtserverprops.xml                    vcsplatforms.xml
-─────────────────                    ────────────────
-<server port="8080"/>                <github enabled="true"
-<database host="localhost"                   client-id="..."
-          port="5432" .../>                  client-secret="..."/>
-<redis addr="localhost:6379"/>       <gitlab enabled="true" .../>
-<engine host="localhost"             <bitbucket enabled="true" .../>
-        port="50051"/>               <azure-devops enabled="true" .../>
+rtserverprops.xml
+─────────────────
+<server port="8080"/>
+<database host="localhost"
+          port="5432" .../>
+<redis addr="localhost:6379"/>
+<engine host="localhost"
+        port="50051"/>
 <llm primary="openai">
   <openai api-key="..." .../>
   <anthropic api-key="..." .../>
@@ -434,7 +437,7 @@ rtserverprops.xml                    vcsplatforms.xml
 ```
 
 Config auto-discovery:
-1. CLI flags (`--config`, `--vcs-config`)
+1. CLI flag (`--config`)
 2. `$RTVORTEX_HOME/config/rtserverprops.xml`
 3. `./config/rtserverprops.xml`
 4. `../config/rtserverprops.xml`
@@ -458,7 +461,7 @@ make server
 RTVORTEX_HOME=/path/to/rt_home ./RTVortexGo
 
 # Run with custom config
-./RTVortexGo --config /etc/rtvortex/rtserverprops.xml --vcs-config /etc/rtvortex/vcsplatforms.xml
+./RTVortexGo --config /etc/rtvortex/rtserverprops.xml
 
 # Tests
 go test -race -cover ./...

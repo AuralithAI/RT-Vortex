@@ -19,6 +19,17 @@ const azureDevOpsAPIBase = "https://dev.azure.com"
 // apiVersion is appended to all Azure DevOps REST API calls.
 const apiVersion = "7.1"
 
+func init() {
+	vcs.RegisterFactory(vcs.PlatformAzureDevOps, func(creds *vcs.ResolvedCreds) vcs.Platform {
+		return New(Config{
+			PAT:           creds.Token,
+			Organization:  creds.Organization,
+			WebhookSecret: creds.WebhookSecret,
+			BaseURL:       creds.BaseURL,
+		})
+	})
+}
+
 // Config holds Azure DevOps specific configuration.
 type Config struct {
 	// PAT (Personal Access Token) — used with Basic auth (username is empty).

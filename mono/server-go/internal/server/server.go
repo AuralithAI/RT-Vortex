@@ -26,6 +26,8 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/review"
 	"github.com/AuralithAI/rtvortex-server/internal/session"
 	"github.com/AuralithAI/rtvortex-server/internal/store"
+	"github.com/AuralithAI/rtvortex-server/internal/swarm"
+	swarmauth "github.com/AuralithAI/rtvortex-server/internal/swarm/auth"
 	"github.com/AuralithAI/rtvortex-server/internal/tracing"
 	"github.com/AuralithAI/rtvortex-server/internal/vault"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
@@ -48,7 +50,7 @@ type Dependencies struct {
 	OAuthReg        *auth.ProviderRegistry
 	TokenEncryptor  *rtcrypto.TokenEncryptor
 	LLMRegistry     *llm.Registry
-	VCSRegistry     *vcs.PlatformRegistry
+	VCSResolver     *vcs.Resolver
 	ReviewPipeline  *review.Pipeline
 	IndexingService *indexing.Service
 	RateLimiter     *session.RateLimiter
@@ -82,6 +84,14 @@ type Dependencies struct {
 
 	// Engine Metrics Collector — Phase 0 observability
 	MetricsCollector *engine.MetricsCollector
+
+	// Swarm — agent swarm infrastructure
+	SwarmAuthSvc  *swarmauth.Service
+	SwarmTaskMgr  *swarm.TaskManager
+	SwarmTeamMgr  *swarm.TeamManager
+	SwarmLLMProxy *swarm.LLMProxy
+	SwarmELO      *swarm.ELOService
+	SwarmHandler  *swarm.Handler
 }
 
 // Server holds the HTTP server components.
@@ -142,7 +152,7 @@ func (s *Server) setupRouter() {
 		OAuthReg:        s.deps.OAuthReg,
 		TokenEnc:        s.deps.TokenEncryptor,
 		LLMRegistry:     s.deps.LLMRegistry,
-		VCSRegistry:     s.deps.VCSRegistry,
+		VCSResolver:     s.deps.VCSResolver,
 		EngineClient:    s.deps.EngineClient,
 		ReviewPipeline:  s.deps.ReviewPipeline,
 		IndexingService: s.deps.IndexingService,
@@ -329,6 +339,58 @@ func (s *Server) setupRouter() {
 			r.Post("/azure-devops", h.HandleAzureDevOpsWebhook)
 		})
 	})
+
+	// ── Swarm internal routes (agent JWT or service secret) ──────────
+	if s.deps.SwarmHandler != nil && s.deps.SwarmAuthSvc != nil {
+		sh := s.deps.SwarmHandler
+
+		r.Route("/internal/swarm", func(r chi.Router) {
+			// Registration — requires service secret, not agent JWT.
+			r.Route("/auth", func(r chi.Router) {
+				r.With(swarmauth.RequireServiceSecret(s.deps.SwarmAuthSvc)).
+					Post("/register", sh.RegisterAgent)
+			})
+
+			// All other internal routes require agent JWT.
+			r.Group(func(r chi.Router) {
+				r.Use(swarmauth.RequireAgentToken(s.deps.SwarmAuthSvc))
+
+				r.Delete("/auth/revoke", sh.RevokeAgent)
+				r.Get("/tasks/next", sh.GetNextTask)
+				r.Post("/tasks/{id}/plan", sh.SubmitPlan)
+				r.Post("/tasks/{id}/diffs", sh.SubmitDiff)
+				r.Get("/tasks/{id}/diffs", sh.ListDiffs)
+				r.Post("/tasks/{id}/diffs/{diffId}/comments", sh.AddDiffComment)
+				r.Post("/tasks/{id}/complete", sh.CompleteTask)
+				r.Post("/tasks/{id}/declare-size", sh.DeclareTeamSize)
+				r.Post("/heartbeat/{id}", sh.Heartbeat)
+
+				// LLM proxy.
+				if s.deps.SwarmLLMProxy != nil {
+					r.Post("/llm/complete", s.deps.SwarmLLMProxy.HandleComplete)
+				}
+			})
+		})
+
+		// ── Swarm user-facing routes (under /api/v1, user JWT) ──────
+		r.Route("/api/v1/swarm", func(r chi.Router) {
+			if s.deps.JWTMgr != nil {
+				r.Use(auth.Middleware(s.deps.JWTMgr))
+			}
+			r.Use(session.RateLimitMiddleware(s.deps.RateLimiter, "api"))
+
+			r.Post("/tasks", sh.CreateTaskUser)
+			r.Get("/tasks", sh.ListTasksUser)
+			r.Get("/tasks/{id}", sh.GetTaskUser)
+			r.Post("/tasks/{id}/plan-action", sh.PlanAction)
+			r.Get("/tasks/{id}/diffs", sh.GetDiffsUser)
+			r.Post("/tasks/{id}/diffs/{diffId}/comments", sh.UserDiffComment)
+			r.Post("/tasks/{id}/diff-action", sh.DiffAction)
+			r.Post("/tasks/{id}/rate", sh.RateTaskUser)
+			r.Get("/agents", sh.ListAgentsUser)
+			r.Get("/teams", sh.ListTeamsUser)
+		})
+	}
 
 	s.router = r
 }

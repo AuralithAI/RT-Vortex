@@ -5,7 +5,8 @@
   ==============================================================================================
 
   This file contains the configuration parameters for the RTVortex server.
-  Platform authentication settings are in vcsplatforms.xml.
+  VCS platform credentials are configured per-user via the dashboard UI and
+  stored in the encrypted vault — no separate XML file is needed.
 
   Variables of the form ${ENV_VAR:default} are resolved at load time:
     1. Environment variable ENV_VAR
@@ -205,9 +206,9 @@
     <!-- OAuth Login Providers                                                 -->
     <!-- ===================================================================== -->
     <!--
-        Standalone OAuth providers for user login (separate from VCS platforms).
-        VCS providers (GitHub, GitLab, Bitbucket) are auto-imported from
-        vcsplatforms.xml when their OAuth client-id is set.
+        OAuth providers for user login.
+        VCS platform OAuth (GitHub, GitLab, Bitbucket) is configured per-user
+        via the dashboard UI and stored in the encrypted vault.
 
         For Google:    https://console.cloud.google.com/apis/credentials
         For Microsoft: https://portal.azure.com > App registrations

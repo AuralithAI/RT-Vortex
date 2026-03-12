@@ -56,7 +56,8 @@ BUILD_DATE   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
         test-cli test-sdk-python test-sdk-node test-sdk-java test-sdks test-all \
         build-cli build-sdk-python build-sdk-node build-sdk-java build-sdks \
         web build-web test-web lint-web \
-        proto proto-go \
+        proto proto-go proto-python \
+        swarm \
         version status help rt_home
 
 # ==============================================================================
@@ -120,7 +121,6 @@ server: rt_home proto-go ## Build the Go RTVortexGo API server
 
 config: rt_home ## Copy configuration files to rt_home
 	@cp -n $(CONFIG_DIR)/rtserverprops.xml $(RT_HOME)/config/ 2>/dev/null || true
-	@cp -n $(CONFIG_DIR)/vcsplatforms.xml  $(RT_HOME)/config/ 2>/dev/null || true
 	@cp -n $(CONFIG_DIR)/*.yml $(RT_HOME)/config/ 2>/dev/null || true
 	@mkdir -p $(RT_HOME)/config/certificates
 	@cp -n $(CONFIG_DIR)/certificates/* $(RT_HOME)/config/certificates/ 2>/dev/null || true
@@ -161,7 +161,7 @@ PROTO_SRC    := $(ROOT_DIR)/mono/proto
 GO_PB_OUT    := $(SERVER_DIR)/internal/engine/pb
 GO_PROTOC_GO := $(shell ls $(HOME)/go/bin/protoc-gen-go 2>/dev/null || echo "")
 
-proto: proto-go ## Regenerate all proto stubs (C++ is automatic via CMake)
+proto: proto-go proto-python ## Regenerate all proto stubs (C++ is automatic via CMake)
 
 proto-go: ## Generate Go gRPC stubs from engine.proto
 	@if [ ! -x "$(PROTOC_BIN)" ]; then \
@@ -304,6 +304,43 @@ lint-web: web ## Lint Web UI
 	@echo ""
 	@echo "──── Linting Web UI ────────────────────────────────────"
 	cd $(WEB_DIR) && $(NPM) run lint
+
+# ==============================================================================
+# Swarm (Python Agent Framework)
+# ==============================================================================
+
+SWARM_DIR    := $(ROOT_DIR)/mono/swarm
+SWARM_HOME   := $(RT_HOME)/swarm
+
+swarm: rt_home proto-python ## Build and install the Python agent swarm into rt_home/swarm
+	@echo ""
+	@echo "──── Building Agent Swarm ──────────────────────────────"
+	@mkdir -p $(SWARM_HOME)
+	@$(PYTHON) -m venv $(SWARM_HOME)/venv 2>/dev/null || true
+	$(SWARM_HOME)/venv/bin/pip install --upgrade pip --quiet
+	$(SWARM_HOME)/venv/bin/pip install $(SWARM_DIR) --quiet
+	@cp -r $(SWARM_DIR)/proto $(SWARM_HOME)/proto 2>/dev/null || true
+	@echo "  rt_home/swarm/ installed"
+	@echo "  Run: RTVORTEX_HOME=$(RT_HOME) $(SWARM_HOME)/venv/bin/rtvortex-swarm"
+
+proto-python: ## Generate Python gRPC stubs from engine.proto
+	@if [ ! -x "$(PROTOC_BIN)" ]; then \
+		echo "WARN: $(PROTOC_BIN) not found. Skipping Python proto generation."; \
+	else \
+		echo "──── Generating Python proto stubs ───────────────────────"; \
+		mkdir -p $(SWARM_DIR)/proto; \
+		$(PYTHON) -m grpc_tools.protoc \
+			--proto_path=$(PROTO_SRC) \
+			--python_out=$(SWARM_DIR)/proto \
+			--grpc_python_out=$(SWARM_DIR)/proto \
+			$(PROTO_SRC)/engine.proto 2>/dev/null \
+		|| $(PROTOC_BIN) \
+			--proto_path=$(PROTO_SRC) \
+			--python_out=$(SWARM_DIR)/proto \
+			$(PROTO_SRC)/engine.proto; \
+		touch $(SWARM_DIR)/proto/__init__.py; \
+		echo "  Python proto stubs generated in $(SWARM_DIR)/proto/"; \
+	fi
 
 # ==============================================================================
 # Run

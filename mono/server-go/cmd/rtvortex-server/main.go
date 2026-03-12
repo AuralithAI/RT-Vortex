@@ -18,6 +18,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
@@ -48,12 +50,16 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/server"
 	"github.com/AuralithAI/rtvortex-server/internal/session"
 	"github.com/AuralithAI/rtvortex-server/internal/store"
+	"github.com/AuralithAI/rtvortex-server/internal/swarm"
+	swarmauth "github.com/AuralithAI/rtvortex-server/internal/swarm/auth"
 	"github.com/AuralithAI/rtvortex-server/internal/vault"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
-	vcsazure "github.com/AuralithAI/rtvortex-server/internal/vcs/azuredevops"
-	vcsbitbucket "github.com/AuralithAI/rtvortex-server/internal/vcs/bitbucket"
-	vcsgithub "github.com/AuralithAI/rtvortex-server/internal/vcs/github"
-	vcsgitlab "github.com/AuralithAI/rtvortex-server/internal/vcs/gitlab"
+
+	// Import platform packages to trigger init() factory registration.
+	_ "github.com/AuralithAI/rtvortex-server/internal/vcs/azuredevops"
+	_ "github.com/AuralithAI/rtvortex-server/internal/vcs/bitbucket"
+	_ "github.com/AuralithAI/rtvortex-server/internal/vcs/github"
+	_ "github.com/AuralithAI/rtvortex-server/internal/vcs/gitlab"
 	"github.com/AuralithAI/rtvortex-server/internal/ws"
 )
 
@@ -67,7 +73,6 @@ var (
 func main() {
 	// ── CLI flags ───────────────────────────────────────────────────────
 	serverPropsPath := flag.String("config", "", "Path to rtserverprops.xml (auto-discovered if omitted)")
-	vcsPropsPath := flag.String("vcs-config", "", "Path to vcsplatforms.xml (auto-discovered if omitted)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	showHelp := flag.Bool("help", false, "Print usage and exit")
 	flag.Parse()
@@ -108,8 +113,7 @@ func main() {
 
 	// ── Load configuration from XML ─────────────────────────────────────
 	cfg, err := config.Load(config.LoadOptions{
-		ServerPropsPath:  *serverPropsPath,
-		VCSPlatformsPath: *vcsPropsPath,
+		ServerPropsPath: *serverPropsPath,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
@@ -388,40 +392,12 @@ func main() {
 		"primary", cfg.LLM.Primary,
 	)
 
-	// VCS platform registry
-	vcsRegistry := vcs.NewPlatformRegistry()
-	if gh := cfg.VCS.GitHub; gh != nil && gh.Enabled {
-		vcsRegistry.Register(vcsgithub.New(vcsgithub.Config{
-			Token: gh.Token, WebhookSecret: gh.Webhook.Secret, BaseURL: gh.APIURL,
-		}))
-		slog.Info("VCS platform registered", "platform", "github")
-	}
-	if gl := cfg.VCS.GitLab; gl != nil && gl.Enabled {
-		vcsRegistry.Register(vcsgitlab.New(vcsgitlab.Config{
-			Token: gl.Token, WebhookSecret: gl.Webhook.Secret, BaseURL: gl.APIURL,
-		}))
-		slog.Info("VCS platform registered", "platform", "gitlab")
-	}
-	if bb := cfg.VCS.Bitbucket; bb != nil && bb.Enabled {
-		token := bb.Token
-		if token == "" {
-			token = bb.Credentials.Token
-		}
-		vcsRegistry.Register(vcsbitbucket.New(vcsbitbucket.Config{
-			Token: token, WebhookSecret: bb.Webhook.Secret, BaseURL: bb.APIURL,
-		}))
-		slog.Info("VCS platform registered", "platform", "bitbucket")
-	}
-	if ado := cfg.VCS.AzureDevOps; ado != nil && ado.Enabled {
-		vcsRegistry.Register(vcsazure.New(vcsazure.Config{
-			PAT: ado.Token, Organization: ado.Organization,
-			WebhookSecret: ado.Webhook.Secret, BaseURL: ado.APIURL,
-		}))
-		slog.Info("VCS platform registered", "platform", "azure_devops")
-	}
+	// VCS resolver — resolves credentials dynamically from vault/DB per repo
+	vcsResolver := vcs.NewResolver(db.Pool, vault.NewVCSVaultAdapter(fileVault))
+	slog.Info("VCS resolver initialised (credentials resolved per-repo from vault)")
 
 	// Review pipeline
-	reviewPipeline := review.NewPipeline(reviewRepo, repoRepo, llmRegistry, vcsRegistry, engineClient, review.PipelineConfig{
+	reviewPipeline := review.NewPipeline(reviewRepo, repoRepo, llmRegistry, vcsResolver, engineClient, review.PipelineConfig{
 		MaxFilesPerReview: 50,
 		MaxDiffSizeBytes:  512 * 1024,
 		ConcurrentFiles:   5,
@@ -494,7 +470,7 @@ func main() {
 	defer bgScheduler.Stop()
 
 	// PR sync worker — discovers and tracks open PRs from connected VCS platforms
-	prSyncWorker := prsync.NewWorker(ctx, prRepo, repoRepo, vcsRegistry, engineClient, wsHub, prsync.DefaultConfig())
+	prSyncWorker := prsync.NewWorker(ctx, prRepo, repoRepo, vcsResolver, engineClient, wsHub, prsync.DefaultConfig())
 	prSyncWorker.Start()
 	defer prSyncWorker.Stop()
 
@@ -504,6 +480,34 @@ func main() {
 
 	// VCS platform config repo — per-user non-secret VCS settings (URLs, usernames)
 	vcsPlatformRepo := store.NewVCSPlatformRepo(db.Pool)
+
+	// ── Initialize Swarm Agent infrastructure ───────────────────────────
+	// The swarm service secret is derived from the existing JWT secret,
+	// so there is no extra env var to manage. It authenticates the initial
+	// agent registration call on the /internal/ routes (before the agent
+	// has its own JWT). The SHA-256 prefix ensures it differs from the JWT
+	// signing key while remaining deterministic across restarts.
+	swarmServiceSecret := deriveSwarmSecret(jwtSecret)
+
+	swarmAuthSvc := swarmauth.NewService([]byte(jwtSecret), swarmServiceSecret, redisClient.Client())
+	swarmTeamMgr := swarm.NewTeamManager(db.Pool)
+	swarmTaskMgr := swarm.NewTaskManager(db.Pool, redisClient.Client(), swarmTeamMgr)
+	swarmLLMProxy := swarm.NewLLMProxy(llmRegistry)
+	swarmELO := swarm.NewELOService(db.Pool)
+
+	swarmHandler := &swarm.Handler{
+		AuthSvc:  swarmAuthSvc,
+		TaskMgr:  swarmTaskMgr,
+		TeamMgr:  swarmTeamMgr,
+		LLMProxy: swarmLLMProxy,
+		ELO:      swarmELO,
+	}
+
+	// Start the swarm task assignment loop.
+	swarmTaskMgr.Start(ctx)
+	defer swarmTaskMgr.Stop()
+
+	slog.Info("Swarm agent infrastructure initialized")
 
 	// Opens a gRPC streaming connection to the C++ engine to receive real-time metrics.
 	metricsCollector := engine.NewMetricsCollector(engineClient, 1000)
@@ -535,7 +539,7 @@ func main() {
 		OAuthReg:        oauthReg,
 		TokenEncryptor:  tokenEnc,
 		LLMRegistry:     llmRegistry,
-		VCSRegistry:     vcsRegistry,
+		VCSResolver:     vcsResolver,
 		ReviewPipeline:  reviewPipeline,
 		IndexingService: indexingService,
 		RateLimiter:     rateLimiter,
@@ -555,6 +559,13 @@ func main() {
 		Vault:            fileVault,
 		VCSPlatformRepo:  vcsPlatformRepo,
 		MetricsCollector: metricsCollector,
+
+		SwarmAuthSvc:  swarmAuthSvc,
+		SwarmTaskMgr:  swarmTaskMgr,
+		SwarmTeamMgr:  swarmTeamMgr,
+		SwarmLLMProxy: swarmLLMProxy,
+		SwarmELO:      swarmELO,
+		SwarmHandler:  swarmHandler,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────
@@ -643,4 +654,12 @@ func setupLogger(level, format string) *slog.Logger {
 	}
 
 	return slog.New(handler)
+}
+
+// deriveSwarmSecret produces a deterministic service secret from the existing
+// JWT signing key. This avoids a separate SWARM_SERVICE_SECRET env var while
+// keeping the registration endpoint authenticated.
+func deriveSwarmSecret(jwtSecret string) string {
+	h := sha256.Sum256([]byte("rtvortex-swarm:" + jwtSecret))
+	return hex.EncodeToString(h[:])
 }

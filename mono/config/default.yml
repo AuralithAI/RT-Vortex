@@ -3,7 +3,7 @@
 # =============================================================================
 #
 # This file is read ONLY by the C++ engine (aipr-engine).
-# The Java server reads rtserverprops.xml and vcsplatforms.xml instead.
+# The Go server reads rtserverprops.xml instead.
 #
 # Usage:
 #   ./bin/aipr-engine --config config/default.yml

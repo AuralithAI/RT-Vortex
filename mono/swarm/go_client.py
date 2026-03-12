@@ -1,0 +1,131 @@
+"""HTTP client for the Go swarm management endpoints.
+
+All agent ↔ Go communication passes through :class:`GoClient`.  It handles
+bearer-token authentication, request serialisation, and timeout management.
+Endpoints correspond to the routes registered in ``internal/server/server.go``
+under ``/internal/swarm/``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from typing import Any
+
+import httpx
+
+from .agents_config import get_config
+
+logger = logging.getLogger(__name__)
+
+
+class GoClient:
+    """Async HTTP client wrapping the Go swarm management API.
+
+    A single instance is shared across all agents in a Python process.  The
+    bearer token is set once after the initial :func:`~mono.swarm.auth.register_agent`
+    call and reused for every subsequent request.
+    """
+
+    def __init__(self, token: str = ""):
+        self.base_url = get_config().go_server_url
+        self._token = token
+
+    def set_token(self, token: str) -> None:
+        self._token = token
+
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self._token:
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
+
+    async def poll_next_task(self) -> dict | None:
+        """Poll for the next assigned task.
+
+        Returns:
+            Parsed JSON task dict, or ``None`` when no work is available (204).
+
+        Raises:
+            httpx.HTTPStatusError: On non-2xx status (except 204).
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/tasks/next",
+                headers=self._headers(),
+            )
+            if resp.status_code == 204:
+                return None
+            resp.raise_for_status()
+            return resp.json()
+
+    async def report_plan(self, task_id: str, plan: dict[str, Any]) -> None:
+        """Submit a structured plan document for human review.
+
+        Args:
+            task_id: Task UUID.
+            plan: Plan dict with *summary*, *steps*, *affected_files*, and
+                  *estimated_complexity*.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/tasks/{task_id}/plan",
+                headers=self._headers(),
+                json={"plan": plan},
+            )
+            resp.raise_for_status()
+
+    async def report_diff(self, task_id: str, diff: dict[str, Any]) -> dict:
+        """Submit a single-file diff for human review.
+
+        Args:
+            task_id: Task UUID.
+            diff: Dict with *file_path*, *change_type*, *original*, *proposed*,
+                  and *unified_diff*.
+
+        Returns:
+            Server-assigned diff metadata (includes the diff ID).
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/tasks/{task_id}/diffs",
+                headers=self._headers(),
+                json=diff,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def report_result(self, task_id: str) -> None:
+        """Mark a task as completed after all diffs have been submitted."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/tasks/{task_id}/complete",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+
+    async def send_heartbeat(self, agent_id: str) -> None:
+        """Send a keepalive heartbeat for *agent_id*.
+
+        Go uses heartbeats to detect stale agents and reclaim their tokens.
+        """
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/heartbeat/{agent_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+
+    async def declare_team_size(self, task_id: str, size: int) -> None:
+        """Request a specific team size for *task_id*.
+
+        The orchestrator calls this after analysing complexity.  Go uses the
+        value to spin up or drain agents in the ``assignLoop``.
+        """
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/tasks/{task_id}/declare-size",
+                headers=self._headers(),
+                json={"size": size},
+            )
+            resp.raise_for_status()

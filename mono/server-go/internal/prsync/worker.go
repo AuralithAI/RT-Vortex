@@ -68,7 +68,7 @@ type Worker struct {
 
 	prRepo       *store.PullRequestRepo
 	repoRepo     *store.RepositoryRepo
-	vcsRegistry  *vcs.PlatformRegistry
+	vcsResolver  *vcs.Resolver
 	engineClient *engine.Client
 	wsHub        *ws.Hub
 
@@ -85,7 +85,7 @@ func NewWorker(
 	ctx context.Context,
 	prRepo *store.PullRequestRepo,
 	repoRepo *store.RepositoryRepo,
-	vcsRegistry *vcs.PlatformRegistry,
+	vcsResolver *vcs.Resolver,
 	engineClient *engine.Client,
 	wsHub *ws.Hub,
 	cfg Config,
@@ -96,7 +96,7 @@ func NewWorker(
 		cancel:       cancel,
 		prRepo:       prRepo,
 		repoRepo:     repoRepo,
-		vcsRegistry:  vcsRegistry,
+		vcsResolver:  vcsResolver,
 		engineClient: engineClient,
 		wsHub:        wsHub,
 		cfg:          cfg,
@@ -204,9 +204,9 @@ func (w *Worker) syncAllRepos() {
 
 // syncRepo syncs open PRs for a single repository.
 func (w *Worker) syncRepo(ctx context.Context, repo *model.Repository) {
-	platform, ok := w.vcsRegistry.Get(vcs.PlatformType(repo.Platform))
-	if !ok {
-		slog.Debug("PR sync: no VCS client for platform", "platform", repo.Platform, "repo", repo.Owner+"/"+repo.Name)
+	platform, err := w.vcsResolver.ForRepoDirect(ctx, repo.OrgID, vcs.PlatformType(repo.Platform), repo.WebhookSecret)
+	if err != nil {
+		slog.Debug("PR sync: failed to resolve VCS client", "platform", repo.Platform, "repo", repo.Owner+"/"+repo.Name, "error", err)
 		return
 	}
 
@@ -316,9 +316,9 @@ func (w *Worker) embedPR(ctx context.Context, pr *model.TrackedPullRequest) {
 		return
 	}
 
-	platform, ok := w.vcsRegistry.Get(vcs.PlatformType(repo.Platform))
-	if !ok {
-		log.Debug("PR embed: no VCS client for platform", "platform", repo.Platform)
+	platform, err := w.vcsResolver.ForRepoDirect(ctx, repo.OrgID, vcs.PlatformType(repo.Platform), repo.WebhookSecret)
+	if err != nil {
+		log.Debug("PR embed: failed to resolve VCS client", "platform", repo.Platform, "error", err)
 		return
 	}
 

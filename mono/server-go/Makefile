@@ -31,7 +31,7 @@ build: ## Build the server binary
 	@mkdir -p $(RT_HOME)/bin $(RT_HOME)/config $(RT_HOME)/data/sql $(RT_HOME)/temp $(RT_HOME)/models
 	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(RT_HOME)/bin/$(BINARY) $(CMD_DIR)
 	@cp -f db/sql/*.sql $(RT_HOME)/data/sql/ 2>/dev/null || true
-	@cp -n ../config/rtserverprops.xml ../config/vcsplatforms.xml $(RT_HOME)/config/ 2>/dev/null || true
+	@cp -n ../config/rtserverprops.xml $(RT_HOME)/config/ 2>/dev/null || true
 	@echo "Built: $(RT_HOME)/bin/$(BINARY)"
 	@ls -lh $(RT_HOME)/bin/$(BINARY)
 

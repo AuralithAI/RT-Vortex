@@ -374,8 +374,10 @@ ENGINE_HOST=engine.internal.example.com ENGINE_PORT=50051 ./bin/RTVortexGo
 | File | Used By | Purpose |
 |------|---------|---------|
 | `config/rtserverprops.xml` | **Both** (via gRPC) | Single source of truth: DB, Redis, LLM, Storage, Engine |
-| `config/vcsplatforms.xml` | Go server | Platform OAuth (GitHub, GitLab, Bitbucket, Azure DevOps) |
 | `config/default.yml` | C++ Engine | Indexing, retrieval, review settings |
+
+VCS platform credentials (OAuth tokens, webhook secrets) are configured per-user
+via the dashboard UI and stored in the encrypted vault.
 
 ### Configuration Flow
 

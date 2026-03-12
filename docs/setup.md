@@ -91,7 +91,7 @@ make
 
 # Edit configuration
 nano rt_home/config/rtserverprops.xml   # Database, LLM, engine settings
-nano rt_home/config/vcsplatforms.xml    # GitHub/GitLab/Bitbucket/Azure OAuth
+# VCS platform OAuth is configured per-user via the dashboard UI
 
 # Setup database
 make db-install
@@ -133,7 +133,6 @@ rt_home/
 │   └── RTVortexGo        ← Go server binary (~20 MB)
 ├── config/
 │   ├── rtserverprops.xml  # Server config
-│   ├── vcsplatforms.xml   # Platform OAuth config
 │   ├── *.yml              # Engine profiles (default, large-repo, etc.)
 │   ├── certificates/      # TLS certificates (dev)
 │   └── model-providers/   # LLM provider config templates
@@ -194,7 +193,6 @@ ctest --test-dir build --output-on-failure -C Release
 | File | Purpose |
 |------|---------|
 | `config/rtserverprops.xml` | Database, Redis, LLM, engine, server, security settings |
-| `config/vcsplatforms.xml` | VCS platform OAuth credentials |
 | `config/default.yml` | C++ engine indexing, retrieval, review settings |
 
 ### rtserverprops.xml
@@ -247,37 +245,6 @@ ctest --test-dir build --output-on-failure -C Release
 </rtvortex-config>
 ```
 
-### vcsplatforms.xml
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<vcs-platforms>
-    <github enabled="true"
-            client-id="${GITHUB_CLIENT_ID}"
-            client-secret="${GITHUB_CLIENT_SECRET}"
-            api-url="https://api.github.com"
-            webhook-secret="${GITHUB_WEBHOOK_SECRET}"/>
-
-    <gitlab enabled="false"
-            application-id="${GITLAB_APPLICATION_ID}"
-            application-secret="${GITLAB_APPLICATION_SECRET}"
-            api-url="https://gitlab.com"
-            webhook-secret="${GITLAB_WEBHOOK_SECRET}"/>
-
-    <bitbucket enabled="false"
-               client-id="${BITBUCKET_CLIENT_ID}"
-               client-secret="${BITBUCKET_CLIENT_SECRET}"
-               api-url="https://api.bitbucket.org/2.0"
-               webhook-secret="${BITBUCKET_WEBHOOK_SECRET}"/>
-
-    <azure-devops enabled="false"
-                  client-id="${AZURE_DEVOPS_CLIENT_ID}"
-                  tenant-id="${AZURE_DEVOPS_TENANT_ID}"
-                  organization="${AZURE_DEVOPS_ORG}"
-                  webhook-secret="${AZURE_DEVOPS_WEBHOOK_SECRET}"/>
-</vcs-platforms>
-```
-
 ### Environment Variables
 
 All XML attributes support `${ENV_VAR:default}` syntax. Key variables:
@@ -290,9 +257,6 @@ All XML attributes support `${ENV_VAR:default}` syntax. Key variables:
 | `LLM_OPENAI_API_KEY` | OpenAI API key |
 | `LLM_ANTHROPIC_API_KEY` | Anthropic API key |
 | `TOKEN_ENCRYPTION_KEY` | 32-byte hex key for AES-256-GCM |
-| `GITHUB_CLIENT_ID` | GitHub OAuth app client ID |
-| `GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret |
-| `GITHUB_WEBHOOK_SECRET` | GitHub webhook HMAC secret |
 
 ### Ingestion Pipeline Tuning
 
@@ -323,8 +287,9 @@ For most deployments, the defaults work well.
 
 ### How It Works
 
-RTVortex is **platform-agnostic**. Enable the platforms you need in `vcsplatforms.xml`.
-All platforms can be active simultaneously.
+RTVortex is **platform-agnostic**. Configure VCS platforms per-user via the
+dashboard UI (Settings → VCS Platforms). Tokens and webhook secrets are stored
+in the encrypted vault. All platforms can be active simultaneously.
 
 ### OAuth2 Flow
 
@@ -521,7 +486,6 @@ rt_home/
 │   └── RTVortexGo        # Go server (static binary)
 ├── config/
 │   ├── rtserverprops.xml # Server config
-│   ├── vcsplatforms.xml  # Platform OAuth config
 │   ├── default.yml       # Engine defaults
 │   ├── certificates/     # TLS certs (dev only)
 │   └── model-providers/  # LLM config templates
@@ -541,7 +505,6 @@ cd rt_home
 
 # Configure
 nano config/rtserverprops.xml
-nano config/vcsplatforms.xml
 
 # Setup database
 psql -U postgres -c "CREATE USER rtvortex WITH PASSWORD 'your_password';"

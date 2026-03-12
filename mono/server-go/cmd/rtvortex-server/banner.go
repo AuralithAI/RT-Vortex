@@ -202,21 +202,10 @@ func printBanner(env *rtenv.Env, cfg *config.Config) {
 
 	// ── VCS Platforms ───────────────────────────────────────────────
 	section("VCS Platforms")
-	printVCSStatus("GitHub", cfg.VCS.GitHub)
-	printVCSStatus("GitLab", cfg.VCS.GitLab)
-	printVCSStatus("Bitbucket", cfg.VCS.Bitbucket)
-	printVCSStatus("Azure DevOps", cfg.VCS.AzureDevOps)
+	kv("Resolution", "dynamic (per-repo from vault/DB)")
 
 	divider()
 	fmt.Println()
-}
-
-// printVCSStatus prints a single VCS platform line.
-func printVCSStatus(name string, p *config.VCSPlatformConfig) {
-	if p == nil || !p.Enabled {
-		return
-	}
-	kv(name, fmt.Sprintf("%s✔ enabled%s", colorGreen, colorReset))
 }
 
 // section prints a section header.

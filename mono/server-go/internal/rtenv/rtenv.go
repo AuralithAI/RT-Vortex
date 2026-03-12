@@ -4,7 +4,7 @@
 //
 //	RTVORTEX_HOME/
 //	├── bin/         executables (rtvortex, RTVortexGo)
-//	├── config/      rtserverprops.xml, vcsplatforms.xml, default.yml
+//	├── config/      rtserverprops.xml, default.yml
 //	├── data/        persistent index data
 //	├── temp/        logs + temporary working files (RT_TEMP)
 //	├── models/      ONNX embeddings

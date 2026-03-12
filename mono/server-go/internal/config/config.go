@@ -1,8 +1,10 @@
 // Package config loads application configuration from XML files.
 //
-// It reads two XML configuration files:
+// It reads the main configuration file:
 //   - rtserverprops.xml  -- server, database, redis, engine, LLM, review, security, storage
-//   - vcsplatforms.xml   -- VCS platform OAuth, webhook, and token settings
+//
+// VCS platform credentials (OAuth tokens, webhook secrets) are resolved at
+// runtime from the per-user vault and database — see the vcs.Resolver type.
 //
 // Variables of the form ${ENV_VAR:default} are resolved at load time:
 //  1. Environment variable ENV_VAR
@@ -32,13 +34,9 @@ type Config struct {
 	Engine   EngineConfig
 	Auth     AuthConfig
 	LLM      LLMConfig
-	Webhooks WebhooksConfig
 	Review   ReviewConfig
 	Storage  StorageConfig
 	Log      LogConfig
-
-	// VCS platforms (from vcsplatforms.xml)
-	VCS VCSConfig
 }
 
 // ServerConfig holds HTTP server settings.
@@ -152,20 +150,6 @@ type LLMProviderConfig struct {
 	Models  []string
 }
 
-// WebhooksConfig holds webhook secrets per platform.
-type WebhooksConfig struct {
-	GitHub      WebhookPlatformConfig
-	GitLab      WebhookPlatformConfig
-	Bitbucket   WebhookPlatformConfig
-	AzureDevOps WebhookPlatformConfig
-}
-
-// WebhookPlatformConfig holds per-platform webhook settings.
-type WebhookPlatformConfig struct {
-	Secret string
-	Path   string
-}
-
 // ReviewConfig holds review pipeline settings.
 type ReviewConfig struct {
 	MaxDiffSize      int
@@ -184,86 +168,6 @@ type StorageConfig struct {
 type LogConfig struct {
 	Level  string // debug, info, warn, error
 	Format string // text, json
-}
-
-// VCSConfig holds all VCS platform settings (from vcsplatforms.xml).
-type VCSConfig struct {
-	GitHub      *VCSPlatformConfig
-	GitLab      *VCSPlatformConfig
-	Bitbucket   *VCSPlatformConfig
-	AzureDevOps *VCSPlatformConfig
-}
-
-// VCSPlatformConfig holds the full config for one VCS platform.
-type VCSPlatformConfig struct {
-	Enabled      bool
-	BaseURL      string
-	APIURL       string
-	Organization string // Azure DevOps only
-
-	// OAuth
-	OAuth VCSOAuthConfig
-
-	// GitHub App (optional)
-	App VCSAppConfig
-
-	// Webhook
-	Webhook VCSWebhookConfig
-
-	// Token / PAT fallback
-	Token string
-
-	// Bitbucket credentials
-	Credentials VCSCredentials
-
-	// Azure AD
-	AzureAD VCSAzureADConfig
-
-	// Azure DevOps events
-	Events []VCSEventConfig
-}
-
-// VCSOAuthConfig holds OAuth settings for a VCS platform.
-type VCSOAuthConfig struct {
-	ClientID     string
-	ClientSecret string
-	CallbackPath string
-	Scopes       string
-}
-
-// VCSAppConfig holds GitHub App settings.
-type VCSAppConfig struct {
-	Enabled        bool
-	AppID          string
-	PrivateKeyPath string
-}
-
-// VCSWebhookConfig holds webhook settings for a VCS platform.
-type VCSWebhookConfig struct {
-	Enabled bool
-	Secret  string
-	Path    string
-}
-
-// VCSCredentials holds Bitbucket App Password credentials.
-type VCSCredentials struct {
-	Username    string
-	AppPassword string
-	Token       string
-}
-
-// VCSAzureADConfig holds Azure AD/Entra ID settings.
-type VCSAzureADConfig struct {
-	Enabled      bool
-	TenantID     string
-	ClientID     string
-	ClientSecret string
-}
-
-// VCSEventConfig holds an event subscription config.
-type VCSEventConfig struct {
-	Name    string
-	Enabled bool
 }
 
 // ---- XML intermediate types ----
@@ -483,103 +387,6 @@ type xmlLogging struct {
 
 // ---- VCS platforms XML types ----
 
-type xmlPlatforms struct {
-	XMLName     xml.Name       `xml:"platforms"`
-	GitHub      xmlGitHub      `xml:"github"`
-	GitLab      xmlGitLab      `xml:"gitlab"`
-	Bitbucket   xmlBitbucket   `xml:"bitbucket"`
-	AzureDevOps xmlAzureDevOps `xml:"azure-devops"`
-}
-
-type xmlGitHub struct {
-	Enabled string        `xml:"enabled,attr"`
-	BaseURL string        `xml:"base-url,attr"`
-	APIURL  string        `xml:"api-url,attr"`
-	OAuth   xmlVCSOAuth   `xml:"oauth"`
-	App     xmlGitHubApp  `xml:"app"`
-	Webhook xmlVCSWebhook `xml:"webhook"`
-	Token   xmlVCSToken   `xml:"token"`
-}
-
-type xmlGitHubApp struct {
-	Enabled        string `xml:"enabled,attr"`
-	AppID          string `xml:"app-id,attr"`
-	PrivateKeyPath string `xml:"private-key-path,attr"`
-}
-
-type xmlGitLab struct {
-	Enabled string        `xml:"enabled,attr"`
-	BaseURL string        `xml:"base-url,attr"`
-	OAuth   xmlVCSOAuthGL `xml:"oauth"`
-	Token   xmlVCSToken   `xml:"token"`
-	Webhook xmlVCSWebhook `xml:"webhook"`
-}
-
-type xmlVCSOAuth struct {
-	ClientID     string `xml:"client-id,attr"`
-	ClientSecret string `xml:"client-secret,attr"`
-	CallbackPath string `xml:"callback-path,attr"`
-	Scopes       string `xml:"scopes,attr"`
-}
-
-type xmlVCSOAuthGL struct {
-	ApplicationID     string `xml:"application-id,attr"`
-	ApplicationSecret string `xml:"application-secret,attr"`
-	CallbackPath      string `xml:"callback-path,attr"`
-	Scopes            string `xml:"scopes,attr"`
-}
-
-type xmlVCSWebhook struct {
-	Enabled string `xml:"enabled,attr"`
-	Secret  string `xml:"secret,attr"`
-	Path    string `xml:"path,attr"`
-}
-
-type xmlVCSToken struct {
-	Value string `xml:"value,attr"`
-}
-
-type xmlBitbucket struct {
-	Enabled     string           `xml:"enabled,attr"`
-	BaseURL     string           `xml:"base-url,attr"`
-	APIURL      string           `xml:"api-url,attr"`
-	OAuth       xmlVCSOAuth      `xml:"oauth"`
-	Credentials xmlBBCredentials `xml:"credentials"`
-	Webhook     xmlVCSWebhook    `xml:"webhook"`
-}
-
-type xmlBBCredentials struct {
-	Username    string `xml:"username,attr"`
-	AppPassword string `xml:"app-password,attr"`
-	Token       string `xml:"token,attr"`
-}
-
-type xmlAzureDevOps struct {
-	Enabled      string         `xml:"enabled,attr"`
-	Organization string         `xml:"organization,attr"`
-	BaseURL      string         `xml:"base-url,attr"`
-	PAT          xmlVCSToken    `xml:"pat"`
-	AzureAD      xmlAzureADCfg  `xml:"azure-ad"`
-	Webhook      xmlVCSWebhook  `xml:"webhook"`
-	Events       xmlAzureEvents `xml:"events"`
-}
-
-type xmlAzureADCfg struct {
-	Enabled      string `xml:"enabled,attr"`
-	TenantID     string `xml:"tenant-id,attr"`
-	ClientID     string `xml:"client-id,attr"`
-	ClientSecret string `xml:"client-secret,attr"`
-}
-
-type xmlAzureEvents struct {
-	Events []xmlAzureEvent `xml:"event"`
-}
-
-type xmlAzureEvent struct {
-	Name    string `xml:"name,attr"`
-	Enabled string `xml:"enabled,attr"`
-}
-
 // ---- Environment variable expansion ----
 
 // envVarRegex matches the innermost ${…} (no nested braces).
@@ -744,13 +551,10 @@ func findConfigFile(name string, explicitPath string) (string, error) {
 type LoadOptions struct {
 	// ServerPropsPath overrides the search path for rtserverprops.xml.
 	ServerPropsPath string
-
-	// VCSPlatformsPath overrides the search path for vcsplatforms.xml.
-	VCSPlatformsPath string
 }
 
-// Load reads configuration from rtserverprops.xml and vcsplatforms.xml.
-// It resolves ${ENV_VAR:default} placeholders in all attribute values.
+// Load reads configuration from rtserverprops.xml.
+// VCS credentials are resolved at runtime from the user vault/DB.
 func Load(opts ...LoadOptions) (*Config, error) {
 	var o LoadOptions
 	if len(opts) > 0 {
@@ -763,76 +567,10 @@ func Load(opts ...LoadOptions) (*Config, error) {
 		return nil, fmt.Errorf("server props: %w", err)
 	}
 
-	vcsFile, err := findConfigFile("vcsplatforms.xml", o.VCSPlatformsPath)
-	if err != nil {
-		return nil, fmt.Errorf("vcs platforms: %w", err)
-	}
-
 	// -- Parse rtserverprops.xml --
 	cfg, err := loadServerProps(serverPropsFile)
 	if err != nil {
 		return nil, fmt.Errorf("loading %s: %w", serverPropsFile, err)
-	}
-
-	// -- Parse vcsplatforms.xml --
-	vcs, err := loadVCSPlatforms(vcsFile)
-	if err != nil {
-		return nil, fmt.Errorf("loading %s: %w", vcsFile, err)
-	}
-	cfg.VCS = *vcs
-
-	// -- Merge VCS webhook secrets into WebhooksConfig for backward compat --
-	if cfg.VCS.GitHub != nil {
-		cfg.Webhooks.GitHub = WebhookPlatformConfig{
-			Secret: cfg.VCS.GitHub.Webhook.Secret,
-			Path:   cfg.VCS.GitHub.Webhook.Path,
-		}
-	}
-	if cfg.VCS.GitLab != nil {
-		cfg.Webhooks.GitLab = WebhookPlatformConfig{
-			Secret: cfg.VCS.GitLab.Webhook.Secret,
-			Path:   cfg.VCS.GitLab.Webhook.Path,
-		}
-	}
-	if cfg.VCS.Bitbucket != nil {
-		cfg.Webhooks.Bitbucket = WebhookPlatformConfig{
-			Secret: cfg.VCS.Bitbucket.Webhook.Secret,
-			Path:   cfg.VCS.Bitbucket.Webhook.Path,
-		}
-	}
-	if cfg.VCS.AzureDevOps != nil {
-		cfg.Webhooks.AzureDevOps = WebhookPlatformConfig{
-			Secret: cfg.VCS.AzureDevOps.Webhook.Secret,
-			Path:   cfg.VCS.AzureDevOps.Webhook.Path,
-		}
-	}
-
-	// -- Merge VCS OAuth into Auth.Providers for backward compat --
-	if cfg.Auth.Providers == nil {
-		cfg.Auth.Providers = make(map[string]OAuthProvider)
-	}
-	if cfg.VCS.GitHub != nil && cfg.VCS.GitHub.OAuth.ClientID != "" {
-		cfg.Auth.Providers["github"] = OAuthProvider{
-			ClientID:     cfg.VCS.GitHub.OAuth.ClientID,
-			ClientSecret: cfg.VCS.GitHub.OAuth.ClientSecret,
-			Scopes:       strings.Split(cfg.VCS.GitHub.OAuth.Scopes, ","),
-			CallbackPath: cfg.VCS.GitHub.OAuth.CallbackPath,
-		}
-	}
-	if cfg.VCS.GitLab != nil && cfg.VCS.GitLab.OAuth.ClientID != "" {
-		cfg.Auth.Providers["gitlab"] = OAuthProvider{
-			ClientID:     cfg.VCS.GitLab.OAuth.ClientID,
-			ClientSecret: cfg.VCS.GitLab.OAuth.ClientSecret,
-			Scopes:       strings.Split(cfg.VCS.GitLab.OAuth.Scopes, ","),
-			CallbackPath: cfg.VCS.GitLab.OAuth.CallbackPath,
-		}
-	}
-	if cfg.VCS.Bitbucket != nil && cfg.VCS.Bitbucket.OAuth.ClientID != "" {
-		cfg.Auth.Providers["bitbucket"] = OAuthProvider{
-			ClientID:     cfg.VCS.Bitbucket.OAuth.ClientID,
-			ClientSecret: cfg.VCS.Bitbucket.OAuth.ClientSecret,
-			CallbackPath: cfg.VCS.Bitbucket.OAuth.CallbackPath,
-		}
 	}
 
 	return cfg, nil
@@ -1101,113 +839,4 @@ func parseJDBCURL(url string) (string, int, string) {
 	}
 
 	return host, port, name
-}
-
-// ---- vcsplatforms.xml loader ----
-
-func loadVCSPlatforms(path string) (*VCSConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var raw xmlPlatforms
-	if err := xml.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("XML parse error: %w", err)
-	}
-
-	vcs := &VCSConfig{}
-
-	// -- GitHub --
-	vcs.GitHub = &VCSPlatformConfig{
-		Enabled: parseBool(raw.GitHub.Enabled, true),
-		BaseURL: expand(raw.GitHub.BaseURL),
-		APIURL:  expand(raw.GitHub.APIURL),
-		OAuth: VCSOAuthConfig{
-			ClientID:     expand(raw.GitHub.OAuth.ClientID),
-			ClientSecret: expand(raw.GitHub.OAuth.ClientSecret),
-			CallbackPath: expand(raw.GitHub.OAuth.CallbackPath),
-			Scopes:       expand(raw.GitHub.OAuth.Scopes),
-		},
-		App: VCSAppConfig{
-			Enabled:        parseBool(raw.GitHub.App.Enabled, false),
-			AppID:          expand(raw.GitHub.App.AppID),
-			PrivateKeyPath: expand(raw.GitHub.App.PrivateKeyPath),
-		},
-		Webhook: VCSWebhookConfig{
-			Enabled: parseBool(raw.GitHub.Webhook.Enabled, true),
-			Secret:  expand(raw.GitHub.Webhook.Secret),
-			Path:    expand(raw.GitHub.Webhook.Path),
-		},
-		Token: expand(raw.GitHub.Token.Value),
-	}
-
-	// -- GitLab --
-	vcs.GitLab = &VCSPlatformConfig{
-		Enabled: parseBool(raw.GitLab.Enabled, false),
-		BaseURL: expand(raw.GitLab.BaseURL),
-		OAuth: VCSOAuthConfig{
-			ClientID:     expand(raw.GitLab.OAuth.ApplicationID),
-			ClientSecret: expand(raw.GitLab.OAuth.ApplicationSecret),
-			CallbackPath: expand(raw.GitLab.OAuth.CallbackPath),
-			Scopes:       expand(raw.GitLab.OAuth.Scopes),
-		},
-		Webhook: VCSWebhookConfig{
-			Enabled: parseBool(raw.GitLab.Webhook.Enabled, true),
-			Secret:  expand(raw.GitLab.Webhook.Secret),
-			Path:    expand(raw.GitLab.Webhook.Path),
-		},
-		Token: expand(raw.GitLab.Token.Value),
-	}
-
-	// -- Bitbucket --
-	vcs.Bitbucket = &VCSPlatformConfig{
-		Enabled: parseBool(raw.Bitbucket.Enabled, false),
-		BaseURL: expand(raw.Bitbucket.BaseURL),
-		APIURL:  expand(raw.Bitbucket.APIURL),
-		OAuth: VCSOAuthConfig{
-			ClientID:     expand(raw.Bitbucket.OAuth.ClientID),
-			ClientSecret: expand(raw.Bitbucket.OAuth.ClientSecret),
-			CallbackPath: expand(raw.Bitbucket.OAuth.CallbackPath),
-		},
-		Credentials: VCSCredentials{
-			Username:    expand(raw.Bitbucket.Credentials.Username),
-			AppPassword: expand(raw.Bitbucket.Credentials.AppPassword),
-			Token:       expand(raw.Bitbucket.Credentials.Token),
-		},
-		Webhook: VCSWebhookConfig{
-			Enabled: parseBool(raw.Bitbucket.Webhook.Enabled, true),
-			Secret:  expand(raw.Bitbucket.Webhook.Secret),
-			Path:    expand(raw.Bitbucket.Webhook.Path),
-		},
-	}
-
-	// -- Azure DevOps --
-	events := make([]VCSEventConfig, 0, len(raw.AzureDevOps.Events.Events))
-	for _, e := range raw.AzureDevOps.Events.Events {
-		events = append(events, VCSEventConfig{
-			Name:    expand(e.Name),
-			Enabled: parseBool(e.Enabled, true),
-		})
-	}
-	vcs.AzureDevOps = &VCSPlatformConfig{
-		Enabled:      parseBool(raw.AzureDevOps.Enabled, false),
-		BaseURL:      expand(raw.AzureDevOps.BaseURL),
-		Organization: expand(raw.AzureDevOps.Organization),
-		Token:        expand(raw.AzureDevOps.PAT.Value),
-		AzureAD: VCSAzureADConfig{
-			Enabled:      parseBool(raw.AzureDevOps.AzureAD.Enabled, false),
-			TenantID:     expand(raw.AzureDevOps.AzureAD.TenantID),
-			ClientID:     expand(raw.AzureDevOps.AzureAD.ClientID),
-			ClientSecret: expand(raw.AzureDevOps.AzureAD.ClientSecret),
-		},
-		Webhook: VCSWebhookConfig{
-			Enabled: parseBool(raw.AzureDevOps.Webhook.Enabled, true),
-			Secret:  expand(raw.AzureDevOps.Webhook.Secret),
-			Path:    expand(raw.AzureDevOps.Webhook.Path),
-		},
-		Events: events,
-	}
-
-	return vcs, nil
 }

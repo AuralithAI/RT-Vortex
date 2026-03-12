@@ -35,6 +35,9 @@ service EngineService {
     rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
     rpc GetDiagnostics(DiagnosticsRequest) returns (DiagnosticsResponse);
 
+    // File Content — read a file from the engine's local clone for the swarm
+    rpc GetFileContent(FileContentRequest) returns (FileContentResponse);
+
     // Metrics — server-streaming so the Go API server can relay to the dashboard.
     // The engine pushes a snapshot every interval_ms (default 1000).
     rpc StreamEngineMetrics(EngineMetricsRequest) returns (stream EngineMetricsSnapshot);
@@ -463,4 +466,20 @@ message EngineMetricsSnapshot {
     map<string, uint64> index_sizes_bytes = 4;      // Per-repo index file sizes
     uint64 knowledge_graph_nodes = 5;               // Total KG nodes
     uint64 knowledge_graph_edges = 6;               // Total KG edges
+}
+
+// ============================================================================
+// File Content (Swarm)
+// ============================================================================
+
+message FileContentRequest {
+    string repo_id = 1;      // Repository identifier
+    string file_path = 2;    // Path within the repository
+    string ref = 3;          // Git ref (branch, tag, commit); empty = HEAD
+}
+
+message FileContentResponse {
+    string content = 1;      // File content (UTF-8 text)
+    string encoding = 2;     // "utf-8" or "base64" for binary files
+    bool is_binary = 3;      // True if file was detected as binary
 }
