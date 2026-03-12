@@ -358,6 +358,10 @@ proto-python: ## Generate Python gRPC stubs from engine.proto
 			--python_out=$(SWARM_DIR)/proto \
 			$(PROTO_SRC)/engine.proto; \
 		touch $(SWARM_DIR)/proto/__init__.py; \
+		: protoc generates absolute imports but the stubs live inside rtvortex_swarm.proto; \
+		: so we rewrite to relative imports — this is the standard workaround for protoc-python; \
+		sed -i 's/^import engine_pb2 as engine__pb2/from . import engine_pb2 as engine__pb2/' \
+			$(SWARM_DIR)/proto/engine_pb2_grpc.py 2>/dev/null || true; \
 		echo "  Python proto stubs generated in $(SWARM_DIR)/proto/"; \
 	fi
 
