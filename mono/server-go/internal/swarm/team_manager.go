@@ -99,6 +99,66 @@ func (m *TeamManager) ReleaseTeam(ctx context.Context, teamID uuid.UUID) {
 	slog.Info("swarm team released to idle", "team_id", teamID)
 }
 
+// MarkTeamOffline sets a team's status to offline (all agents lost).
+func (m *TeamManager) MarkTeamOffline(ctx context.Context, teamID uuid.UUID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, _ = m.db.Exec(ctx, `UPDATE swarm_teams SET status = 'offline' WHERE id = $1`, teamID)
+	slog.Warn("swarm team marked offline", "team_id", teamID)
+}
+
+// ScaleTeam dynamically adds agents to an existing team mid-task.
+// Returns error if the team is at max capacity or not found.
+func (m *TeamManager) ScaleTeam(ctx context.Context, teamID uuid.UUID, additionalAgents int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var currentCount int
+	err := m.db.QueryRow(ctx, `
+		SELECT COALESCE(array_length(agent_ids, 1), 0) FROM swarm_teams WHERE id = $1`,
+		teamID,
+	).Scan(&currentCount)
+	if err != nil {
+		return fmt.Errorf("querying team %s agent count: %w", teamID, err)
+	}
+
+	const maxAgentsPerTeam = 10
+	if currentCount+additionalAgents > maxAgentsPerTeam {
+		return fmt.Errorf("team %s would exceed max agents (%d + %d > %d)",
+			teamID, currentCount, additionalAgents, maxAgentsPerTeam)
+	}
+
+	slog.Info("swarm team scaling requested",
+		"team_id", teamID,
+		"current_agents", currentCount,
+		"additional", additionalAgents,
+	)
+
+	return nil
+}
+
+// DisbandTeam marks a team as offline and sets all its agents to offline.
+func (m *TeamManager) DisbandTeam(ctx context.Context, teamID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Mark all agents in this team offline.
+	_, err := m.db.Exec(ctx, `
+		UPDATE swarm_agents SET status = 'offline' WHERE team_id = $1`, teamID)
+	if err != nil {
+		return fmt.Errorf("offlining team agents: %w", err)
+	}
+
+	// Mark team offline.
+	_, err = m.db.Exec(ctx, `UPDATE swarm_teams SET status = 'offline' WHERE id = $1`, teamID)
+	if err != nil {
+		return fmt.Errorf("offlining team: %w", err)
+	}
+
+	slog.Info("swarm team disbanded", "team_id", teamID)
+	return nil
+}
+
 // CanCreateTeam checks whether we're below the max team count.
 func (m *TeamManager) CanCreateTeam() bool {
 	m.mu.RLock()

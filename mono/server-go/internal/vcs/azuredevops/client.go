@@ -463,3 +463,35 @@ func (c *Client) doJSON(ctx context.Context, method, url string, body interface{
 	}
 	return nil
 }
+
+// ── Phase 2 stubs — branch / commit / PR creation ──────────────────────────
+
+// CreateBranch creates a new branch from the given commit SHA.
+// TODO: implement Azure DevOps branch creation via POST /refs.
+func (c *Client) CreateBranch(ctx context.Context, owner, repo string, req *vcs.CreateBranchRequest) error {
+	return fmt.Errorf("azuredevops: CreateBranch not implemented")
+}
+
+// CreateOrUpdateFile creates or updates a file on a branch and commits it.
+// TODO: implement via POST /pushes.
+func (c *Client) CreateOrUpdateFile(ctx context.Context, owner, repo, branch string, file *vcs.FileCommit) (string, error) {
+	return "", fmt.Errorf("azuredevops: CreateOrUpdateFile not implemented")
+}
+
+// CreatePullRequest opens a new pull request on Azure DevOps.
+// TODO: implement via POST /pullrequests.
+func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, req *vcs.CreatePullRequestRequest) (*vcs.PullRequest, error) {
+	return nil, fmt.Errorf("azuredevops: CreatePullRequest not implemented")
+}
+
+// GetDefaultBranch returns the repo's default branch name.
+// TODO: implement via GET /repositories/:id → defaultBranch.
+func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) (string, error) {
+	return "", fmt.Errorf("azuredevops: GetDefaultBranch not implemented")
+}
+
+// GetBranchSHA returns the HEAD commit SHA for a branch.
+// TODO: implement via GET /refs?filter=heads/:branch.
+func (c *Client) GetBranchSHA(ctx context.Context, owner, repo, branch string) (string, error) {
+	return "", fmt.Errorf("azuredevops: GetBranchSHA not implemented")
+}

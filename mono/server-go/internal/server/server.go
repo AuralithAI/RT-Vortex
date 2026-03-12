@@ -362,7 +362,9 @@ func (s *Server) setupRouter() {
 				r.Get("/tasks/{id}/diffs", sh.ListDiffs)
 				r.Post("/tasks/{id}/diffs/{diffId}/comments", sh.AddDiffComment)
 				r.Post("/tasks/{id}/complete", sh.CompleteTask)
+				r.Post("/tasks/{id}/fail", sh.FailTask)
 				r.Post("/tasks/{id}/declare-size", sh.DeclareTeamSize)
+				r.Post("/tasks/{id}/contribution", sh.RecordContribution)
 				r.Post("/heartbeat/{id}", sh.Heartbeat)
 
 				// LLM proxy.
@@ -381,14 +383,18 @@ func (s *Server) setupRouter() {
 
 			r.Post("/tasks", sh.CreateTaskUser)
 			r.Get("/tasks", sh.ListTasksUser)
+			r.Get("/tasks/history", sh.TaskHistory)
 			r.Get("/tasks/{id}", sh.GetTaskUser)
 			r.Post("/tasks/{id}/plan-action", sh.PlanAction)
 			r.Get("/tasks/{id}/diffs", sh.GetDiffsUser)
 			r.Post("/tasks/{id}/diffs/{diffId}/comments", sh.UserDiffComment)
 			r.Post("/tasks/{id}/diff-action", sh.DiffAction)
 			r.Post("/tasks/{id}/rate", sh.RateTaskUser)
+			r.Post("/tasks/{id}/retry", sh.RetryTask)
+			r.Post("/tasks/{id}/cancel", sh.CancelTask)
 			r.Get("/agents", sh.ListAgentsUser)
 			r.Get("/teams", sh.ListTeamsUser)
+			r.Get("/overview", sh.SwarmOverview)
 		})
 	}
 

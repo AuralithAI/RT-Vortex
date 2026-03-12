@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -279,9 +280,75 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 
 // DeclareTeamSize handles POST /internal/swarm/tasks/{id}/declare-size.
 func (h *Handler) DeclareTeamSize(w http.ResponseWriter, r *http.Request) {
-	// Placeholder — Orchestrator signals team size adjustment.
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		AdditionalAgents int      `json:"additional_agents"`
+		Roles            []string `json:"roles,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	task, err := h.TaskMgr.GetTask(r.Context(), taskID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
+		return
+	}
+
+	if task.AssignedTeamID == nil {
+		http.Error(w, `{"error":"task has no assigned team"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.TeamMgr.ScaleTeam(r.Context(), *task.AssignedTeamID, body.AdditionalAgents); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	// Broadcast scaling event.
+	if h.WS != nil {
+		h.WS.BroadcastTaskEvent("team_scaled", taskID.String(), map[string]interface{}{
+			"additional_agents": body.AdditionalAgents,
+			"roles":            body.Roles,
+		})
+	}
+
 	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte(`{"status":"acknowledged"}`))
+	w.Write([]byte(`{"status":"scaling_acknowledged"}`))
+}
+
+// FailTask handles POST /internal/swarm/tasks/{id}/fail.
+func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if body.Reason == "" {
+		body.Reason = "agent reported failure"
+	}
+
+	if err := h.TaskMgr.FailTask(r.Context(), taskID, body.Reason); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"failed"}`))
 }
 
 // Heartbeat handles POST /internal/swarm/heartbeat/{id}.
@@ -586,6 +653,142 @@ func (h *Handler) ListTeamsUser(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(teams)
 }
 
+// RetryTask handles POST /api/v1/swarm/tasks/{id}/retry (user JWT required).
+func (h *Handler) RetryTask(w http.ResponseWriter, r *http.Request) {
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.TaskMgr.RetryTask(r.Context(), taskID); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"retried"}`))
+}
+
+// CancelTask handles POST /api/v1/swarm/tasks/{id}/cancel (user JWT required).
+func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	task, err := h.TaskMgr.GetTask(r.Context(), taskID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
+		return
+	}
+
+	// Cannot cancel terminal-state tasks.
+	switch task.Status {
+	case StatusCompleted, StatusCancelled, StatusFailed, StatusTimedOut:
+		http.Error(w, fmt.Sprintf(`{"error":"cannot cancel task in status %q"}`, task.Status), http.StatusBadRequest)
+		return
+	}
+
+	if err := h.TaskMgr.UpdateStatus(r.Context(), taskID, StatusCancelled); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	SwarmTasksTotal.WithLabelValues(StatusCancelled).Inc()
+	SwarmTasksActive.Dec()
+
+	// Release the team.
+	if task.AssignedTeamID != nil {
+		h.TeamMgr.ReleaseTeam(r.Context(), *task.AssignedTeamID)
+	}
+
+	if h.WS != nil {
+		h.WS.BroadcastTaskEvent("cancelled", taskID.String(), nil)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"cancelled"}`))
+}
+
+// TaskHistory handles GET /api/v1/swarm/tasks/history (user JWT required).
+func (h *Handler) TaskHistory(w http.ResponseWriter, r *http.Request) {
+	repoID := r.URL.Query().Get("repo_id")
+	limit := parseIntParam(r, "limit", 25)
+	offset := parseIntParam(r, "offset", 0)
+
+	summaries, total, err := h.TaskMgr.ListTaskHistory(r.Context(), repoID, limit, offset)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"tasks": summaries,
+		"total": total,
+		"limit": limit,
+		"offset": offset,
+	})
+}
+
+// SwarmOverview handles GET /api/v1/swarm/overview (user JWT required).
+func (h *Handler) SwarmOverview(w http.ResponseWriter, r *http.Request) {
+	overview, err := h.TaskMgr.GetOverview(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(overview)
+}
+
+// RecordContribution handles POST /internal/swarm/tasks/{id}/contribution.
+func (h *Handler) RecordContribution(w http.ResponseWriter, r *http.Request) {
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	var body struct {
+		AgentID          string `json:"agent_id"`
+		Role             string `json:"role"`
+		Phase            string `json:"phase"`
+		ContributionType string `json:"contribution_type"`
+		TokensUsed       int    `json:"tokens_used"`
+		LLMCalls         int    `json:"llm_calls"`
+		RAGCalls         int    `json:"rag_calls"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	agentID, _ := uuid.Parse(body.AgentID)
+	if agentID == uuid.Nil {
+		// Try from JWT claims.
+		claims, ok := swarmauth.AgentClaimsFromContext(r.Context())
+		if ok {
+			agentID, _ = uuid.Parse(claims.Subject)
+		}
+	}
+
+	if err := h.TaskMgr.RecordAgentContribution(
+		r.Context(), taskID, agentID,
+		body.Role, body.Phase, body.ContributionType,
+		body.TokensUsed, body.LLMCalls, body.RAGCalls,
+	); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(`{"status":"recorded"}`))
+}
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 // userIDFromRequest extracts the user UUID from auth context.
@@ -596,4 +799,17 @@ func userIDFromRequest(r *http.Request) uuid.UUID {
 		return id
 	}
 	return uuid.Nil
+}
+
+// parseIntParam extracts an integer query parameter with a default fallback.
+func parseIntParam(r *http.Request, name string, defaultVal int) int {
+	s := r.URL.Query().Get(name)
+	if s == "" {
+		return defaultVal
+	}
+	v, err := strconv.Atoi(s)
+	if err != nil || v < 0 {
+		return defaultVal
+	}
+	return v
 }

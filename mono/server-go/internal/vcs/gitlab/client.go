@@ -327,3 +327,35 @@ func (c *Client) doJSON(ctx context.Context, method, url string, body interface{
 	}
 	return nil
 }
+
+// ── Phase 2 stubs — branch / commit / PR creation ──────────────────────────
+
+// CreateBranch creates a new branch from the given commit SHA.
+// TODO: implement GitLab branch creation via POST /projects/:id/repository/branches.
+func (c *Client) CreateBranch(ctx context.Context, owner, repo string, req *vcs.CreateBranchRequest) error {
+	return fmt.Errorf("gitlab: CreateBranch not implemented")
+}
+
+// CreateOrUpdateFile creates or updates a file on a branch and commits it.
+// TODO: implement via PUT /projects/:id/repository/files/:path.
+func (c *Client) CreateOrUpdateFile(ctx context.Context, owner, repo, branch string, file *vcs.FileCommit) (string, error) {
+	return "", fmt.Errorf("gitlab: CreateOrUpdateFile not implemented")
+}
+
+// CreatePullRequest opens a new merge request (PR) on GitLab.
+// TODO: implement via POST /projects/:id/merge_requests.
+func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, req *vcs.CreatePullRequestRequest) (*vcs.PullRequest, error) {
+	return nil, fmt.Errorf("gitlab: CreatePullRequest not implemented")
+}
+
+// GetDefaultBranch returns the repo's default branch name.
+// TODO: implement via GET /projects/:id → default_branch field.
+func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) (string, error) {
+	return "", fmt.Errorf("gitlab: GetDefaultBranch not implemented")
+}
+
+// GetBranchSHA returns the HEAD commit SHA for a branch.
+// TODO: implement via GET /projects/:id/repository/branches/:branch.
+func (c *Client) GetBranchSHA(ctx context.Context, owner, repo, branch string) (string, error) {
+	return "", fmt.Errorf("gitlab: GetBranchSHA not implemented")
+}

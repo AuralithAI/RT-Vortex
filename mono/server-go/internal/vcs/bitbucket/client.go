@@ -439,3 +439,35 @@ func (c *Client) doJSON(ctx context.Context, method, url string, body interface{
 	}
 	return nil
 }
+
+// ── Phase 2 stubs — branch / commit / PR creation ──────────────────────────
+
+// CreateBranch creates a new branch from the given commit SHA.
+// TODO: implement Bitbucket branch creation via POST /refs/branches.
+func (c *Client) CreateBranch(ctx context.Context, owner, repo string, req *vcs.CreateBranchRequest) error {
+	return fmt.Errorf("bitbucket: CreateBranch not implemented")
+}
+
+// CreateOrUpdateFile creates or updates a file on a branch and commits it.
+// TODO: implement via POST /src with multipart form.
+func (c *Client) CreateOrUpdateFile(ctx context.Context, owner, repo, branch string, file *vcs.FileCommit) (string, error) {
+	return "", fmt.Errorf("bitbucket: CreateOrUpdateFile not implemented")
+}
+
+// CreatePullRequest opens a new pull request on Bitbucket.
+// TODO: implement via POST /pullrequests.
+func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, req *vcs.CreatePullRequestRequest) (*vcs.PullRequest, error) {
+	return nil, fmt.Errorf("bitbucket: CreatePullRequest not implemented")
+}
+
+// GetDefaultBranch returns the repo's default branch name.
+// TODO: implement via GET /repositories/:owner/:slug → mainbranch.name.
+func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) (string, error) {
+	return "", fmt.Errorf("bitbucket: GetDefaultBranch not implemented")
+}
+
+// GetBranchSHA returns the HEAD commit SHA for a branch.
+// TODO: implement via GET /refs/branches/:name → target.hash.
+func (c *Client) GetBranchSHA(ctx context.Context, owner, repo, branch string) (string, error) {
+	return "", fmt.Errorf("bitbucket: GetBranchSHA not implemented")
+}

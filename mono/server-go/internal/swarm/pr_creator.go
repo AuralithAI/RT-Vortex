@@ -155,6 +155,8 @@ func (c *PRCreator) CreatePR(ctx context.Context, taskID uuid.UUID) error {
 		"branch":    branchName,
 	})
 
+	SwarmPRsCreated.Inc()
+
 	slog.Info("swarm pr_creator: PR created successfully",
 		"task_id", taskID,
 		"pr_url", pr.URL,
@@ -222,6 +224,8 @@ func (c *PRCreator) buildPRBody(task *Task, diffs []TaskDiff, branch, commitSHA 
 func (c *PRCreator) failPR(ctx context.Context, taskID uuid.UUID, err error) error {
 	slog.Error("swarm pr_creator: PR creation failed", "task_id", taskID, "error", err)
 	_ = c.taskMgr.UpdateStatus(ctx, taskID, StatusFailed)
+
+	SwarmPRsFailed.Inc()
 
 	c.broadcastPREvent(taskID, "pr_failed", map[string]interface{}{
 		"error": err.Error(),

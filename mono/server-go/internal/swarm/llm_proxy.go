@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
 )
@@ -128,11 +129,26 @@ func (p *LLMProxy) HandleComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	resp, err := p.Complete(r.Context(), &req)
+	duration := time.Since(start)
+
 	if err != nil {
 		slog.Error("swarm llm proxy error", "error", err)
+		SwarmLLMCallsTotal.WithLabelValues("error").Inc()
+		SwarmLLMCallDuration.Observe(duration.Seconds())
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 		return
+	}
+
+	// Record metrics.
+	SwarmLLMCallsTotal.WithLabelValues("ok").Inc()
+	SwarmLLMCallDuration.Observe(duration.Seconds())
+	if resp.Usage.PromptTokens > 0 {
+		SwarmLLMTokensTotal.WithLabelValues("prompt").Add(float64(resp.Usage.PromptTokens))
+	}
+	if resp.Usage.CompletionTokens > 0 {
+		SwarmLLMTokensTotal.WithLabelValues("completion").Add(float64(resp.Usage.CompletionTokens))
 	}
 
 	w.Header().Set("Content-Type", "application/json")

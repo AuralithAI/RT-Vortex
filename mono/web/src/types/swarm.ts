@@ -43,6 +43,8 @@ export interface SwarmTask {
   human_rating?: number;
   human_comment?: string;
   submitted_by?: string;
+  retry_count: number;
+  failure_reason?: string;
   created_at: string;
   completed_at?: string;
   timeout_at?: string;
@@ -115,12 +117,40 @@ export interface AgentFeedback {
 }
 
 export interface SwarmOverview {
-  total_tasks: number;
   active_tasks: number;
-  completed_tasks: number;
+  pending_tasks: number;
+  completed_all_time: number;
+  failed_all_time: number;
   active_teams: number;
-  total_agents: number;
-  tasks_by_status: Record<TaskStatus, number>;
+  busy_teams: number;
+  online_agents: number;
+  busy_agents: number;
+  avg_duration_seconds: number;
+  total_retries: number;
+  llm_percentage: number;
+}
+
+export interface TaskSummary {
+  id: string;
+  repo_id: string;
+  description: string;
+  status: TaskStatus;
+  retry_count: number;
+  pr_url?: string;
+  pr_number?: number;
+  human_rating?: number;
+  created_at: string;
+  completed_at?: string;
+  diff_count: number;
+  agent_count: number;
+  duration_sec?: number;
+}
+
+export interface TaskHistoryResponse {
+  tasks: TaskSummary[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface TaskSubmission {

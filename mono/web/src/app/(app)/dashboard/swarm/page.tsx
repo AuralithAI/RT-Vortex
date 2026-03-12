@@ -1,25 +1,64 @@
 // ─── Swarm Dashboard ─────────────────────────────────────────────────────────
-// Overview page: task submission form, task list, team grid, agent leaderboard.
-// Phase 0 stub — will be expanded with live WebSocket data in Phase 1.
+// Overview page: live stats, task submission, pipeline board, task history.
+// Phase 3 — production-grade with live overview, Prometheus-backed metrics,
+// retry controls, and tabbed navigation.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
 
-import { useState } from "react";
-import { Bot, ListChecks, Users, Plus, Send, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback } from "react";
+import {
+  Bot,
+  ListChecks,
+  Users,
+  Plus,
+  Send,
+  Loader2,
+  Activity,
+  Clock,
+  AlertTriangle,
+  RefreshCw,
+  Percent,
+  Kanban,
+  History,
+} from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { SwarmTask, TaskSubmission } from "@/types/swarm";
+import { TaskPipelineBoard } from "@/components/swarm/task-pipeline-board";
+import { TaskHistory } from "@/components/swarm/task-history";
+import type { SwarmTask, SwarmOverview, TaskSubmission } from "@/types/swarm";
+
+type Tab = "pipeline" | "history";
 
 export default function SwarmDashboardPage() {
   const [tasks, setTasks] = useState<SwarmTask[]>([]);
+  const [overview, setOverview] = useState<SwarmOverview | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [repoId, setRepoId] = useState("");
   const [description, setDescription] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>("pipeline");
+
+  // Fetch live overview stats every 10 seconds
+  const fetchOverview = useCallback(async () => {
+    try {
+      const res = await fetch("/api/v1/swarm/overview");
+      if (res.ok) {
+        setOverview(await res.json());
+      }
+    } catch {
+      /* will retry on next interval */
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchOverview();
+    const iv = setInterval(fetchOverview, 10_000);
+    return () => clearInterval(iv);
+  }, [fetchOverview]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -127,47 +166,120 @@ export default function SwarmDashboardPage() {
         </div>
       )}
 
-      {/* Stats Overview */}
+      {/* Stats Overview — live from /overview */}
+      <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-6">
+        <StatCard
+          icon={<ListChecks className="h-5 w-5 text-blue-600 dark:text-blue-400" />}
+          bgClass="bg-blue-100 dark:bg-blue-900"
+          label="Active Tasks"
+          value={overview?.active_tasks ?? "—"}
+        />
+        <StatCard
+          icon={<Clock className="h-5 w-5 text-amber-600 dark:text-amber-400" />}
+          bgClass="bg-amber-100 dark:bg-amber-900"
+          label="Pending"
+          value={overview?.pending_tasks ?? "—"}
+        />
+        <StatCard
+          icon={<Users className="h-5 w-5 text-green-600 dark:text-green-400" />}
+          bgClass="bg-green-100 dark:bg-green-900"
+          label="Active Teams"
+          value={
+            overview
+              ? `${overview.busy_teams} / ${overview.active_teams}`
+              : "—"
+          }
+        />
+        <StatCard
+          icon={<Bot className="h-5 w-5 text-purple-600 dark:text-purple-400" />}
+          bgClass="bg-purple-100 dark:bg-purple-900"
+          label="Online Agents"
+          value={
+            overview
+              ? `${overview.busy_agents} / ${overview.online_agents}`
+              : "—"
+          }
+        />
+        <StatCard
+          icon={<Activity className="h-5 w-5 text-teal-600 dark:text-teal-400" />}
+          bgClass="bg-teal-100 dark:bg-teal-900"
+          label="Avg Duration"
+          value={
+            overview
+              ? overview.avg_duration_seconds < 60
+                ? `${Math.round(overview.avg_duration_seconds)}s`
+                : `${Math.round(overview.avg_duration_seconds / 60)}m`
+              : "—"
+          }
+        />
+        <StatCard
+          icon={<Percent className="h-5 w-5 text-indigo-600 dark:text-indigo-400" />}
+          bgClass="bg-indigo-100 dark:bg-indigo-900"
+          label="LLM Utilisation"
+          value={
+            overview
+              ? `${overview.llm_percentage.toFixed(0)}%`
+              : "—"
+          }
+        />
+      </div>
+
+      {/* Secondary stats row */}
       <div className="grid gap-4 md:grid-cols-3">
-        <div className="rounded-lg border bg-card p-6">
-          <div className="flex items-center gap-3">
-            <div className="rounded-md bg-blue-100 p-2 dark:bg-blue-900">
-              <ListChecks className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Total Tasks</p>
-              <p className="text-2xl font-bold">{tasks.length}</p>
-            </div>
+        <div className="flex items-center gap-3 rounded-lg border bg-card p-4">
+          <AlertTriangle className="h-5 w-5 text-red-500" />
+          <div>
+            <p className="text-sm text-muted-foreground">Failed (all time)</p>
+            <p className="text-xl font-bold">{overview?.failed_all_time ?? "—"}</p>
           </div>
         </div>
-        <div className="rounded-lg border bg-card p-6">
-          <div className="flex items-center gap-3">
-            <div className="rounded-md bg-green-100 p-2 dark:bg-green-900">
-              <Users className="h-5 w-5 text-green-600 dark:text-green-400" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Active Teams</p>
-              <p className="text-2xl font-bold">0</p>
-            </div>
+        <div className="flex items-center gap-3 rounded-lg border bg-card p-4">
+          <RefreshCw className="h-5 w-5 text-amber-500" />
+          <div>
+            <p className="text-sm text-muted-foreground">Total Retries</p>
+            <p className="text-xl font-bold">{overview?.total_retries ?? "—"}</p>
           </div>
         </div>
-        <div className="rounded-lg border bg-card p-6">
-          <div className="flex items-center gap-3">
-            <div className="rounded-md bg-purple-100 p-2 dark:bg-purple-900">
-              <Bot className="h-5 w-5 text-purple-600 dark:text-purple-400" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Active Agents</p>
-              <p className="text-2xl font-bold">0</p>
-            </div>
+        <div className="flex items-center gap-3 rounded-lg border bg-card p-4">
+          <ListChecks className="h-5 w-5 text-green-500" />
+          <div>
+            <p className="text-sm text-muted-foreground">
+              Completed (all time)
+            </p>
+            <p className="text-xl font-bold">
+              {overview?.completed_all_time ?? "—"}
+            </p>
           </div>
         </div>
       </div>
 
+      {/* Tabs: Pipeline Board / History */}
+      <div className="flex gap-2 border-b pb-2">
+        <Button
+          variant={activeTab === "pipeline" ? "default" : "ghost"}
+          size="sm"
+          onClick={() => setActiveTab("pipeline")}
+        >
+          <Kanban className="mr-2 h-4 w-4" />
+          Pipeline Board
+        </Button>
+        <Button
+          variant={activeTab === "history" ? "default" : "ghost"}
+          size="sm"
+          onClick={() => setActiveTab("history")}
+        >
+          <History className="mr-2 h-4 w-4" />
+          Task History
+        </Button>
+      </div>
+
+      {activeTab === "pipeline" && <TaskPipelineBoard />}
+      {activeTab === "history" && <TaskHistory />}
+
       {/* Task List */}
       <div className="rounded-lg border bg-card">
         <div className="border-b px-6 py-4">
-          <h3 className="text-lg font-semibold">Tasks</h3>
+          <h3 className="text-lg font-semibold">Recent Tasks</h3>
         </div>
         <div className="divide-y">
           {tasks.length === 0 ? (
@@ -202,5 +314,31 @@ export default function SwarmDashboardPage() {
         </div>
       </div>
     </>
+  );
+}
+
+// ── Stat Card ──────────────────────────────────────────────────────────────────
+
+function StatCard({
+  icon,
+  bgClass,
+  label,
+  value,
+}: {
+  icon: React.ReactNode;
+  bgClass: string;
+  label: string;
+  value: string | number;
+}) {
+  return (
+    <div className="rounded-lg border bg-card p-4">
+      <div className="flex items-center gap-3">
+        <div className={`rounded-md p-2 ${bgClass}`}>{icon}</div>
+        <div>
+          <p className="text-xs text-muted-foreground">{label}</p>
+          <p className="text-lg font-bold">{value}</p>
+        </div>
+      </div>
+    </div>
   );
 }

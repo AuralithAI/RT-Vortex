@@ -35,6 +35,19 @@ const TaskTimeout = 30 * time.Minute
 // AssignLoopInterval is how often the assign loop checks for pending tasks.
 const AssignLoopInterval = 1 * time.Second
 
+// HeartbeatCheckInterval is how often the heartbeat monitor runs.
+const HeartbeatCheckInterval = 15 * time.Second
+
+// HeartbeatTimeout is how long an agent can go without a heartbeat before
+// being marked offline.
+const HeartbeatTimeout = 60 * time.Second
+
+// MaxRetries is the maximum number of times a failed/timed-out task can be retried.
+const MaxRetries = 3
+
+// MetricsRefreshInterval is how often swarm gauges are recomputed from the DB.
+const MetricsRefreshInterval = 10 * time.Second
+
 // Redis stream name for pending tasks.
 const streamPending = "swarm:tasks:pending"
 
@@ -57,9 +70,28 @@ type Task struct {
 	HumanRating    *int            `json:"human_rating,omitempty"`
 	HumanComment   string          `json:"human_comment,omitempty"`
 	SubmittedBy    *uuid.UUID      `json:"submitted_by,omitempty"`
+	RetryCount     int             `json:"retry_count"`
+	FailureReason  string          `json:"failure_reason,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
 	CompletedAt    *time.Time      `json:"completed_at,omitempty"`
 	TimeoutAt      *time.Time      `json:"timeout_at,omitempty"`
+}
+
+// TaskSummary is a lightweight projection for history / listing views.
+type TaskSummary struct {
+	ID          uuid.UUID  `json:"id"`
+	RepoID      string     `json:"repo_id"`
+	Description string     `json:"description"`
+	Status      string     `json:"status"`
+	RetryCount  int        `json:"retry_count"`
+	PRUrl       string     `json:"pr_url,omitempty"`
+	PRNumber    int        `json:"pr_number,omitempty"`
+	HumanRating *int       `json:"human_rating,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	DiffCount   int        `json:"diff_count"`
+	AgentCount  int        `json:"agent_count"`
+	DurationSec *float64   `json:"duration_sec,omitempty"`
 }
 
 // ── TaskManager ─────────────────────────────────────────────────────────────
@@ -70,6 +102,7 @@ type TaskManager struct {
 	db    *pgxpool.Pool
 	redis *redis.Client
 	tm    *TeamManager
+	wsHub *WSHub
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -84,7 +117,12 @@ func NewTaskManager(db *pgxpool.Pool, redisClient *redis.Client, teamMgr *TeamMa
 	}
 }
 
-// Start launches the assignLoop goroutine.
+// SetWSHub sets the WebSocket hub for broadcasting events.
+func (m *TaskManager) SetWSHub(hub *WSHub) {
+	m.wsHub = hub
+}
+
+// Start launches the assignLoop, heartbeat monitor, and metrics refresh goroutines.
 func (m *TaskManager) Start(ctx context.Context) {
 	ctx, m.cancel = context.WithCancel(ctx)
 
@@ -92,7 +130,14 @@ func (m *TaskManager) Start(ctx context.Context) {
 	_ = m.redis.XGroupCreateMkStream(ctx, streamPending, consumerGroup, "0").Err()
 
 	go m.assignLoop(ctx)
-	slog.Info("swarm task_manager started", "interval", AssignLoopInterval)
+	go m.heartbeatMonitor(ctx)
+	go m.metricsRefreshLoop(ctx)
+	slog.Info("swarm task_manager started",
+		"assign_interval", AssignLoopInterval,
+		"heartbeat_check", HeartbeatCheckInterval,
+		"heartbeat_timeout", HeartbeatTimeout,
+		"max_retries", MaxRetries,
+	)
 }
 
 // Stop cancels the assignLoop.
@@ -117,8 +162,8 @@ func (m *TaskManager) CreateTask(ctx context.Context, repoID, description string
 	}
 
 	_, err := m.db.Exec(ctx, `
-		INSERT INTO swarm_tasks (id, repo_id, description, status, submitted_by, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
+		INSERT INTO swarm_tasks (id, repo_id, description, status, submitted_by, created_at, retry_count)
+		VALUES ($1, $2, $3, $4, $5, $6, 0)`,
 		task.ID, task.RepoID, task.Description, task.Status, task.SubmittedBy, task.CreatedAt,
 	)
 	if err != nil {
@@ -137,6 +182,7 @@ func (m *TaskManager) CreateTask(ctx context.Context, repoID, description string
 		// Task is in DB — assignLoop can still pick it up via a fallback query.
 	}
 
+	SwarmTasksActive.Inc()
 	slog.Info("swarm task created", "task_id", task.ID, "repo_id", repoID)
 	return task, nil
 }
@@ -147,6 +193,7 @@ func (m *TaskManager) GetTask(ctx context.Context, taskID uuid.UUID) (*Task, err
 		SELECT id, repo_id, description, status, plan_document,
 		       assigned_team_id, assigned_agents, pr_url, pr_number,
 		       human_rating, human_comment, submitted_by,
+		       COALESCE(retry_count, 0), COALESCE(failure_reason, ''),
 		       created_at, completed_at, timeout_at
 		FROM swarm_tasks WHERE id = $1`, taskID)
 
@@ -155,6 +202,7 @@ func (m *TaskManager) GetTask(ctx context.Context, taskID uuid.UUID) (*Task, err
 		&t.ID, &t.RepoID, &t.Description, &t.Status, &t.PlanDocument,
 		&t.AssignedTeamID, &t.AssignedAgents, &t.PRUrl, &t.PRNumber,
 		&t.HumanRating, &t.HumanComment, &t.SubmittedBy,
+		&t.RetryCount, &t.FailureReason,
 		&t.CreatedAt, &t.CompletedAt, &t.TimeoutAt,
 	)
 	if err != nil {
@@ -168,6 +216,7 @@ func (m *TaskManager) ListTasks(ctx context.Context, repoID, status string, limi
 	query := `SELECT id, repo_id, description, status, plan_document,
 	                 assigned_team_id, assigned_agents, pr_url, pr_number,
 	                 human_rating, human_comment, submitted_by,
+	                 COALESCE(retry_count, 0), COALESCE(failure_reason, ''),
 	                 created_at, completed_at, timeout_at
 	          FROM swarm_tasks WHERE 1=1`
 	args := []interface{}{}
@@ -202,6 +251,7 @@ func (m *TaskManager) ListTasks(ctx context.Context, repoID, status string, limi
 			&t.ID, &t.RepoID, &t.Description, &t.Status, &t.PlanDocument,
 			&t.AssignedTeamID, &t.AssignedAgents, &t.PRUrl, &t.PRNumber,
 			&t.HumanRating, &t.HumanComment, &t.SubmittedBy,
+			&t.RetryCount, &t.FailureReason,
 			&t.CreatedAt, &t.CompletedAt, &t.TimeoutAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning task: %w", err)
@@ -248,9 +298,19 @@ func (m *TaskManager) CompleteTask(ctx context.Context, taskID uuid.UUID) error 
 		return fmt.Errorf("completing task: %w", err)
 	}
 
+	// Record metrics.
+	SwarmTasksTotal.WithLabelValues(StatusCompleted).Inc()
+	SwarmTasksActive.Dec()
+
+	// Record duration.
+	task, tErr := m.GetTask(ctx, taskID)
+	if tErr == nil {
+		duration := now.Sub(task.CreatedAt).Seconds()
+		SwarmTaskDuration.Observe(duration)
+	}
+
 	// Release the team.
-	task, err := m.GetTask(ctx, taskID)
-	if err == nil && task.AssignedTeamID != nil {
+	if task != nil && task.AssignedTeamID != nil {
 		m.tm.ReleaseTeam(ctx, *task.AssignedTeamID)
 	}
 
@@ -364,6 +424,11 @@ func (m *TaskManager) Heartbeat(ctx context.Context, agentID uuid.UUID) error {
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("agent %s not found", agentID)
 	}
+
+	// Store last heartbeat timestamp in Redis for the heartbeat monitor.
+	hbKey := fmt.Sprintf("swarm:agent:heartbeat:%s", agentID)
+	m.redis.Set(ctx, hbKey, time.Now().UTC().Unix(), HeartbeatTimeout*2)
+
 	return nil
 }
 
@@ -528,12 +593,449 @@ func (m *TaskManager) checkTimeouts(ctx context.Context) {
 			continue
 		}
 		slog.Warn("swarm task timed out", "task_id", taskID)
-		_ = m.UpdateStatus(ctx, taskID, StatusTimedOut)
+
+		// Record failure reason.
+		_, _ = m.db.Exec(ctx, `
+			UPDATE swarm_tasks SET status = $1, failure_reason = $2, completed_at = $3
+			WHERE id = $4`,
+			StatusTimedOut, "task exceeded 30 minute timeout", now, taskID,
+		)
+
+		SwarmTasksTotal.WithLabelValues(StatusTimedOut).Inc()
+		SwarmTasksActive.Dec()
+
+		// Broadcast timeout event.
+		if m.wsHub != nil {
+			m.wsHub.BroadcastTaskEvent("timed_out", taskID.String(), map[string]interface{}{
+				"task_id": taskID.String(),
+			})
+		}
 
 		// Release the team.
 		task, err := m.GetTask(ctx, taskID)
 		if err == nil && task.AssignedTeamID != nil {
 			m.tm.ReleaseTeam(ctx, *task.AssignedTeamID)
 		}
+	}
+}
+
+// ── Retry ───────────────────────────────────────────────────────────────────
+
+// RetryTask resets a failed or timed-out task for re-execution.
+// It increments the retry counter, clears the assignment, and re-publishes
+// to the Redis stream. Returns error if the task is not retryable.
+func (m *TaskManager) RetryTask(ctx context.Context, taskID uuid.UUID) error {
+	task, err := m.GetTask(ctx, taskID)
+	if err != nil {
+		return fmt.Errorf("retry: %w", err)
+	}
+
+	// Only failed or timed_out tasks can be retried.
+	if task.Status != StatusFailed && task.Status != StatusTimedOut {
+		return fmt.Errorf("task %s has status %q — only failed or timed_out tasks can be retried", taskID, task.Status)
+	}
+
+	if task.RetryCount >= MaxRetries {
+		return fmt.Errorf("task %s has reached max retries (%d)", taskID, MaxRetries)
+	}
+
+	newRetry := task.RetryCount + 1
+	_, err = m.db.Exec(ctx, `
+		UPDATE swarm_tasks
+		SET status = $1, retry_count = $2, failure_reason = '',
+		    assigned_team_id = NULL, assigned_agents = NULL,
+		    timeout_at = NULL, completed_at = NULL,
+		    plan_document = NULL
+		WHERE id = $3`,
+		StatusSubmitted, newRetry, taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("retry update: %w", err)
+	}
+
+	// Re-publish to Redis stream.
+	if pubErr := m.redis.XAdd(ctx, &redis.XAddArgs{
+		Stream: streamPending,
+		Values: map[string]interface{}{
+			"task_id": taskID.String(),
+			"repo_id": task.RepoID,
+		},
+	}).Err(); pubErr != nil {
+		slog.Error("retry: failed to republish task", "task_id", taskID, "error", pubErr)
+	}
+
+	SwarmTaskRetriesTotal.Inc()
+	SwarmTasksActive.Inc()
+
+	// Broadcast retry event.
+	if m.wsHub != nil {
+		m.wsHub.BroadcastTaskEvent("retried", taskID.String(), map[string]interface{}{
+			"retry_count": newRetry,
+		})
+	}
+
+	slog.Info("swarm task retried", "task_id", taskID, "retry", newRetry)
+	return nil
+}
+
+// FailTask marks a task as failed with a reason.
+func (m *TaskManager) FailTask(ctx context.Context, taskID uuid.UUID, reason string) error {
+	now := time.Now().UTC()
+	_, err := m.db.Exec(ctx, `
+		UPDATE swarm_tasks SET status = $1, failure_reason = $2, completed_at = $3
+		WHERE id = $4`,
+		StatusFailed, reason, now, taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("failing task: %w", err)
+	}
+
+	SwarmTasksTotal.WithLabelValues(StatusFailed).Inc()
+	SwarmTasksActive.Dec()
+
+	// Release the team.
+	task, tErr := m.GetTask(ctx, taskID)
+	if tErr == nil && task.AssignedTeamID != nil {
+		m.tm.ReleaseTeam(ctx, *task.AssignedTeamID)
+	}
+
+	if m.wsHub != nil {
+		m.wsHub.BroadcastTaskEvent("failed", taskID.String(), map[string]interface{}{
+			"reason": reason,
+		})
+	}
+
+	slog.Warn("swarm task failed", "task_id", taskID, "reason", reason)
+	return nil
+}
+
+// ── Task History ────────────────────────────────────────────────────────────
+
+// ListTaskHistory returns completed/failed/timed_out tasks with summary stats.
+func (m *TaskManager) ListTaskHistory(ctx context.Context, repoID string, limit, offset int) ([]TaskSummary, int, error) {
+	if limit <= 0 {
+		limit = 25
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Count total matching rows.
+	countQuery := `SELECT COUNT(*) FROM swarm_tasks WHERE status IN ($1, $2, $3, $4)`
+	countArgs := []interface{}{StatusCompleted, StatusFailed, StatusTimedOut, StatusCancelled}
+	if repoID != "" {
+		countQuery += ` AND repo_id = $5`
+		countArgs = append(countArgs, repoID)
+	}
+
+	var total int
+	if err := m.db.QueryRow(ctx, countQuery, countArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("counting task history: %w", err)
+	}
+
+	// Fetch rows with aggregates.
+	query := `
+		SELECT t.id, t.repo_id, t.description, t.status,
+		       COALESCE(t.retry_count, 0), t.pr_url, t.pr_number,
+		       t.human_rating, t.created_at, t.completed_at,
+		       (SELECT COUNT(*) FROM swarm_task_diffs d WHERE d.task_id = t.id) AS diff_count,
+		       COALESCE(array_length(t.assigned_agents, 1), 0) AS agent_count,
+		       CASE WHEN t.completed_at IS NOT NULL
+		            THEN EXTRACT(EPOCH FROM (t.completed_at - t.created_at))
+		            ELSE NULL END AS duration_sec
+		FROM swarm_tasks t
+		WHERE t.status IN ($1, $2, $3, $4)`
+	args := []interface{}{StatusCompleted, StatusFailed, StatusTimedOut, StatusCancelled}
+	argIdx := 5
+
+	if repoID != "" {
+		query += fmt.Sprintf(` AND t.repo_id = $%d`, argIdx)
+		args = append(args, repoID)
+		argIdx++
+	}
+	query += fmt.Sprintf(` ORDER BY t.created_at DESC LIMIT $%d OFFSET $%d`, argIdx, argIdx+1)
+	args = append(args, limit, offset)
+
+	rows, err := m.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("listing task history: %w", err)
+	}
+	defer rows.Close()
+
+	var summaries []TaskSummary
+	for rows.Next() {
+		var s TaskSummary
+		if err := rows.Scan(
+			&s.ID, &s.RepoID, &s.Description, &s.Status,
+			&s.RetryCount, &s.PRUrl, &s.PRNumber,
+			&s.HumanRating, &s.CreatedAt, &s.CompletedAt,
+			&s.DiffCount, &s.AgentCount, &s.DurationSec,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scanning task summary: %w", err)
+		}
+		summaries = append(summaries, s)
+	}
+	return summaries, total, nil
+}
+
+// ── Agent Task Log ──────────────────────────────────────────────────────────
+
+// RecordAgentContribution logs an agent's contribution to a task.
+func (m *TaskManager) RecordAgentContribution(ctx context.Context, taskID, agentID uuid.UUID,
+	role, phase, contributionType string, tokensUsed, llmCalls, ragCalls int) error {
+
+	_, err := m.db.Exec(ctx, `
+		INSERT INTO agent_task_log
+			(id, task_id, agent_id, role, phase, contribution_type,
+			 tokens_used, llm_calls, rag_calls, started_at, finished_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+		uuid.New(), taskID, agentID, role, phase, contributionType,
+		tokensUsed, llmCalls, ragCalls,
+	)
+	if err != nil {
+		return fmt.Errorf("recording agent contribution: %w", err)
+	}
+	return nil
+}
+
+// ── Swarm Overview ──────────────────────────────────────────────────────────
+
+// SwarmOverview holds a snapshot of the swarm's current state.
+type SwarmOverview struct {
+	ActiveTasks   int     `json:"active_tasks"`
+	PendingTasks  int     `json:"pending_tasks"`
+	CompletedAll  int     `json:"completed_all_time"`
+	FailedAll     int     `json:"failed_all_time"`
+	ActiveTeams   int     `json:"active_teams"`
+	BusyTeams     int     `json:"busy_teams"`
+	OnlineAgents  int     `json:"online_agents"`
+	BusyAgents    int     `json:"busy_agents"`
+	AvgDurationS  float64 `json:"avg_duration_seconds"`
+	TotalRetries  int     `json:"total_retries"`
+	LLMPercentage float64 `json:"llm_percentage"`
+}
+
+// GetOverview computes the current swarm overview from the database.
+func (m *TaskManager) GetOverview(ctx context.Context) (*SwarmOverview, error) {
+	o := &SwarmOverview{}
+
+	// Active tasks (non-terminal).
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_tasks
+		WHERE status NOT IN ($1, $2, $3, $4)`,
+		StatusCompleted, StatusCancelled, StatusFailed, StatusTimedOut,
+	).Scan(&o.ActiveTasks)
+
+	// Pending tasks (submitted, not assigned).
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_tasks WHERE status = $1`, StatusSubmitted,
+	).Scan(&o.PendingTasks)
+
+	// All-time completed.
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_tasks WHERE status = $1`, StatusCompleted,
+	).Scan(&o.CompletedAll)
+
+	// All-time failed + timed out.
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_tasks WHERE status IN ($1, $2)`,
+		StatusFailed, StatusTimedOut,
+	).Scan(&o.FailedAll)
+
+	// Teams.
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_teams WHERE status != 'offline'`,
+	).Scan(&o.ActiveTeams)
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_teams WHERE status = 'busy'`,
+	).Scan(&o.BusyTeams)
+
+	// Agents.
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_agents WHERE status != 'offline'`,
+	).Scan(&o.OnlineAgents)
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_agents WHERE status = 'busy'`,
+	).Scan(&o.BusyAgents)
+
+	// Average duration of completed tasks (last 100).
+	_ = m.db.QueryRow(ctx, `
+		SELECT COALESCE(AVG(EXTRACT(EPOCH FROM (completed_at - created_at))), 0)
+		FROM (SELECT completed_at, created_at FROM swarm_tasks
+		      WHERE status = $1 AND completed_at IS NOT NULL
+		      ORDER BY completed_at DESC LIMIT 100) sub`,
+		StatusCompleted,
+	).Scan(&o.AvgDurationS)
+
+	// Total retries.
+	_ = m.db.QueryRow(ctx, `
+		SELECT COALESCE(SUM(retry_count), 0) FROM swarm_tasks`,
+	).Scan(&o.TotalRetries)
+
+	return o, nil
+}
+
+// ── Heartbeat Monitor ───────────────────────────────────────────────────────
+
+// heartbeatMonitor periodically checks for agents that have missed heartbeats
+// and marks them offline. If a busy agent goes offline, its team's task is
+// marked as failed and eligible for retry.
+func (m *TaskManager) heartbeatMonitor(ctx context.Context) {
+	ticker := time.NewTicker(HeartbeatCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.checkHeartbeats(ctx)
+		}
+	}
+}
+
+func (m *TaskManager) checkHeartbeats(ctx context.Context) {
+	// Find all non-offline agents.
+	rows, err := m.db.Query(ctx, `
+		SELECT id, team_id, status FROM swarm_agents WHERE status != 'offline'`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now().UTC()
+	for rows.Next() {
+		var agentID uuid.UUID
+		var teamID *uuid.UUID
+		var status string
+		if err := rows.Scan(&agentID, &teamID, &status); err != nil {
+			continue
+		}
+
+		// Check Redis for last heartbeat.
+		hbKey := fmt.Sprintf("swarm:agent:heartbeat:%s", agentID)
+		val, err := m.redis.Get(ctx, hbKey).Int64()
+		if err != nil {
+			// No heartbeat key → agent never sent one or key expired.
+			// Only mark offline if the key is truly missing (not a Redis error).
+			if err == redis.Nil {
+				m.markAgentOffline(ctx, agentID, teamID, status, now)
+			}
+			continue
+		}
+
+		lastHB := time.Unix(val, 0)
+		if now.Sub(lastHB) > HeartbeatTimeout {
+			m.markAgentOffline(ctx, agentID, teamID, status, now)
+		}
+	}
+}
+
+func (m *TaskManager) markAgentOffline(ctx context.Context, agentID uuid.UUID, teamID *uuid.UUID, prevStatus string, now time.Time) {
+	_, _ = m.db.Exec(ctx, `UPDATE swarm_agents SET status = 'offline' WHERE id = $1`, agentID)
+	SwarmAgentHeartbeatMisses.Inc()
+
+	slog.Warn("swarm agent heartbeat missed, marked offline",
+		"agent_id", agentID,
+		"prev_status", prevStatus,
+	)
+
+	if m.wsHub != nil {
+		m.wsHub.BroadcastAgentEvent("offline", "", agentID.String(), map[string]interface{}{
+			"reason": "heartbeat_timeout",
+		})
+	}
+
+	// If the agent was busy and part of a team, check if the team should be failed.
+	if prevStatus == "busy" && teamID != nil {
+		m.checkTeamHealth(ctx, *teamID)
+	}
+}
+
+// checkTeamHealth verifies whether a team still has enough online agents.
+// If the lead agent (orchestrator) is offline, fail the team's current task.
+func (m *TaskManager) checkTeamHealth(ctx context.Context, teamID uuid.UUID) {
+	// Count online agents in this team.
+	var onlineCount int
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_agents
+		WHERE team_id = $1 AND status != 'offline'`, teamID,
+	).Scan(&onlineCount)
+
+	if onlineCount == 0 {
+		// No agents left — fail any active task assigned to this team.
+		rows, err := m.db.Query(ctx, `
+			SELECT id FROM swarm_tasks
+			WHERE assigned_team_id = $1 AND status NOT IN ($2, $3, $4, $5)`,
+			teamID, StatusCompleted, StatusCancelled, StatusFailed, StatusTimedOut,
+		)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var taskID uuid.UUID
+			if err := rows.Scan(&taskID); err != nil {
+				continue
+			}
+			_ = m.FailTask(ctx, taskID, "all team agents offline (heartbeat timeout)")
+		}
+
+		// Mark team offline.
+		m.tm.MarkTeamOffline(ctx, teamID)
+	}
+}
+
+// ── Metrics Refresh ─────────────────────────────────────────────────────────
+
+// metricsRefreshLoop periodically recomputes gauge metrics from the database.
+func (m *TaskManager) metricsRefreshLoop(ctx context.Context) {
+	ticker := time.NewTicker(MetricsRefreshInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.refreshMetrics(ctx)
+		}
+	}
+}
+
+func (m *TaskManager) refreshMetrics(ctx context.Context) {
+	// Active tasks.
+	var active int
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_tasks
+		WHERE status NOT IN ($1, $2, $3, $4)`,
+		StatusCompleted, StatusCancelled, StatusFailed, StatusTimedOut,
+	).Scan(&active)
+	SwarmTasksActive.Set(float64(active))
+
+	// Queue depth (submitted but not assigned).
+	var pending int
+	_ = m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_tasks WHERE status = $1`, StatusSubmitted,
+	).Scan(&pending)
+	SwarmQueueDepth.Set(float64(pending))
+
+	// Teams.
+	var activeTeams, busyTeams int
+	_ = m.db.QueryRow(ctx, `SELECT COUNT(*) FROM swarm_teams WHERE status != 'offline'`).Scan(&activeTeams)
+	_ = m.db.QueryRow(ctx, `SELECT COUNT(*) FROM swarm_teams WHERE status = 'busy'`).Scan(&busyTeams)
+	SwarmTeamsActive.Set(float64(activeTeams))
+	SwarmTeamsBusy.Set(float64(busyTeams))
+
+	// Agents.
+	var onlineAgents, busyAgents int
+	_ = m.db.QueryRow(ctx, `SELECT COUNT(*) FROM swarm_agents WHERE status != 'offline'`).Scan(&onlineAgents)
+	_ = m.db.QueryRow(ctx, `SELECT COUNT(*) FROM swarm_agents WHERE status = 'busy'`).Scan(&busyAgents)
+	SwarmAgentsOnline.Set(float64(onlineAgents))
+	if onlineAgents > 0 {
+		SwarmAgentUtilisation.Set(float64(busyAgents) / float64(onlineAgents))
+	} else {
+		SwarmAgentUtilisation.Set(0)
 	}
 }

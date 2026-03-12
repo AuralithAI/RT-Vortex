@@ -321,6 +321,11 @@ CREATE TABLE IF NOT EXISTS swarm_agents (
     registered_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Phase 3: partial index for heartbeat monitoring (online agents only).
+CREATE INDEX IF NOT EXISTS idx_swarm_agents_online
+    ON swarm_agents(status)
+    WHERE status != 'offline';
+
 CREATE TABLE IF NOT EXISTS swarm_teams (
     id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name           TEXT,
@@ -347,6 +352,8 @@ CREATE TABLE IF NOT EXISTS swarm_tasks (
     human_rating      INT,
     human_comment     TEXT,
     submitted_by      UUID,
+    retry_count       INT DEFAULT 0,
+    failure_reason    TEXT,
     created_at        TIMESTAMPTZ DEFAULT NOW(),
     completed_at      TIMESTAMPTZ,
     timeout_at        TIMESTAMPTZ
@@ -354,6 +361,16 @@ CREATE TABLE IF NOT EXISTS swarm_tasks (
 
 CREATE INDEX IF NOT EXISTS idx_swarm_tasks_repo_id ON swarm_tasks(repo_id);
 CREATE INDEX IF NOT EXISTS idx_swarm_tasks_status  ON swarm_tasks(status);
+
+-- Phase 3: partial indexes for task history, timeout checking, and agent monitoring.
+CREATE INDEX IF NOT EXISTS idx_swarm_tasks_history
+    ON swarm_tasks(status, created_at DESC)
+    WHERE status IN ('completed', 'failed', 'timed_out', 'cancelled');
+
+CREATE INDEX IF NOT EXISTS idx_swarm_tasks_timeout
+    ON swarm_tasks(timeout_at)
+    WHERE timeout_at IS NOT NULL
+      AND status NOT IN ('completed', 'cancelled', 'failed', 'timed_out');
 
 CREATE TABLE IF NOT EXISTS swarm_task_diffs (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -438,6 +455,10 @@ WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 6);
 INSERT INTO schema_info (version, description)
 SELECT 7, 'Add swarm agent tables — agents, teams, tasks, diffs, feedback, task logs'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 7);
+
+INSERT INTO schema_info (version, description)
+SELECT 8, 'Add retry_count, failure_reason columns + partial indexes for history, timeout, heartbeat'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 8);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
