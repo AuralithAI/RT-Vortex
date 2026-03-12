@@ -1,11 +1,11 @@
 // ─── Swarm Task Detail ───────────────────────────────────────────────────────
-// Task detail page: plan display, approve/reject, rating, diff list.
-// Phase 0 stub — will be expanded with Monaco diff viewer in Phase 1.
+// Task detail page: plan display, approve/reject, rating, diff list with
+// real-time WebSocket updates and links to full review page.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import {
   Bot,
@@ -15,9 +15,14 @@ import {
   Star,
   FileCode,
   ArrowLeft,
+  ExternalLink,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
+import { PlanReviewCard } from "@/components/swarm/plan-review-card";
+import { DiffViewer } from "@/components/swarm/diff-viewer";
+import { ActivityFeed } from "@/components/swarm/activity-feed";
+import { useSwarmEvents } from "@/hooks/use-swarm-events";
 import type { SwarmTask, SwarmDiff, PlanDocument } from "@/types/swarm";
 
 export default function SwarmTaskDetailPage() {
@@ -28,31 +33,46 @@ export default function SwarmTaskDetailPage() {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
 
-  useEffect(() => {
-    const fetchTask = async () => {
-      try {
-        const res = await fetch(`/api/v1/swarm/tasks/${params.id}`);
-        if (res.ok) {
-          const data = await res.json();
-          setTask(data);
-        }
+  const { events, connected } = useSwarmEvents(params.id);
 
-        // Fetch diffs if available.
-        const diffsRes = await fetch(
-          `/api/v1/swarm/tasks/${params.id}/diffs`
-        );
-        if (diffsRes.ok) {
-          const diffsData = await diffsRes.json();
-          setDiffs(diffsData.diffs || []);
-        }
-      } catch {
-        // Handled by error boundary in Phase 1.
-      } finally {
-        setLoading(false);
+  const fetchTask = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/v1/swarm/tasks/${params.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setTask(data);
       }
-    };
-    fetchTask();
+
+      const diffsRes = await fetch(
+        `/api/v1/swarm/tasks/${params.id}/diffs`
+      );
+      if (diffsRes.ok) {
+        const diffsData = await diffsRes.json();
+        setDiffs(diffsData.diffs || []);
+      }
+    } catch {
+      // Handled by error boundary
+    } finally {
+      setLoading(false);
+    }
   }, [params.id]);
+
+  useEffect(() => {
+    fetchTask();
+  }, [fetchTask]);
+
+  // Refresh on relevant WS events
+  useEffect(() => {
+    if (!events.length) return;
+    const last = events[0];
+    if (
+      last.type === "swarm_diff" ||
+      last.type === "swarm_plan" ||
+      (last.type === "swarm_task" && last.event === "status_changed")
+    ) {
+      fetchTask();
+    }
+  }, [events, fetchTask]);
 
   const handlePlanAction = async (action: string) => {
     await fetch(`/api/v1/swarm/tasks/${params.id}/plan-action`, {
@@ -60,9 +80,15 @@ export default function SwarmTaskDetailPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action }),
     });
-    // Refresh task.
-    const res = await fetch(`/api/v1/swarm/tasks/${params.id}`);
-    if (res.ok) setTask(await res.json());
+    await fetchTask();
+  };
+
+  const handlePlanComment = async (commentText: string) => {
+    await fetch(`/api/v1/swarm/tasks/${params.id}/plan-comment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ comment: commentText }),
+    });
   };
 
   const handleRate = async () => {
@@ -72,9 +98,7 @@ export default function SwarmTaskDetailPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ rating, comment }),
     });
-    // Refresh.
-    const res = await fetch(`/api/v1/swarm/tasks/${params.id}`);
-    if (res.ok) setTask(await res.json());
+    await fetchTask();
   };
 
   if (loading) {
@@ -97,170 +121,154 @@ export default function SwarmTaskDetailPage() {
   const plan = task.plan_document as PlanDocument | undefined;
 
   return (
-    <>
+    <div className="space-y-6">
       <PageHeader
         title={task.description}
         description={`${task.repo_id} • ${task.status.replace(/_/g, " ")}`}
         actions={
-          <Button variant="outline" asChild>
-            <a href="/swarm/tasks">
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Tasks
-            </a>
-          </Button>
+          <div className="flex items-center gap-3">
+            {connected && (
+              <span className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
+                Live
+              </span>
+            )}
+            {diffs.length > 0 && (
+              <Button variant="outline" asChild>
+                <a href={`/swarm/tasks/${params.id}/review`}>
+                  <FileCode className="mr-2 h-4 w-4" />
+                  Review Diffs ({diffs.length})
+                </a>
+              </Button>
+            )}
+            <Button variant="outline" asChild>
+              <a href="/swarm/tasks">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back to Tasks
+              </a>
+            </Button>
+          </div>
         }
       />
 
-      {/* Task Info */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-lg border bg-card p-6">
-          <h3 className="mb-3 font-semibold">Details</h3>
-          <dl className="space-y-2 text-sm">
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Status</dt>
-              <dd className="font-medium">{task.status.replace(/_/g, " ")}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Created</dt>
-              <dd>{new Date(task.created_at).toLocaleString()}</dd>
-            </div>
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Agents</dt>
-              <dd>{task.assigned_agents.length}</dd>
-            </div>
-            {task.pr_url && (
-              <div className="flex justify-between">
-                <dt className="text-muted-foreground">PR</dt>
-                <dd>
-                  <a
-                    href={task.pr_url}
-                    className="text-blue-600 hover:underline"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    #{task.pr_number}
-                  </a>
-                </dd>
-              </div>
-            )}
-          </dl>
-        </div>
-
-        {/* Rating Card (shown for completed tasks) */}
-        {task.status === "completed" && (
-          <div className="rounded-lg border bg-card p-6">
-            <h3 className="mb-3 font-semibold">Rate This Work</h3>
-            <div className="mb-3 flex gap-1">
-              {[1, 2, 3, 4, 5].map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setRating(n)}
-                  className="transition-colors"
-                >
-                  <Star
-                    className={`h-6 w-6 ${n <= rating ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground"}`}
-                  />
-                </button>
-              ))}
-            </div>
-            <textarea
-              className="mb-3 w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground"
-              rows={2}
-              placeholder="Optional comment…"
-              value={comment}
-              onChange={(e) => setComment(e.target.value)}
-            />
-            <Button size="sm" onClick={handleRate} disabled={rating === 0}>
-              Submit Rating
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {/* Plan Section */}
-      {plan && (
-        <div className="rounded-lg border bg-card p-6">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-lg font-semibold">Plan</h3>
-            {task.status === "plan_review" && (
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  onClick={() => handlePlanAction("approve")}
-                >
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                  Approve
-                </Button>
-                <Button
-                  size="sm"
-                  variant="destructive"
-                  onClick={() => handlePlanAction("reject")}
-                >
-                  <XCircle className="mr-2 h-4 w-4" />
-                  Reject
-                </Button>
-              </div>
-            )}
-          </div>
-          <p className="mb-4 text-sm">{plan.summary}</p>
-          <div className="mb-4">
-            <h4 className="mb-2 text-sm font-medium text-muted-foreground">
-              Steps
-            </h4>
-            <ol className="list-inside list-decimal space-y-1 text-sm">
-              {plan.steps?.map((step, i) => (
-                <li key={i}>{step.description}</li>
-              ))}
-            </ol>
-          </div>
-          <div>
-            <h4 className="mb-2 text-sm font-medium text-muted-foreground">
-              Affected Files
-            </h4>
-            <ul className="space-y-1 text-sm font-mono">
-              {plan.affected_files?.map((f, i) => (
-                <li key={i} className="flex items-center gap-2">
-                  <FileCode className="h-3 w-3 text-muted-foreground" />
-                  {f}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      )}
-
-      {/* Diffs Section (stub — Monaco viewer in Phase 1) */}
-      {diffs.length > 0 && (
-        <div className="rounded-lg border bg-card p-6">
-          <h3 className="mb-4 text-lg font-semibold">
-            Diffs ({diffs.length} file{diffs.length !== 1 ? "s" : ""})
-          </h3>
-          <div className="divide-y">
-            {diffs.map((diff) => (
-              <div key={diff.id} className="py-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <FileCode className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-mono text-sm">{diff.file_path}</span>
-                    <span className="rounded-full bg-muted px-2 py-0.5 text-xs">
-                      {diff.change_type}
-                    </span>
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    {diff.status}
-                  </span>
+      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
+        {/* Main content */}
+        <div className="space-y-6">
+          {/* Task Info */}
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="rounded-lg border bg-card p-6">
+              <h3 className="mb-3 font-semibold">Details</h3>
+              <dl className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Status</dt>
+                  <dd className="font-medium">{task.status.replace(/_/g, " ")}</dd>
                 </div>
-                {/* Phase 1: Replace with Monaco diff editor */}
-                {diff.unified_diff && (
-                  <pre className="mt-2 max-h-64 overflow-auto rounded bg-muted p-3 font-mono text-xs">
-                    {diff.unified_diff}
-                  </pre>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Created</dt>
+                  <dd>{new Date(task.created_at).toLocaleString()}</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-muted-foreground">Agents</dt>
+                  <dd>{task.assigned_agents.length}</dd>
+                </div>
+                {task.pr_url && (
+                  <div className="flex justify-between">
+                    <dt className="text-muted-foreground">PR</dt>
+                    <dd>
+                      <a
+                        href={task.pr_url}
+                        className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        #{task.pr_number}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </dd>
+                  </div>
                 )}
+              </dl>
+            </div>
+
+            {/* Rating Card */}
+            {task.status === "completed" && (
+              <div className="rounded-lg border bg-card p-6">
+                <h3 className="mb-3 font-semibold">Rate This Work</h3>
+                <div className="mb-3 flex gap-1">
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => setRating(n)}
+                      className="transition-colors"
+                    >
+                      <Star
+                        className={`h-6 w-6 ${n <= rating ? "fill-yellow-400 text-yellow-400" : "text-muted-foreground"}`}
+                      />
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  className="mb-3 w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground"
+                  rows={2}
+                  placeholder="Optional comment…"
+                  value={comment}
+                  onChange={(e) => setComment(e.target.value)}
+                />
+                <Button size="sm" onClick={handleRate} disabled={rating === 0}>
+                  Submit Rating
+                </Button>
               </div>
-            ))}
+            )}
           </div>
+
+          {/* Plan Section */}
+          {plan && (
+            <PlanReviewCard
+              plan={plan}
+              taskId={params.id}
+              status={task.status}
+              onApprove={() => handlePlanAction("approve")}
+              onReject={() => handlePlanAction("reject")}
+              onComment={handlePlanComment}
+            />
+          )}
+
+          {/* Diffs Section */}
+          {diffs.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold">
+                  Diffs ({diffs.length} file{diffs.length !== 1 ? "s" : ""})
+                </h3>
+                <Button variant="outline" size="sm" asChild>
+                  <a href={`/swarm/tasks/${params.id}/review`}>
+                    Full Review View →
+                  </a>
+                </Button>
+              </div>
+              {diffs.slice(0, 5).map((diff) => (
+                <DiffViewer key={diff.id} diff={diff} readOnly />
+              ))}
+              {diffs.length > 5 && (
+                <p className="text-center text-sm text-muted-foreground">
+                  +{diffs.length - 5} more files.{" "}
+                  <a
+                    href={`/swarm/tasks/${params.id}/review`}
+                    className="text-blue-600 hover:underline"
+                  >
+                    View all in review mode
+                  </a>
+                </p>
+              )}
+            </div>
+          )}
         </div>
-      )}
-    </>
+
+        {/* Sidebar */}
+        <div className="space-y-4">
+          <ActivityFeed events={events} />
+        </div>
+      </div>
+    </div>
   );
 }

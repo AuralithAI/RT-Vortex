@@ -31,23 +31,11 @@ func NewLLMProxy(reg *llm.Registry) *LLMProxy {
 
 // LLMCompleteRequest is the JSON body for POST /internal/swarm/llm/complete.
 type LLMCompleteRequest struct {
-	Messages  []llm.Message `json:"messages"`
-	Tools     []ToolSchema  `json:"tools,omitempty"`
-	MaxTokens int           `json:"max_tokens,omitempty"`
-	Model     string        `json:"model,omitempty"`
-}
-
-// ToolSchema describes a tool in OpenAI function-calling format.
-type ToolSchema struct {
-	Type     string       `json:"type"` // "function"
-	Function ToolFunction `json:"function"`
-}
-
-// ToolFunction is the function definition within a tool schema.
-type ToolFunction struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
+	Messages   []llm.Message `json:"messages"`
+	Tools      []llm.ToolDef `json:"tools,omitempty"`
+	ToolChoice string        `json:"tool_choice,omitempty"`
+	MaxTokens  int           `json:"max_tokens,omitempty"`
+	Model      string        `json:"model,omitempty"`
 }
 
 // LLMCompleteResponse is the OpenAI-compatible response shape.
@@ -68,22 +56,9 @@ type LLMChoice struct {
 
 // LLMMessage is the assistant's message in the response.
 type LLMMessage struct {
-	Role      string     `json:"role"`
-	Content   string     `json:"content"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-}
-
-// ToolCall represents a tool invocation requested by the LLM.
-type ToolCall struct {
-	ID       string       `json:"id"`
-	Type     string       `json:"type"` // "function"
-	Function ToolCallFunc `json:"function"`
-}
-
-// ToolCallFunc is the function name + arguments string.
-type ToolCallFunc struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	Role      string         `json:"role"`
+	Content   string         `json:"content"`
+	ToolCalls []llm.ToolCall `json:"tool_calls,omitempty"`
 }
 
 // LLMUsage tracks token consumption.
@@ -100,9 +75,11 @@ type LLMUsage struct {
 func (p *LLMProxy) Complete(ctx context.Context, req *LLMCompleteRequest) (*LLMCompleteResponse, error) {
 	// Build the internal CompletionRequest.
 	cr := &llm.CompletionRequest{
-		Messages:  req.Messages,
-		MaxTokens: req.MaxTokens,
-		Model:     req.Model,
+		Messages:   req.Messages,
+		Tools:      req.Tools,
+		ToolChoice: req.ToolChoice,
+		MaxTokens:  req.MaxTokens,
+		Model:      req.Model,
 	}
 
 	// Use registry to complete (handles fallback, provider selection).
@@ -112,17 +89,22 @@ func (p *LLMProxy) Complete(ctx context.Context, req *LLMCompleteRequest) (*LLMC
 	}
 
 	// Normalise to OpenAI-compatible response.
+	msg := LLMMessage{
+		Role:    "assistant",
+		Content: resp.Content,
+	}
+	if len(resp.ToolCalls) > 0 {
+		msg.ToolCalls = resp.ToolCalls
+	}
+
 	out := &LLMCompleteResponse{
 		ID:     "swarm-" + resp.Model,
 		Object: "chat.completion",
 		Model:  resp.Model,
 		Choices: []LLMChoice{
 			{
-				Index: 0,
-				Message: LLMMessage{
-					Role:    "assistant",
-					Content: resp.Content,
-				},
+				Index:        0,
+				Message:      msg,
 				FinishReason: resp.FinishReason,
 			},
 		},

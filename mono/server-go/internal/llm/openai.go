@@ -69,11 +69,16 @@ type openaiChatRequest struct {
 	Temperature float64         `json:"temperature,omitempty"`
 	TopP        float64         `json:"top_p,omitempty"`
 	Stop        []string        `json:"stop,omitempty"`
+	Tools       []ToolDef       `json:"tools,omitempty"`       // function-calling tool definitions
+	ToolChoice  interface{}     `json:"tool_choice,omitempty"` // "auto", "none", "required", or object
 }
 
 type openaiMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	Name       string     `json:"name,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 }
 
 type openaiChatResponse struct {
@@ -105,7 +110,13 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 
 	msgs := make([]openaiMessage, len(req.Messages))
 	for i, m := range req.Messages {
-		msgs[i] = openaiMessage{Role: string(m.Role), Content: m.Content}
+		msgs[i] = openaiMessage{
+			Role:       string(m.Role),
+			Content:    m.Content,
+			Name:       m.Name,
+			ToolCallID: m.ToolCallID,
+			ToolCalls:  m.ToolCalls,
+		}
 	}
 
 	body := openaiChatRequest{
@@ -115,6 +126,10 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		Stop:        req.Stop,
+		Tools:       req.Tools,
+	}
+	if req.ToolChoice != "" {
+		body.ToolChoice = req.ToolChoice
 	}
 
 	jsonBody, err := json.Marshal(body)
@@ -161,16 +176,27 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		return nil, fmt.Errorf("openai returned no choices")
 	}
 
-	return &CompletionResponse{
-		Content:      chatResp.Choices[0].Message.Content,
+	choice := chatResp.Choices[0]
+	out := &CompletionResponse{
+		Content:      choice.Message.Content,
 		Model:        chatResp.Model,
-		FinishReason: chatResp.Choices[0].FinishReason,
+		FinishReason: choice.FinishReason,
 		Usage: Usage{
 			PromptTokens:     chatResp.Usage.PromptTokens,
 			CompletionTokens: chatResp.Usage.CompletionTokens,
 			TotalTokens:      chatResp.Usage.TotalTokens,
 		},
-	}, nil
+	}
+
+	// Map tool calls from the response.
+	if len(choice.Message.ToolCalls) > 0 {
+		out.ToolCalls = choice.Message.ToolCalls
+		if out.FinishReason == "" {
+			out.FinishReason = "tool_calls"
+		}
+	}
+
+	return out, nil
 }
 
 func (p *OpenAIProvider) ListModels(ctx context.Context) ([]string, error) {
@@ -223,6 +249,8 @@ type openaiStreamRequest struct {
 	TopP        float64         `json:"top_p,omitempty"`
 	Stop        []string        `json:"stop,omitempty"`
 	Stream      bool            `json:"stream"`
+	Tools       []ToolDef       `json:"tools,omitempty"`       // tool definitions for streaming
+	ToolChoice  interface{}     `json:"tool_choice,omitempty"` // "auto", "none", "required"
 }
 
 type openaiStreamChunk struct {
@@ -250,7 +278,13 @@ func (p *OpenAIProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 
 	msgs := make([]openaiMessage, len(req.Messages))
 	for i, m := range req.Messages {
-		msgs[i] = openaiMessage{Role: string(m.Role), Content: m.Content}
+		msgs[i] = openaiMessage{
+			Role:       string(m.Role),
+			Content:    m.Content,
+			Name:       m.Name,
+			ToolCallID: m.ToolCallID,
+			ToolCalls:  m.ToolCalls,
+		}
 	}
 
 	body := openaiStreamRequest{
@@ -261,6 +295,10 @@ func (p *OpenAIProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 		TopP:        req.TopP,
 		Stop:        req.Stop,
 		Stream:      true,
+		Tools:       req.Tools,
+	}
+	if req.ToolChoice != "" {
+		body.ToolChoice = req.ToolChoice
 	}
 
 	jsonBody, err := json.Marshal(body)

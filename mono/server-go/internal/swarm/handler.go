@@ -20,6 +20,7 @@ type Handler struct {
 	TeamMgr  *TeamManager
 	LLMProxy *LLMProxy
 	ELO      *ELOService
+	WS       *WSHub
 }
 
 // ── Agent Auth endpoints ────────────────────────────────────────────────────
@@ -138,6 +139,16 @@ func (h *Handler) SubmitPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Emit WebSocket event.
+	if h.WS != nil {
+		h.WS.BroadcastPlanEvent(taskID.String(), "plan_submitted", map[string]interface{}{
+			"task_id": taskID.String(),
+		})
+		h.WS.BroadcastTaskEvent("status_changed", taskID.String(), map[string]interface{}{
+			"new_status": "plan_review",
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"plan_review"}`))
 }
@@ -167,6 +178,14 @@ func (h *Handler) SubmitDiff(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
+	}
+
+	// Emit WebSocket event.
+	if h.WS != nil {
+		h.WS.BroadcastDiffEvent(taskID.String(), result.ID.String(), map[string]interface{}{
+			"file_path":   diff.FilePath,
+			"change_type": diff.ChangeType,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -237,6 +256,13 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Emit WebSocket event.
+	if h.WS != nil {
+		h.WS.BroadcastTaskEvent("completed", taskID.String(), map[string]interface{}{
+			"task_id": taskID.String(),
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"completed"}`))
 }
@@ -288,6 +314,14 @@ func (h *Handler) CreateTaskUser(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
+	}
+
+	// Emit WebSocket event.
+	if h.WS != nil {
+		h.WS.BroadcastTaskEvent("created", task.ID.String(), map[string]interface{}{
+			"repo_id":     body.RepoID,
+			"description": body.Description,
+		})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -350,14 +384,31 @@ func (h *Handler) PlanAction(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 			return
 		}
+		if h.WS != nil {
+			h.WS.BroadcastPlanEvent(taskID.String(), "plan_approved", nil)
+			h.WS.BroadcastTaskEvent("status_changed", taskID.String(), map[string]interface{}{
+				"new_status": "implementing",
+			})
+		}
 	case "reject":
 		if err := h.TaskMgr.UpdateStatus(r.Context(), taskID, StatusCancelled); err != nil {
 			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 			return
 		}
+		if h.WS != nil {
+			h.WS.BroadcastPlanEvent(taskID.String(), "plan_rejected", nil)
+			h.WS.BroadcastTaskEvent("status_changed", taskID.String(), map[string]interface{}{
+				"new_status": "cancelled",
+			})
+		}
 	case "comment":
 		// Just add comment — no status change.
 		slog.Info("swarm plan comment", "task_id", taskID, "comment", body.Comment)
+		if h.WS != nil {
+			h.WS.BroadcastPlanEvent(taskID.String(), "plan_commented", map[string]interface{}{
+				"comment": body.Comment,
+			})
+		}
 	default:
 		http.Error(w, `{"error":"action must be approve, reject, or comment"}`, http.StatusBadRequest)
 		return

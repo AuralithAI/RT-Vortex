@@ -60,11 +60,14 @@ type ollamaChatRequest struct {
 	Messages []ollamaMessage `json:"messages"`
 	Stream   bool            `json:"stream"`
 	Options  *ollamaOptions  `json:"options,omitempty"`
+	Tools    []ToolDef       `json:"tools,omitempty"`
 }
 
 type ollamaMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 type ollamaOptions struct {
@@ -89,15 +92,24 @@ func (p *OllamaProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		model = p.defaultModel
 	}
 
-	msgs := make([]ollamaMessage, len(req.Messages))
-	for i, m := range req.Messages {
-		msgs[i] = ollamaMessage{Role: string(m.Role), Content: m.Content}
+	var msgs []ollamaMessage
+	for _, m := range req.Messages {
+		om := ollamaMessage{Role: string(m.Role), Content: m.Content}
+		if m.Role == RoleTool {
+			om.Role = "tool"
+			om.ToolCallID = m.ToolCallID
+		}
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			om.ToolCalls = m.ToolCalls
+		}
+		msgs = append(msgs, om)
 	}
 
 	body := ollamaChatRequest{
 		Model:    model,
 		Messages: msgs,
 		Stream:   false,
+		Tools:    req.Tools,
 		Options: &ollamaOptions{
 			Temperature: req.Temperature,
 			TopP:        req.TopP,
@@ -137,7 +149,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	return &CompletionResponse{
+	out := &CompletionResponse{
 		Content:      cr.Message.Content,
 		Model:        cr.Model,
 		FinishReason: "stop",
@@ -146,7 +158,14 @@ func (p *OllamaProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			CompletionTokens: cr.EvalCount,
 			TotalTokens:      cr.PromptEvalCount + cr.EvalCount,
 		},
-	}, nil
+	}
+
+	if len(cr.Message.ToolCalls) > 0 {
+		out.ToolCalls = cr.Message.ToolCalls
+		out.FinishReason = "tool_calls"
+	}
+
+	return out, nil
 }
 
 func (p *OllamaProvider) ListModels(ctx context.Context) ([]string, error) {
@@ -199,15 +218,24 @@ func (p *OllamaProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 		model = p.defaultModel
 	}
 
-	msgs := make([]ollamaMessage, len(req.Messages))
-	for i, m := range req.Messages {
-		msgs[i] = ollamaMessage{Role: string(m.Role), Content: m.Content}
+	var msgs []ollamaMessage
+	for _, m := range req.Messages {
+		om := ollamaMessage{Role: string(m.Role), Content: m.Content}
+		if m.Role == RoleTool {
+			om.Role = "tool"
+			om.ToolCallID = m.ToolCallID
+		}
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			om.ToolCalls = m.ToolCalls
+		}
+		msgs = append(msgs, om)
 	}
 
 	body := ollamaChatRequest{
 		Model:    model,
 		Messages: msgs,
 		Stream:   true,
+		Tools:    req.Tools,
 		Options: &ollamaOptions{
 			Temperature: req.Temperature,
 			TopP:        req.TopP,

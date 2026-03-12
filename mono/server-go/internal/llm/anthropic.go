@@ -71,20 +71,40 @@ type anthropicRequest struct {
 	MaxTokens int                `json:"max_tokens"`
 	System    string             `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
+	Tools     []anthropicToolDef `json:"tools,omitempty"`
 }
 
+// anthropicMessage supports text, tool_use, and tool_result content blocks.
+// Anthropic requires Content to be either a string (simple) or an array of
+// content blocks (multi-part / tool conversations). We use json.RawMessage
+// and marshal conditionally.
 type anthropicMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string          `json:"role"`
+	Content json.RawMessage `json:"content"`
+}
+
+// anthropicContentBlock represents a single content block in an Anthropic message.
+type anthropicContentBlock struct {
+	Type      string          `json:"type"`                  // "text", "tool_use", "tool_result"
+	Text      string          `json:"text,omitempty"`        // for type="text"
+	ID        string          `json:"id,omitempty"`          // for type="tool_use" (tool call ID)
+	Name      string          `json:"name,omitempty"`        // for type="tool_use"
+	Input     json.RawMessage `json:"input,omitempty"`       // for type="tool_use" (arguments object)
+	ToolUseID string          `json:"tool_use_id,omitempty"` // for type="tool_result"
+	Content   string          `json:"content,omitempty"`     // for type="tool_result"
+}
+
+// anthropicToolDef is Anthropic's tool definition format.
+type anthropicToolDef struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 type anthropicResponse struct {
-	Content []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	} `json:"content"`
-	StopReason string `json:"stop_reason"`
-	Model      string `json:"model"`
+	Content    []anthropicContentBlock `json:"content"`
+	StopReason string                  `json:"stop_reason"` // "end_turn", "tool_use", etc.
+	Model      string                  `json:"model"`
 	Usage      struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
@@ -96,6 +116,18 @@ type anthropicErrorResp struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+}
+
+// newAnthropicTextMessage creates an anthropicMessage with a simple text content.
+func newAnthropicTextMessage(role, text string) anthropicMessage {
+	b, _ := json.Marshal(text)
+	return anthropicMessage{Role: role, Content: b}
+}
+
+// newAnthropicBlockMessage creates an anthropicMessage with content block array.
+func newAnthropicBlockMessage(role string, blocks []anthropicContentBlock) anthropicMessage {
+	b, _ := json.Marshal(blocks)
+	return anthropicMessage{Role: role, Content: b}
 }
 
 func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
@@ -117,7 +149,46 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 			systemMsg = m.Content
 			continue
 		}
-		msgs = append(msgs, anthropicMessage{Role: string(m.Role), Content: m.Content})
+		// Handle tool-result messages: Anthropic expects a content block array
+		// with type="tool_result" under role="user".
+		if m.Role == RoleTool {
+			blocks := []anthropicContentBlock{{
+				Type:      "tool_result",
+				ToolUseID: m.ToolCallID,
+				Content:   m.Content,
+			}}
+			msgs = append(msgs, newAnthropicBlockMessage("user", blocks))
+			continue
+		}
+		// Handle assistant messages with tool_calls: Anthropic expects
+		// tool_use content blocks.
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			var blocks []anthropicContentBlock
+			if m.Content != "" {
+				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				blocks = append(blocks, anthropicContentBlock{
+					Type:  "tool_use",
+					ID:    tc.ID,
+					Name:  tc.Function.Name,
+					Input: json.RawMessage(tc.Function.Arguments),
+				})
+			}
+			msgs = append(msgs, newAnthropicBlockMessage("assistant", blocks))
+			continue
+		}
+		msgs = append(msgs, newAnthropicTextMessage(string(m.Role), m.Content))
+	}
+
+	// Convert tool definitions: OpenAI format → Anthropic format.
+	var tools []anthropicToolDef
+	for _, t := range req.Tools {
+		tools = append(tools, anthropicToolDef{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			InputSchema: t.Function.Parameters,
+		})
 	}
 
 	body := anthropicRequest{
@@ -125,6 +196,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		MaxTokens: maxTokens,
 		System:    systemMsg,
 		Messages:  msgs,
+		Tools:     tools,
 	}
 
 	jsonBody, err := json.Marshal(body)
@@ -165,17 +237,41 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	content := ""
+	// Parse content blocks — collect text and tool_use blocks.
+	var textContent string
+	var toolCalls []ToolCall
 	for _, c := range ar.Content {
-		if c.Type == "text" {
-			content += c.Text
+		switch c.Type {
+		case "text":
+			textContent += c.Text
+		case "tool_use":
+			// Anthropic sends arguments as a JSON object in Input.
+			// OpenAI format expects a JSON string in Arguments.
+			argsStr := string(c.Input)
+			toolCalls = append(toolCalls, ToolCall{
+				ID:   c.ID,
+				Type: "function",
+				Function: ToolCallFunc{
+					Name:      c.Name,
+					Arguments: argsStr,
+				},
+			})
 		}
 	}
 
+	finishReason := ar.StopReason
+	if finishReason == "end_turn" {
+		finishReason = "stop"
+	}
+	if finishReason == "tool_use" {
+		finishReason = "tool_calls"
+	}
+
 	return &CompletionResponse{
-		Content:      content,
+		Content:      textContent,
 		Model:        ar.Model,
-		FinishReason: ar.StopReason,
+		FinishReason: finishReason,
+		ToolCalls:    toolCalls,
 		Usage: Usage{
 			PromptTokens:     ar.Usage.InputTokens,
 			CompletionTokens: ar.Usage.OutputTokens,
@@ -217,9 +313,12 @@ type anthropicStreamRequest struct {
 	System    string             `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Stream    bool               `json:"stream"`
+	Tools     []anthropicToolDef `json:"tools,omitempty"`
 }
 
 // StreamComplete sends a streaming completion request using Anthropic's SSE API.
+// NOTE: Tool calling during streaming is not fully handled in Phase 1 —
+// the swarm uses non-streaming completions. Streaming with tools is a Phase 3 goal.
 func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {
@@ -238,7 +337,42 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 			systemMsg = m.Content
 			continue
 		}
-		msgs = append(msgs, anthropicMessage{Role: string(m.Role), Content: m.Content})
+		if m.Role == RoleTool {
+			blocks := []anthropicContentBlock{{
+				Type:      "tool_result",
+				ToolUseID: m.ToolCallID,
+				Content:   m.Content,
+			}}
+			msgs = append(msgs, newAnthropicBlockMessage("user", blocks))
+			continue
+		}
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			var blocks []anthropicContentBlock
+			if m.Content != "" {
+				blocks = append(blocks, anthropicContentBlock{Type: "text", Text: m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				blocks = append(blocks, anthropicContentBlock{
+					Type:  "tool_use",
+					ID:    tc.ID,
+					Name:  tc.Function.Name,
+					Input: json.RawMessage(tc.Function.Arguments),
+				})
+			}
+			msgs = append(msgs, newAnthropicBlockMessage("assistant", blocks))
+			continue
+		}
+		msgs = append(msgs, newAnthropicTextMessage(string(m.Role), m.Content))
+	}
+
+	// Convert tool definitions.
+	var tools []anthropicToolDef
+	for _, t := range req.Tools {
+		tools = append(tools, anthropicToolDef{
+			Name:        t.Function.Name,
+			Description: t.Function.Description,
+			InputSchema: t.Function.Parameters,
+		})
 	}
 
 	body := anthropicStreamRequest{
@@ -247,6 +381,7 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 		System:    systemMsg,
 		Messages:  msgs,
 		Stream:    true,
+		Tools:     tools,
 	}
 
 	jsonBody, err := json.Marshal(body)

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -26,12 +27,44 @@ const (
 	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
+	RoleTool      Role = "tool"
 )
 
 // Message is a single message in a conversation.
 type Message struct {
-	Role    Role   `json:"role"`
-	Content string `json:"content"`
+	Role       Role       `json:"role"`
+	Content    string     `json:"content"`
+	Name       string     `json:"name,omitempty"`         // function name when Role == RoleTool
+	ToolCallID string     `json:"tool_call_id,omitempty"` // correlates tool result to ToolCall.ID
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`   // set by assistant when requesting tool invocations
+}
+
+// ── Tool Calling Types ──────────────────────────────────────────────────────
+
+// ToolCall represents a single tool invocation requested by the LLM.
+type ToolCall struct {
+	ID       string       `json:"id"`
+	Type     string       `json:"type"` // always "function"
+	Function ToolCallFunc `json:"function"`
+}
+
+// ToolCallFunc is the function name and JSON-encoded arguments string.
+type ToolCallFunc struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+// ToolDef describes a tool the LLM may invoke (OpenAI function-calling format).
+type ToolDef struct {
+	Type     string       `json:"type"` // "function"
+	Function ToolFunction `json:"function"`
+}
+
+// ToolFunction is the function schema within a tool definition.
+type ToolFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
 }
 
 // CompletionRequest is sent to an LLM provider.
@@ -42,14 +75,17 @@ type CompletionRequest struct {
 	Temperature float64   `json:"temperature,omitempty"`
 	TopP        float64   `json:"top_p,omitempty"`
 	Stop        []string  `json:"stop,omitempty"`
+	Tools       []ToolDef `json:"tools,omitempty"`       // tool definitions for function calling
+	ToolChoice  string    `json:"tool_choice,omitempty"` // "auto", "none", "required"
 }
 
 // CompletionResponse is the result from an LLM provider.
 type CompletionResponse struct {
-	Content      string `json:"content"`
-	Model        string `json:"model"`
-	FinishReason string `json:"finish_reason"`
-	Usage        Usage  `json:"usage"`
+	Content      string     `json:"content"`
+	Model        string     `json:"model"`
+	FinishReason string     `json:"finish_reason"` // "stop" or "tool_calls"
+	Usage        Usage      `json:"usage"`
+	ToolCalls    []ToolCall `json:"tool_calls,omitempty"` // tool invocations requested by the LLM
 }
 
 // Usage tracks token consumption.

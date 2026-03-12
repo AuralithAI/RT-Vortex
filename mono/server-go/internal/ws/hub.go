@@ -79,6 +79,16 @@ type PREmbedProgressEvent struct {
 	Timestamp      time.Time `json:"timestamp"`
 }
 
+// SwarmEvent is the payload sent to WebSocket clients for swarm activity.
+type SwarmEvent struct {
+	Type      string                 `json:"type"` // "swarm_task", "swarm_agent", "swarm_diff", "swarm_plan"
+	TaskID    string                 `json:"task_id,omitempty"`
+	AgentID   string                 `json:"agent_id,omitempty"`
+	Event     string                 `json:"event"` // "created", "status_changed", "plan_submitted", "diff_submitted", etc.
+	Data      map[string]interface{} `json:"data,omitempty"`
+	Timestamp time.Time              `json:"timestamp"`
+}
+
 // ── Client ──────────────────────────────────────────────────────────────────
 
 // Client represents a single WebSocket subscriber.
@@ -87,6 +97,7 @@ type Client struct {
 	reviewID    uuid.UUID // set for review subscriptions
 	indexRepoID string    // set for indexing subscriptions
 	embedRepoID string    // set for PR embed progress subscriptions
+	swarmTaskID string    // set for swarm task subscriptions
 	metrics     bool      // set for engine metrics subscriptions
 	send        chan []byte
 }
@@ -104,6 +115,7 @@ type Hub struct {
 	reviews  map[uuid.UUID]map[*Client]struct{} // reviewID → set of clients
 	indexes  map[string]map[*Client]struct{}    // repoID → set of clients (indexing)
 	prEmbeds map[string]map[*Client]struct{}    // repoID → set of clients (PR embedding)
+	swarm    map[string]map[*Client]struct{}    // taskID → set of clients (swarm)
 	metrics  map[*Client]struct{}               // engine metrics subscribers
 
 	register   chan *Client
@@ -117,6 +129,7 @@ func NewHub() *Hub {
 		reviews:    make(map[uuid.UUID]map[*Client]struct{}),
 		indexes:    make(map[string]map[*Client]struct{}),
 		prEmbeds:   make(map[string]map[*Client]struct{}),
+		swarm:      make(map[string]map[*Client]struct{}),
 		metrics:    make(map[*Client]struct{}),
 		register:   make(chan *Client, 32),
 		unregister: make(chan *Client, 32),
@@ -140,6 +153,15 @@ func (h *Hub) run() {
 				// Engine metrics subscription
 				h.metrics[c] = struct{}{}
 				slog.Debug("ws metrics client registered")
+			} else if c.swarmTaskID != "" {
+				// Swarm task subscription
+				clients, ok := h.swarm[c.swarmTaskID]
+				if !ok {
+					clients = make(map[*Client]struct{})
+					h.swarm[c.swarmTaskID] = clients
+				}
+				clients[c] = struct{}{}
+				slog.Debug("ws swarm client registered", "task_id", c.swarmTaskID)
 			} else if c.embedRepoID != "" {
 				// PR embed subscription
 				clients, ok := h.prEmbeds[c.embedRepoID]
@@ -175,6 +197,14 @@ func (h *Hub) run() {
 			if c.metrics {
 				delete(h.metrics, c)
 				slog.Debug("ws metrics client unregistered")
+			} else if c.swarmTaskID != "" {
+				if clients, ok := h.swarm[c.swarmTaskID]; ok {
+					delete(clients, c)
+					if len(clients) == 0 {
+						delete(h.swarm, c.swarmTaskID)
+					}
+				}
+				slog.Debug("ws swarm client unregistered", "task_id", c.swarmTaskID)
 			} else if c.embedRepoID != "" {
 				if clients, ok := h.prEmbeds[c.embedRepoID]; ok {
 					delete(clients, c)
@@ -220,12 +250,18 @@ func (h *Hub) run() {
 					close(c.send)
 				}
 			}
+			for _, clients := range h.swarm {
+				for c := range clients {
+					close(c.send)
+				}
+			}
 			for c := range h.metrics {
 				close(c.send)
 			}
 			h.reviews = make(map[uuid.UUID]map[*Client]struct{})
 			h.indexes = make(map[string]map[*Client]struct{})
 			h.prEmbeds = make(map[string]map[*Client]struct{})
+			h.swarm = make(map[string]map[*Client]struct{})
 			h.metrics = make(map[*Client]struct{})
 			h.mu.Unlock()
 			return
@@ -399,6 +435,79 @@ func (h *Hub) HasPREmbedSubscribers(repoID string) bool {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	clients, ok := h.prEmbeds[repoID]
+	return ok && len(clients) > 0
+}
+
+// ── Swarm subscriptions ────────────────────────────────────────────────────
+
+// SubscribeSwarm registers a client for swarm events on a task.
+// If taskID is empty, the client receives ALL swarm events (global subscriber).
+func (h *Hub) SubscribeSwarm(conn *websocket.Conn, taskID string) *Client {
+	if taskID == "" {
+		taskID = "*" // sentinel for global subscribers
+	}
+	c := &Client{
+		conn:        conn,
+		swarmTaskID: taskID,
+		send:        make(chan []byte, sendBufSize),
+	}
+	h.register <- c
+	metrics.WSConnectionsActive.Inc()
+	return c
+}
+
+// BroadcastSwarm sends a SwarmEvent to all clients watching a specific task
+// and to all global ("*") subscribers.
+func (h *Hub) BroadcastSwarm(evt SwarmEvent) {
+	if evt.Timestamp.IsZero() {
+		evt.Timestamp = time.Now()
+	}
+
+	data, err := json.Marshal(evt)
+	if err != nil {
+		slog.Error("ws: failed to marshal swarm event", "error", err)
+		return
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	// Send to task-specific subscribers.
+	if evt.TaskID != "" {
+		if clients, ok := h.swarm[evt.TaskID]; ok {
+			for c := range clients {
+				select {
+				case c.send <- data:
+					metrics.WSMessagesTotal.Inc()
+				default:
+					slog.Debug("ws: dropping swarm message, client buffer full", "task_id", evt.TaskID)
+				}
+			}
+		}
+	}
+
+	// Send to global subscribers.
+	if clients, ok := h.swarm["*"]; ok {
+		for c := range clients {
+			select {
+			case c.send <- data:
+				metrics.WSMessagesTotal.Inc()
+			default:
+				slog.Debug("ws: dropping swarm message, global client buffer full")
+			}
+		}
+	}
+}
+
+// HasSwarmSubscribers returns true if at least one client is watching swarm events
+// for the given task (or globally).
+func (h *Hub) HasSwarmSubscribers(taskID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	if clients, ok := h.swarm[taskID]; ok && len(clients) > 0 {
+		return true
+	}
+	clients, ok := h.swarm["*"]
 	return ok && len(clients) > 0
 }
 

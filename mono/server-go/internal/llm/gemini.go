@@ -60,9 +60,20 @@ func (p *GeminiProvider) Name() string { return "gemini" }
 // ── Gemini Generate Content API ─────────────────────────────────────────────
 
 type geminiRequest struct {
-	Contents         []geminiContent      `json:"contents"`
-	SystemInstruct   *geminiContent       `json:"systemInstruction,omitempty"`
-	GenerationConfig *geminiGenerationCfg `json:"generationConfig,omitempty"`
+	Contents         []geminiContent          `json:"contents"`
+	SystemInstruct   *geminiContent           `json:"systemInstruction,omitempty"`
+	GenerationConfig *geminiGenerationCfg     `json:"generationConfig,omitempty"`
+	Tools            []geminiToolDeclarations `json:"tools,omitempty"`
+}
+
+type geminiToolDeclarations struct {
+	FunctionDeclarations []geminiFunctionDecl `json:"functionDeclarations"`
+}
+
+type geminiFunctionDecl struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters"`
 }
 
 type geminiContent struct {
@@ -71,7 +82,19 @@ type geminiContent struct {
 }
 
 type geminiPart struct {
-	Text string `json:"text"`
+	Text             string          `json:"text,omitempty"`
+	FunctionCall     *geminiFuncCall `json:"functionCall,omitempty"`
+	FunctionResponse *geminiFuncResp `json:"functionResponse,omitempty"`
+}
+
+type geminiFuncCall struct {
+	Name string                 `json:"name"`
+	Args map[string]interface{} `json:"args"`
+}
+
+type geminiFuncResp struct {
+	Name     string                 `json:"name"`
+	Response map[string]interface{} `json:"response"`
 }
 
 type geminiGenerationCfg struct {
@@ -86,7 +109,7 @@ type geminiResponse struct {
 		Content struct {
 			Parts []geminiPart `json:"parts"`
 		} `json:"content"`
-		FinishReason string `json:"finishReason"`
+		FinishReason string `json:"finishReason"` // "STOP", "MAX_TOKENS", "SAFETY", etc.
 	} `json:"candidates"`
 	UsageMetadata struct {
 		PromptTokenCount     int `json:"promptTokenCount"`
@@ -119,6 +142,44 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			}
 			continue
 		}
+		// Handle tool result messages: Gemini expects functionResponse parts.
+		if m.Role == RoleTool {
+			// Parse the content as JSON for the response object.
+			var respObj map[string]interface{}
+			if err := json.Unmarshal([]byte(m.Content), &respObj); err != nil {
+				// If not valid JSON, wrap in a result object.
+				respObj = map[string]interface{}{"result": m.Content}
+			}
+			contents = append(contents, geminiContent{
+				Role: "function",
+				Parts: []geminiPart{{
+					FunctionResponse: &geminiFuncResp{
+						Name:     m.Name,
+						Response: respObj,
+					},
+				}},
+			})
+			continue
+		}
+		// Handle assistant messages with tool calls: Gemini expects functionCall parts.
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			var parts []geminiPart
+			if m.Content != "" {
+				parts = append(parts, geminiPart{Text: m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				var args map[string]interface{}
+				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+				parts = append(parts, geminiPart{
+					FunctionCall: &geminiFuncCall{
+						Name: tc.Function.Name,
+						Args: args,
+					},
+				})
+			}
+			contents = append(contents, geminiContent{Role: "model", Parts: parts})
+			continue
+		}
 		role := "user"
 		if m.Role == RoleAssistant {
 			role = "model"
@@ -129,9 +190,24 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		})
 	}
 
+	// Convert tool definitions to Gemini format.
+	var geminiTools []geminiToolDeclarations
+	if len(req.Tools) > 0 {
+		var decls []geminiFunctionDecl
+		for _, t := range req.Tools {
+			decls = append(decls, geminiFunctionDecl{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				Parameters:  t.Function.Parameters,
+			})
+		}
+		geminiTools = []geminiToolDeclarations{{FunctionDeclarations: decls}}
+	}
+
 	body := geminiRequest{
 		Contents:       contents,
 		SystemInstruct: systemInstruct,
+		Tools:          geminiTools,
 		GenerationConfig: &geminiGenerationCfg{
 			MaxOutputTokens: req.MaxTokens,
 			Temperature:     req.Temperature,
@@ -181,15 +257,36 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		return nil, fmt.Errorf("gemini returned no candidates")
 	}
 
-	content := ""
-	for _, part := range gr.Candidates[0].Content.Parts {
-		content += part.Text
+	// Parse response parts — collect text and function calls.
+	var textContent string
+	var toolCalls []ToolCall
+	for i, part := range gr.Candidates[0].Content.Parts {
+		if part.Text != "" {
+			textContent += part.Text
+		}
+		if part.FunctionCall != nil {
+			argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+			toolCalls = append(toolCalls, ToolCall{
+				ID:   fmt.Sprintf("gemini-call-%d", i),
+				Type: "function",
+				Function: ToolCallFunc{
+					Name:      part.FunctionCall.Name,
+					Arguments: string(argsJSON),
+				},
+			})
+		}
+	}
+
+	finishReason := strings.ToLower(gr.Candidates[0].FinishReason)
+	if len(toolCalls) > 0 {
+		finishReason = "tool_calls"
 	}
 
 	return &CompletionResponse{
-		Content:      content,
+		Content:      textContent,
 		Model:        model,
-		FinishReason: strings.ToLower(gr.Candidates[0].FinishReason),
+		FinishReason: finishReason,
+		ToolCalls:    toolCalls,
 		Usage: Usage{
 			PromptTokens:     gr.UsageMetadata.PromptTokenCount,
 			CompletionTokens: gr.UsageMetadata.CandidatesTokenCount,
@@ -229,6 +326,7 @@ func (p *GeminiProvider) Healthy(ctx context.Context) bool {
 // ── Gemini Streaming ────────────────────────────────────────────────────────
 
 // StreamComplete sends a streaming request to Gemini and returns chunks via SSE.
+// NOTE: Tool calling during streaming is not fully handled in Phase 1.
 func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {
@@ -244,6 +342,34 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 			}
 			continue
 		}
+		if m.Role == RoleTool {
+			var respObj map[string]interface{}
+			if err := json.Unmarshal([]byte(m.Content), &respObj); err != nil {
+				respObj = map[string]interface{}{"result": m.Content}
+			}
+			contents = append(contents, geminiContent{
+				Role: "function",
+				Parts: []geminiPart{{
+					FunctionResponse: &geminiFuncResp{Name: m.Name, Response: respObj},
+				}},
+			})
+			continue
+		}
+		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
+			var parts []geminiPart
+			if m.Content != "" {
+				parts = append(parts, geminiPart{Text: m.Content})
+			}
+			for _, tc := range m.ToolCalls {
+				var args map[string]interface{}
+				_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+				parts = append(parts, geminiPart{
+					FunctionCall: &geminiFuncCall{Name: tc.Function.Name, Args: args},
+				})
+			}
+			contents = append(contents, geminiContent{Role: "model", Parts: parts})
+			continue
+		}
 		role := "user"
 		if m.Role == RoleAssistant {
 			role = "model"
@@ -254,9 +380,24 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 		})
 	}
 
+	// Convert tool definitions.
+	var geminiTools []geminiToolDeclarations
+	if len(req.Tools) > 0 {
+		var decls []geminiFunctionDecl
+		for _, t := range req.Tools {
+			decls = append(decls, geminiFunctionDecl{
+				Name:        t.Function.Name,
+				Description: t.Function.Description,
+				Parameters:  t.Function.Parameters,
+			})
+		}
+		geminiTools = []geminiToolDeclarations{{FunctionDeclarations: decls}}
+	}
+
 	body := geminiRequest{
 		Contents:       contents,
 		SystemInstruct: systemInstruct,
+		Tools:          geminiTools,
 		GenerationConfig: &geminiGenerationCfg{
 			MaxOutputTokens: req.MaxTokens,
 			Temperature:     req.Temperature,
