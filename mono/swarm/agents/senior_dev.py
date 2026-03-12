@@ -1,6 +1,6 @@
 """Senior Dev agent — primary code generation role.
 
-The senior dev receives subtasks (or the full task in Phase 0), reads the
+The senior dev receives subtasks or the full task, reads the
 relevant code, and produces unified diffs implementing the changes.
 """
 
@@ -22,12 +22,10 @@ logger = logging.getLogger(__name__)
 class SeniorDevAgent(Agent):
     """Code generation agent — produces file diffs from approved plans.
 
-    Phase 0 capabilities:
+    Capabilities:
     - Read files from the codebase
     - Generate unified diffs for code changes
     - Submit diffs for human review
-
-    Phase 1+ additions:
     - Work on delegated subtasks from orchestrator
     - Coordinate with QA for test generation
     - Self-review before submission

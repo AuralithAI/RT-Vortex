@@ -59,6 +59,24 @@ class GoClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def get_task_status(self, task_id: str) -> str:
+        """Fetch current status of a task.
+
+        Returns:
+            The task's ``status`` string (e.g. ``implementing``, ``plan_review``).
+
+        Raises:
+            httpx.HTTPStatusError: On non-2xx status.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/tasks/{task_id}/status",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("status", "")
+
     async def report_plan(self, task_id: str, plan: dict[str, Any]) -> None:
         """Submit a structured plan document for human review.
 
@@ -101,6 +119,21 @@ class GoClient:
             resp = await client.post(
                 f"{self.base_url}/internal/swarm/tasks/{task_id}/complete",
                 headers=self._headers(),
+            )
+            resp.raise_for_status()
+
+    async def fail_task(self, task_id: str, reason: str) -> None:
+        """Mark a task as failed with an error reason.
+
+        Args:
+            task_id: Task UUID.
+            reason: Human-readable failure reason.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/tasks/{task_id}/fail",
+                headers=self._headers(),
+                json={"reason": reason},
             )
             resp.raise_for_status()
 

@@ -21,11 +21,17 @@ from typing import Any, Callable, Coroutine
 import redis.asyncio as aioredis
 
 from .agents_config import get_config
+from .agents.architect import ArchitectAgent
+from .agents.docs import DocsAgent
+from .agents.junior_dev import JuniorDevAgent
+from .agents.ops import OpsAgent
 from .agents.orchestrator import OrchestratorAgent
+from .agents.qa import QAAgent
+from .agents.security import SecurityAgent
 from .agents.senior_dev import SeniorDevAgent
 from .engine_client import EngineClient
 from .go_client import GoClient
-from .sdk.agent import AgentConfig, Task
+from .sdk.agent import Agent, AgentConfig, AgentResult, Task
 from .tools.engine_tools import init_engine_tools
 from .tools.task_tools import init_task_tools
 
@@ -35,6 +41,287 @@ logger = logging.getLogger(__name__)
 _STREAM_KEY = "swarm:events:team:create"
 _GROUP_NAME = "swarm-python"
 _CONSUMER_NAME = f"consumer-{uuid.uuid4().hex[:8]}"
+
+# How often to send heartbeats (seconds).
+_HEARTBEAT_INTERVAL = 25
+
+# How long to wait between status polls while waiting for human approval.
+_APPROVAL_POLL_INTERVAL = 5
+
+# Maximum wait time for plan approval before timing out (10 minutes).
+_APPROVAL_TIMEOUT = 600
+
+
+def _make_agent(role: str, team_id: str, agent_config: AgentConfig) -> Agent:
+    """Instantiate an agent by role name.
+
+    Args:
+        role: One of ``orchestrator``, ``senior_dev``, ``architect``, ``qa``,
+              ``security``, ``docs``, ``ops``, ``junior_dev``.
+        team_id: Team UUID.
+        agent_config: Shared agent runtime config.
+
+    Returns:
+        An :class:`Agent` subclass instance.
+
+    Raises:
+        ValueError: If the role is unknown.
+    """
+    agent_id = f"{role[:4]}-{team_id[:8]}-{uuid.uuid4().hex[:4]}"
+    role_map: dict[str, type[Agent]] = {
+        "orchestrator": OrchestratorAgent,
+        "senior_dev": SeniorDevAgent,
+        "architect": ArchitectAgent,
+        "qa": QAAgent,
+        "security": SecurityAgent,
+        "docs": DocsAgent,
+        "ops": OpsAgent,
+        "junior_dev": JuniorDevAgent,
+    }
+    cls = role_map.get(role)
+    if cls is None:
+        raise ValueError(f"Unknown agent role: {role}")
+    return cls(agent_id=agent_id, team_id=team_id, agent_config=agent_config)
+
+
+async def _heartbeat_loop(
+    go_client: GoClient,
+    agent_ids: list[str],
+    stop_event: asyncio.Event,
+) -> None:
+    """Send periodic heartbeats for all active agents until *stop_event* is set."""
+    while not stop_event.is_set():
+        for aid in list(agent_ids):
+            try:
+                await go_client.send_heartbeat(aid)
+            except Exception as e:
+                logger.warning("Heartbeat failed for %s: %s", aid, e)
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=_HEARTBEAT_INTERVAL)
+        except asyncio.TimeoutError:
+            pass  # expected — loop again
+
+
+async def _wait_for_status(
+    go_client: GoClient,
+    task_id: str,
+    target_statuses: set[str],
+    cancel_statuses: set[str] | None = None,
+    timeout: float = _APPROVAL_TIMEOUT,
+) -> str:
+    """Poll Go for the task's status until it reaches one of *target_statuses*.
+
+    Args:
+        go_client: Go HTTP client.
+        task_id: Task UUID to poll.
+        target_statuses: Set of statuses that mean "proceed".
+        cancel_statuses: Set of statuses that mean "abort" (e.g. cancelled).
+        timeout: Maximum wait in seconds.
+
+    Returns:
+        The status that was reached.
+
+    Raises:
+        asyncio.TimeoutError: If *timeout* expires.
+        RuntimeError: If a cancel status is reached.
+    """
+    cancel_statuses = cancel_statuses or {"cancelled", "failed", "timed_out"}
+    elapsed = 0.0
+    while elapsed < timeout:
+        status = await go_client.get_task_status(task_id)
+        if status in target_statuses:
+            return status
+        if status in cancel_statuses:
+            raise RuntimeError(f"Task {task_id} reached terminal status: {status}")
+        await asyncio.sleep(_APPROVAL_POLL_INTERVAL)
+        elapsed += _APPROVAL_POLL_INTERVAL
+
+    raise asyncio.TimeoutError(
+        f"Timed out waiting for task {task_id} to reach {target_statuses}"
+    )
+
+
+async def _run_full_pipeline(
+    team_id: str,
+    task_data: dict[str, Any],
+    engine_client: EngineClient | None,
+    go_client: GoClient,
+) -> None:
+    """Execute the full multi-agent pipeline for a task.
+
+    Lifecycle:
+        1. **Planning** — Orchestrator analyses the task and produces a plan.
+        2. **Human approval** — Plan is submitted to Go; we poll until approved.
+        3. **Implementation** — SeniorDev (+ optional Architect, QA, Security,
+           Docs, Ops, JuniorDev) produce diffs.
+        4. **Diff submission** — Each agent's diffs are submitted to Go.
+        5. **Completion** — Task is marked complete; Go triggers PR creation.
+
+    Args:
+        team_id: Team UUID.
+        task_data: Raw task dict from Go.
+        engine_client: Optional engine gRPC client.
+        go_client: Go HTTP client.
+    """
+    task = Task(
+        id=task_data["id"],
+        repo_id=task_data.get("repo_id", ""),
+        description=task_data.get("description", ""),
+        status=task_data.get("status", "submitted"),
+        plan_document=task_data.get("plan_document"),
+    )
+    agent_config = AgentConfig()
+
+    # Initialise shared tools.
+    if engine_client:
+        init_engine_tools(engine_client)
+    init_task_tools(go_client)
+
+    # Track all agent IDs for heartbeats.
+    agent_ids: list[str] = []
+    stop_heartbeat = asyncio.Event()
+    heartbeat_task: asyncio.Task | None = None
+
+    try:
+        # ── Step 1: Orchestrator produces the plan ──────────────────────
+        orchestrator = _make_agent("orchestrator", team_id, agent_config)
+        await orchestrator.register()
+        agent_ids.append(orchestrator.agent_id)
+
+        # Start heartbeat loop.
+        heartbeat_task = asyncio.create_task(
+            _heartbeat_loop(go_client, agent_ids, stop_heartbeat),
+            name=f"heartbeat-{team_id[:8]}",
+        )
+
+        logger.info("Team %s: Orchestrator planning task %s", team_id[:8], task.id)
+        orch_result = await orchestrator.run(task)
+
+        if orch_result.error:
+            logger.error("Team %s: Orchestrator error: %s", team_id[:8], orch_result.error)
+            await go_client.fail_task(task.id, f"Orchestrator error: {orch_result.error}")
+            return
+
+        if not orch_result.plan:
+            logger.warning("Team %s: Orchestrator produced no plan", team_id[:8])
+            await go_client.fail_task(task.id, "Orchestrator produced no plan")
+            return
+
+        logger.info("Team %s: Plan submitted, waiting for human approval…", team_id[:8])
+
+        # ── Step 2: Wait for human plan approval ────────────────────────
+        try:
+            status = await _wait_for_status(
+                go_client,
+                task.id,
+                target_statuses={"implementing"},
+                cancel_statuses={"cancelled", "failed", "timed_out"},
+            )
+        except asyncio.TimeoutError:
+            logger.error("Team %s: Plan approval timed out for task %s", team_id[:8], task.id)
+            await go_client.fail_task(task.id, "Plan approval timed out")
+            return
+        except RuntimeError as e:
+            logger.warning("Team %s: %s", team_id[:8], e)
+            return
+
+        logger.info("Team %s: Plan approved — spinning up implementation agents", team_id[:8])
+
+        # Inject the approved plan into the task so implementation agents see it.
+        task.plan_document = orch_result.plan
+        task.status = "implementing"
+
+        # ── Step 3: Determine team composition from the plan ────────────
+        # The plan's estimated_complexity drives team size.
+        complexity = (orch_result.plan or {}).get("estimated_complexity", "medium")
+        if complexity == "small":
+            roles = ["senior_dev"]
+        elif complexity == "large":
+            roles = ["architect", "senior_dev", "junior_dev", "qa", "security", "docs"]
+        else:  # medium
+            roles = ["senior_dev", "qa", "security"]
+
+        # Declare team size to Go.
+        await go_client.declare_team_size(task.id, len(roles) + 1)  # +1 for orchestrator
+
+        # ── Step 4: Run implementation agents ───────────────────────────
+        all_diffs: list[dict] = []
+        implementation_agents: list[Agent] = []
+
+        for role in roles:
+            agent = _make_agent(role, team_id, agent_config)
+            await agent.register()
+            agent_ids.append(agent.agent_id)
+            implementation_agents.append(agent)
+
+        # Run code-generating agents concurrently, review agents sequentially.
+        code_agents = [a for a in implementation_agents if a.role in ("senior_dev", "junior_dev", "architect", "docs", "ops")]
+        review_agents = [a for a in implementation_agents if a.role in ("qa", "security")]
+
+        # Run code agents in parallel.
+        if code_agents:
+            code_tasks = [a.run(task) for a in code_agents]
+            code_results: list[AgentResult] = await asyncio.gather(
+                *code_tasks, return_exceptions=True
+            )
+
+            for agent, result in zip(code_agents, code_results):
+                if isinstance(result, Exception):
+                    logger.error("Team %s: %s agent failed: %s",
+                                 team_id[:8], agent.role, result)
+                    continue
+                if result.diffs:
+                    all_diffs.extend(result.diffs)
+                    logger.info("Team %s: %s produced %d diffs",
+                                team_id[:8], agent.role, len(result.diffs))
+                else:
+                    logger.info("Team %s: %s completed (no diffs)", team_id[:8], agent.role)
+
+        # Run review agents sequentially so they can see prior diffs.
+        for agent in review_agents:
+            try:
+                result = await agent.run(task)
+                if result.diffs:
+                    all_diffs.extend(result.diffs)
+                    logger.info("Team %s: %s produced %d diffs",
+                                team_id[:8], agent.role, len(result.diffs))
+                else:
+                    logger.info("Team %s: %s completed (no diffs)", team_id[:8], agent.role)
+            except Exception as e:
+                logger.error("Team %s: %s agent failed: %s",
+                             team_id[:8], agent.role, e)
+
+        # ── Step 5: Submit remaining diffs and complete ─────────────────
+        # Most diffs are submitted in real-time by agent tool calls, but
+        # if any diffs came via parse_result, submit them here.
+        for diff in all_diffs:
+            if not diff.get("_submitted"):
+                try:
+                    await go_client.report_diff(task.id, diff)
+                except Exception as e:
+                    logger.error("Team %s: Failed to submit diff for %s: %s",
+                                 team_id[:8], diff.get("file_path", "?"), e)
+
+        # Mark task complete — Go triggers PR creation.
+        await go_client.report_result(task.id)
+        logger.info("Team %s: Task %s completed successfully", team_id[:8], task.id)
+
+    except Exception as e:
+        logger.error("Team %s: Fatal pipeline error: %s", team_id[:8], e, exc_info=True)
+        try:
+            await go_client.fail_task(task.id, f"Pipeline error: {e}")
+        except Exception:
+            pass
+
+    finally:
+        # Stop heartbeats.
+        stop_heartbeat.set()
+        if heartbeat_task:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 class RedisConsumer:
@@ -146,61 +433,13 @@ class RedisConsumer:
         # Spin up a team for this task.
         team_id = str(uuid.uuid4())
         team_task = asyncio.create_task(
-            self._run_team(team_id, task_data),
+            _run_full_pipeline(team_id, task_data, self._engine, self._go_client),
             name=f"team-{team_id[:8]}",
         )
         self._active_teams[team_id] = team_task
 
         # Clean up when done.
         team_task.add_done_callback(lambda _: self._active_teams.pop(team_id, None))
-
-    async def _run_team(self, team_id: str, task_data: dict[str, Any]) -> None:
-        """Run a minimal Phase 0 team: Orchestrator + SeniorDev.
-
-        Phase 0 flow:
-        1. Create Orchestrator + SeniorDev agents
-        2. Register both with Go
-        3. Orchestrator searches codebase and produces a plan
-        4. Plan submitted to Go for human review
-        """
-        task = Task(
-            id=task_data["id"],
-            repo_id=task_data.get("repo_id", ""),
-            description=task_data.get("description", ""),
-            status=task_data.get("status", "submitted"),
-            plan_document=task_data.get("plan_document"),
-        )
-
-        agent_config = AgentConfig()
-
-        # Initialise tools with shared clients.
-        if self._engine:
-            init_engine_tools(self._engine)
-        if self._go_client:
-            init_task_tools(self._go_client)
-
-        # Phase 0: Only Orchestrator for planning.
-        orchestrator = OrchestratorAgent(
-            agent_id=f"orch-{team_id[:8]}",
-            team_id=team_id,
-            agent_config=agent_config,
-        )
-
-        try:
-            # Register and run orchestrator.
-            await orchestrator.register()
-            logger.info("Team %s: Orchestrator running for task %s", team_id[:8], task.id)
-
-            result = await orchestrator.run(task)
-
-            if result.error:
-                logger.error("Team %s: Orchestrator error: %s", team_id[:8], result.error)
-            else:
-                logger.info("Team %s: Orchestrator completed. Plan: %s",
-                            team_id[:8], "yes" if result.plan else "no")
-
-        except Exception as e:
-            logger.error("Team %s: Fatal error: %s", team_id[:8], e, exc_info=True)
 
 
 class TaskPollingConsumer:
@@ -244,7 +483,9 @@ class TaskPollingConsumer:
                 if task_data:
                     team_id = str(uuid.uuid4())
                     team_task = asyncio.create_task(
-                        self._run_team(team_id, task_data),
+                        _run_full_pipeline(
+                            team_id, task_data, self._engine, self._go_client
+                        ),
                         name=f"team-{team_id[:8]}",
                     )
                     self._active_teams[team_id] = team_task
@@ -256,39 +497,3 @@ class TaskPollingConsumer:
                 logger.error("Polling error: %s", e)
 
             await asyncio.sleep(self._poll_interval)
-
-    async def _run_team(self, team_id: str, task_data: dict[str, Any]) -> None:
-        """Same team logic as RedisConsumer._run_team."""
-        task = Task(
-            id=task_data["id"],
-            repo_id=task_data.get("repo_id", ""),
-            description=task_data.get("description", ""),
-            status=task_data.get("status", "submitted"),
-            plan_document=task_data.get("plan_document"),
-        )
-
-        agent_config = AgentConfig()
-
-        if self._engine:
-            init_engine_tools(self._engine)
-        if self._go_client:
-            init_task_tools(self._go_client)
-
-        orchestrator = OrchestratorAgent(
-            agent_id=f"orch-{team_id[:8]}",
-            team_id=team_id,
-            agent_config=agent_config,
-        )
-
-        try:
-            await orchestrator.register()
-            logger.info("Team %s: Orchestrator running for task %s", team_id[:8], task.id)
-            result = await orchestrator.run(task)
-
-            if result.error:
-                logger.error("Team %s: Orchestrator error: %s", team_id[:8], result.error)
-            else:
-                logger.info("Team %s: Orchestrator completed. Plan: %s",
-                            team_id[:8], "yes" if result.plan else "no")
-        except Exception as e:
-            logger.error("Team %s: Fatal error: %s", team_id[:8], e, exc_info=True)

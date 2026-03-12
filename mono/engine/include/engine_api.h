@@ -254,6 +254,12 @@ public:
      * Get engine version
      */
     virtual std::string getVersion() const = 0;
+
+    /**
+     * Get the storage path used by this engine instance.
+     * Repo clones live at  <storage_path>/repos/<repo_id>.
+     */
+    virtual std::string getStoragePath() const { return ""; }
     
     /**
      * Run self-diagnostics

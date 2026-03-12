@@ -1,6 +1,5 @@
 // ─── Task History ────────────────────────────────────────────────────────────
 // Paginated table of completed/failed/timed-out tasks with stats.
-// Phase 3 implementation.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";

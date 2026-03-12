@@ -149,7 +149,7 @@ class EngineClient:
     async def get_file_content(self, repo_id: str, file_path: str, ref: str = "") -> dict[str, Any]:
         """Read a file from the engine's local repository clone.
 
-        Uses the ``GetFileContent`` RPC added to ``engine.proto`` in Phase 0.
+        Uses the ``GetFileContent`` RPC defined in ``engine.proto``.
         If the RPC is not yet compiled into the engine binary, the call
         degrades gracefully and returns an error message in the dict.
 

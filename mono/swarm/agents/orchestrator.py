@@ -1,7 +1,7 @@
 """Orchestrator agent — team lead responsible for planning and delegation.
 
 The orchestrator receives a task, searches the codebase to understand scope,
-produces a plan document, and (in Phase 1+) delegates subtasks to other agents.
+produces a plan document, and delegates subtasks to other agents.
 """
 
 from __future__ import annotations
@@ -21,12 +21,10 @@ logger = logging.getLogger(__name__)
 class OrchestratorAgent(Agent):
     """Team lead agent: planning, delegation, synthesis.
 
-    Phase 0 capabilities:
+    Capabilities:
     - Search the codebase to understand context
     - Produce a structured plan document
     - Submit the plan for human review
-
-    Phase 1+ additions:
     - Delegate implementation subtasks to SeniorDev/JuniorDev
     - Coordinate QA and Security reviews
     - Synthesise final output

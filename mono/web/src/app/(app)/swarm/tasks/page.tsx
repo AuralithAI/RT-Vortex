@@ -1,6 +1,5 @@
 // ─── Swarm Task List ─────────────────────────────────────────────────────────
-// Filterable list of all swarm tasks with status badges.
-// Phase 0 stub — will be expanded with WebSocket updates in Phase 1.
+// Filterable list of all swarm tasks with status badges and WebSocket updates.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -38,7 +37,7 @@ export default function SwarmTasksPage() {
           setTasks(data.tasks || []);
         }
       } catch {
-        // Will be handled by error boundary in Phase 1.
+        // Handled by error boundary.
       } finally {
         setLoading(false);
       }

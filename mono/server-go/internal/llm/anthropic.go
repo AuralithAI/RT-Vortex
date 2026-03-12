@@ -317,8 +317,8 @@ type anthropicStreamRequest struct {
 }
 
 // StreamComplete sends a streaming completion request using Anthropic's SSE API.
-// NOTE: Tool calling during streaming is not fully handled in Phase 1 —
-// the swarm uses non-streaming completions. Streaming with tools is a Phase 3 goal.
+// NOTE: Tool calling during streaming is not supported — the swarm uses
+// non-streaming completions for tool calling workflows.
 func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {

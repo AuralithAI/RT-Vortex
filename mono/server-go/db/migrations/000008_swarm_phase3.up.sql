@@ -1,5 +1,5 @@
 -- ==============================================================================
--- 000008_swarm_phase3.up.sql — Phase 3: Scale + Polish additions
+-- 000008_swarm_phase3.up.sql — Scale + Polish additions
 -- ==============================================================================
 
 -- ── Add retry and failure tracking to swarm_tasks ───────────────────────────

@@ -440,34 +440,136 @@ func (c *Client) doJSON(ctx context.Context, method, url string, body interface{
 	return nil
 }
 
-// ── Phase 2 stubs — branch / commit / PR creation ──────────────────────────
+// ── Branch / Commit / PR Creation ───────────────────────────────────────────
 
 // CreateBranch creates a new branch from the given commit SHA.
-// TODO: implement Bitbucket branch creation via POST /refs/branches.
 func (c *Client) CreateBranch(ctx context.Context, owner, repo string, req *vcs.CreateBranchRequest) error {
-	return fmt.Errorf("bitbucket: CreateBranch not implemented")
+	url := fmt.Sprintf("%s/repositories/%s/%s/refs/branches", c.baseURL, owner, repo)
+
+	body := map[string]interface{}{
+		"name": req.BranchName,
+		"target": map[string]interface{}{
+			"hash": req.FromSHA,
+		},
+	}
+
+	if err := c.doJSON(ctx, http.MethodPost, url, body, nil); err != nil {
+		return fmt.Errorf("create branch %s: %w", req.BranchName, err)
+	}
+	slog.Info("bitbucket: created branch", "owner", owner, "repo", repo, "branch", req.BranchName)
+	return nil
 }
 
 // CreateOrUpdateFile creates or updates a file on a branch and commits it.
-// TODO: implement via POST /src with multipart form.
+// Bitbucket uses a multipart form POST to the /src endpoint.
 func (c *Client) CreateOrUpdateFile(ctx context.Context, owner, repo, branch string, file *vcs.FileCommit) (string, error) {
-	return "", fmt.Errorf("bitbucket: CreateOrUpdateFile not implemented")
+	url := fmt.Sprintf("%s/repositories/%s/%s/src", c.baseURL, owner, repo)
+
+	// Bitbucket's /src endpoint accepts form data for committing files.
+	body := map[string]interface{}{
+		file.Path: file.Content,
+		"message": file.Message,
+		"branch":  branch,
+	}
+
+	if err := c.doJSON(ctx, http.MethodPost, url, body, nil); err != nil {
+		return "", fmt.Errorf("create/update file %s: %w", file.Path, err)
+	}
+
+	// Fetch the latest commit SHA on the branch.
+	sha, err := c.GetBranchSHA(ctx, owner, repo, branch)
+	if err != nil {
+		slog.Warn("bitbucket: committed file but failed to get SHA", "path", file.Path, "err", err)
+		return "", nil
+	}
+
+	slog.Info("bitbucket: committed file", "owner", owner, "repo", repo, "path", file.Path, "sha", sha)
+	return sha, nil
 }
 
 // CreatePullRequest opens a new pull request on Bitbucket.
-// TODO: implement via POST /pullrequests.
 func (c *Client) CreatePullRequest(ctx context.Context, owner, repo string, req *vcs.CreatePullRequestRequest) (*vcs.PullRequest, error) {
-	return nil, fmt.Errorf("bitbucket: CreatePullRequest not implemented")
+	url := fmt.Sprintf("%s/repositories/%s/%s/pullrequests", c.baseURL, owner, repo)
+
+	body := map[string]interface{}{
+		"title":       req.Title,
+		"description": req.Body,
+		"source": map[string]interface{}{
+			"branch": map[string]string{
+				"name": req.SourceBranch,
+			},
+		},
+		"destination": map[string]interface{}{
+			"branch": map[string]string{
+				"name": req.TargetBranch,
+			},
+		},
+		"close_source_branch": true,
+	}
+
+	var bbPR bbPullRequest
+	if err := c.doJSON(ctx, http.MethodPost, url, body, &bbPR); err != nil {
+		return nil, fmt.Errorf("create PR: %w", err)
+	}
+
+	state := strings.ToLower(bbPR.State)
+	if state == "declined" || state == "superseded" {
+		state = "closed"
+	}
+	author := bbPR.Author.Nickname
+	if author == "" {
+		author = bbPR.Author.DisplayName
+	}
+
+	pr := &vcs.PullRequest{
+		ID:           fmt.Sprintf("%d", bbPR.ID),
+		Number:       bbPR.ID,
+		Title:        bbPR.Title,
+		Description:  bbPR.Description,
+		Author:       author,
+		SourceBranch: bbPR.Source.Branch.Name,
+		TargetBranch: bbPR.Destination.Branch.Name,
+		State:        state,
+		URL:          bbPR.Links.HTML.Href,
+		HeadSHA:      bbPR.Source.Commit.Hash,
+		BaseSHA:      bbPR.Destination.Commit.Hash,
+		CreatedAt:    bbPR.CreatedOn,
+		UpdatedAt:    bbPR.UpdatedOn,
+	}
+
+	slog.Info("bitbucket: created pull request", "owner", owner, "repo", repo, "id", bbPR.ID, "url", bbPR.Links.HTML.Href)
+	return pr, nil
 }
 
 // GetDefaultBranch returns the repo's default branch name.
-// TODO: implement via GET /repositories/:owner/:slug → mainbranch.name.
 func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) (string, error) {
-	return "", fmt.Errorf("bitbucket: GetDefaultBranch not implemented")
+	url := fmt.Sprintf("%s/repositories/%s/%s", c.baseURL, owner, repo)
+
+	var repoInfo struct {
+		MainBranch struct {
+			Name string `json:"name"`
+		} `json:"mainbranch"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &repoInfo); err != nil {
+		return "", fmt.Errorf("get default branch: %w", err)
+	}
+	if repoInfo.MainBranch.Name == "" {
+		return "main", nil
+	}
+	return repoInfo.MainBranch.Name, nil
 }
 
 // GetBranchSHA returns the HEAD commit SHA for a branch.
-// TODO: implement via GET /refs/branches/:name → target.hash.
 func (c *Client) GetBranchSHA(ctx context.Context, owner, repo, branch string) (string, error) {
-	return "", fmt.Errorf("bitbucket: GetBranchSHA not implemented")
+	url := fmt.Sprintf("%s/repositories/%s/%s/refs/branches/%s", c.baseURL, owner, repo, branch)
+
+	var branchInfo struct {
+		Target struct {
+			Hash string `json:"hash"`
+		} `json:"target"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &branchInfo); err != nil {
+		return "", fmt.Errorf("get branch SHA: %w", err)
+	}
+	return branchInfo.Target.Hash, nil
 }

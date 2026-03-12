@@ -289,7 +289,7 @@ func (c *Client) ValidateWebhookSignature(payload []byte, signature string) bool
 	return hmac.Equal([]byte(sig), []byte(expected))
 }
 
-// ── Branch / Commit / PR Creation (Phase 2) ─────────────────────────────────
+// ── Branch / Commit / PR Creation ────────────────────────────────────────────
 
 // GetDefaultBranch returns the default branch for a GitHub repo (e.g. "main").
 func (c *Client) GetDefaultBranch(ctx context.Context, owner, repo string) (string, error) {

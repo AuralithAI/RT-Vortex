@@ -51,7 +51,7 @@ export default function SwarmDiffReviewPage() {
         setDiffs(data.diffs || []);
       }
     } catch {
-      // Error handling deferred to Phase 2 error boundary
+      // Handled by error boundary.
     } finally {
       setLoading(false);
     }

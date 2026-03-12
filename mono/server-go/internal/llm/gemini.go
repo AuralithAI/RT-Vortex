@@ -326,7 +326,8 @@ func (p *GeminiProvider) Healthy(ctx context.Context) bool {
 // ── Gemini Streaming ────────────────────────────────────────────────────────
 
 // StreamComplete sends a streaming request to Gemini and returns chunks via SSE.
-// NOTE: Tool calling during streaming is not fully handled in Phase 1.
+// NOTE: Tool calling during streaming is not supported — the swarm uses
+// non-streaming completions for tool calling workflows.
 func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {

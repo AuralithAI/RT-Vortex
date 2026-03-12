@@ -1,5 +1,5 @@
 /**
- * TMS Metrics Registry — Phase 0 Observability
+ * TMS Metrics Registry — Engine Observability
  *
  * Thread-safe metrics registry that collects counters, gauges, and histograms
  * from the C++ engine. The registry is exposed via a server-streaming gRPC

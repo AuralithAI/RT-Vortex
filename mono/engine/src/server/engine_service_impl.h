@@ -133,6 +133,16 @@ public:
     ) override;
 
     //-------------------------------------------------------------------------
+    // File Content (Swarm)
+    //-------------------------------------------------------------------------
+
+    grpc::Status GetFileContent(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::FileContentRequest* request,
+        aipr::engine::v1::FileContentResponse* response
+    ) override;
+
+    //-------------------------------------------------------------------------
     // Configuration
     //-------------------------------------------------------------------------
 

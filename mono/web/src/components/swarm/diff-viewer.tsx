@@ -1,7 +1,6 @@
 // ─── Diff Viewer ─────────────────────────────────────────────────────────────
 // Side-by-side / inline diff viewer for agent-generated code changes.
 // Uses a pre-formatted unified diff display with syntax-highlighted lines.
-// Phase 1: pure HTML/CSS diff rendering. Phase 2: Monaco editor integration.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";

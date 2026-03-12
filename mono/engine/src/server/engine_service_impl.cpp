@@ -10,6 +10,7 @@
 #include "metrics.h"
 
 #include <filesystem>
+#include <fstream>
 #include <sstream>
 #include <mutex>
 #include <chrono>
@@ -604,10 +605,10 @@ grpc::Status EngineServiceImpl::BuildReviewContextStream(
     };
 
     try {
-        // Phase 1: Parsing diff
+        // Step 1: Parsing diff
         send_progress(5, "parsing_diff");
 
-        // Phase 2: Building review context (does parsing, TMS search,
+        // Step 2: Building review context (does parsing, TMS search,
         //          symbol resolution, and heuristic checks internally)
         send_progress(15, "resolving_symbols");
 
@@ -622,7 +623,7 @@ grpc::Status EngineServiceImpl::BuildReviewContextStream(
             return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
         }
 
-        // Phase 3: Building context pack proto
+        // Step 3: Building context pack proto
         send_progress(70, "building_context",
                       "", pack.context_chunks.size(), pack.context_chunks.size());
 
@@ -653,7 +654,7 @@ grpc::Status EngineServiceImpl::BuildReviewContextStream(
 
         send_progress(90, "finalizing");
 
-        // Phase 4: Send final completion with context_pack
+        // Step 4: Send final completion with context_pack
         aipr::engine::v1::PREmbedProgressUpdate final_update;
         final_update.set_repo_id(repo_id);
         final_update.set_progress(100);
@@ -891,6 +892,145 @@ CloudProvider EngineServiceImpl::toCloudProvider(aipr::engine::v1::StorageProvid
             return CloudProvider::Local;
     }
 }
+
+//=============================================================================
+// File Content (Swarm)
+//=============================================================================
+
+grpc::Status EngineServiceImpl::GetFileContent(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::FileContentRequest* request,
+    aipr::engine::v1::FileContentResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    const std::string& repo_id  = request->repo_id();
+    const std::string& rel_path = request->file_path();
+    const std::string& ref      = request->ref();
+
+    if (repo_id.empty() || rel_path.empty()) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "repo_id and file_path are required");
+    }
+
+    // Reject path traversal attempts.
+    if (rel_path.find("..") != std::string::npos) {
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "file_path must not contain '..'");
+    }
+
+    try {
+        // Resolve the local clone directory.
+        // The engine stores clones at  <storage_path>/repos/<repo_id>.
+        auto* eng = engine_.get();
+        if (!eng) {
+            return grpc::Status(grpc::StatusCode::INTERNAL, "engine not initialised");
+        }
+
+        // Check that the repository has been indexed.
+        IndexStats stats = eng->getIndexStats(repo_id);
+        if (stats.total_chunks == 0) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                                "repository not indexed: " + repo_id);
+        }
+
+        // Retrieve the storage_path from the engine.
+        std::string storage_path = eng->getStoragePath();
+        if (storage_path.empty()) {
+            return grpc::Status(grpc::StatusCode::INTERNAL,
+                                "engine storage_path not configured");
+        }
+
+        namespace fs = std::filesystem;
+
+        fs::path repo_dir = fs::path(storage_path) / "repos" / repo_id;
+        if (!fs::exists(repo_dir)) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                                "local clone not found for " + repo_id);
+        }
+
+        // If a git ref was requested, checkout that ref temporarily.
+        if (!ref.empty()) {
+            std::string checkout_cmd = "cd " + repo_dir.string() +
+                                       " && git checkout " + ref + " 2>&1";
+            int rc = std::system(checkout_cmd.c_str());
+            if (rc != 0) {
+                return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                                    "git ref not found: " + ref);
+            }
+        }
+
+        fs::path full_path = repo_dir / rel_path;
+        if (!fs::exists(full_path) || !fs::is_regular_file(full_path)) {
+            return grpc::Status(grpc::StatusCode::NOT_FOUND,
+                                "file not found: " + rel_path);
+        }
+
+        // Size guard — refuse files larger than 10 MB.
+        auto file_size = fs::file_size(full_path);
+        if (file_size > 10 * 1024 * 1024) {
+            return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED,
+                                "file too large (" + std::to_string(file_size) + " bytes)");
+        }
+
+        // Read file content.
+        std::ifstream ifs(full_path, std::ios::binary);
+        if (!ifs) {
+            return grpc::Status(grpc::StatusCode::INTERNAL,
+                                "failed to open file: " + rel_path);
+        }
+
+        std::string content((std::istreambuf_iterator<char>(ifs)),
+                             std::istreambuf_iterator<char>());
+
+        // Detect binary: check for null bytes in the first 8KB.
+        bool is_binary = false;
+        size_t check_len = std::min(content.size(), size_t(8192));
+        for (size_t i = 0; i < check_len; ++i) {
+            if (content[i] == '\0') {
+                is_binary = true;
+                break;
+            }
+        }
+
+        if (is_binary) {
+            // Base64 encode binary content.
+            // Simple base64 implementation for binary files.
+            static const char b64_table[] =
+                "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            std::string encoded;
+            encoded.reserve(((content.size() + 2) / 3) * 4);
+            for (size_t i = 0; i < content.size(); i += 3) {
+                uint32_t n = (static_cast<uint8_t>(content[i]) << 16);
+                if (i + 1 < content.size()) n |= (static_cast<uint8_t>(content[i + 1]) << 8);
+                if (i + 2 < content.size()) n |= (static_cast<uint8_t>(content[i + 2]));
+                encoded += b64_table[(n >> 18) & 0x3F];
+                encoded += b64_table[(n >> 12) & 0x3F];
+                encoded += (i + 1 < content.size()) ? b64_table[(n >> 6) & 0x3F] : '=';
+                encoded += (i + 2 < content.size()) ? b64_table[n & 0x3F] : '=';
+            }
+            response->set_content(encoded);
+            response->set_encoding("base64");
+            response->set_is_binary(true);
+        } else {
+            response->set_content(content);
+            response->set_encoding("utf-8");
+            response->set_is_binary(false);
+        }
+
+        return grpc::Status::OK;
+
+    } catch (const std::exception& e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL,
+                            std::string("GetFileContent failed: ") + e.what());
+    }
+}
+
+//=============================================================================
+// Storage Configuration
+//=============================================================================
 
 grpc::Status EngineServiceImpl::ConfigureStorage(
     grpc::ServerContext* context,

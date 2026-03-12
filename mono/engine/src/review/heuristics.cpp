@@ -137,7 +137,7 @@ std::vector<HeuristicFinding> RiskyApiDetector::check(const ParsedDiff& diff) {
 }
 
 // ============================================================================
-// TODO Detector
+// TodoDetector — finds leftover TODO/FIXME/HACK markers in added lines
 // ============================================================================
 
 std::vector<HeuristicFinding> TodoDetector::check(const ParsedDiff& diff) {

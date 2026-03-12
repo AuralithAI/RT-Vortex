@@ -128,7 +128,7 @@ type Platform interface {
 	// ValidateWebhookSignature verifies the webhook payload is authentic.
 	ValidateWebhookSignature(payload []byte, signature string) bool
 
-	// ── Phase 2: PR creation methods ────────────────────────────────
+	// ── PR creation methods ────────────────────────────────────────
 
 	// CreateBranch creates a new branch from the given SHA.
 	CreateBranch(ctx context.Context, owner, repo string, req *CreateBranchRequest) error

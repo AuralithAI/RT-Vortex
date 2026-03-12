@@ -85,6 +85,27 @@ func (h *Handler) RevokeAgent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// GetTaskStatus handles GET /internal/swarm/tasks/{id}/status — lightweight
+// status poll for agents waiting on plan/diff approval.
+func (h *Handler) GetTaskStatus(w http.ResponseWriter, r *http.Request) {
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	task, err := h.TaskMgr.GetTask(r.Context(), taskID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": task.Status,
+	})
+}
+
 // ── Task endpoints (agent-facing) ───────────────────────────────────────────
 
 // GetNextTask handles GET /internal/swarm/tasks/next.
@@ -315,7 +336,7 @@ func (h *Handler) DeclareTeamSize(w http.ResponseWriter, r *http.Request) {
 	if h.WS != nil {
 		h.WS.BroadcastTaskEvent("team_scaled", taskID.String(), map[string]interface{}{
 			"additional_agents": body.AdditionalAgents,
-			"roles":            body.Roles,
+			"roles":             body.Roles,
 		})
 	}
 
@@ -726,9 +747,9 @@ func (h *Handler) TaskHistory(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"tasks": summaries,
-		"total": total,
-		"limit": limit,
+		"tasks":  summaries,
+		"total":  total,
+		"limit":  limit,
 		"offset": offset,
 	})
 }

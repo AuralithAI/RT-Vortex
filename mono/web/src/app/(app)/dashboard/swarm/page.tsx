@@ -1,6 +1,6 @@
 // ─── Swarm Dashboard ─────────────────────────────────────────────────────────
 // Overview page: live stats, task submission, pipeline board, task history.
-// Phase 3 — production-grade with live overview, Prometheus-backed metrics,
+// Production-grade with live overview, Prometheus-backed metrics,
 // retry controls, and tabbed navigation.
 // ─────────────────────────────────────────────────────────────────────────────
 

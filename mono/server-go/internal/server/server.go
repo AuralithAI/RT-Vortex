@@ -82,7 +82,7 @@ type Dependencies struct {
 	// VCS Platform Config — per-user non-secret VCS settings (URLs, usernames)
 	VCSPlatformRepo *store.VCSPlatformRepo
 
-	// Engine Metrics Collector — Phase 0 observability
+	// Engine Metrics Collector — real-time engine observability
 	MetricsCollector *engine.MetricsCollector
 
 	// Swarm — agent swarm infrastructure
@@ -310,7 +310,7 @@ func (s *Server) setupRouter() {
 				r.Get("/token-capabilities", h.ListVCSTokenCapabilities)
 			})
 
-			// Engine Metrics — Phase 0 observability
+			// Engine Metrics
 			r.Route("/engine", func(r chi.Router) {
 				r.Get("/metrics", h.GetEngineMetrics)
 				r.Get("/health", h.GetEngineHealth)
@@ -357,6 +357,7 @@ func (s *Server) setupRouter() {
 
 				r.Delete("/auth/revoke", sh.RevokeAgent)
 				r.Get("/tasks/next", sh.GetNextTask)
+				r.Get("/tasks/{id}/status", sh.GetTaskStatus)
 				r.Post("/tasks/{id}/plan", sh.SubmitPlan)
 				r.Post("/tasks/{id}/diffs", sh.SubmitDiff)
 				r.Get("/tasks/{id}/diffs", sh.ListDiffs)

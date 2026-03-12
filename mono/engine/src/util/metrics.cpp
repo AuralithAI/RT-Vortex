@@ -156,15 +156,14 @@ Snapshot Registry::snapshot() const {
 // ── Bridge from perf::Profiler ────────────────────────────────────────────
 
 void Registry::syncFromProfiler() {
-    // TODO: We access Profiler::instance() which lives in perf_timer.cpp.
+    // We access Profiler::instance() which lives in perf_timer.cpp.
     // Both are linked into the same static lib, so this always works.
     //
     // We intentionally DON'T #include perf_timer's header (it's a .cpp-only
     // class) — instead we declare the minimal API we need.
     //
-    // For now this is a no-op placeholder. A future commit can expose
-    // Profiler's getMetricNames() + getStats() through a thin header and
-    // call them here to copy samples into our histograms.
+    // Currently a no-op. Once Profiler exposes getMetricNames() + getStats()
+    // through a thin header, this method will copy samples into our histograms.
 }
 
 // ── Reset ─────────────────────────────────────────────────────────────────

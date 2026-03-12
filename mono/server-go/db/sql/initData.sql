@@ -321,7 +321,7 @@ CREATE TABLE IF NOT EXISTS swarm_agents (
     registered_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Phase 3: partial index for heartbeat monitoring (online agents only).
+-- Partial index for heartbeat monitoring (online agents only).
 CREATE INDEX IF NOT EXISTS idx_swarm_agents_online
     ON swarm_agents(status)
     WHERE status != 'offline';
@@ -362,7 +362,7 @@ CREATE TABLE IF NOT EXISTS swarm_tasks (
 CREATE INDEX IF NOT EXISTS idx_swarm_tasks_repo_id ON swarm_tasks(repo_id);
 CREATE INDEX IF NOT EXISTS idx_swarm_tasks_status  ON swarm_tasks(status);
 
--- Phase 3: partial indexes for task history, timeout checking, and agent monitoring.
+-- Partial indexes for task history, timeout checking, and agent monitoring.
 CREATE INDEX IF NOT EXISTS idx_swarm_tasks_history
     ON swarm_tasks(status, created_at DESC)
     WHERE status IN ('completed', 'failed', 'timed_out', 'cancelled');

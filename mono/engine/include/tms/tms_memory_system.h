@@ -92,7 +92,7 @@ public:
     bool isInitialized() const { return initialized_.load(); }
     
     // =========================================================================
-    // Repository Ingestion (Phase 1)
+    // Repository Ingestion
     // =========================================================================
     
     /**

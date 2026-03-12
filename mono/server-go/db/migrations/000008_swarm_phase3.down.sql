@@ -1,5 +1,5 @@
 -- ==============================================================================
--- 000008_swarm_phase3.down.sql — Rollback Phase 3 additions
+-- 000008_swarm_phase3.down.sql — Rollback scale + polish additions
 -- ==============================================================================
 
 DROP INDEX IF EXISTS idx_swarm_agents_online;

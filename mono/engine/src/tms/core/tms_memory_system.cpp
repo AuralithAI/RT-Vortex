@@ -230,7 +230,7 @@ void TMSMemorySystem::ingestRepository(
     auto start_time = std::chrono::steady_clock::now();
 
     // =========================================================================
-    // Phase 0: Discover files (lightweight — only collects paths, no content)
+    // Discover files (lightweight — only collects paths, no content)
     // =========================================================================
     if (progress_callback) {
         progress_callback(0.0f, "Scanning repository...");
@@ -301,7 +301,7 @@ void TMSMemorySystem::ingestRepository(
     }
 
     // =========================================================================
-    // Phase 1–3: Batched parse → enrich → embed → store
+    // Batched parse → enrich → embed → store
     // =========================================================================
     for (size_t batch_idx = 0; batch_idx < num_batches; ++batch_idx) {
         size_t start_file = batch_idx * batch_file_count;
@@ -431,7 +431,7 @@ void TMSMemorySystem::ingestRepository(
     }
 
     // =========================================================================
-    // Phase 4: Persist to disk
+    // Persist to disk
     // =========================================================================
     if (progress_callback) {
         progress_callback(0.92f, "Persisting index to disk...");

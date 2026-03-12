@@ -744,7 +744,7 @@ private:
     }
 
     std::vector<std::vector<float>> embedBatchSentenceTransformers(const std::vector<std::string>& texts) {
-        // TODO: implement Python bridge
+        // Python bridge not yet wired — fall back to mock embeddings.
         return embedBatchMock(texts);
     }
 

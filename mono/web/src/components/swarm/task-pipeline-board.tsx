@@ -1,6 +1,5 @@
 // ─── Task Pipeline Board ─────────────────────────────────────────────────────
 // Kanban-style board showing tasks across all statuses.
-// Phase 3 implementation — full swarm pipeline board.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
