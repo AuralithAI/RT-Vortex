@@ -3,9 +3,9 @@
  * 
  * Wrapper around embedding computation.
  * Supports multiple backends:
- * - HTTP API (OpenAI, local server)
- * - ONNX Runtime (local models)
- * - Sentence Transformers (via Python bridge)
+ * - HTTP API (OpenAI-compatible, or self-hosted TEI/FastAPI)
+ * - ONNX Runtime (local models — ships with all-MiniLM-L6-v2;
+ *   any HuggingFace model exported to ONNX can be dropped in)
  * 
  * Optimized for code embeddings with:
  * - Batched processing
@@ -30,9 +30,8 @@ namespace aipr::tms {
  * Embedding Backend Type
  */
 enum class EmbeddingBackend {
-    HTTP_API,           // OpenAI-compatible HTTP API
-    ONNX_RUNTIME,       // Local ONNX model
-    SENTENCE_TRANSFORMERS,  // Python Sentence Transformers
+    HTTP_API,           // OpenAI-compatible HTTP API (cloud or self-hosted)
+    ONNX_RUNTIME,       // Local ONNX model (ships all-MiniLM-L6-v2, supports any ONNX export)
     MOCK                // For testing
 };
 
