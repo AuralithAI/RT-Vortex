@@ -317,8 +317,9 @@ type anthropicStreamRequest struct {
 }
 
 // StreamComplete sends a streaming completion request using Anthropic's SSE API.
-// NOTE: Tool calling during streaming is not supported — the swarm uses
-// non-streaming completions for tool calling workflows.
+// Supports both text content and tool calling during streaming. When the model
+// invokes tools, the final chunk's ToolCalls field is populated with the
+// accumulated tool_use blocks.
 func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {
@@ -422,6 +423,16 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 		scanner := bufio.NewScanner(resp.Body)
 		var currentModel string
 
+		// Tool call accumulation: Anthropic streams tool_use blocks as
+		// content_block_start → input_json_delta(s) → content_block_stop.
+		type pendingToolCall struct {
+			ID        string
+			Name      string
+			InputJSON strings.Builder
+		}
+		var toolCalls []ToolCall
+		var activeTool *pendingToolCall
+
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -447,14 +458,49 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 					}
 				}
 
+			case "content_block_start":
+				// A new content block is starting. Could be text or tool_use.
+				if cb, ok := evt["content_block"].(map[string]interface{}); ok {
+					blockType, _ := cb["type"].(string)
+					if blockType == "tool_use" {
+						id, _ := cb["id"].(string)
+						name, _ := cb["name"].(string)
+						activeTool = &pendingToolCall{ID: id, Name: name}
+					}
+				}
+
 			case "content_block_delta":
 				if delta, ok := evt["delta"].(map[string]interface{}); ok {
-					text, _ := delta["text"].(string)
-					select {
-					case ch <- StreamChunk{Content: text, Model: currentModel}:
-					case <-ctx.Done():
-						return
+					deltaType, _ := delta["type"].(string)
+					switch deltaType {
+					case "text_delta":
+						text, _ := delta["text"].(string)
+						select {
+						case ch <- StreamChunk{Content: text, Model: currentModel}:
+						case <-ctx.Done():
+							return
+						}
+					case "input_json_delta":
+						// Accumulate partial JSON for the active tool call.
+						if activeTool != nil {
+							partialJSON, _ := delta["partial_json"].(string)
+							activeTool.InputJSON.WriteString(partialJSON)
+						}
 					}
+				}
+
+			case "content_block_stop":
+				// Finalise the active tool call if one was in progress.
+				if activeTool != nil {
+					toolCalls = append(toolCalls, ToolCall{
+						ID:   activeTool.ID,
+						Type: "function",
+						Function: ToolCallFunc{
+							Name:      activeTool.Name,
+							Arguments: activeTool.InputJSON.String(),
+						},
+					})
+					activeTool = nil
 				}
 
 			case "message_delta":
@@ -463,11 +509,21 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 				if delta, ok := evt["delta"].(map[string]interface{}); ok {
 					if sr, ok := delta["stop_reason"].(string); ok {
 						sc.FinishReason = sr
+						if sr == "end_turn" {
+							sc.FinishReason = "stop"
+						}
+						if sr == "tool_use" {
+							sc.FinishReason = "tool_calls"
+						}
 					}
 				}
 				if usage, ok := evt["usage"].(map[string]interface{}); ok {
 					outTokens := int(usage["output_tokens"].(float64))
 					sc.Usage = &Usage{CompletionTokens: outTokens}
+				}
+				// Attach accumulated tool calls to the final chunk.
+				if len(toolCalls) > 0 {
+					sc.ToolCalls = toolCalls
 				}
 				select {
 				case ch <- sc:

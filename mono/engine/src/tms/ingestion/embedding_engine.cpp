@@ -744,8 +744,116 @@ private:
     }
 
     std::vector<std::vector<float>> embedBatchSentenceTransformers(const std::vector<std::string>& texts) {
-        // Python bridge not yet wired — fall back to mock embeddings.
-        return embedBatchMock(texts);
+        // SentenceTransformers backend: spawns a Python subprocess that loads
+        // the configured model, encodes the input texts, and writes the
+        // embeddings as newline-delimited JSON arrays to a temp file.
+        //
+        // Uses temp files for I/O since popen() only supports unidirectional
+        // pipes.  The Python script reads from an input .jsonl and writes
+        // embeddings to an output .jsonl.
+
+        if (config_.model_name.empty()) {
+            std::cerr << "[EMBED] SentenceTransformers model_name not configured, falling back to mock" << std::endl;
+            return embedBatchMock(texts);
+        }
+
+        std::string tmp_input  = "/tmp/aipr_st_input_"  + std::to_string(getpid()) + ".jsonl";
+        std::string tmp_output = "/tmp/aipr_st_output_" + std::to_string(getpid()) + ".jsonl";
+
+        // Write input texts to temp file.
+        {
+            std::ofstream ofs(tmp_input);
+            if (!ofs) {
+                std::cerr << "[EMBED] Failed to write SentenceTransformers input file" << std::endl;
+                return embedBatchMock(texts);
+            }
+            for (const auto& text : texts) {
+                nlohmann::json jt = text;
+                ofs << jt.dump() << "\n";
+            }
+        }
+
+        // Build the file-based Python script.
+        static const char* py_file_script = R"PY(
+import sys, json
+from sentence_transformers import SentenceTransformer
+
+model_name = sys.argv[1]
+dim = int(sys.argv[2])
+input_path = sys.argv[3]
+output_path = sys.argv[4]
+
+model = SentenceTransformer(model_name)
+
+with open(input_path) as f:
+    lines = [json.loads(line.strip()) for line in f if line.strip()]
+
+if not lines:
+    open(output_path, 'w').close()
+    sys.exit(0)
+
+embeddings = model.encode(lines, normalize_embeddings=True, show_progress_bar=False)
+with open(output_path, 'w') as f:
+    for emb in embeddings:
+        vec = emb.tolist()
+        if len(vec) != dim:
+            vec = (vec + [0.0] * dim)[:dim]
+        f.write(json.dumps(vec) + '\n')
+)PY";
+
+        std::string file_cmd = "python3 -c '" + std::string(py_file_script) + "' "
+                             + config_.model_name + " "
+                             + std::to_string(config_.embedding_dimension) + " "
+                             + tmp_input + " " + tmp_output;
+
+        int rc = std::system(file_cmd.c_str());
+        std::remove(tmp_input.c_str());
+
+        if (rc != 0) {
+            std::cerr << "[EMBED] SentenceTransformers subprocess failed (exit "
+                      << rc << "), falling back to mock" << std::endl;
+            std::remove(tmp_output.c_str());
+            return embedBatchMock(texts);
+        }
+
+        // Read output embeddings.
+        std::vector<std::vector<float>> results;
+        results.reserve(texts.size());
+        {
+            std::ifstream ifs(tmp_output);
+            if (!ifs) {
+                std::cerr << "[EMBED] Failed to read SentenceTransformers output" << std::endl;
+                std::remove(tmp_output.c_str());
+                return embedBatchMock(texts);
+            }
+            std::string line;
+            while (std::getline(ifs, line)) {
+                if (line.empty()) continue;
+                try {
+                    auto arr = nlohmann::json::parse(line);
+                    std::vector<float> vec;
+                    vec.reserve(arr.size());
+                    for (auto& v : arr) {
+                        vec.push_back(v.get<float>());
+                    }
+                    results.push_back(std::move(vec));
+                } catch (const std::exception& e) {
+                    std::cerr << "[EMBED] Failed to parse ST output line: " << e.what() << std::endl;
+                    results.push_back(std::vector<float>(config_.embedding_dimension, 0.0f));
+                }
+            }
+        }
+        std::remove(tmp_output.c_str());
+
+        // If we got fewer results than inputs, pad with zeros.
+        while (results.size() < texts.size()) {
+            results.push_back(std::vector<float>(config_.embedding_dimension, 0.0f));
+        }
+
+        metrics::Registry::instance().incCounter("embed_st_batches");
+        metrics::Registry::instance().incCounter("embed_st_texts", static_cast<double>(texts.size()));
+
+        return results;
     }
 
     std::vector<std::vector<float>> embedBatchMock(const std::vector<std::string>& texts) {

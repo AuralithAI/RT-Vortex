@@ -211,7 +211,7 @@ func main() {
 	jwtMgr := auth.NewJWTManager(auth.JWTConfig{
 		Secret:          jwtSecret,
 		Issuer:          "rtvortex",
-		AccessDuration:  15 * time.Minute,
+		AccessDuration:  1 * time.Hour,
 		RefreshDuration: 7 * 24 * time.Hour,
 	})
 

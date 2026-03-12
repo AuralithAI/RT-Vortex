@@ -256,7 +256,16 @@ type openaiStreamRequest struct {
 type openaiStreamChunk struct {
 	Choices []struct {
 		Delta struct {
-			Content string `json:"content"`
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id,omitempty"`
+				Type     string `json:"type,omitempty"`
+				Function struct {
+					Name      string `json:"name,omitempty"`
+					Arguments string `json:"arguments,omitempty"`
+				} `json:"function"`
+			} `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`
@@ -339,6 +348,18 @@ func (p *OpenAIProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 		defer resp.Body.Close()
 
 		scanner := bufio.NewScanner(resp.Body)
+
+		// OpenAI streams tool calls incrementally: each delta may contain a
+		// tool_calls array with an index, and either an id+name (first delta
+		// for that call) or an arguments fragment (subsequent deltas).
+		// We accumulate them in a map keyed by index.
+		type pendingTC struct {
+			ID        string
+			Name      string
+			Arguments strings.Builder
+		}
+		toolCallMap := make(map[int]*pendingTC)
+
 		for scanner.Scan() {
 			line := scanner.Text()
 
@@ -361,9 +382,45 @@ func (p *OpenAIProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 
 			if len(chunk.Choices) > 0 {
 				sc.Content = chunk.Choices[0].Delta.Content
+
+				// Accumulate streaming tool call deltas.
+				for _, tc := range chunk.Choices[0].Delta.ToolCalls {
+					ptc, exists := toolCallMap[tc.Index]
+					if !exists {
+						ptc = &pendingTC{}
+						toolCallMap[tc.Index] = ptc
+					}
+					if tc.ID != "" {
+						ptc.ID = tc.ID
+					}
+					if tc.Function.Name != "" {
+						ptc.Name = tc.Function.Name
+					}
+					if tc.Function.Arguments != "" {
+						ptc.Arguments.WriteString(tc.Function.Arguments)
+					}
+				}
+
 				if chunk.Choices[0].FinishReason != nil {
 					sc.FinishReason = *chunk.Choices[0].FinishReason
 					sc.Done = true
+
+					// On finish, attach accumulated tool calls.
+					if len(toolCallMap) > 0 {
+						for _, ptc := range toolCallMap {
+							sc.ToolCalls = append(sc.ToolCalls, ToolCall{
+								ID:   ptc.ID,
+								Type: "function",
+								Function: ToolCallFunc{
+									Name:      ptc.Name,
+									Arguments: ptc.Arguments.String(),
+								},
+							})
+						}
+						if sc.FinishReason == "tool_calls" || sc.FinishReason == "function_call" {
+							sc.FinishReason = "tool_calls"
+						}
+					}
 				}
 			}
 

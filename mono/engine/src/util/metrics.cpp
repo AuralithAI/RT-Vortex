@@ -5,17 +5,13 @@
  */
 
 #include "metrics.h"
+#include "perf_timer.h"
 
 #include <algorithm>
 #include <cmath>
 #include <numeric>
 
 namespace aipr {
-
-// Forward-declare Profiler access (perf_timer.cpp is in the same library).
-namespace perf {
-class Profiler;
-} // namespace perf
 
 namespace metrics {
 
@@ -156,14 +152,51 @@ Snapshot Registry::snapshot() const {
 // ── Bridge from perf::Profiler ────────────────────────────────────────────
 
 void Registry::syncFromProfiler() {
-    // We access Profiler::instance() which lives in perf_timer.cpp.
-    // Both are linked into the same static lib, so this always works.
-    //
-    // We intentionally DON'T #include perf_timer's header (it's a .cpp-only
-    // class) — instead we declare the minimal API we need.
-    //
-    // Currently a no-op. Once Profiler exposes getMetricNames() + getStats()
-    // through a thin header, this method will copy samples into our histograms.
+    // Pull all timing data from perf::Profiler into our histogram registry.
+    // Profiler stores raw millisecond samples; we convert to seconds for
+    // consistency with our histogram naming convention (*_latency_s).
+    auto& profiler = perf::Profiler::instance();
+
+    auto names = profiler.getMetricNames();
+    for (const auto& name : names) {
+        auto stats = profiler.getStats(name);
+        if (stats.count == 0) continue;
+
+        // Use the profiler metric name prefixed with "perf_" to avoid
+        // collisions with existing metrics registry names.
+        std::string hist_name = "perf_" + name;
+
+        // Record the average as a single representative sample.
+        // The Profiler accumulates since startup; we can't replay every
+        // individual sample, so we record avg, p50, p95, p99 as synthetic
+        // observations that approximate the distribution.
+        std::lock_guard<std::mutex> lk(mu_);
+        auto& hd = histograms_[hist_name];
+
+        // Only import new samples — track how many we've already imported.
+        // We use the counter to avoid double-counting across sync calls.
+        double prev_count = 0.0;
+        auto cit = counters_.find(hist_name + "_synced_count");
+        if (cit != counters_.end()) {
+            prev_count = cit->second;
+        }
+
+        if (static_cast<double>(stats.count) > prev_count) {
+            // Record percentile values as representative samples.
+            // This gives the histogram a reasonable approximation of the
+            // Profiler's distribution without replaying every raw sample.
+            double ms_to_s = 0.001;
+            hd.observe(stats.avg_ms * ms_to_s);
+            hd.observe(stats.p50_ms * ms_to_s);
+            hd.observe(stats.p95_ms * ms_to_s);
+            hd.observe(stats.p99_ms * ms_to_s);
+
+            counters_[hist_name + "_synced_count"] = static_cast<double>(stats.count);
+        }
+
+        // Also publish a gauge with the latest average.
+        gauges_[hist_name + "_avg_s"] = stats.avg_ms * 0.001;
+    }
 }
 
 // ── Reset ─────────────────────────────────────────────────────────────────

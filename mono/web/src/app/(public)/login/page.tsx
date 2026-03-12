@@ -9,6 +9,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 import { useAuthProviders } from "@/lib/api/queries";
 import { getApiBaseUrl } from "@/lib/utils";
+import { clearAccessToken } from "@/lib/api/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/api/queries";
 
@@ -24,6 +25,15 @@ function LoginContent() {
   };
 
   const handleLogin = (providerId: string) => {
+    // Clear any stale auth state before initiating OAuth — this prevents
+    // issues in incognito where expired tokens from a prior session interfere
+    // with the new login flow (e.g. 401 loops, stale cookie overrides).
+    clearAccessToken();
+    try { localStorage.removeItem("rtvortex_refresh_token"); } catch { /* ignore */ }
+    if (typeof document !== "undefined") {
+      document.cookie = "token=; path=/; max-age=0";
+    }
+
     const callbackUrl = getCallbackUrl();
     const base = getApiBaseUrl();
     window.location.href = `${base}/api/v1/auth/login/${providerId}?redirect_url=${encodeURIComponent(callbackUrl)}`;

@@ -192,6 +192,11 @@ async function tryRefreshToken(): Promise<boolean> {
     const data = await res.json();
     if (data.access_token) {
       setAccessToken(data.access_token);
+      // Update the middleware route-protection cookie to match.
+      if (typeof document !== "undefined") {
+        const maxAge = data.expires_in ?? 3600; // default 1 hour
+        document.cookie = `token=${data.access_token}; path=/; max-age=${maxAge}; samesite=lax`;
+      }
     }
     if (data.refresh_token && typeof window !== "undefined") {
       try { localStorage.setItem("rtvortex_refresh_token", data.refresh_token); } catch { /* ignore */ }

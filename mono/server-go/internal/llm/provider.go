@@ -97,11 +97,12 @@ type Usage struct {
 
 // StreamChunk is a single piece of a streamed completion response.
 type StreamChunk struct {
-	Content      string `json:"content"`                 // incremental text delta
-	Model        string `json:"model,omitempty"`         // only set on first/last chunk
-	FinishReason string `json:"finish_reason,omitempty"` // set when streaming is done (e.g. "stop")
-	Done         bool   `json:"done"`                    // true on the final chunk
-	Usage        *Usage `json:"usage,omitempty"`         // set on the final chunk
+	Content      string     `json:"content"`                  // incremental text delta
+	Model        string     `json:"model,omitempty"`          // only set on first/last chunk
+	FinishReason string     `json:"finish_reason,omitempty"`  // set when streaming is done (e.g. "stop")
+	Done         bool       `json:"done"`                     // true on the final chunk
+	Usage        *Usage     `json:"usage,omitempty"`          // set on the final chunk
+	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`     // tool invocations accumulated during stream
 }
 
 // ── Provider Interface ──────────────────────────────────────────────────────

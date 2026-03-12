@@ -31,6 +31,12 @@ function CallbackContent() {
       return;
     }
 
+    // Clear any stale auth state first — this fixes re-login in incognito
+    // windows where old tokens/cookies may linger from a prior session.
+    try { localStorage.removeItem("rtvortex_token"); } catch { /* ignore */ }
+    try { localStorage.removeItem("rtvortex_refresh_token"); } catch { /* ignore */ }
+    document.cookie = "token=; path=/; max-age=0";
+
     // Store access token in memory + localStorage for API calls.
     setAccessToken(token);
 
@@ -40,7 +46,8 @@ function CallbackContent() {
     }
 
     // Also set cookie for middleware route protection.
-    document.cookie = `token=${token}; path=/; max-age=${7 * 24 * 60 * 60}; samesite=lax`;
+    // Max-age = 1 hour, matching the server-side access token lifetime.
+    document.cookie = `token=${token}; path=/; max-age=${60 * 60}; samesite=lax`;
 
     router.replace(returnTo);
   }, [searchParams, router]);

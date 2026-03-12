@@ -326,8 +326,8 @@ func (p *GeminiProvider) Healthy(ctx context.Context) bool {
 // ── Gemini Streaming ────────────────────────────────────────────────────────
 
 // StreamComplete sends a streaming request to Gemini and returns chunks via SSE.
-// NOTE: Tool calling during streaming is not supported — the swarm uses
-// non-streaming completions for tool calling workflows.
+// Tool calling during streaming is supported — function calls returned in
+// streaming chunks are collected and emitted as ToolCalls on the final chunk.
 func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {
@@ -442,6 +442,9 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 		defer resp.Body.Close()
 
 		scanner := bufio.NewScanner(resp.Body)
+		var toolCalls []ToolCall
+		toolCallIdx := 0
+
 		for scanner.Scan() {
 			line := scanner.Text()
 			if !strings.HasPrefix(line, "data: ") {
@@ -458,7 +461,21 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 			sc := StreamChunk{Model: model}
 			if len(gr.Candidates) > 0 {
 				for _, part := range gr.Candidates[0].Content.Parts {
-					sc.Content += part.Text
+					if part.Text != "" {
+						sc.Content += part.Text
+					}
+					if part.FunctionCall != nil {
+						argsJSON, _ := json.Marshal(part.FunctionCall.Args)
+						toolCalls = append(toolCalls, ToolCall{
+							ID:   fmt.Sprintf("gemini-call-%d", toolCallIdx),
+							Type: "function",
+							Function: ToolCallFunc{
+								Name:      part.FunctionCall.Name,
+								Arguments: string(argsJSON),
+							},
+						})
+						toolCallIdx++
+					}
 				}
 				if gr.Candidates[0].FinishReason != "" && gr.Candidates[0].FinishReason != "STOP" {
 					sc.FinishReason = strings.ToLower(gr.Candidates[0].FinishReason)
@@ -467,6 +484,13 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 					sc.FinishReason = "stop"
 					sc.Done = true
 				}
+			}
+
+			// Attach accumulated tool calls on the final chunk.
+			if len(toolCalls) > 0 && (sc.Done || sc.FinishReason != "") {
+				sc.ToolCalls = toolCalls
+				sc.FinishReason = "tool_calls"
+				sc.Done = true
 			}
 
 			if gr.UsageMetadata.TotalTokenCount > 0 {
