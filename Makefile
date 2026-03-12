@@ -312,16 +312,35 @@ lint-web: web ## Lint Web UI
 SWARM_DIR    := $(ROOT_DIR)/mono/swarm
 SWARM_HOME   := $(RT_HOME)/swarm
 
+# Cross-platform venv bin dir: Scripts/ on Windows, bin/ everywhere else.
+ifeq ($(OS),Windows_NT)
+  VENV_BIN := $(SWARM_HOME)/venv/Scripts
+else
+  VENV_BIN := $(SWARM_HOME)/venv/bin
+endif
+
 swarm: rt_home proto-python ## Build and install the Python agent swarm into rt_home/swarm
 	@echo ""
 	@echo "──── Building Agent Swarm ──────────────────────────────"
 	@mkdir -p $(SWARM_HOME)
-	@$(PYTHON) -m venv $(SWARM_HOME)/venv 2>/dev/null || true
-	$(SWARM_HOME)/venv/bin/pip install --upgrade pip --quiet
-	$(SWARM_HOME)/venv/bin/pip install $(SWARM_DIR) --quiet
+	@# Create venv — try with pip first, fall back to --without-pip + get-pip.py
+	@if [ ! -f "$(VENV_BIN)/python3" ] && [ ! -f "$(VENV_BIN)/python.exe" ] && [ ! -f "$(VENV_BIN)/python" ]; then \
+		echo "  Creating virtualenv..."; \
+		$(PYTHON) -m venv $(SWARM_HOME)/venv 2>/dev/null \
+		|| $(PYTHON) -m venv --without-pip $(SWARM_HOME)/venv; \
+	fi
+	@# Bootstrap pip if missing (Debian/Ubuntu without python3-venv, or --without-pip)
+	@if [ ! -x "$(VENV_BIN)/pip" ] && [ ! -x "$(VENV_BIN)/pip3" ] && [ ! -x "$(VENV_BIN)/pip.exe" ]; then \
+		echo "  Bootstrapping pip (ensurepip unavailable)..."; \
+		curl -sS https://bootstrap.pypa.io/get-pip.py -o /tmp/_get_pip.py; \
+		$(VENV_BIN)/python /tmp/_get_pip.py --quiet; \
+		rm -f /tmp/_get_pip.py; \
+	fi
+	$(VENV_BIN)/pip install --upgrade pip --quiet
+	$(VENV_BIN)/pip install $(SWARM_DIR) --quiet
 	@cp -r $(SWARM_DIR)/proto $(SWARM_HOME)/proto 2>/dev/null || true
 	@echo "  rt_home/swarm/ installed"
-	@echo "  Run: RTVORTEX_HOME=$(RT_HOME) $(SWARM_HOME)/venv/bin/rtvortex-swarm"
+	@echo "  Run: RTVORTEX_HOME=$(RT_HOME) $(VENV_BIN)/rtvortex-swarm"
 
 proto-python: ## Generate Python gRPC stubs from engine.proto
 	@if [ ! -x "$(PROTOC_BIN)" ]; then \

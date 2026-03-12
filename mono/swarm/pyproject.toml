@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "rtvortex-swarm"
 version = "0.1.0"
 description = "RTVortex Agent Swarm — AI coding agents for automated development tasks"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "grpcio>=1.60.0",
     "grpcio-tools>=1.60.0",
@@ -16,6 +16,9 @@ dependencies = [
     "redis>=5.0.0",
     "python-jose[cryptography]>=3.3.0",
 ]
+
+[project.scripts]
+rtvortex-swarm = "rtvortex_swarm.main:main"
 
 [project.optional-dependencies]
 dev = [
@@ -29,6 +32,18 @@ dev = [
 #   litellm         — holds API keys in Python
 #   openai          — forces OpenAI provider
 #   claude_agent_sdk — wraps CLI subprocesses
+
+# ── Package discovery ────────────────────────────────────────────────────────
+# The swarm is a flat-layout package: __init__.py + sub-packages (agents/,
+# sdk/, tools/, proto/) all live directly in this directory. We map the root
+# directory "." to the importable package name "rtvortex_swarm".
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["*"]
+namespaces = false
+
+[tool.setuptools.package-dir]
+rtvortex_swarm = "."
 
 [tool.ruff]
 line-length = 120
