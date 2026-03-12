@@ -1,18 +1,24 @@
 /**
  * AI PR Reviewer — Profiler Public Interface
  *
- * Thin header exposing perf::Profiler's read-only API so that other
- * compilation units (e.g. metrics.cpp) can pull timing data without
- * including the full perf_timer.cpp internals.
+ * Timing infrastructure for profiling engine operations.
+ * Used by metrics::Registry::syncFromProfiler() to bridge profiler
+ * samples into the Prometheus-compatible metrics registry.
  */
 
 #pragma once
 
+#include <chrono>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace aipr {
 namespace perf {
+
+using Clock     = std::chrono::high_resolution_clock;
+using TimePoint = Clock::time_point;
 
 /**
  * Timing statistics for a single named metric.
@@ -26,13 +32,12 @@ struct TimingStats {
     double p50_ms   = 0.0;
     double p95_ms   = 0.0;
     double p99_ms   = 0.0;
+
+    std::string toString() const;
 };
 
 /**
  * Profiler singleton — collects high-resolution timing samples.
- *
- * The full implementation lives in perf_timer.cpp.  This header exposes
- * only the read-only query surface needed by metrics::Registry.
  */
 class Profiler {
 public:
@@ -60,8 +65,73 @@ public:
     std::string report() const;
 
 private:
-    Profiler();
-    // Members live in perf_timer.cpp — this header only declares the API.
+    Profiler() = default;
+
+    double percentile(const std::vector<double>& sorted, int p) const;
+
+    mutable std::mutex mutex_;
+    std::unordered_map<std::string, std::vector<double>> timings_;
+    std::unordered_map<std::string, TimePoint> active_timers_;
+};
+
+/**
+ * Simple scoped timer (start on construction, query elapsed on demand).
+ */
+class ScopedTimer {
+public:
+    ScopedTimer() : start_(Clock::now()) {}
+
+    double elapsedMs() const {
+        return std::chrono::duration<double, std::milli>(Clock::now() - start_).count();
+    }
+    double elapsedUs() const {
+        return std::chrono::duration<double, std::micro>(Clock::now() - start_).count();
+    }
+    double elapsedNs() const {
+        return std::chrono::duration<double, std::nano>(Clock::now() - start_).count();
+    }
+    void reset() { start_ = Clock::now(); }
+
+private:
+    TimePoint start_;
+};
+
+/**
+ * RAII timer that records to Profiler on destruction.
+ */
+class AutoTimer {
+public:
+    explicit AutoTimer(const std::string& name) : name_(name) {}
+    ~AutoTimer() { Profiler::instance().record(name_, timer_.elapsedMs()); }
+
+    AutoTimer(const AutoTimer&) = delete;
+    AutoTimer& operator=(const AutoTimer&) = delete;
+
+private:
+    std::string name_;
+    ScopedTimer timer_;
+};
+
+// Convenience macros
+#define AIPR_PROFILE_SCOPE(name)    aipr::perf::AutoTimer _aipr_timer_##__LINE__(name)
+#define AIPR_PROFILE_FUNCTION()     aipr::perf::AutoTimer _aipr_timer_##__LINE__(__func__)
+
+/**
+ * Token-bucket rate limiter.
+ */
+class RateLimiter {
+public:
+    explicit RateLimiter(size_t max_per_second);
+    bool tryAcquire();
+    void waitAndAcquire();
+
+private:
+    void refill();
+
+    size_t max_per_second_;
+    size_t tokens_;
+    TimePoint last_update_;
+    std::mutex mutex_;
 };
 
 } // namespace perf
