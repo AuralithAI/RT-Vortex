@@ -18,6 +18,7 @@ import logging
 import uuid
 from typing import Any, Callable, Coroutine
 
+import httpx
 import redis.asyncio as aioredis
 
 from .agents_config import get_config
@@ -89,12 +90,27 @@ async def _heartbeat_loop(
     go_client: GoClient,
     agent_ids: list[str],
     stop_event: asyncio.Event,
+    on_auth_failure: Callable[[], Coroutine[Any, Any, None]] | None = None,
 ) -> None:
-    """Send periodic heartbeats for all active agents until *stop_event* is set."""
+    """Send periodic heartbeats for all active agents until *stop_event* is set.
+
+    If *on_auth_failure* is provided, it is called when a 401 Unauthorized
+    response is received.  The callback should re-register the agent and
+    update the GoClient token so subsequent heartbeats succeed.
+    """
     while not stop_event.is_set():
         for aid in list(agent_ids):
             try:
                 await go_client.send_heartbeat(aid)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401 and on_auth_failure:
+                    logger.warning("Heartbeat 401 for %s — re-registering", aid)
+                    try:
+                        await on_auth_failure()
+                    except Exception as re_err:
+                        logger.error("Re-registration failed: %s", re_err)
+                else:
+                    logger.warning("Heartbeat failed for %s: %s", aid, e)
             except Exception as e:
                 logger.warning("Heartbeat failed for %s: %s", aid, e)
         try:
@@ -378,6 +394,26 @@ class RedisConsumer:
         self._controller_hb_task: asyncio.Task | None = None
         self._controller_hb_stop = asyncio.Event()
 
+    async def _reregister_controller(self) -> None:
+        """Re-register the controller agent and update the GoClient token.
+
+        Called automatically when a 401 Unauthorized is received, indicating
+        the Redis token was evicted, expired, or manually deleted.
+        """
+        if not self._controller_id:
+            return
+        logger.info("Re-registering controller %s", self._controller_id)
+        token, cid = await register_agent(
+            agent_id=self._controller_id,
+            role="controller",
+            team_id="00000000-0000-0000-0000-000000000000",
+            hostname=__import__("socket").gethostname(),
+        )
+        if self._go_client:
+            self._go_client.set_token(token)
+        self._controller_id = cid
+        logger.info("Controller re-registered: %s", cid)
+
     async def start(self) -> None:
         """Connect to Redis, register a controller agent, and begin consuming."""
         # Register a controller agent with Go to obtain a JWT for internal API
@@ -402,7 +438,8 @@ class RedisConsumer:
                 self._controller_hb_stop.clear()
                 self._controller_hb_task = asyncio.create_task(
                     _heartbeat_loop(
-                        self._go_client, [controller_id], self._controller_hb_stop
+                        self._go_client, [controller_id], self._controller_hb_stop,
+                        on_auth_failure=self._reregister_controller,
                     ),
                     name="heartbeat-controller",
                 )
@@ -458,6 +495,11 @@ class RedisConsumer:
         if not self._redis:
             raise RuntimeError("Consumer not started — call start() first")
 
+        # First, claim and process any pending messages left by dead consumers.
+        # This handles the case where the previous swarm process crashed or was
+        # restarted — the messages were delivered but never ACKed.
+        await self._claim_pending_messages()
+
         while self._running:
             try:
                 entries = await self._redis.xreadgroup(
@@ -483,6 +525,55 @@ class RedisConsumer:
                 logger.error("Redis consumer error: %s", e, exc_info=True)
                 await asyncio.sleep(2)
 
+    async def _claim_pending_messages(self) -> None:
+        """Claim and process pending messages from dead consumers.
+
+        Uses XAUTOCLAIM to steal messages that have been idle for more than
+        30 seconds (i.e. the previous consumer died without ACKing them).
+        Only processes messages whose task_id corresponds to a task still in
+        ``submitted`` status (not already assigned/completed).
+        """
+        if not self._redis:
+            return
+
+        try:
+            # XAUTOCLAIM: steal messages idle for >30s from any consumer in the group.
+            min_idle_ms = 30_000
+            start_id = "0-0"
+            result = await self._redis.xautoclaim(
+                name=_STREAM_KEY,
+                groupname=_GROUP_NAME,
+                consumername=_CONSUMER_NAME,
+                min_idle_time=min_idle_ms,
+                start_id=start_id,
+            )
+
+            # result is (next_start_id, [(msg_id, data), ...], [deleted_ids])
+            if not result or len(result) < 2:
+                return
+
+            claimed_messages = result[1]
+            if not claimed_messages:
+                logger.debug("No pending messages to claim from dead consumers")
+                return
+
+            logger.info("Claimed %d pending message(s) from dead consumers",
+                        len(claimed_messages))
+
+            for msg_id, data in claimed_messages:
+                if data is None:
+                    # Message was deleted from stream but still in PEL — just ACK it.
+                    await self._redis.xack(_STREAM_KEY, _GROUP_NAME, msg_id)
+                    continue
+                try:
+                    await self._handle_event(msg_id, data)
+                except Exception as e:
+                    logger.error("Error handling claimed message %s: %s", msg_id, e)
+                await self._redis.xack(_STREAM_KEY, _GROUP_NAME, msg_id)
+
+        except Exception as e:
+            logger.warning("Failed to claim pending messages: %s", e, exc_info=True)
+
     async def _handle_event(self, msg_id: str, data: dict[str, str]) -> None:
         """Handle a team:create event — spin up a new agent team."""
         task_id = data.get("task_id", "")
@@ -497,10 +588,33 @@ class RedisConsumer:
             logger.error("No GoClient available — cannot fetch task")
             return
 
-        task_data = await self._go_client.get_task(task_id)
+        # Fetch task — retry once on 401 after re-registering.
+        try:
+            task_data = await self._go_client.get_task(task_id)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                logger.warning("get_task 401 for %s — re-registering controller", task_id)
+                await self._reregister_controller()
+                task_data = await self._go_client.get_task(task_id)
+            else:
+                raise
+
         if not task_data:
             logger.warning("No task available from Go for task_id %s", task_id)
             return
+
+        # Skip tasks that are no longer waiting for assignment (stale messages
+        # from dead consumers or previous runs).
+        task_status = task_data.get("status", "")
+        if task_status not in ("submitted", "assigning"):
+            logger.info("Skipping task %s — already in status %r", task_id, task_status)
+            return
+
+        # Skip if we're already running a team for this task.
+        for tid, t in self._active_teams.items():
+            if not t.done() and t.get_name().endswith(task_id[:8]):
+                logger.info("Skipping task %s — team already active", task_id)
+                return
 
         # Spin up a team for this task.
         team_id = str(uuid.uuid4())

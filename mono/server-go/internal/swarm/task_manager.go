@@ -505,13 +505,14 @@ func (m *TaskManager) processAssignments(ctx context.Context) {
 	// because no idle team existed yet at that time.
 	m.processPendingAssignments(ctx)
 
-	// Then read new messages.
+	// Then read new messages (non-blocking — use short timeout so we don't
+	// starve the pending re-processing on the next tick).
 	result, err := m.redis.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    consumerGroup,
 		Consumer: "go-controller",
 		Streams:  []string{streamPending, ">"},
 		Count:    10,
-		Block:    0,
+		Block:    500 * time.Millisecond,
 	}).Result()
 	if err != nil {
 		if err != redis.Nil && ctx.Err() == nil {
@@ -533,7 +534,7 @@ func (m *TaskManager) processPendingAssignments(ctx context.Context) {
 		Consumer: "go-controller",
 		Streams:  []string{streamPending, "0"},
 		Count:    10,
-		Block:    0,
+		Block:    100 * time.Millisecond,
 	}).Result()
 	if err != nil {
 		if err != redis.Nil && ctx.Err() == nil {
