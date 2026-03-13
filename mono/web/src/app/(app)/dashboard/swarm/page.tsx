@@ -24,10 +24,11 @@ import {
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskPipelineBoard } from "@/components/swarm/task-pipeline-board";
 import { TaskHistory } from "@/components/swarm/task-history";
+import { Combobox } from "@/components/ui/combobox";
+import { useRepos } from "@/lib/api/queries";
 import type { SwarmTask, SwarmOverview, TaskSubmission } from "@/types/swarm";
 
 type Tab = "pipeline" | "history";
@@ -41,6 +42,10 @@ export default function SwarmDashboardPage() {
   const [description, setDescription] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("pipeline");
+
+  // Fetch connected repos for the dropdown.
+  const { data: reposData } = useRepos({ limit: 100, offset: 0 });
+  const repos = reposData?.data ?? [];
 
   // Fetch live overview stats every 10 seconds
   const fetchOverview = useCallback(async () => {
@@ -125,12 +130,27 @@ export default function SwarmDashboardPage() {
               <label className="mb-1 block text-sm font-medium">
                 Repository
               </label>
-              <Input
-                placeholder="e.g. my-org/my-repo"
+              <Combobox
+                options={repos.map((repo) => ({
+                  value: repo.full_name,
+                  label: repo.full_name,
+                  description: repo.platform ?? undefined,
+                }))}
                 value={repoId}
-                onChange={(e) => setRepoId(e.target.value)}
+                onValueChange={setRepoId}
+                placeholder="Select a repository…"
+                searchPlaceholder="Search repositories…"
+                emptyMessage="No matching repositories."
                 disabled={submitting}
               />
+              {repos.length === 0 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  No repositories connected.{" "}
+                  <a href="/repos" className="text-primary hover:underline">
+                    Add one first →
+                  </a>
+                </p>
+              )}
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium">

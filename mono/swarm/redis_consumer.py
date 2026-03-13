@@ -29,6 +29,7 @@ from .agents.orchestrator import OrchestratorAgent
 from .agents.qa import QAAgent
 from .agents.security import SecurityAgent
 from .agents.senior_dev import SeniorDevAgent
+from .auth import register_agent
 from .engine_client import EngineClient
 from .go_client import GoClient
 from .sdk.agent import Agent, AgentConfig, AgentResult, Task
@@ -346,7 +347,24 @@ class RedisConsumer:
         self._active_teams: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
-        """Connect to Redis and begin consuming."""
+        """Connect to Redis, register a controller agent, and begin consuming."""
+        # Register a controller agent with Go to obtain a JWT for internal API
+        # calls (poll_next_task, heartbeats, etc.).  This is a long-lived
+        # "consumer" agent — individual team agents register separately.
+        try:
+            controller_id = f"ctrl-{_CONSUMER_NAME}"
+            token = await register_agent(
+                agent_id=controller_id,
+                role="controller",
+                team_id="00000000-0000-0000-0000-000000000000",
+                hostname=__import__("socket").gethostname(),
+            )
+            if self._go_client:
+                self._go_client.set_token(token)
+            logger.info("Controller agent registered: %s", controller_id)
+        except Exception as e:
+            logger.warning("Controller registration failed (internal calls may 401): %s", e)
+
         self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
 
         # Ensure stream + consumer group exist.
@@ -463,6 +481,21 @@ class TaskPollingConsumer:
         self._active_teams: dict[str, asyncio.Task] = {}
 
     async def start(self) -> None:
+        # Register a controller agent for internal API auth (same as RedisConsumer).
+        try:
+            controller_id = f"ctrl-poll-{uuid.uuid4().hex[:8]}"
+            token = await register_agent(
+                agent_id=controller_id,
+                role="controller",
+                team_id="00000000-0000-0000-0000-000000000000",
+                hostname=__import__("socket").gethostname(),
+            )
+            if self._go_client:
+                self._go_client.set_token(token)
+            logger.info("Controller agent registered: %s", controller_id)
+        except Exception as e:
+            logger.warning("Controller registration failed: %s", e)
+
         self._running = True
         logger.info("Task polling consumer started (interval=%ss)", self._poll_interval)
 
