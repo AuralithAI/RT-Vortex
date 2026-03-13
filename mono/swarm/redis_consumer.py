@@ -345,6 +345,9 @@ class RedisConsumer:
         self._go_client = go_client
         self._running = False
         self._active_teams: dict[str, asyncio.Task] = {}
+        self._controller_id: str | None = None
+        self._controller_hb_task: asyncio.Task | None = None
+        self._controller_hb_stop = asyncio.Event()
 
     async def start(self) -> None:
         """Connect to Redis, register a controller agent, and begin consuming."""
@@ -361,7 +364,19 @@ class RedisConsumer:
             )
             if self._go_client:
                 self._go_client.set_token(token)
+            self._controller_id = controller_id
             logger.info("Controller agent registered: %s", controller_id)
+
+            # Start a heartbeat loop for the controller so the Go heartbeat
+            # monitor doesn't mark it offline while it waits for tasks.
+            if self._go_client:
+                self._controller_hb_stop.clear()
+                self._controller_hb_task = asyncio.create_task(
+                    _heartbeat_loop(
+                        self._go_client, [controller_id], self._controller_hb_stop
+                    ),
+                    name="heartbeat-controller",
+                )
         except Exception as e:
             logger.warning("Controller registration failed (internal calls may 401): %s", e)
 
@@ -387,6 +402,16 @@ class RedisConsumer:
     async def stop(self) -> None:
         """Stop consuming and cancel active teams."""
         self._running = False
+
+        # Stop controller heartbeat.
+        self._controller_hb_stop.set()
+        if self._controller_hb_task:
+            self._controller_hb_task.cancel()
+            try:
+                await self._controller_hb_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._controller_hb_task = None
 
         # Cancel all active team tasks.
         for team_id, task in self._active_teams.items():
@@ -479,6 +504,8 @@ class TaskPollingConsumer:
         self._poll_interval = poll_interval or get_config().task_poll_interval
         self._running = False
         self._active_teams: dict[str, asyncio.Task] = {}
+        self._controller_hb_task: asyncio.Task | None = None
+        self._controller_hb_stop = asyncio.Event()
 
     async def start(self) -> None:
         # Register a controller agent for internal API auth (same as RedisConsumer).
@@ -493,6 +520,16 @@ class TaskPollingConsumer:
             if self._go_client:
                 self._go_client.set_token(token)
             logger.info("Controller agent registered: %s", controller_id)
+
+            # Keep the controller alive with heartbeats.
+            if self._go_client:
+                self._controller_hb_stop.clear()
+                self._controller_hb_task = asyncio.create_task(
+                    _heartbeat_loop(
+                        self._go_client, [controller_id], self._controller_hb_stop
+                    ),
+                    name="heartbeat-controller",
+                )
         except Exception as e:
             logger.warning("Controller registration failed: %s", e)
 
@@ -501,6 +538,14 @@ class TaskPollingConsumer:
 
     async def stop(self) -> None:
         self._running = False
+        self._controller_hb_stop.set()
+        if self._controller_hb_task:
+            self._controller_hb_task.cancel()
+            try:
+                await self._controller_hb_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._controller_hb_task = None
         for team_id, task in self._active_teams.items():
             task.cancel()
         self._active_teams.clear()

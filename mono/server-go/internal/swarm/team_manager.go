@@ -197,6 +197,16 @@ func (m *TeamManager) RegisterAgent(ctx context.Context, agentID uuid.UUID, role
 	var teamPtr *uuid.UUID
 	if teamID != uuid.Nil {
 		teamPtr = &teamID
+
+		// Ensure team row exists — the Python consumer generates team UUIDs
+		// client-side before any Go API call, so the first agent to register
+		// for a team must create the row to satisfy the FK constraint.
+		_, _ = m.db.Exec(ctx, `
+			INSERT INTO swarm_teams (id, name, status)
+			VALUES ($1, $2, 'idle')
+			ON CONFLICT (id) DO NOTHING`,
+			teamID, fmt.Sprintf("team-%s", teamID.String()[:8]),
+		)
 	}
 
 	_, err := m.db.Exec(ctx, `

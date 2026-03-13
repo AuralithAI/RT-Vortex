@@ -53,6 +53,10 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	if err := h.TeamMgr.RegisterAgent(r.Context(), agentID, req.Role, teamID, req.Hostname, req.Version); err != nil {
 		slog.Error("swarm: failed to register agent in DB", "error", err)
 		// Non-fatal — continue with JWT issuance.
+	} else {
+		// Seed heartbeat so the monitor doesn't mark the agent offline
+		// before its first real heartbeat arrives.
+		_ = h.TaskMgr.Heartbeat(r.Context(), agentID)
 	}
 
 	// Issue JWT.

@@ -188,10 +188,11 @@ class EngineClient:
         request = _pb2.IndexStatsRequest(repo_id=repo_id)
         response = await self._stub.GetIndexStats(request)
 
+        stats = response.stats if response.found else None
         return {
-            "indexed": response.total_chunks > 0,
-            "total_chunks": response.total_chunks,
-            "total_files": response.total_files,
+            "indexed": response.found and stats is not None and stats.total_chunks > 0,
+            "total_chunks": stats.total_chunks if stats else 0,
+            "total_files": stats.total_files if stats else 0,
         }
 
     async def get_file_content(self, repo_id: str, file_path: str, ref: str = "") -> dict[str, Any]:
