@@ -274,72 +274,73 @@ export default function SwarmDashboardPage() {
         </div>
       </div>
 
-      {/* Tabs: Pipeline Board / History */}
-      <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
-        <div className="space-y-4">
-          <div className="flex gap-2 border-b pb-2">
-            <Button
-              variant={activeTab === "pipeline" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setActiveTab("pipeline")}
-            >
-              <Kanban className="mr-2 h-4 w-4" />
-              Pipeline Board
-            </Button>
-            <Button
-              variant={activeTab === "history" ? "default" : "ghost"}
-              size="sm"
-              onClick={() => setActiveTab("history")}
-            >
-              <History className="mr-2 h-4 w-4" />
-              Task History
-            </Button>
-          </div>
-
-          {activeTab === "pipeline" && <TaskPipelineBoard />}
-          {activeTab === "history" && <TaskHistory />}
+      {/* Tabs: Pipeline Board / History — full width */}
+      <div className="space-y-4">
+        <div className="flex gap-2 border-b pb-2">
+          <Button
+            variant={activeTab === "pipeline" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setActiveTab("pipeline")}
+          >
+            <Kanban className="mr-2 h-4 w-4" />
+            Pipeline Board
+          </Button>
+          <Button
+            variant={activeTab === "history" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setActiveTab("history")}
+          >
+            <History className="mr-2 h-4 w-4" />
+            Task History
+          </Button>
         </div>
 
-        {/* Live Agent Panel — right sidebar */}
-        <LiveAgentPanel agents={overview?.agents ?? []} />
+        {activeTab === "pipeline" && <TaskPipelineBoard />}
+        {activeTab === "history" && <TaskHistory />}
       </div>
 
-      {/* Task List */}
-      <div className="rounded-lg border bg-card">
-        <div className="border-b px-6 py-4">
-          <h3 className="text-lg font-semibold">Recent Tasks</h3>
-        </div>
-        <div className="divide-y">
-          {tasks.length === 0 ? (
-            <div className="px-6 py-12 text-center text-muted-foreground">
-              <Bot className="mx-auto mb-3 h-10 w-10 opacity-50" />
-              <p>No tasks yet. Submit a task to get started.</p>
-            </div>
-          ) : (
-            tasks.map((task) => (
-              <a
-                key={task.id}
-                href={`/swarm/tasks/${task.id}`}
-                className="block px-6 py-4 transition-colors hover:bg-muted/50"
-              >
-                <div className="flex items-center justify-between">
-                  <div className="space-y-1">
-                    <p className="font-medium">{task.description}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {task.repo_id} •{" "}
-                      {new Date(task.created_at).toLocaleDateString()}
-                    </p>
+      {/* Recent Tasks + Live Agents — side by side */}
+      <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
+        {/* Recent Tasks */}
+        <div className="rounded-lg border bg-card">
+          <div className="border-b px-6 py-4">
+            <h3 className="text-lg font-semibold">Recent Tasks</h3>
+          </div>
+          <div className="divide-y">
+            {tasks.length === 0 ? (
+              <div className="px-6 py-12 text-center text-muted-foreground">
+                <Bot className="mx-auto mb-3 h-10 w-10 opacity-50" />
+                <p>No tasks yet. Submit a task to get started.</p>
+              </div>
+            ) : (
+              tasks.map((task) => (
+                <a
+                  key={task.id}
+                  href={`/swarm/tasks/${task.id}`}
+                  className="block px-6 py-4 transition-colors hover:bg-muted/50"
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <p className="font-medium">{task.description}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {task.repo_id} •{" "}
+                        {new Date(task.created_at).toLocaleDateString()}
+                      </p>
+                    </div>
+                    <span
+                      className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(task.status)}`}
+                    >
+                      {task.status.replace(/_/g, " ")}
+                    </span>
                   </div>
-                  <span
-                    className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(task.status)}`}
-                  >
-                    {task.status.replace(/_/g, " ")}
-                  </span>
-                </div>
-              </a>
-            ))
-          )}
+                </a>
+              ))
+            )}
+          </div>
         </div>
+
+        {/* Live Agent Panel */}
+        <LiveAgentPanel agents={overview?.agents ?? []} />
       </div>
     </>
   );
