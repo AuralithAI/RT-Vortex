@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { PlanReviewCard } from "@/components/swarm/plan-review-card";
 import { DiffViewer } from "@/components/swarm/diff-viewer";
 import { ActivityFeed } from "@/components/swarm/activity-feed";
+import { TaskAgentList } from "@/components/swarm/task-agent-list";
 import { useSwarmEvents } from "@/hooks/use-swarm-events";
 import type { SwarmTask, SwarmDiff, PlanDocument } from "@/types/swarm";
 
@@ -266,6 +267,7 @@ export default function SwarmTaskDetailPage() {
 
         {/* Sidebar */}
         <div className="space-y-4">
+          <TaskAgentList taskId={params.id} />
           <ActivityFeed events={events} />
         </div>
       </div>

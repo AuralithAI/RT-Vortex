@@ -297,6 +297,32 @@ func (m *TaskManager) UpdateStatus(ctx context.Context, taskID uuid.UUID, newSta
 	return nil
 }
 
+// GetTaskAgents returns all agents assigned to a task's team with their roles and statuses.
+func (m *TaskManager) GetTaskAgents(ctx context.Context, taskID uuid.UUID) ([]AgentSnapshot, error) {
+	rows, err := m.db.Query(ctx, `
+		SELECT a.id, a.role, a.status, COALESCE(a.team_id::text, '')
+		FROM swarm_agents a
+		JOIN swarm_tasks t ON a.team_id = t.assigned_team_id
+		WHERE t.id = $1
+		ORDER BY a.registered_at ASC`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("querying task agents: %w", err)
+	}
+	defer rows.Close()
+
+	var agents []AgentSnapshot
+	for rows.Next() {
+		var a AgentSnapshot
+		var tid string
+		if err := rows.Scan(&a.ID, &a.Role, &a.Status, &tid); err != nil {
+			continue
+		}
+		a.TeamID = tid
+		agents = append(agents, a)
+	}
+	return agents, nil
+}
+
 // DeleteTask removes a task and all its dependent rows (cascaded via FK).
 func (m *TaskManager) DeleteTask(ctx context.Context, taskID uuid.UUID) error {
 	tag, err := m.db.Exec(ctx, `DELETE FROM swarm_tasks WHERE id = $1`, taskID)
@@ -903,17 +929,26 @@ func (m *TaskManager) RecordAgentContribution(ctx context.Context, taskID, agent
 
 // SwarmOverview holds a snapshot of the swarm's current state.
 type SwarmOverview struct {
-	ActiveTasks   int     `json:"active_tasks"`
-	PendingTasks  int     `json:"pending_tasks"`
-	CompletedAll  int     `json:"completed_all_time"`
-	FailedAll     int     `json:"failed_all_time"`
-	ActiveTeams   int     `json:"active_teams"`
-	BusyTeams     int     `json:"busy_teams"`
-	OnlineAgents  int     `json:"online_agents"`
-	BusyAgents    int     `json:"busy_agents"`
-	AvgDurationS  float64 `json:"avg_duration_seconds"`
-	TotalRetries  int     `json:"total_retries"`
-	LLMPercentage float64 `json:"llm_percentage"`
+	ActiveTasks   int              `json:"active_tasks"`
+	PendingTasks  int              `json:"pending_tasks"`
+	CompletedAll  int              `json:"completed_all_time"`
+	FailedAll     int              `json:"failed_all_time"`
+	ActiveTeams   int              `json:"active_teams"`
+	BusyTeams     int              `json:"busy_teams"`
+	OnlineAgents  int              `json:"online_agents"`
+	BusyAgents    int              `json:"busy_agents"`
+	AvgDurationS  float64          `json:"avg_duration_seconds"`
+	TotalRetries  int              `json:"total_retries"`
+	LLMPercentage float64          `json:"llm_percentage"`
+	Agents        []AgentSnapshot  `json:"agents,omitempty"`
+}
+
+// AgentSnapshot is a lightweight view of an agent for the overview.
+type AgentSnapshot struct {
+	ID     uuid.UUID `json:"id"`
+	Role   string    `json:"role"`
+	Status string    `json:"status"`
+	TeamID string    `json:"team_id,omitempty"`
 }
 
 // GetOverview computes the current swarm overview from the database.
@@ -972,6 +1007,23 @@ func (m *TaskManager) GetOverview(ctx context.Context) (*SwarmOverview, error) {
 	_ = m.db.QueryRow(ctx, `
 		SELECT COALESCE(SUM(retry_count), 0) FROM swarm_tasks`,
 	).Scan(&o.TotalRetries)
+
+	// All non-offline agents with role, status, and team.
+	rows, err := m.db.Query(ctx, `
+		SELECT id, role, status, COALESCE(team_id::text, '')
+		FROM swarm_agents WHERE status != 'offline'
+		ORDER BY registered_at DESC`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var a AgentSnapshot
+			var tid string
+			if err := rows.Scan(&a.ID, &a.Role, &a.Status, &tid); err == nil {
+				a.TeamID = tid
+				o.Agents = append(o.Agents, a)
+			}
+		}
+	}
 
 	return o, nil
 }

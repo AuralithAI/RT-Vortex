@@ -84,18 +84,20 @@ func (m *TeamManager) GetIdleTeam(ctx context.Context) *Team {
 	return &t
 }
 
-// MarkTeamBusy sets a team's status to busy.
+// MarkTeamBusy sets a team's status to busy and all its agents to busy.
 func (m *TeamManager) MarkTeamBusy(ctx context.Context, teamID uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	_, _ = m.db.Exec(ctx, `UPDATE swarm_teams SET status = 'busy' WHERE id = $1`, teamID)
+	_, _ = m.db.Exec(ctx, `UPDATE swarm_agents SET status = 'busy' WHERE team_id = $1 AND status != 'offline'`, teamID)
 }
 
-// ReleaseTeam sets a team's status back to idle.
+// ReleaseTeam sets a team's status back to idle and its agents to idle.
 func (m *TeamManager) ReleaseTeam(ctx context.Context, teamID uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	_, _ = m.db.Exec(ctx, `UPDATE swarm_teams SET status = 'idle' WHERE id = $1`, teamID)
+	_, _ = m.db.Exec(ctx, `UPDATE swarm_agents SET status = 'idle' WHERE team_id = $1 AND status != 'offline'`, teamID)
 	slog.Info("swarm team released to idle", "team_id", teamID)
 }
 

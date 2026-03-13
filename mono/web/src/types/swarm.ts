@@ -128,6 +128,14 @@ export interface SwarmOverview {
   avg_duration_seconds: number;
   total_retries: number;
   llm_percentage: number;
+  agents?: AgentSnapshot[];
+}
+
+export interface AgentSnapshot {
+  id: string;
+  role: AgentRole;
+  status: AgentStatus;
+  team_id?: string;
 }
 
 export interface TaskSummary {

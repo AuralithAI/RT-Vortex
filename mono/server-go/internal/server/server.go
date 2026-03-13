@@ -395,6 +395,7 @@ func (s *Server) setupRouter() {
 			r.Post("/tasks/{id}/retry", sh.RetryTask)
 			r.Post("/tasks/{id}/cancel", sh.CancelTask)
 			r.Delete("/tasks/{id}", sh.DeleteTaskUser)
+			r.Get("/tasks/{id}/agents", sh.GetTaskAgents)
 			r.Get("/agents", sh.ListAgentsUser)
 			r.Get("/teams", sh.ListTeamsUser)
 			r.Get("/overview", sh.SwarmOverview)

@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { TaskPipelineBoard } from "@/components/swarm/task-pipeline-board";
 import { TaskHistory } from "@/components/swarm/task-history";
+import { LiveAgentPanel } from "@/components/swarm/live-agent-panel";
 import { Combobox } from "@/components/ui/combobox";
 import { useRepos } from "@/lib/api/queries";
 import type { SwarmTask, SwarmOverview, TaskSubmission } from "@/types/swarm";
@@ -274,27 +275,34 @@ export default function SwarmDashboardPage() {
       </div>
 
       {/* Tabs: Pipeline Board / History */}
-      <div className="flex gap-2 border-b pb-2">
-        <Button
-          variant={activeTab === "pipeline" ? "default" : "ghost"}
-          size="sm"
-          onClick={() => setActiveTab("pipeline")}
-        >
-          <Kanban className="mr-2 h-4 w-4" />
-          Pipeline Board
-        </Button>
-        <Button
-          variant={activeTab === "history" ? "default" : "ghost"}
-          size="sm"
-          onClick={() => setActiveTab("history")}
-        >
-          <History className="mr-2 h-4 w-4" />
-          Task History
-        </Button>
-      </div>
+      <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
+        <div className="space-y-4">
+          <div className="flex gap-2 border-b pb-2">
+            <Button
+              variant={activeTab === "pipeline" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setActiveTab("pipeline")}
+            >
+              <Kanban className="mr-2 h-4 w-4" />
+              Pipeline Board
+            </Button>
+            <Button
+              variant={activeTab === "history" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setActiveTab("history")}
+            >
+              <History className="mr-2 h-4 w-4" />
+              Task History
+            </Button>
+          </div>
 
-      {activeTab === "pipeline" && <TaskPipelineBoard />}
-      {activeTab === "history" && <TaskHistory />}
+          {activeTab === "pipeline" && <TaskPipelineBoard />}
+          {activeTab === "history" && <TaskHistory />}
+        </div>
+
+        {/* Live Agent Panel — right sidebar */}
+        <LiveAgentPanel agents={overview?.agents ?? []} />
+      </div>
 
       {/* Task List */}
       <div className="rounded-lg border bg-card">

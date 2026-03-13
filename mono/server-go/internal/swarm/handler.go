@@ -514,6 +514,27 @@ func (h *Handler) GetTaskUser(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(task)
 }
 
+// GetTaskAgents handles GET /api/v1/swarm/tasks/{id}/agents.
+func (h *Handler) GetTaskAgents(w http.ResponseWriter, r *http.Request) {
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	agents, err := h.TaskMgr.GetTaskAgents(r.Context(), taskID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if agents == nil {
+		agents = []AgentSnapshot{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"agents": agents})
+}
+
 // PlanAction handles POST /api/v1/swarm/tasks/{id}/plan-action.
 func (h *Handler) PlanAction(w http.ResponseWriter, r *http.Request) {
 	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
