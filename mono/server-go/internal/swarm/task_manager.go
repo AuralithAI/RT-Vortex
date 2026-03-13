@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -152,6 +153,26 @@ func (m *TaskManager) Stop() {
 
 // CreateTask inserts a new task and publishes it to the Redis stream.
 func (m *TaskManager) CreateTask(ctx context.Context, repoID, description string, submittedBy uuid.UUID) (*Task, error) {
+	// If repoID looks like a slug ("owner/name"), resolve it to the
+	// repository UUID.  The engine indexes by UUID, so all downstream
+	// consumers (Python swarm, engine gRPC calls) need the UUID.
+	if strings.Contains(repoID, "/") {
+		parts := strings.SplitN(repoID, "/", 2)
+		var resolved uuid.UUID
+		err := m.db.QueryRow(ctx,
+			`SELECT id FROM repositories WHERE owner = $1 AND name = $2`,
+			parts[0], parts[1],
+		).Scan(&resolved)
+		if err == nil {
+			slog.Debug("swarm CreateTask: resolved repo slug to UUID",
+				"slug", repoID, "uuid", resolved)
+			repoID = resolved.String()
+		} else {
+			slog.Warn("swarm CreateTask: could not resolve repo slug, using as-is",
+				"slug", repoID, "error", err)
+		}
+	}
+
 	task := &Task{
 		ID:          uuid.New(),
 		RepoID:      repoID,
@@ -576,6 +597,15 @@ func (m *TaskManager) handleStreamMessages(ctx context.Context, messages []redis
 		}
 		if task.AssignedTeamID != nil {
 			// Already assigned — ACK and move on.
+			m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
+			continue
+		}
+
+		// ACK tasks in terminal states — no point re-queuing them.
+		switch task.Status {
+		case StatusCompleted, StatusFailed, StatusCancelled, StatusTimedOut:
+			slog.Debug("swarm assignLoop: task in terminal state, ACKing",
+				"task_id", taskID, "status", task.Status)
 			m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
 			continue
 		}
