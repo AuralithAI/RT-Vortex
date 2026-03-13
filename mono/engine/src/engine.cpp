@@ -442,14 +442,28 @@ public:
                 if (!token.empty() && repo_path.rfind("https://", 0) == 0) {
                     git_auth_flag = " -c http.extraHeader=" +
                                     shellEscape("Authorization: Bearer " + token);
-                    std::cerr << "[ENGINE] Using Bearer token for authenticated git operation" << std::endl;
                 }
 
                 fs::create_directories(fs::path(local_path).parent_path());
-                std::string clone_cmd = "git" + git_auth_flag +
-                                        " clone --depth 1 " + shellEscape(repo_path) +
-                                        " " + shellEscape(local_path) + " 2>&1";
-                int rc = std::system(clone_cmd.c_str());
+
+                // Try unauthenticated first (works for public repos), then
+                // fall back to token-authenticated clone if available.
+                std::string clone_base = "git clone --depth 1 " +
+                                         shellEscape(repo_path) + " " +
+                                         shellEscape(local_path) + " 2>&1";
+                int rc = std::system(clone_base.c_str());
+
+                if (rc != 0 && !git_auth_flag.empty()) {
+                    // Unauthenticated clone failed — retry with token
+                    std::cerr << "[ENGINE] Unauthenticated clone failed, retrying with VCS token" << std::endl;
+                    // Clean up partial clone
+                    if (fs::exists(local_path)) fs::remove_all(local_path);
+                    std::string auth_clone = "git" + git_auth_flag +
+                                             " clone --depth 1 " + shellEscape(repo_path) +
+                                             " " + shellEscape(local_path) + " 2>&1";
+                    rc = std::system(auth_clone.c_str());
+                }
+
                 if (rc != 0) {
                     throw std::runtime_error("git clone failed for " + repo_path + " (exit code " + std::to_string(rc) + ")");
                 }
@@ -465,19 +479,21 @@ public:
                                     shellEscape("Authorization: Bearer " + token);
                 }
 
-                std::string pull_cmd;
-                if (!git_auth_flag.empty()) {
+                // Try unauthenticated pull first, fall back to token
+                std::string pull_cmd = "git -C " + shellEscape(local_path) +
+                                       " pull --ff-only 2>&1";
+                int rc = std::system(pull_cmd.c_str());
+
+                if (rc != 0 && !git_auth_flag.empty()) {
+                    std::cerr << "[ENGINE] Unauthenticated pull failed, retrying with VCS token" << std::endl;
                     pull_cmd = "git" + git_auth_flag + " -C " + shellEscape(local_path) +
                                " pull --ff-only 2>&1";
-                } else {
-                    pull_cmd = "cd " + shellEscape(local_path) + " && git pull --ff-only 2>&1";
+                    rc = std::system(pull_cmd.c_str());
                 }
-                int rc = std::system(pull_cmd.c_str());
+
                 if (rc != 0) {
                     std::cerr << "[ENGINE] pull failed (rc=" << rc
                               << "), continuing with existing files" << std::endl;
-                    // Don't delete & re-clone on pull failure — just reindex
-                    // what we have. This fixes the "every reindex re-clones" bug.
                 }
                 if (progress) progress(10, 100, "Repository updated, scanning files...");
             }
@@ -489,11 +505,18 @@ public:
                     git_auth_flag = " -c http.extraHeader=" +
                                     shellEscape("Authorization: Bearer " + token);
                 }
-                // Fetch the branch then checkout
-                std::string fetch_cmd = "git" + git_auth_flag + " -C " + shellEscape(local_path) +
+                // Fetch the branch — try unauthenticated first, fall back to token
+                std::string fetch_cmd = "git -C " + shellEscape(local_path) +
                                         " fetch origin " + shellEscape(target_branch) +
                                         " --depth 1 2>&1";
-                std::system(fetch_cmd.c_str());
+                int fetch_rc = std::system(fetch_cmd.c_str());
+
+                if (fetch_rc != 0 && !git_auth_flag.empty()) {
+                    fetch_cmd = "git" + git_auth_flag + " -C " + shellEscape(local_path) +
+                                " fetch origin " + shellEscape(target_branch) +
+                                " --depth 1 2>&1";
+                    std::system(fetch_cmd.c_str());
+                }
 
                 std::string checkout_cmd = "git -C " + shellEscape(local_path) +
                                           " checkout " + shellEscape(target_branch) + " 2>&1";

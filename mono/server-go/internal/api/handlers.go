@@ -1144,21 +1144,26 @@ func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Run git ls-remote --heads to list remote branches
-	var gitCmd string
-	if cloneToken != "" && strings.HasPrefix(repo.CloneURL, "https://") {
-		gitCmd = fmt.Sprintf("git -c http.extraHeader='Authorization: Bearer %s' ls-remote --heads %s",
-			cloneToken, repo.CloneURL)
-	} else {
-		gitCmd = fmt.Sprintf("git ls-remote --heads %s", repo.CloneURL)
-	}
+	// Run git ls-remote --heads to list remote branches.
+	// Try unauthenticated first (works for public repos), fall back to token.
+	gitCmd := fmt.Sprintf("git ls-remote --heads %s", repo.CloneURL)
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	// Execute git ls-remote
 	cmd := exec.CommandContext(ctx, "sh", "-c", gitCmd)
 	output, err := cmd.Output()
+
+	if err != nil && cloneToken != "" && strings.HasPrefix(repo.CloneURL, "https://") {
+		// Unauthenticated failed — retry with token (private repo)
+		slog.Info("unauthenticated ls-remote failed, retrying with VCS token",
+			"repo_id", repoID)
+		gitCmd = fmt.Sprintf("git -c http.extraHeader='Authorization: Bearer %s' ls-remote --heads %s",
+			cloneToken, repo.CloneURL)
+		cmd = exec.CommandContext(ctx, "sh", "-c", gitCmd)
+		output, err = cmd.Output()
+	}
+
 	if err != nil {
 		slog.Error("failed to list branches", "repo_id", repoID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list remote branches")
