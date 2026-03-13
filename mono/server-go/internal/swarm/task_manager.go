@@ -500,7 +500,12 @@ func (m *TaskManager) assignLoop(ctx context.Context) {
 }
 
 func (m *TaskManager) processAssignments(ctx context.Context) {
-	// Read pending messages from the stream.
+	// First, re-process any previously delivered but un-ACKed (pending) messages.
+	// These arise when a team:create was published but the task wasn't assigned
+	// because no idle team existed yet at that time.
+	m.processPendingAssignments(ctx)
+
+	// Then read new messages.
 	result, err := m.redis.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    consumerGroup,
 		Consumer: "go-controller",
@@ -516,49 +521,91 @@ func (m *TaskManager) processAssignments(ctx context.Context) {
 	}
 
 	for _, stream := range result {
-		for _, msg := range stream.Messages {
-			taskIDStr, ok := msg.Values["task_id"].(string)
-			if !ok {
-				slog.Warn("swarm assignLoop: missing task_id in stream message", "msg_id", msg.ID)
-				m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
-				continue
-			}
+		m.handleStreamMessages(ctx, stream.Messages)
+	}
+}
 
-			taskID, err := uuid.Parse(taskIDStr)
-			if err != nil {
-				slog.Warn("swarm assignLoop: invalid task_id", "task_id", taskIDStr)
-				m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
-				continue
-			}
-
-			// Try to assign to an idle team.
-			team := m.tm.GetIdleTeam(ctx)
-			if team != nil {
-				if err := m.assignTask(ctx, taskID, team.ID); err != nil {
-					slog.Error("swarm assignLoop: failed to assign task", "task_id", taskID, "team_id", team.ID, "error", err)
-					continue // Don't ACK — retry next iteration.
-				}
-				m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
-				continue
-			}
-
-			// No idle team — request team creation if under max.
-			if m.tm.CanCreateTeam() {
-				// Publish creation event — Python will pick this up.
-				m.redis.XAdd(ctx, &redis.XAddArgs{
-					Stream: "swarm:events:team:create",
-					Values: map[string]interface{}{
-						"task_id": taskID.String(),
-					},
-				})
-				slog.Info("swarm assignLoop: requested new team for task", "task_id", taskID)
-				// Don't ACK — we'll assign when the team is ready.
-				continue
-			}
-
-			// All teams busy at max — leave in stream (FIFO).
-			slog.Debug("swarm assignLoop: all teams busy, task queued", "task_id", taskID)
+// processPendingAssignments reads messages that were previously delivered to
+// this consumer but never ACKed (e.g. because no idle team was available).
+func (m *TaskManager) processPendingAssignments(ctx context.Context) {
+	result, err := m.redis.XReadGroup(ctx, &redis.XReadGroupArgs{
+		Group:    consumerGroup,
+		Consumer: "go-controller",
+		Streams:  []string{streamPending, "0"},
+		Count:    10,
+		Block:    0,
+	}).Result()
+	if err != nil {
+		if err != redis.Nil && ctx.Err() == nil {
+			slog.Error("swarm assignLoop: XReadGroup pending failed", "error", err)
 		}
+		return
+	}
+
+	for _, stream := range result {
+		if len(stream.Messages) == 0 {
+			return // No pending messages.
+		}
+		m.handleStreamMessages(ctx, stream.Messages)
+	}
+}
+
+func (m *TaskManager) handleStreamMessages(ctx context.Context, messages []redis.XMessage) {
+	for _, msg := range messages {
+		taskIDStr, ok := msg.Values["task_id"].(string)
+		if !ok {
+			slog.Warn("swarm assignLoop: missing task_id in stream message", "msg_id", msg.ID)
+			m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
+			continue
+		}
+
+		taskID, err := uuid.Parse(taskIDStr)
+		if err != nil {
+			slog.Warn("swarm assignLoop: invalid task_id", "task_id", taskIDStr)
+			m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
+			continue
+		}
+
+		// Check if this task is already assigned (e.g. via DeclareTeamSize auto-assign).
+		task, err := m.GetTask(ctx, taskID)
+		if err != nil {
+			slog.Warn("swarm assignLoop: task not found", "task_id", taskID)
+			m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
+			continue
+		}
+		if task.AssignedTeamID != nil {
+			// Already assigned — ACK and move on.
+			m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
+			continue
+		}
+
+		// Try to assign to an idle team.
+		team := m.tm.GetIdleTeam(ctx)
+		if team != nil {
+			if err := m.assignTask(ctx, taskID, team.ID); err != nil {
+				slog.Error("swarm assignLoop: failed to assign task", "task_id", taskID, "team_id", team.ID, "error", err)
+				continue // Don't ACK — retry next iteration.
+			}
+			m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
+			continue
+		}
+
+		// No idle team — request team creation if under max.
+		if m.tm.CanCreateTeam() {
+			// Publish creation event — Python will pick this up.
+			m.redis.XAdd(ctx, &redis.XAddArgs{
+				Stream: "swarm:events:team:create",
+				Values: map[string]interface{}{
+					"task_id": taskID.String(),
+				},
+			})
+			slog.Info("swarm assignLoop: requested new team for task", "task_id", taskID)
+			// Don't ACK — we'll retry on next iteration via pending.
+			continue
+		}
+
+		// All teams busy at max — leave in stream (FIFO).
+		slog.Debug("swarm assignLoop: all teams busy, task queued", "task_id", taskID)
 	}
 }
 
@@ -587,6 +634,13 @@ func (m *TaskManager) assignTask(ctx context.Context, taskID, teamID uuid.UUID) 
 
 	slog.Info("swarm task assigned", "task_id", taskID, "team_id", teamID, "timeout_at", timeoutAt)
 	return nil
+}
+
+// AssignTaskToTeam is a public wrapper around assignTask, used when an agent
+// declares team size for a task that hasn't been formally assigned yet (race
+// between the Python consumer creating teams on demand and the Go assign loop).
+func (m *TaskManager) AssignTaskToTeam(ctx context.Context, taskID, teamID uuid.UUID) error {
+	return m.assignTask(ctx, taskID, teamID)
 }
 
 func (m *TaskManager) checkTimeouts(ctx context.Context) {

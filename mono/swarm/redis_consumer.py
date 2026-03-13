@@ -184,6 +184,35 @@ async def _run_full_pipeline(
     heartbeat_task: asyncio.Task | None = None
 
     try:
+        # ── Pre-check: verify the repository is indexed ─────────────────
+        if engine_client and task.repo_id:
+            try:
+                idx_status = await engine_client.get_index_status(task.repo_id)
+                if not idx_status.get("indexed"):
+                    logger.warning(
+                        "Team %s: Repository %s is not indexed "
+                        "(chunks=%d, files=%d) — failing task",
+                        team_id[:8], task.repo_id,
+                        idx_status.get("total_chunks", 0),
+                        idx_status.get("total_files", 0),
+                    )
+                    await go_client.fail_task(
+                        task.id,
+                        f"Repository '{task.repo_id}' has not been indexed yet. "
+                        f"Please trigger indexing from the repository settings page "
+                        f"and retry this task once indexing completes.",
+                    )
+                    return
+                logger.info(
+                    "Team %s: Index verified for %s (chunks=%d, files=%d)",
+                    team_id[:8], task.repo_id,
+                    idx_status.get("total_chunks", 0),
+                    idx_status.get("total_files", 0),
+                )
+            except Exception as e:
+                logger.warning("Team %s: Index check failed (continuing): %s",
+                               team_id[:8], e)
+
         # ── Step 1: Orchestrator produces the plan ──────────────────────
         orchestrator = _make_agent("orchestrator", team_id, agent_config)
         await orchestrator.register()

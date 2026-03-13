@@ -358,10 +358,28 @@ func (h *Handler) DeclareTeamSize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if task.AssignedTeamID == nil {
-		// Team not yet assigned (race with assign loop); tell the agent to retry.
-		w.Header().Set("Retry-After", "3")
-		http.Error(w, `{"error":"task has no assigned team yet, retry later"}`, http.StatusConflict)
-		return
+		// Team not yet assigned — the agent that's calling knows its team.
+		// Auto-assign the task to the calling agent's team to resolve the
+		// race between the Python consumer (which creates teams on demand)
+		// and the Go assign loop.
+		claims, ok := swarmauth.AgentClaimsFromContext(r.Context())
+		if !ok || claims.TeamID == "" || claims.TeamID == uuid.Nil.String() {
+			w.Header().Set("Retry-After", "3")
+			http.Error(w, `{"error":"task has no assigned team yet, retry later"}`, http.StatusConflict)
+			return
+		}
+		teamID, err := uuid.Parse(claims.TeamID)
+		if err != nil {
+			http.Error(w, `{"error":"invalid team id in token"}`, http.StatusBadRequest)
+			return
+		}
+		if err := h.TaskMgr.AssignTaskToTeam(r.Context(), taskID, teamID); err != nil {
+			slog.Error("declare-size: auto-assign failed", "task_id", taskID, "team_id", teamID, "error", err)
+			http.Error(w, `{"error":"failed to assign task to team"}`, http.StatusInternalServerError)
+			return
+		}
+		slog.Info("declare-size: auto-assigned task to team", "task_id", taskID, "team_id", teamID)
+		task.AssignedTeamID = &teamID
 	}
 
 	if err := h.TeamMgr.ScaleTeam(r.Context(), *task.AssignedTeamID, body.AdditionalAgents); err != nil {
