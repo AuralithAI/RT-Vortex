@@ -145,6 +145,19 @@ def _parse_server_props(xml_path: str) -> dict[str, Any]:
         ).upper()
         props["engine_tls"] = negotiation in ("TLS", "MTLS")
 
+        # <tls cert-chain="..." private-key="..." trust-certs="..."/>
+        tls_el = engine_el.find("tls")
+        if tls_el is not None:
+            props["engine_cert_chain"] = _resolve_xml_var(
+                tls_el.get("cert-chain", "")
+            )
+            props["engine_private_key"] = _resolve_xml_var(
+                tls_el.get("private-key", "")
+            )
+            props["engine_trust_certs"] = _resolve_xml_var(
+                tls_el.get("trust-certs", "")
+            )
+
     # <redis host="..." port="..." password="..." database="...">
     redis_el = root.find("redis")
     if redis_el is not None:
@@ -200,6 +213,12 @@ class AgentsConfig:
         engine_tls: Whether the engine gRPC channel uses TLS (from
             ``negotiation-type`` in the XML: ``TLS``/``mTLS`` → True,
             ``PLAINTEXT`` → False).
+        engine_cert_chain: Path to the client certificate PEM file for mTLS
+            (``cert-chain`` attribute of ``<engine><tls>`` in XML).
+        engine_private_key: Path to the client private-key PEM file for mTLS
+            (``private-key`` attribute of ``<engine><tls>`` in XML).
+        engine_trust_certs: Path to the CA certificate PEM file used to verify
+            the engine's server certificate (``trust-certs`` attribute).
         go_server_url: Base URL of the Go API server (``https://`` when
             server TLS is enabled, ``http://`` otherwise).
         redis_url: Redis connection URL (``rediss://`` for TLS,
@@ -219,6 +238,9 @@ class AgentsConfig:
     engine_host: str = "localhost"
     engine_port: int = 50051
     engine_tls: bool = False
+    engine_cert_chain: str = ""
+    engine_private_key: str = ""
+    engine_trust_certs: str = ""
     go_server_url: str = "http://localhost:8080"
     redis_url: str = "redis://localhost:6379/0"
     service_secret: str = ""
@@ -288,6 +310,9 @@ class AgentsConfig:
             engine_host=engine_host,
             engine_port=engine_port,
             engine_tls=engine_tls,
+            engine_cert_chain=xml.get("engine_cert_chain", ""),
+            engine_private_key=xml.get("engine_private_key", ""),
+            engine_trust_certs=xml.get("engine_trust_certs", ""),
             go_server_url=go_server_url,
             redis_url=redis_url,
             service_secret=service_secret,

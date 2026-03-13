@@ -9,6 +9,7 @@ IDE autocompletion and unit testing with mocks).
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 import grpc
@@ -55,8 +56,55 @@ class EngineClient:
         self.host = host or cfg.engine_host
         self.port = port or cfg.engine_port
         self._tls = cfg.engine_tls
+        self._cert_chain = cfg.engine_cert_chain
+        self._private_key = cfg.engine_private_key
+        self._trust_certs = cfg.engine_trust_certs
         self._channel: grpc.aio.Channel | None = None
         self._stub = None
+
+    # ------------------------------------------------------------------
+    # TLS helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _read_pem(path: str) -> bytes | None:
+        """Read a PEM file, returning ``None`` if the path is empty or missing."""
+        if not path:
+            return None
+        p = Path(path)
+        if not p.is_file():
+            logger.warning("TLS file not found: %s", path)
+            return None
+        return p.read_bytes()
+
+    def _build_channel_credentials(self) -> grpc.ChannelCredentials:
+        """Construct gRPC channel credentials mirroring the Go engine pool.
+
+        * ``trust_certs`` (CA)    → verify the engine's server certificate.
+        * ``cert_chain`` + ``private_key`` → mTLS client identity.
+
+        Falls back to default system roots when no custom CA is configured.
+        """
+        ca_pem = self._read_pem(self._trust_certs)
+        cert_pem = self._read_pem(self._cert_chain)
+        key_pem = self._read_pem(self._private_key)
+
+        if ca_pem:
+            logger.info("Engine TLS: loaded CA certificate (%s)", self._trust_certs)
+        if cert_pem and key_pem:
+            logger.info("Engine TLS: loaded client certificate for mTLS (%s)",
+                        self._cert_chain)
+        elif self._cert_chain or self._private_key:
+            logger.warning("Engine TLS: client cert or key missing — "
+                           "connecting without mTLS client identity")
+            cert_pem = None
+            key_pem = None
+
+        return grpc.ssl_channel_credentials(
+            root_certificates=ca_pem,
+            private_key=key_pem,
+            certificate_chain=cert_pem,
+        )
 
     async def connect(self) -> None:
         """Establish the gRPC channel.
@@ -72,7 +120,7 @@ class EngineClient:
         if self._tls:
             self._channel = grpc.aio.secure_channel(
                 target,
-                grpc.ssl_channel_credentials(),
+                self._build_channel_credentials(),
                 options=channel_opts,
             )
         else:
