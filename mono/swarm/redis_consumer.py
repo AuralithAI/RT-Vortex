@@ -528,41 +528,63 @@ class RedisConsumer:
     async def _claim_pending_messages(self) -> None:
         """Claim and process pending messages from dead consumers.
 
-        Uses XAUTOCLAIM to steal messages that have been idle for more than
-        30 seconds (i.e. the previous consumer died without ACKing them).
-        Only processes messages whose task_id corresponds to a task still in
-        ``submitted`` status (not already assigned/completed).
+        Uses XPENDING + XCLAIM (Redis 5.0+) to steal messages that have been
+        idle for more than 30 seconds from any consumer in the group.
+        This is compatible with Redis < 6.2 where XAUTOCLAIM is unavailable.
         """
         if not self._redis:
             return
 
         try:
-            # XAUTOCLAIM: steal messages idle for >30s from any consumer in the group.
             min_idle_ms = 30_000
-            start_id = "0-0"
-            result = await self._redis.xautoclaim(
+
+            # XPENDING: get summary of pending messages across all consumers.
+            pending = await self._redis.xpending_range(
+                name=_STREAM_KEY,
+                groupname=_GROUP_NAME,
+                min="-",
+                max="+",
+                count=100,
+            )
+
+            if not pending:
+                logger.debug("No pending messages to claim from dead consumers")
+                return
+
+            # Filter to messages idle for > min_idle_ms and owned by OTHER consumers.
+            stale_ids = []
+            for entry in pending:
+                idle = entry.get("time_since_delivered", 0)
+                consumer = entry.get("consumer", b"")
+                if isinstance(consumer, bytes):
+                    consumer = consumer.decode()
+                msg_id = entry.get("message_id", "")
+                if isinstance(msg_id, bytes):
+                    msg_id = msg_id.decode()
+                if idle >= min_idle_ms and consumer != _CONSUMER_NAME and msg_id:
+                    stale_ids.append(msg_id)
+
+            if not stale_ids:
+                logger.debug("No stale pending messages to claim")
+                return
+
+            # XCLAIM: take ownership of the stale messages.
+            claimed = await self._redis.xclaim(
                 name=_STREAM_KEY,
                 groupname=_GROUP_NAME,
                 consumername=_CONSUMER_NAME,
                 min_idle_time=min_idle_ms,
-                start_id=start_id,
+                message_ids=stale_ids,
             )
 
-            # result is (next_start_id, [(msg_id, data), ...], [deleted_ids])
-            if not result or len(result) < 2:
-                return
-
-            claimed_messages = result[1]
-            if not claimed_messages:
-                logger.debug("No pending messages to claim from dead consumers")
+            if not claimed:
                 return
 
             logger.info("Claimed %d pending message(s) from dead consumers",
-                        len(claimed_messages))
+                        len(claimed))
 
-            for msg_id, data in claimed_messages:
+            for msg_id, data in claimed:
                 if data is None:
-                    # Message was deleted from stream but still in PEL — just ACK it.
                     await self._redis.xack(_STREAM_KEY, _GROUP_NAME, msg_id)
                     continue
                 try:
