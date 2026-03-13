@@ -393,6 +393,7 @@ func (s *Server) setupRouter() {
 			r.Post("/tasks/{id}/rate", sh.RateTaskUser)
 			r.Post("/tasks/{id}/retry", sh.RetryTask)
 			r.Post("/tasks/{id}/cancel", sh.CancelTask)
+			r.Delete("/tasks/{id}", sh.DeleteTaskUser)
 			r.Get("/agents", sh.ListAgentsUser)
 			r.Get("/teams", sh.ListTeamsUser)
 			r.Get("/overview", sh.SwarmOverview)

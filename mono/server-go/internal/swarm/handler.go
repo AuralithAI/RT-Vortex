@@ -733,6 +733,37 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`{"status":"cancelled"}`))
 }
 
+// DeleteTaskUser handles DELETE /api/v1/swarm/tasks/{id} (user JWT required).
+func (h *Handler) DeleteTaskUser(w http.ResponseWriter, r *http.Request) {
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	task, err := h.TaskMgr.GetTask(r.Context(), taskID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
+		return
+	}
+
+	// Release team before deletion if one is assigned.
+	if task.AssignedTeamID != nil {
+		h.TeamMgr.ReleaseTeam(r.Context(), *task.AssignedTeamID)
+	}
+
+	if err := h.TaskMgr.DeleteTask(r.Context(), taskID); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	if h.WS != nil {
+		h.WS.BroadcastTaskEvent("deleted", taskID.String(), nil)
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // TaskHistory handles GET /api/v1/swarm/tasks/history (user JWT required).
 func (h *Handler) TaskHistory(w http.ResponseWriter, r *http.Request) {
 	repoID := r.URL.Query().Get("repo_id")

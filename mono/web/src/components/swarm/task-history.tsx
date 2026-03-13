@@ -17,6 +17,7 @@ import {
   RefreshCw,
   Loader2,
   ExternalLink,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { TaskSummary, TaskHistoryResponse, TaskStatus } from "@/types/swarm";
@@ -52,6 +53,20 @@ export function TaskHistory() {
     try {
       const res = await fetch(`/api/v1/swarm/tasks/${taskId}/retry`, {
         method: "POST",
+      });
+      if (res.ok) {
+        fetchHistory();
+      }
+    } catch {
+      /* */
+    }
+  };
+
+  const handleDelete = async (taskId: string) => {
+    if (!confirm("Delete this task? This cannot be undone.")) return;
+    try {
+      const res = await fetch(`/api/v1/swarm/tasks/${taskId}`, {
+        method: "DELETE",
       });
       if (res.ok) {
         fetchHistory();
@@ -176,18 +191,28 @@ export function TaskHistory() {
                   {new Date(task.created_at).toLocaleDateString()}
                 </td>
                 <td className="p-3">
-                  {(task.status === "failed" || task.status === "timed_out") &&
-                    task.retry_count < 3 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleRetry(task.id)}
-                        className="h-7 px-2"
-                      >
-                        <RefreshCw className="mr-1 h-3 w-3" />
-                        Retry
-                      </Button>
-                    )}
+                  <div className="flex items-center gap-1">
+                    {(task.status === "failed" || task.status === "timed_out") &&
+                      task.retry_count < 3 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleRetry(task.id)}
+                          className="h-7 px-2"
+                        >
+                          <RefreshCw className="mr-1 h-3 w-3" />
+                          Retry
+                        </Button>
+                      )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDelete(task.id)}
+                      className="h-7 px-2 text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  </div>
                 </td>
               </tr>
             ))}

@@ -191,8 +191,9 @@ func (m *TaskManager) CreateTask(ctx context.Context, repoID, description string
 func (m *TaskManager) GetTask(ctx context.Context, taskID uuid.UUID) (*Task, error) {
 	row := m.db.QueryRow(ctx, `
 		SELECT id, repo_id, description, status, plan_document,
-		       assigned_team_id, assigned_agents, pr_url, pr_number,
-		       human_rating, human_comment, submitted_by,
+		       assigned_team_id, assigned_agents,
+		       COALESCE(pr_url, ''), COALESCE(pr_number, 0),
+		       human_rating, COALESCE(human_comment, ''), submitted_by,
 		       COALESCE(retry_count, 0), COALESCE(failure_reason, ''),
 		       created_at, completed_at, timeout_at
 		FROM swarm_tasks WHERE id = $1`, taskID)
@@ -214,8 +215,9 @@ func (m *TaskManager) GetTask(ctx context.Context, taskID uuid.UUID) (*Task, err
 // ListTasks returns tasks filtered by optional repo_id and status.
 func (m *TaskManager) ListTasks(ctx context.Context, repoID, status string, limit int) ([]Task, error) {
 	query := `SELECT id, repo_id, description, status, plan_document,
-	                 assigned_team_id, assigned_agents, pr_url, pr_number,
-	                 human_rating, human_comment, submitted_by,
+	                 assigned_team_id, assigned_agents,
+	                 COALESCE(pr_url, ''), COALESCE(pr_number, 0),
+	                 human_rating, COALESCE(human_comment, ''), submitted_by,
 	                 COALESCE(retry_count, 0), COALESCE(failure_reason, ''),
 	                 created_at, completed_at, timeout_at
 	          FROM swarm_tasks WHERE 1=1`
@@ -271,6 +273,20 @@ func (m *TaskManager) UpdateStatus(ctx context.Context, taskID uuid.UUID, newSta
 		return fmt.Errorf("task %s not found", taskID)
 	}
 	slog.Info("swarm task status updated", "task_id", taskID, "status", newStatus)
+	return nil
+}
+
+// DeleteTask removes a task and all its dependent rows (cascaded via FK).
+func (m *TaskManager) DeleteTask(ctx context.Context, taskID uuid.UUID) error {
+	tag, err := m.db.Exec(ctx, `DELETE FROM swarm_tasks WHERE id = $1`, taskID)
+	if err != nil {
+		return fmt.Errorf("deleting task: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+	SwarmTasksActive.Dec()
+	slog.Info("swarm task deleted", "task_id", taskID)
 	return nil
 }
 
@@ -736,7 +752,7 @@ func (m *TaskManager) ListTaskHistory(ctx context.Context, repoID string, limit,
 	// Fetch rows with aggregates.
 	query := `
 		SELECT t.id, t.repo_id, t.description, t.status,
-		       COALESCE(t.retry_count, 0), t.pr_url, t.pr_number,
+		       COALESCE(t.retry_count, 0), COALESCE(t.pr_url, ''), COALESCE(t.pr_number, 0),
 		       t.human_rating, t.created_at, t.completed_at,
 		       (SELECT COUNT(*) FROM swarm_task_diffs d WHERE d.task_id = t.id) AS diff_count,
 		       COALESCE(array_length(t.assigned_agents, 1), 0) AS agent_count,

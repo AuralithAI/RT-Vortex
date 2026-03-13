@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   Loader2,
   RefreshCw,
+  Trash2,
 } from "lucide-react";
 import type { SwarmTask, TaskStatus } from "@/types/swarm";
 
@@ -156,6 +157,7 @@ export function TaskPipelineBoard() {
 
 function TaskCard({ task }: { task: SwarmTask }) {
   const [retrying, setRetrying] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const handleRetry = async (e: React.MouseEvent) => {
     e.preventDefault();
@@ -168,6 +170,18 @@ function TaskCard({ task }: { task: SwarmTask }) {
     }
   };
 
+  const handleDelete = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!confirm("Delete this task? This cannot be undone.")) return;
+    setDeleting(true);
+    try {
+      await fetch(`/api/v1/swarm/tasks/${task.id}`, { method: "DELETE" });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const isRetryable =
     (task.status === "failed" || task.status === "timed_out") &&
     task.retry_count < 3;
@@ -175,9 +189,23 @@ function TaskCard({ task }: { task: SwarmTask }) {
   return (
     <Link href={`/swarm/tasks/${task.id}`}>
       <div className="group cursor-pointer rounded-md border bg-card p-3 shadow-sm transition-colors hover:border-primary/50">
-        <p className="line-clamp-2 text-xs font-medium leading-tight">
-          {task.description}
-        </p>
+        <div className="flex items-start justify-between gap-1">
+          <p className="line-clamp-2 text-xs font-medium leading-tight">
+            {task.description}
+          </p>
+          <button
+            onClick={handleDelete}
+            disabled={deleting}
+            className="shrink-0 rounded p-0.5 opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 disabled:opacity-50"
+            title="Delete task"
+          >
+            {deleting ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Trash2 className="h-3 w-3" />
+            )}
+          </button>
+        </div>
         <div className="mt-2 flex items-center justify-between">
           <span className="text-[10px] text-muted-foreground">
             {new Date(task.created_at).toLocaleDateString()}
