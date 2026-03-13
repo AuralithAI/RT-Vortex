@@ -354,7 +354,9 @@ func (h *Handler) DeclareTeamSize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if task.AssignedTeamID == nil {
-		http.Error(w, `{"error":"task has no assigned team"}`, http.StatusBadRequest)
+		// Team not yet assigned (race with assign loop); tell the agent to retry.
+		w.Header().Set("Retry-After", "3")
+		http.Error(w, `{"error":"task has no assigned team yet, retry later"}`, http.StatusConflict)
 		return
 	}
 

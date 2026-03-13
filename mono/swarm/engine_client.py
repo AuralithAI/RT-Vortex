@@ -108,7 +108,7 @@ class EngineClient:
         request = _pb2.SearchRequest(
             query=query,
             repo_id=repo_id,
-            top_k=top_k,
+            config=_pb2.SearchConfig(top_k=top_k),
         )
         response = await self._stub.Search(request)
 

@@ -113,8 +113,8 @@ export default function SwarmTasksPage() {
                   <p className="text-sm text-muted-foreground">
                     {task.repo_id} •{" "}
                     {new Date(task.created_at).toLocaleDateString()} •{" "}
-                    {task.assigned_agents.length} agent
-                    {task.assigned_agents.length !== 1 ? "s" : ""}
+                    {(task.assigned_agents ?? []).length} agent
+                    {(task.assigned_agents ?? []).length !== 1 ? "s" : ""}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">

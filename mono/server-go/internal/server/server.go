@@ -398,6 +398,13 @@ func (s *Server) setupRouter() {
 			r.Get("/agents", sh.ListAgentsUser)
 			r.Get("/teams", sh.ListTeamsUser)
 			r.Get("/overview", sh.SwarmOverview)
+
+			// WebSocket: real-time swarm task events
+			if s.deps.WSHub != nil {
+				swarmWS := ws.NewSwarmHandler(s.deps.WSHub)
+				r.Get("/tasks/{id}/ws", swarmWS.ServeHTTP)
+				r.Get("/ws", swarmWS.ServeHTTP) // global swarm events
+			}
 		})
 	}
 

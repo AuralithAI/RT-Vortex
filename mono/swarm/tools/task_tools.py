@@ -6,6 +6,7 @@ and team size declarations through the agentic loop.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -140,8 +141,18 @@ async def declare_team_size(task_id: str, size: int) -> str:
     """
     client = _get_client()
     size = max(2, min(10, size))
-    await client.declare_team_size(task_id=task_id, size=size)
-    logger.info("Team size declared: %d for task %s", size, task_id)
+    # The team may not be assigned yet — retry a few times.
+    for attempt in range(4):
+        try:
+            await client.declare_team_size(task_id=task_id, size=size)
+            logger.info("Team size declared: %d for task %s", size, task_id)
+            return f"Team size set to {size} for task {task_id}."
+        except Exception as exc:
+            if "409" in str(exc) or "Conflict" in str(exc) or "no assigned team" in str(exc):
+                if attempt < 3:
+                    await asyncio.sleep(3)
+                    continue
+            raise
     return f"Team size set to {size} for task {task_id}."
 
 

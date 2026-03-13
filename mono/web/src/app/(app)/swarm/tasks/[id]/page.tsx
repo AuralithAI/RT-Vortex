@@ -169,7 +169,7 @@ export default function SwarmTaskDetailPage() {
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-muted-foreground">Agents</dt>
-                  <dd>{task.assigned_agents.length}</dd>
+                  <dd>{(task.assigned_agents ?? []).length}</dd>
                 </div>
                 {task.pr_url && (
                   <div className="flex justify-between">

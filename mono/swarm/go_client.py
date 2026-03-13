@@ -179,6 +179,6 @@ class GoClient:
             resp = await client.post(
                 f"{self.base_url}/internal/swarm/tasks/{task_id}/declare-size",
                 headers=self._headers(),
-                json={"size": size},
+                json={"additional_agents": size},
             )
             resp.raise_for_status()

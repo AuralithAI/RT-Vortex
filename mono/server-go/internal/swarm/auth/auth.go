@@ -51,6 +51,7 @@ type RegisterRequest struct {
 // RegisterResponse is returned on successful registration.
 type RegisterResponse struct {
 	AccessToken string `json:"access_token"`
+	AgentID     string `json:"agent_id"`  // canonical UUID assigned by the server
 	ExpiresIn   int64  `json:"expires_in"` // seconds
 }
 
@@ -137,6 +138,7 @@ func (s *Service) Register(ctx context.Context, req RegisterRequest) (*RegisterR
 
 	return &RegisterResponse{
 		AccessToken: tokenStr,
+		AgentID:     agentID,
 		ExpiresIn:   int64(AgentTokenTTL.Seconds()),
 	}, nil
 }

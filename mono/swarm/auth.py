@@ -26,8 +26,8 @@ async def register_agent(
     team_id: str,
     hostname: str = "",
     version: str = "",
-) -> str:
-    """Register an agent with the Go server and return a JWT access token.
+) -> tuple[str, str]:
+    """Register an agent with the Go server and return (token, agent_id).
 
     Calls ``POST /internal/swarm/auth/register`` with the service secret in
     the ``X-Service-Secret`` header.  The Go server validates the secret,
@@ -41,7 +41,7 @@ async def register_agent(
         version: Build version string.  Defaults to ``mono/VERSION``.
 
     Returns:
-        The JWT access token string.
+        Tuple of (JWT access token, canonical agent_id assigned by server).
 
     Raises:
         httpx.HTTPStatusError: If registration fails (invalid secret, etc.).
@@ -69,9 +69,10 @@ async def register_agent(
         resp.raise_for_status()
         data = resp.json()
         token = data["access_token"]
+        canonical_id = data.get("agent_id", agent_id)
         logger.info("Agent %s registered (role=%s, team=%s, expires_in=%ds)",
-                     agent_id, role, team_id, data.get("expires_in", 0))
-        return token
+                     canonical_id, role, team_id, data.get("expires_in", 0))
+        return token, canonical_id
 
 
 async def check_and_reregister(
@@ -108,4 +109,5 @@ async def check_and_reregister(
         pass
 
     logger.info("Agent %s token expired, re-registering", agent_id)
-    return await register_agent(agent_id, role, team_id)
+    token, _ = await register_agent(agent_id, role, team_id)
+    return token

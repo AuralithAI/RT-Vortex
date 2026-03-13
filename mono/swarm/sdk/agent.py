@@ -82,6 +82,9 @@ class Agent:
         to ``POST /internal/swarm/auth/register``.  The Go server validates
         the service secret (derived from the JWT signing key via the same
         SHA-256 algorithm both sides share) and returns a 3-hour JWT.
+
+        The server may assign a canonical UUID for the agent, which replaces
+        the original short-form ``agent_id``.
         """
         cfg = get_config()
         url = f"{self.config.go_base_url}/internal/swarm/auth/register"
@@ -102,6 +105,9 @@ class Agent:
             resp.raise_for_status()
             data = resp.json()
             self.token = data["access_token"]
+            # The server may assign a canonical UUID; always prefer it.
+            if data.get("agent_id"):
+                self.agent_id = data["agent_id"]
             logger.info("Agent %s registered (role=%s, team=%s)", self.agent_id, self.role, self.team_id)
 
     async def run(self, task: Task) -> AgentResult:

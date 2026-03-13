@@ -192,7 +192,13 @@ func (m *TeamManager) ListTeams(ctx context.Context) ([]Team, error) {
 }
 
 // RegisterAgent inserts or updates an agent in the DB, linked to a team.
+// If teamID is uuid.Nil (controller agents), team_id is stored as NULL.
 func (m *TeamManager) RegisterAgent(ctx context.Context, agentID uuid.UUID, role string, teamID uuid.UUID, hostname, version string) error {
+	var teamPtr *uuid.UUID
+	if teamID != uuid.Nil {
+		teamPtr = &teamID
+	}
+
 	_, err := m.db.Exec(ctx, `
 		INSERT INTO swarm_agents (id, role, team_id, status, hostname, version)
 		VALUES ($1, $2, $3, 'idle', $4, $5)
@@ -203,22 +209,24 @@ func (m *TeamManager) RegisterAgent(ctx context.Context, agentID uuid.UUID, role
 			hostname = EXCLUDED.hostname,
 			version = EXCLUDED.version,
 			registered_at = NOW()`,
-		agentID, role, teamID, hostname, version,
+		agentID, role, teamPtr, hostname, version,
 	)
 	if err != nil {
 		return fmt.Errorf("registering agent: %w", err)
 	}
 
-	// Add agent to team's agent_ids array.
-	_, _ = m.db.Exec(ctx, `
-		UPDATE swarm_teams
-		SET agent_ids = array_append(
-			COALESCE(agent_ids, ARRAY[]::UUID[]),
-			$1
+	// Add agent to team's agent_ids array (skip for controller agents).
+	if teamID != uuid.Nil {
+		_, _ = m.db.Exec(ctx, `
+			UPDATE swarm_teams
+			SET agent_ids = array_append(
+				COALESCE(agent_ids, ARRAY[]::UUID[]),
+				$1
+			)
+			WHERE id = $2 AND NOT ($1 = ANY(COALESCE(agent_ids, ARRAY[]::UUID[])))`,
+			agentID, teamID,
 		)
-		WHERE id = $2 AND NOT ($1 = ANY(COALESCE(agent_ids, ARRAY[]::UUID[])))`,
-		agentID, teamID,
-	)
+	}
 
 	return nil
 }

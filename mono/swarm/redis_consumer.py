@@ -353,7 +353,7 @@ class RedisConsumer:
         # "consumer" agent — individual team agents register separately.
         try:
             controller_id = f"ctrl-{_CONSUMER_NAME}"
-            token = await register_agent(
+            token, controller_id = await register_agent(
                 agent_id=controller_id,
                 role="controller",
                 team_id="00000000-0000-0000-0000-000000000000",
@@ -484,7 +484,7 @@ class TaskPollingConsumer:
         # Register a controller agent for internal API auth (same as RedisConsumer).
         try:
             controller_id = f"ctrl-poll-{uuid.uuid4().hex[:8]}"
-            token = await register_agent(
+            token, controller_id = await register_agent(
                 agent_id=controller_id,
                 role="controller",
                 team_id="00000000-0000-0000-0000-000000000000",
