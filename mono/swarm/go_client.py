@@ -59,6 +59,26 @@ class GoClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def get_task(self, task_id: str) -> dict:
+        """Fetch the full task object by ID.
+
+        Args:
+            task_id: Task UUID.
+
+        Returns:
+            Parsed JSON task dict.
+
+        Raises:
+            httpx.HTTPStatusError: On non-2xx status.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/tasks/{task_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     async def get_task_status(self, task_id: str) -> str:
         """Fetch current status of a task.
 

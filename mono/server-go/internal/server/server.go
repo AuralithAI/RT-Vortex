@@ -357,6 +357,7 @@ func (s *Server) setupRouter() {
 
 				r.Delete("/auth/revoke", sh.RevokeAgent)
 				r.Get("/tasks/next", sh.GetNextTask)
+				r.Get("/tasks/{id}", sh.GetTaskInternal)
 				r.Get("/tasks/{id}/status", sh.GetTaskStatus)
 				r.Post("/tasks/{id}/plan", sh.SubmitPlan)
 				r.Post("/tasks/{id}/diffs", sh.SubmitDiff)

@@ -85,6 +85,25 @@ func (h *Handler) RevokeAgent(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// GetTaskInternal handles GET /internal/swarm/tasks/{id} — returns the full
+// task for any authenticated agent (controller or team member).
+func (h *Handler) GetTaskInternal(w http.ResponseWriter, r *http.Request) {
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	task, err := h.TaskMgr.GetTask(r.Context(), taskID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(task)
+}
+
 // GetTaskStatus handles GET /internal/swarm/tasks/{id}/status — lightweight
 // status poll for agents waiting on plan/diff approval.
 func (h *Handler) GetTaskStatus(w http.ResponseWriter, r *http.Request) {
@@ -117,8 +136,20 @@ func (h *Handler) GetNextTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	teamID, _ := uuid.Parse(claims.TeamID)
+
 	if teamID == uuid.Nil {
-		http.Error(w, `{"error":"agent has no team_id"}`, http.StatusBadRequest)
+		// Controller agent — return the oldest submitted (unassigned) task.
+		tasks, err := h.TaskMgr.ListTasks(r.Context(), "", StatusSubmitted, 1)
+		if err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+			return
+		}
+		if len(tasks) == 0 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(tasks[0])
 		return
 	}
 

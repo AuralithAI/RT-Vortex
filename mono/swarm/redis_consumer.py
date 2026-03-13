@@ -438,12 +438,12 @@ class RedisConsumer:
 
         logger.info("Received team:create event for task %s", task_id)
 
-        # Fetch full task from Go.
+        # Fetch full task from Go by ID.
         if not self._go_client:
             logger.error("No GoClient available — cannot fetch task")
             return
 
-        task_data = await self._go_client.poll_next_task()
+        task_data = await self._go_client.get_task(task_id)
         if not task_data:
             logger.warning("No task available from Go for task_id %s", task_id)
             return
