@@ -194,9 +194,27 @@ func (r *Registry) RegisterWithMeta(p Provider, m ProviderMeta) {
 	r.meta[p.Name()] = m
 }
 
-// SetPrimary changes the primary provider.
+// SetPrimary changes the primary provider and persists the choice.
 func (r *Registry) SetPrimary(name string) {
 	r.primary = name
+
+	// Remove name from fallbacks and prepend remaining providers.
+	newFallbacks := make([]string, 0, len(r.fallbacks))
+	for _, fb := range r.fallbacks {
+		if fb != name {
+			newFallbacks = append(newFallbacks, fb)
+		}
+	}
+	r.fallbacks = newFallbacks
+
+	// Persist to vault so the choice survives restarts.
+	if r.vault != nil {
+		if err := r.vault.Set("llm.primary", name); err != nil {
+			slog.Error("vault: failed to persist primary provider", "provider", name, "error", err)
+		} else {
+			slog.Info("vault: primary provider persisted", "provider", name)
+		}
+	}
 }
 
 // Get returns a specific provider.
@@ -284,6 +302,15 @@ func (r *Registry) LoadFromVault() int {
 
 	loaded := 0
 	for vaultKey, apiKey := range secrets {
+		// Restore persisted primary provider choice.
+		if vaultKey == "llm.primary" {
+			if _, ok := r.providers[apiKey]; ok {
+				r.primary = apiKey
+				slog.Info("vault: restored primary provider", "provider", apiKey)
+			}
+			continue
+		}
+
 		// Keys are stored as "llm.<provider>.api_key".
 		if len(vaultKey) < 5 || vaultKey[:4] != "llm." {
 			continue
@@ -415,7 +442,8 @@ func (r *Registry) Complete(ctx context.Context, req *CompletionRequest) (*Compl
 		if err == nil {
 			return resp, nil
 		}
-		// Log and try fallbacks.
+		slog.Warn("llm: primary provider failed, trying fallbacks",
+			"primary", r.primary, "error", err)
 	}
 
 	for _, name := range r.fallbacks {
@@ -429,12 +457,35 @@ func (r *Registry) Complete(ctx context.Context, req *CompletionRequest) (*Compl
 	return nil, ErrProviderNotFound
 }
 
-// ListProviders returns the names of all registered providers.
+// ListProviders returns the names of all registered providers in stable order
+// (primary first, then fallbacks, then any remaining).
 func (r *Registry) ListProviders() []string {
+	seen := make(map[string]bool, len(r.providers))
 	names := make([]string, 0, len(r.providers))
-	for name := range r.providers {
-		names = append(names, name)
+
+	// Primary first.
+	if r.primary != "" {
+		if _, ok := r.providers[r.primary]; ok {
+			names = append(names, r.primary)
+			seen[r.primary] = true
+		}
 	}
+
+	// Then fallbacks in order.
+	for _, fb := range r.fallbacks {
+		if !seen[fb] {
+			names = append(names, fb)
+			seen[fb] = true
+		}
+	}
+
+	// Then any remaining (shouldn't happen, but be safe).
+	for name := range r.providers {
+		if !seen[name] {
+			names = append(names, name)
+		}
+	}
+
 	return names
 }
 

@@ -355,7 +355,7 @@ export const reviews = {
 export const llm = {
   providers: async () => {
     const res = await request<{ providers: LLMProvider[]; primary: string; count: number }>("/api/v1/llm/providers");
-    return res.providers ?? [];
+    return { providers: res.providers ?? [], primary: res.primary ?? "" };
   },
 
   configure: (provider: string, data: LLMConfigureRequest) =>

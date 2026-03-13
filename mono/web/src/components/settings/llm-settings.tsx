@@ -49,7 +49,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 
 export function LLMSettings() {
-  const { data: providers, isLoading } = useLLMProviders();
+  const { data: llmData, isLoading } = useLLMProviders();
+  const providers = llmData?.providers ?? [];
+  const primaryProvider = llmData?.primary ?? "";
   const testLLM = useTestLLM();
   const configureLLM = useConfigureLLM();
   const setPrimaryLLM = useSetPrimaryLLM();
@@ -118,9 +120,7 @@ export function LLMSettings() {
         ) : (
           <div className="space-y-4">
             {providers.map((provider) => {
-              const isPrimary =
-                providers.length > 0 &&
-                providers.findIndex((p) => p.name === provider.name) === 0;
+              const isPrimary = provider.name === primaryProvider;
               const testResult =
                 testLLM.data && testLLM.variables?.provider === provider.name
                   ? testLLM.data
