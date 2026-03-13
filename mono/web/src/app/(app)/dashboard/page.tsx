@@ -15,6 +15,7 @@ import { PageHeader } from "@/components/layout/page-header";
 import { StatsCard } from "@/components/dashboard/stats-card";
 import { RecentReviews } from "@/components/dashboard/recent-reviews";
 import { ReviewActivityChart } from "@/components/dashboard/review-activity-chart";
+import { SwarmSummaryCard } from "@/components/dashboard/swarm-summary-card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export default function DashboardPage() {
@@ -91,10 +92,11 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Charts + Recent */}
-      <div className="grid gap-6 lg:grid-cols-2">
+      {/* Charts + Recent + Swarm */}
+      <div className="grid gap-6 lg:grid-cols-3">
         <ReviewActivityChart data={chartData} />
         <RecentReviews reviews={reviewsData?.data ?? []} />
+        <SwarmSummaryCard />
       </div>
     </>
   );
