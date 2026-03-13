@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,7 +39,7 @@ def _resolve_xml_var(raw: str, env: dict[str, str] | None = None) -> str:
     if not raw or "${" not in raw:
         return raw
 
-    rt_home = os.getenv("RTVORTEX_HOME", "")
+    rt_home = _resolve_rt_home()
     result = raw.replace("${rtvortex.home}", rt_home)
 
     while "${" in result:
@@ -55,6 +56,44 @@ def _resolve_xml_var(raw: str, env: dict[str, str] | None = None) -> str:
         result = result[:start] + value + result[end + 1 :]
 
     return result
+
+
+def _resolve_rt_home() -> str:
+    """Determine the ``rt_home`` directory.
+
+    Resolution order:
+
+    1. ``$RTVORTEX_HOME`` environment variable (absolute or relative).
+    2. Auto-detect from the running executable path — the swarm venv lives at
+       ``<rt_home>/swarm/venv/…``, so walking up three levels from
+       ``sys.executable`` (or ``sys.prefix``) gives ``rt_home``.
+    3. Auto-detect from this source file — during development, this file is at
+       ``<repo>/mono/swarm/agents_config.py``; ``<repo>/rt_home`` is checked.
+
+    Returns the resolved path (always absolute), or an empty string if nothing
+    was found.
+    """
+    # 1. Explicit env var.
+    env = os.getenv("RTVORTEX_HOME", "")
+    if env:
+        p = Path(env).resolve()
+        if (p / "config" / "rtserverprops.xml").is_file():
+            return str(p)
+
+    # 2. Infer from venv location:  …/rt_home/swarm/venv/bin/python
+    #    sys.prefix → …/rt_home/swarm/venv
+    venv_prefix = Path(sys.prefix).resolve()
+    candidate = venv_prefix.parent.parent          # …/rt_home
+    if (candidate / "config" / "rtserverprops.xml").is_file():
+        return str(candidate)
+
+    # 3. Infer from source tree:  mono/swarm/agents_config.py → repo/rt_home
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    candidate = repo_root / "rt_home"
+    if (candidate / "config" / "rtserverprops.xml").is_file():
+        return str(candidate)
+
+    return ""
 
 
 def _parse_server_props(xml_path: str) -> dict[str, Any]:
@@ -207,7 +246,7 @@ class AgentsConfig:
             Fully resolved ``AgentsConfig`` instance.
         """
         if not xml_path:
-            rt_home = os.getenv("RTVORTEX_HOME", "")
+            rt_home = _resolve_rt_home()
             if rt_home:
                 xml_path = os.path.join(rt_home, "config", "rtserverprops.xml")
 
@@ -273,7 +312,7 @@ def _read_version() -> str:
     4. Falls back to ``"0.0.0"``
     """
     # Try RTVORTEX_HOME first (production layout).
-    rt_home = os.getenv("RTVORTEX_HOME", "")
+    rt_home = _resolve_rt_home()
     if rt_home:
         # In production the VERSION file is copied alongside the swarm venv.
         candidates = [
