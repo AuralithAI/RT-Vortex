@@ -165,7 +165,7 @@ class EngineClient:
             chunks.append({
                 "content": chunk.content,
                 "file_path": chunk.file_path,
-                "score": chunk.score,
+                "score": chunk.relevance_score,
                 "start_line": chunk.start_line,
                 "end_line": chunk.end_line,
                 "language": chunk.language,
