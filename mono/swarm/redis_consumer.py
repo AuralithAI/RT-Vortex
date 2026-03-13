@@ -337,16 +337,12 @@ async def _run_full_pipeline(
                 logger.error("Team %s: %s agent failed: %s",
                              team_id[:8], agent.role, e)
 
-        # ── Step 5: Submit remaining diffs and complete ─────────────────
-        # Most diffs are submitted in real-time by agent tool calls, but
-        # if any diffs came via parse_result, submit them here.
-        for diff in all_diffs:
-            if not diff.get("_submitted"):
-                try:
-                    await go_client.report_diff(task.id, diff)
-                except Exception as e:
-                    logger.error("Team %s: Failed to submit diff for %s: %s",
-                                 team_id[:8], diff.get("file_path", "?"), e)
+        # ── Step 5: Complete the task ───────────────────────────────────
+        # All diffs are submitted in real-time by the report_diff tool call
+        # during the agent loop.  The diffs collected in all_diffs via
+        # parse_result are already on the server — no need to re-submit.
+        if all_diffs:
+            logger.info("Team %s: Total diffs produced: %d", team_id[:8], len(all_diffs))
 
         # Mark task complete — Go triggers PR creation.
         await go_client.report_result(task.id)
