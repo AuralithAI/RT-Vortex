@@ -238,6 +238,47 @@ export interface LLMBalanceResult {
   warning?: string;
 }
 
+// ── Agent Orchestration ─────────────────────────────────────────────────────
+
+/** A single role → provider/model mapping. */
+export interface AgentRoute {
+  role: string;
+  provider: string;
+  model?: string;
+}
+
+/** Response from GET /api/v1/llm/routes */
+export interface AgentRoutesResponse {
+  routes: AgentRoute[];
+  primary: string;
+}
+
+/** All agent roles in the review swarm. */
+export const AGENT_ROLES = [
+  "orchestrator",
+  "architect",
+  "senior_dev",
+  "junior_dev",
+  "qa",
+  "security",
+  "docs",
+  "ops",
+] as const;
+
+export type AgentRoleId = (typeof AGENT_ROLES)[number];
+
+/** Human-readable labels and descriptions for each agent role. */
+export const AGENT_ROLE_META: Record<AgentRoleId, { label: string; description: string; icon: string }> = {
+  orchestrator: { label: "Orchestrator", description: "Plans and coordinates the overall review", icon: "🎯" },
+  architect:    { label: "Architect",    description: "Architecture, design patterns, trade-offs", icon: "🏗️" },
+  senior_dev:   { label: "Senior Dev",   description: "Deep code review, correctness, edge cases", icon: "👨‍💻" },
+  junior_dev:   { label: "Junior Dev",   description: "Style, formatting, simple improvements", icon: "🧑‍💻" },
+  qa:           { label: "QA",           description: "Test coverage and test quality", icon: "🧪" },
+  security:     { label: "Security",     description: "Vulnerabilities, CVEs, OWASP checks", icon: "🔒" },
+  docs:         { label: "Docs",         description: "Documentation quality, comments, READMEs", icon: "📝" },
+  ops:          { label: "Ops",          description: "CI/CD, deployment, infrastructure", icon: "⚙️" },
+};
+
 // ── Embeddings ──────────────────────────────────────────────────────────────
 
 export interface BuiltinEmbeddingModel {

@@ -289,6 +289,8 @@ func (s *Server) setupRouter() {
 				r.Post("/providers/{provider}/balance", h.CheckLLMBalance)
 				r.Post("/providers/test", h.TestLLMProvider)
 				r.Put("/primary", h.SetPrimaryLLMProvider)
+				r.Get("/routes", h.GetLLMRoutes)
+				r.Put("/routes", h.SetLLMRoutes)
 				r.Post("/stream", h.StreamLLMCompletion) // SSE streaming
 			})
 

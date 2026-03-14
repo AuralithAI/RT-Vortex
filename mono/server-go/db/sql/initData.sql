@@ -335,9 +335,18 @@ CREATE TABLE IF NOT EXISTS swarm_teams (
     formed_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-ALTER TABLE swarm_agents
-    ADD CONSTRAINT IF NOT EXISTS fk_swarm_agents_team
-    FOREIGN KEY (team_id) REFERENCES swarm_teams(id) ON DELETE SET NULL;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'fk_swarm_agents_team'
+          AND table_name = 'swarm_agents'
+    ) THEN
+        ALTER TABLE swarm_agents
+            ADD CONSTRAINT fk_swarm_agents_team
+            FOREIGN KEY (team_id) REFERENCES swarm_teams(id) ON DELETE SET NULL;
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS swarm_tasks (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -387,9 +387,40 @@ func main() {
 		llmRegistry.SetPrimary(cfg.LLM.Primary)
 	}
 
+	// Apply role-based model routing from config.
+	// If the user configured routes in XML, use those. Otherwise apply sensible
+	// defaults: complex-reasoning roles (orchestrator, architect, security) get
+	// the strongest configured model, while implementation roles (junior_dev,
+	// docs) can use faster/cheaper models.
+	if len(cfg.LLM.Routes) > 0 {
+		routes := make(map[string]llm.ModelRoute, len(cfg.LLM.Routes))
+		for role, rc := range cfg.LLM.Routes {
+			routes[role] = llm.ModelRoute{Provider: rc.Provider, Model: rc.Model}
+		}
+		llmRegistry.SetRoutes(routes)
+		slog.Info("LLM role-based routing configured", "routes", len(routes))
+	} else {
+		// Smart defaults: if both Anthropic and OpenAI are configured,
+		// route complex-reasoning roles to Anthropic (stronger at planning)
+		// and leave implementation roles on the primary (usually OpenAI).
+		anthropicMeta, anthropicOK := llmRegistry.GetMeta("anthropic")
+		_, openaiOK := llmRegistry.GetMeta("openai")
+		if anthropicOK && anthropicMeta.Configured && openaiOK {
+			defaultRoutes := map[string]llm.ModelRoute{
+				"orchestrator": {Provider: "anthropic"},
+				"architect":    {Provider: "anthropic"},
+				"security":     {Provider: "anthropic"},
+				"senior_dev":   {Provider: "anthropic"},
+			}
+			llmRegistry.SetRoutes(defaultRoutes)
+			slog.Info("LLM role-based routing: smart defaults applied (complex roles → Anthropic)")
+		}
+	}
+
 	slog.Info("LLM providers registered",
 		"count", len(llmRegistry.ListProviders()),
 		"primary", cfg.LLM.Primary,
+		"routes", len(llmRegistry.GetRoutes()),
 	)
 
 	// VCS resolver — resolves credentials dynamically from vault/DB per repo

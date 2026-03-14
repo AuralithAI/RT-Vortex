@@ -1430,6 +1430,7 @@ func (h *Handler) ListLLMProviders(w http.ResponseWriter, r *http.Request) {
 		"providers": providers,
 		"primary":   h.LLMRegistry.PrimaryName(),
 		"count":     len(providers),
+		"routes":    h.LLMRegistry.GetRoutes(),
 	})
 }
 
@@ -1500,6 +1501,70 @@ func (h *Handler) SetPrimaryLLMProvider(w http.ResponseWriter, r *http.Request) 
 	h.LLMRegistry.SetPrimary(req.Provider)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"primary": req.Provider,
+	})
+}
+
+// GetLLMRoutes returns the role-based model routing table.
+// GET /api/v1/llm/routes
+func (h *Handler) GetLLMRoutes(w http.ResponseWriter, _ *http.Request) {
+	routes := h.LLMRegistry.GetRoutes()
+
+	type routeInfo struct {
+		Role     string `json:"role"`
+		Provider string `json:"provider"`
+		Model    string `json:"model,omitempty"`
+	}
+
+	out := make([]routeInfo, 0, len(routes))
+	for role, route := range routes {
+		out = append(out, routeInfo{
+			Role:     role,
+			Provider: route.Provider,
+			Model:    route.Model,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"routes":  out,
+		"primary": h.LLMRegistry.PrimaryName(),
+	})
+}
+
+// SetLLMRoutes updates the role-based model routing table.
+// PUT /api/v1/llm/routes
+//
+//	Request body:
+//	  { "routes": [{ "role": "orchestrator", "provider": "anthropic", "model": "..." }, ...] }
+func (h *Handler) SetLLMRoutes(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Routes []struct {
+			Role     string `json:"role"`
+			Provider string `json:"provider"`
+			Model    string `json:"model"`
+		} `json:"routes"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	routes := make(map[string]llm.ModelRoute, len(req.Routes))
+	for _, rt := range req.Routes {
+		if rt.Role == "" || rt.Provider == "" {
+			continue
+		}
+		// Verify the provider exists.
+		if _, ok := h.LLMRegistry.Get(rt.Provider); !ok {
+			writeError(w, http.StatusBadRequest, "unknown provider: "+rt.Provider)
+			return
+		}
+		routes[rt.Role] = llm.ModelRoute{Provider: rt.Provider, Model: rt.Model}
+	}
+
+	h.LLMRegistry.SetRoutes(routes)
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"routes": len(routes),
+		"ok":     true,
 	})
 }
 

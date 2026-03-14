@@ -1,4 +1,4 @@
-// ─── Next.js Middleware — Route Protection ──────────────────────────────────
+// ─── Next.js Proxy — Route Protection ───────────────────────────────────────
 // Redirects unauthenticated users to /login for protected routes.
 // Redirects authenticated users away from /login.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -7,7 +7,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC_PATHS = new Set(["/login", "/callback"]);
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // ── API proxy: inject Authorization header from cookie ────────────────

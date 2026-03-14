@@ -25,6 +25,7 @@ async def llm_complete(
     *,
     go_base_url: str | None = None,
     agent_token: str = "",
+    agent_role: str = "",
 ) -> dict:
     """Send a chat-completion request via the Go LLM proxy.
 
@@ -37,12 +38,19 @@ async def llm_complete(
             "usage": {"prompt_tokens": ..., "completion_tokens": ..., ...}
         }
 
+    When ``agent_role`` is provided, the Go server uses role-based model
+    routing to pick the best provider for the task (e.g. orchestrator gets the
+    strongest model, junior_dev gets a fast/cheap one).  If the chosen model
+    truncates the response, the server automatically retries with the next
+    provider in the fallback chain.
+
     Args:
         messages: Conversation history (system, user, assistant, tool roles).
         tools: Optional list of tool schemas in function-calling format.
         max_tokens: Maximum tokens for the completion.
         go_base_url: Go server base URL. Falls back to config.
         agent_token: JWT obtained during agent registration.
+        agent_role: Agent role hint for smart model routing (e.g. "orchestrator").
 
     Returns:
         Parsed JSON response dict.
@@ -58,6 +66,8 @@ async def llm_complete(
     }
     if tools:
         payload["tools"] = tools
+    if agent_role:
+        payload["agent_role"] = agent_role
 
     async with httpx.AsyncClient(timeout=cfg.llm_timeout) as client:
         resp = await client.post(

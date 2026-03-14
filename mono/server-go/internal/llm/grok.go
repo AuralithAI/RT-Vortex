@@ -51,7 +51,16 @@ func (p *GrokProvider) Complete(ctx context.Context, req *CompletionRequest) (*C
 	return p.inner.Complete(ctx, req)
 }
 
-func (p *GrokProvider) ListModels(_ context.Context) ([]string, error) {
+func (p *GrokProvider) ListModels(ctx context.Context) ([]string, error) {
+	// Delegate to inner OpenAI-compatible API for dynamic model listing.
+	if p.inner.apiKey != "" {
+		models, err := p.inner.ListModels(ctx)
+		if err == nil && len(models) > 0 {
+			return models, nil
+		}
+		slog.Debug("grok: dynamic model list failed, using fallback", "error", err)
+	}
+	// Fallback: well-known Grok models.
 	return []string{
 		"grok-3",
 		"grok-3-mini",

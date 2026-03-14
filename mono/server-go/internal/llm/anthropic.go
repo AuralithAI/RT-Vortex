@@ -280,7 +280,40 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 	}, nil
 }
 
-func (p *AnthropicProvider) ListModels(_ context.Context) ([]string, error) {
+func (p *AnthropicProvider) ListModels(ctx context.Context) ([]string, error) {
+	// Try the Anthropic models API (beta).
+	if p.apiKey != "" {
+		url := p.baseURL + "/models?limit=50"
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err == nil {
+			httpReq.Header.Set("x-api-key", p.apiKey)
+			httpReq.Header.Set("anthropic-version", p.apiVersion)
+			resp, err := p.client.Do(httpReq)
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					var result struct {
+						Data []struct {
+							ID string `json:"id"`
+						} `json:"data"`
+					}
+					if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && len(result.Data) > 0 {
+						models := make([]string, 0, len(result.Data))
+						for _, m := range result.Data {
+							if strings.HasPrefix(m.ID, "claude-") {
+								models = append(models, m.ID)
+							}
+						}
+						if len(models) > 0 {
+							return models, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback: well-known Claude models.
 	return []string{
 		"claude-sonnet-4-20250514",
 		"claude-3-5-sonnet-20241022",

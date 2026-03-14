@@ -200,7 +200,7 @@ analysis, etc.) via Redis Streams or HTTP polling.
 
 ```bash
 make swarm   # one-time: installs into rt_home/swarm/venv
-RTVORTEX_HOME=rt_home rt_home/swarm/venv/bin/python -m rtvortex_swarm
+RTVORTEX_HOME=rt_home rt_home/swarm/venv/bin/rtvortex-swarm
 ```
 
 The swarm connects to:

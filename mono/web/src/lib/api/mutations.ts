@@ -5,7 +5,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./client";
 import { queryKeys } from "./queries";
-import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest } from "@/types/api";
+import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute } from "@/types/api";
 
 // ── User ────────────────────────────────────────────────────────────────────
 
@@ -173,6 +173,16 @@ export function useSetPrimaryLLM() {
 export function useCheckLLMBalance() {
   return useMutation({
     mutationFn: (provider: string) => api.llm.balance(provider),
+  });
+}
+
+export function useSetLLMRoutes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (routes: AgentRoute[]) => api.llm.setRoutes(routes),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.llmRoutes });
+    },
   });
 }
 

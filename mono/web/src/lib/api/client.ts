@@ -7,6 +7,7 @@
 
 import { getApiBaseUrl } from "@/lib/utils";
 import type {
+  AgentRoute,
   AuthProvider,
   ChatMessage,
   ChatSession,
@@ -385,6 +386,17 @@ export const llm = {
   balance: (provider: string) =>
     request<LLMBalanceResult>(`/api/v1/llm/providers/${provider}/balance`, {
       method: "POST",
+    }),
+
+  /** Get the current agent role → provider/model routing table. */
+  routes: () =>
+    request<{ routes: AgentRoute[]; primary: string }>("/api/v1/llm/routes"),
+
+  /** Update the agent role → provider/model routing table. */
+  setRoutes: (routes: AgentRoute[]) =>
+    request<{ routes: number; ok: boolean }>("/api/v1/llm/routes", {
+      method: "PUT",
+      body: JSON.stringify({ routes }),
     }),
 };
 

@@ -34,6 +34,7 @@ async def agent_loop(
     go_base_url: str | None = None,
     max_turns: int = 25,
     initial_message: str = "",
+    agent_role: str = "",
 ) -> list[dict]:
     """Run the provider-agnostic agentic loop.
 
@@ -45,6 +46,7 @@ async def agent_loop(
         go_base_url: Go server URL (defaults to config).
         max_turns: Maximum tool-call round trips.
         initial_message: Optional first user message to kick off the loop.
+        agent_role: Agent role hint for smart model routing.
 
     Returns:
         Full message history.
@@ -64,6 +66,7 @@ async def agent_loop(
             tools=tool_schemas if tool_schemas else None,
             go_base_url=go_base_url,
             agent_token=agent_token,
+            agent_role=agent_role,
         )
 
         # Extract the assistant message from OpenAI-compatible response.
@@ -72,8 +75,22 @@ async def agent_loop(
             logger.warning("agent_loop: empty choices in LLM response")
             break
 
-        message = choices[0].get("message", {})
+        choice = choices[0]
+        message = choice.get("message", {})
+        finish_reason = choice.get("finish_reason", "")
         messages.append(message)
+
+        # Warn on truncated response — the Go server's smart routing should
+        # have retried with a different provider, but if ALL providers
+        # truncated, we log it so the user can increase max_tokens or pick a
+        # model with a larger output window.
+        if finish_reason == "length":
+            model = response.get("model", "unknown")
+            logger.warning(
+                "agent_loop: response truncated (finish_reason=length, model=%s, turn=%d). "
+                "Consider increasing llm_max_tokens or using a model with a larger output window.",
+                model, turn + 1,
+            )
 
         # Check for tool calls.
         tool_calls = message.get("tool_calls")

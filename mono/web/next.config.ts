@@ -10,7 +10,11 @@ const nextConfig: NextConfig = {
   reactCompiler: true,
   reactStrictMode: true,
 
+  // Allow all cross-origin dev requests — no host restrictions
+  allowedDevOrigins: ["*"],
+
   images: {
+    remotePatterns: [{ protocol: "https", hostname: "**" }],
     unoptimized: process.env.NEXT_OUTPUT === "export",
   },
 

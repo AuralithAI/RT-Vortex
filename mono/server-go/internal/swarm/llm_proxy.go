@@ -37,6 +37,7 @@ type LLMCompleteRequest struct {
 	ToolChoice string        `json:"tool_choice,omitempty"`
 	MaxTokens  int           `json:"max_tokens,omitempty"`
 	Model      string        `json:"model,omitempty"`
+	AgentRole  string        `json:"agent_role,omitempty"` // role hint for smart model routing
 }
 
 // LLMCompleteResponse is the OpenAI-compatible response shape.
@@ -81,6 +82,7 @@ func (p *LLMProxy) Complete(ctx context.Context, req *LLMCompleteRequest) (*LLMC
 		ToolChoice: req.ToolChoice,
 		MaxTokens:  req.MaxTokens,
 		Model:      req.Model,
+		AgentRole:  req.AgentRole,
 	}
 
 	// Use registry to complete (handles fallback, provider selection).

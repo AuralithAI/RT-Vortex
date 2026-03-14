@@ -139,6 +139,13 @@ type LLMConfig struct {
 	Temperature float64
 	Timeout     time.Duration
 	Providers   map[string]LLMProviderConfig
+	Routes      map[string]LLMRouteConfig // agent role → preferred provider/model
+}
+
+// LLMRouteConfig maps an agent role to a preferred provider and optional model.
+type LLMRouteConfig struct {
+	Provider string
+	Model    string
 }
 
 // LLMProviderConfig holds settings for a single LLM provider.
@@ -306,6 +313,17 @@ type xmlLLM struct {
 	AzureOpenAI       xmlLLMProvider `xml:"azure-openai"`
 	Ollama            xmlLLMProvider `xml:"ollama"`
 	Custom            xmlLLMProvider `xml:"custom"`
+	Routing           xmlLLMRouting  `xml:"routing"`
+}
+
+type xmlLLMRouting struct {
+	Routes []xmlLLMRoute `xml:"route"`
+}
+
+type xmlLLMRoute struct {
+	Role     string `xml:"role,attr"`
+	Provider string `xml:"provider,attr"`
+	Model    string `xml:"model,attr"`
 }
 
 type xmlLLMProvider struct {
@@ -761,6 +779,25 @@ func loadServerProps(path string) (*Config, error) {
 	if baseURL := expand(raw.LLM.Custom.BaseURL); baseURL != "" {
 		cfg.LLM.Providers["custom"] = LLMProviderConfig{
 			BaseURL: baseURL,
+		}
+	}
+
+	// Role-based model routing — maps agent roles to preferred providers/models.
+	// Example XML:
+	//   <routing>
+	//     <route role="orchestrator" provider="anthropic" model="claude-sonnet-4-20250514"/>
+	//     <route role="senior_dev" provider="anthropic"/>
+	//     <route role="junior_dev" provider="openai" model="gpt-4o-mini"/>
+	//   </routing>
+	cfg.LLM.Routes = make(map[string]LLMRouteConfig)
+	for _, route := range raw.LLM.Routing.Routes {
+		role := expand(route.Role)
+		provider := expand(route.Provider)
+		if role != "" && provider != "" {
+			cfg.LLM.Routes[role] = LLMRouteConfig{
+				Provider: provider,
+				Model:    expand(route.Model),
+			}
 		}
 	}
 

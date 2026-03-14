@@ -295,7 +295,41 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}, nil
 }
 
-func (p *GeminiProvider) ListModels(_ context.Context) ([]string, error) {
+func (p *GeminiProvider) ListModels(ctx context.Context) ([]string, error) {
+	// Try dynamic API fetch first (requires API key).
+	if p.apiKey != "" {
+		url := p.baseURL + "/models?key=" + p.apiKey
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err == nil {
+			resp, err := p.client.Do(httpReq)
+			if err == nil {
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					var result struct {
+						Models []struct {
+							Name string `json:"name"` // "models/gemini-2.5-flash"
+						} `json:"models"`
+					}
+					if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && len(result.Models) > 0 {
+						models := make([]string, 0, len(result.Models))
+						for _, m := range result.Models {
+							// Strip "models/" prefix to get clean model names.
+							name := strings.TrimPrefix(m.Name, "models/")
+							// Only include generateContent-capable models.
+							if strings.HasPrefix(name, "gemini-") {
+								models = append(models, name)
+							}
+						}
+						if len(models) > 0 {
+							return models, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback: return well-known models.
 	return []string{
 		"gemini-2.5-flash",
 		"gemini-2.5-pro",

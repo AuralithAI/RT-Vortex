@@ -144,18 +144,19 @@
             Configure them via:
               1. Dashboard Settings UI (recommended)
               2. Environment variables (LLM_OPENAI_API_KEY, LLM_ANTHROPIC_API_KEY, etc.)
+
+            Models are NOT configured here either. Once a provider is configured
+            with an API key (via UI or env var), available models are fetched
+            dynamically from the provider's API. Users select their preferred
+            model in the Dashboard UI (Settings → LLM Configuration).
         -->
-        <openai base-url="${LLM_OPENAI_BASE_URL:https://api.openai.com/v1}"
-                model="${LLM_OPENAI_MODEL:gpt-4o}"/>
+        <openai base-url="${LLM_OPENAI_BASE_URL:https://api.openai.com/v1}"/>
 
-        <anthropic base-url="${LLM_ANTHROPIC_BASE_URL:https://api.anthropic.com/v1}"
-                   models="${LLM_ANTHROPIC_MODELS:claude-sonnet-4-20250514,claude-3-5-sonnet-20241022,claude-3-5-haiku-20241022}"/>
+        <anthropic base-url="${LLM_ANTHROPIC_BASE_URL:https://api.anthropic.com/v1}"/>
 
-        <gemini base-url="${LLM_GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta}"
-                model="${LLM_GEMINI_MODEL:gemini-2.5-flash}"/>
+        <gemini base-url="${LLM_GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta}"/>
 
-        <grok base-url="${LLM_GROK_BASE_URL:https://api.x.ai/v1}"
-              model="${LLM_GROK_MODEL:grok-3-mini}"/>
+        <grok base-url="${LLM_GROK_BASE_URL:https://api.x.ai/v1}"/>
 
         <azure-openai endpoint="${LLM_AZURE_OPENAI_ENDPOINT:}"
                       deployment="${LLM_AZURE_OPENAI_DEPLOYMENT:}"/>
@@ -165,6 +166,42 @@
                 discovery-ports="${LLM_OLLAMA_DISCOVERY_PORTS:11434,11435,8080}"/>
 
         <custom base-url="${LLM_CUSTOM_BASE_URL:}"/>
+
+        <!--
+            Agent orchestration / role-based routing (optional).
+            Maps agent roles to specific providers and models. When configured,
+            each agent in the review swarm can use the most appropriate model
+            for its task (e.g. Anthropic for complex reasoning, a fast model
+            for documentation).
+
+            This section is optional — if omitted, all agents use the primary
+            provider. Routes configured via the Dashboard UI override these
+            XML defaults and are persisted in the encrypted vault.
+
+            Available roles:
+              orchestrator  - Plans and coordinates the overall review
+              architect     - Analyses architecture, design patterns, trade-offs
+              senior_dev    - Deep code review, correctness, edge cases
+              junior_dev    - Style, formatting, simple improvements
+              qa            - Test coverage, test quality
+              security      - Security vulnerabilities, CVEs, OWASP
+              docs          - Documentation quality, comments, READMEs
+              ops           - CI/CD, deployment, infrastructure concerns
+
+            Example (uncomment to enable):
+        -->
+        <!--
+        <routing>
+            <route role="orchestrator" provider="anthropic" model="claude-sonnet-4-20250514"/>
+            <route role="architect"    provider="anthropic"/>
+            <route role="senior_dev"   provider="anthropic"/>
+            <route role="security"     provider="anthropic"/>
+            <route role="junior_dev"   provider="openai"    model="gpt-4o"/>
+            <route role="qa"           provider="openai"    model="gpt-4o"/>
+            <route role="docs"         provider="gemini"    model="gemini-2.5-flash"/>
+            <route role="ops"          provider="openai"    model="gpt-4o"/>
+        </routing>
+        -->
     </llm>
 
     <!-- ===================================================================== -->

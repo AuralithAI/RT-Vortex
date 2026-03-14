@@ -136,6 +136,7 @@ class Agent:
             agent_token=self.token or "",
             go_base_url=self.config.go_base_url,
             initial_message=initial_message,
+            agent_role=self.role,
         )
 
         return self.parse_result(messages)
