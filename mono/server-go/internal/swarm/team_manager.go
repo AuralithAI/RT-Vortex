@@ -92,13 +92,14 @@ func (m *TeamManager) MarkTeamBusy(ctx context.Context, teamID uuid.UUID) {
 	_, _ = m.db.Exec(ctx, `UPDATE swarm_agents SET status = 'busy' WHERE team_id = $1 AND status != 'offline'`, teamID)
 }
 
-// ReleaseTeam sets a team's status back to idle and its agents to idle.
+// ReleaseTeam disbands a team after task completion. Teams are ephemeral —
+// each task gets a fresh team from Python, so we mark agents and team offline.
 func (m *TeamManager) ReleaseTeam(ctx context.Context, teamID uuid.UUID) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_, _ = m.db.Exec(ctx, `UPDATE swarm_teams SET status = 'idle' WHERE id = $1`, teamID)
-	_, _ = m.db.Exec(ctx, `UPDATE swarm_agents SET status = 'idle' WHERE team_id = $1 AND status != 'offline'`, teamID)
-	slog.Info("swarm team released to idle", "team_id", teamID)
+	_, _ = m.db.Exec(ctx, `UPDATE swarm_agents SET status = 'offline' WHERE team_id = $1`, teamID)
+	_, _ = m.db.Exec(ctx, `UPDATE swarm_teams SET status = 'offline' WHERE id = $1`, teamID)
+	slog.Info("swarm team disbanded", "team_id", teamID)
 }
 
 // MarkTeamOffline sets a team's status to offline (all agents lost).
@@ -211,17 +212,27 @@ func (m *TeamManager) RegisterAgent(ctx context.Context, agentID uuid.UUID, role
 		)
 	}
 
+	// If the team is busy, the new agent should be busy too.
+	agentStatus := "idle"
+	if teamPtr != nil {
+		var teamStatus string
+		err := m.db.QueryRow(ctx, `SELECT status FROM swarm_teams WHERE id = $1`, teamID).Scan(&teamStatus)
+		if err == nil && teamStatus == "busy" {
+			agentStatus = "busy"
+		}
+	}
+
 	_, err := m.db.Exec(ctx, `
 		INSERT INTO swarm_agents (id, role, team_id, status, hostname, version)
-		VALUES ($1, $2, $3, 'idle', $4, $5)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (id) DO UPDATE SET
 			role = EXCLUDED.role,
 			team_id = EXCLUDED.team_id,
-			status = 'idle',
+			status = EXCLUDED.status,
 			hostname = EXCLUDED.hostname,
 			version = EXCLUDED.version,
 			registered_at = NOW()`,
-		agentID, role, teamPtr, hostname, version,
+		agentID, role, teamPtr, agentStatus, hostname, version,
 	)
 	if err != nil {
 		return fmt.Errorf("registering agent: %w", err)

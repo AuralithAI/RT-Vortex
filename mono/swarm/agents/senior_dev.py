@@ -113,6 +113,15 @@ When creating unified diffs, use standard git format:
 - 3 lines of context before and after each change
 - Proper @@ hunk headers with line numbers
 - Use 'a/' and 'b/' prefixes for file paths
+
+## CRITICAL RULES
+- You MUST call `report_diff` for every file you change or create. Do NOT just
+  describe changes in text — the system only accepts diffs via the tool.
+- For NEW files, set change_type to "added", original to "", and provide the
+  full file content as proposed.
+- If you cannot find a file, create it as a new file rather than giving up.
+- Do NOT end your turn without submitting at least one diff unless the plan
+  explicitly has no code changes for your step.
 """
 
     def parse_result(self, messages: list[dict]) -> AgentResult:

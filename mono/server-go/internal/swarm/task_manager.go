@@ -961,7 +961,7 @@ type AgentSnapshot struct {
 	ID     uuid.UUID `json:"id"`
 	Role   string    `json:"role"`
 	Status string    `json:"status"`
-	TeamID string    `json:"team_id,omitempty"`
+	TeamID string    `json:"team_id"`
 }
 
 // GetOverview computes the current swarm overview from the database.

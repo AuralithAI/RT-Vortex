@@ -266,8 +266,12 @@ func (h *Handler) ListDiffs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if diffs == nil {
+		diffs = []TaskDiff{}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(diffs)
+	json.NewEncoder(w).Encode(map[string]any{"diffs": diffs})
 }
 
 // AddDiffComment handles POST /internal/swarm/tasks/{id}/diffs/{diffId}/comments.

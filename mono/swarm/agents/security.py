@@ -9,12 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 from ..sdk.agent import Agent, AgentResult, Task
 from ..sdk.tool import ToolDef
 from ..tools.engine_tools import ENGINE_TOOLS
-from ..tools.task_tools import report_plan
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +37,7 @@ class SecurityAgent(Agent):
             team_id=team_id,
             **kwargs,
         )
-        self.tools: list[ToolDef] = list(ENGINE_TOOLS) + [report_plan]
+        self.tools: list[ToolDef] = list(ENGINE_TOOLS)
 
     def build_system_prompt(self, task: Task) -> str:
         plan_section = ""
@@ -111,19 +109,16 @@ For each changed function/method, check for:
 - Insecure deserialization
 
 ### Step 3: Submit Security Report
-Use `report_plan` with a structured JSON security report containing:
-- `summary`: Overall security assessment ("safe", "concerns", "critical")
-- `steps`: Array of findings, each with:
-  - `symbol`: The function/endpoint/file affected
-  - `risk_level`: "info", "low", "medium", "high", "critical"
-  - `description`: What the vulnerability is and how it could be exploited
-  - `recommendation`: Specific fix recommendation
-  - `line_reference`: File and line number where the issue exists
-- `affected_files`: List of files with security concerns
-- `estimated_complexity`: "small" if no issues, "medium" if concerns, "large" if critical
+Write your security findings as structured text in your final response.
+Include:
+- **Overall Assessment**: "safe", "concerns", or "critical"
+- **Findings**: Each with affected symbol/file, risk level (info/low/medium/high/critical),
+  description of the vulnerability, recommendation, and line reference
+- **Summary**: Files with security concerns and overall risk
 
 ## Important Rules
 - Do NOT generate code — only security analysis
+- Do NOT call report_plan — your text output IS your report
 - Be CONSERVATIVE — flag potential issues even if you're not 100% sure
 - Check EVERY new endpoint for auth/authz
 - Check EVERY database query for injection
@@ -136,32 +131,11 @@ Use `report_plan` with a structured JSON security report containing:
     def parse_result(self, messages: list[dict]) -> AgentResult:
         """Extract security findings from the conversation history."""
         output_parts: list[str] = []
-        plan: dict | None = None
 
         for msg in messages:
             if msg.get("role") == "assistant" and msg.get("content"):
                 output_parts.append(msg["content"])
 
-            tool_calls = msg.get("tool_calls", [])
-            for tc in tool_calls:
-                fn = tc.get("function", {})
-                if fn.get("name") == "report_plan":
-                    try:
-                        args = json.loads(fn.get("arguments", "{}"))
-                        steps = args.get("steps", "[]")
-                        files = args.get("affected_files", "[]")
-                        plan = {
-                            "summary": args.get("summary", ""),
-                            "steps": json.loads(steps) if isinstance(steps, str) else steps,
-                            "affected_files": json.loads(files) if isinstance(files, str) else files,
-                            "estimated_complexity": args.get("estimated_complexity", "small"),
-                        }
-                    except (json.JSONDecodeError, TypeError) as e:
-                        logger.warning("Failed to parse security report from tool call: %s", e)
-
-        final_output = output_parts[-1] if output_parts else "Security review submitted."
-
         return AgentResult(
-            output=final_output,
-            plan=plan,
+            output=output_parts[-1] if output_parts else "Security review completed.",
         )
