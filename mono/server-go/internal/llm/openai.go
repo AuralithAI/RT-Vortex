@@ -63,14 +63,14 @@ func (p *OpenAIProvider) Name() string { return "openai" }
 // ── OpenAI Chat Completion ──────────────────────────────────────────────────
 
 type openaiChatRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openaiMessage `json:"messages"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Temperature float64         `json:"temperature,omitempty"`
-	TopP        float64         `json:"top_p,omitempty"`
-	Stop        []string        `json:"stop,omitempty"`
-	Tools       []ToolDef       `json:"tools,omitempty"`       // function-calling tool definitions
-	ToolChoice  interface{}     `json:"tool_choice,omitempty"` // "auto", "none", "required", or object
+	Model               string          `json:"model"`
+	Messages            []openaiMessage `json:"messages"`
+	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
+	Temperature         float64         `json:"temperature,omitempty"`
+	TopP                float64         `json:"top_p,omitempty"`
+	Stop                []string        `json:"stop,omitempty"`
+	Tools               []ToolDef       `json:"tools,omitempty"`       // function-calling tool definitions
+	ToolChoice          interface{}     `json:"tool_choice,omitempty"` // "auto", "none", "required", or object
 }
 
 type openaiMessage struct {
@@ -120,13 +120,13 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}
 
 	body := openaiChatRequest{
-		Model:       model,
-		Messages:    msgs,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		Stop:        req.Stop,
-		Tools:       req.Tools,
+		Model:               model,
+		Messages:            msgs,
+		MaxCompletionTokens: req.MaxTokens,
+		Temperature:         req.Temperature,
+		TopP:                req.TopP,
+		Stop:                req.Stop,
+		Tools:               req.Tools,
 	}
 	if req.ToolChoice != "" {
 		body.ToolChoice = req.ToolChoice
@@ -164,7 +164,19 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	if resp.StatusCode != http.StatusOK {
 		var errResp openaiErrorResponse
 		_ = json.Unmarshal(respBody, &errResp)
-		return nil, fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+		errMsg := errResp.Error.Message
+
+		// Models that reject output-limit hits with 400 instead of truncating gracefully.
+		if resp.StatusCode == http.StatusBadRequest &&
+			(strings.Contains(errMsg, "max_tokens") ||
+				strings.Contains(errMsg, "output limit") ||
+				strings.Contains(errMsg, "max_completion_tokens")) {
+			return &CompletionResponse{
+				Content: "", Model: model, FinishReason: "length",
+			}, nil
+		}
+
+		return nil, fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errMsg)
 	}
 
 	var chatResp openaiChatResponse
@@ -242,15 +254,15 @@ func (p *OpenAIProvider) Healthy(ctx context.Context) bool {
 // ── OpenAI Streaming ────────────────────────────────────────────────────────
 
 type openaiStreamRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openaiMessage `json:"messages"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Temperature float64         `json:"temperature,omitempty"`
-	TopP        float64         `json:"top_p,omitempty"`
-	Stop        []string        `json:"stop,omitempty"`
-	Stream      bool            `json:"stream"`
-	Tools       []ToolDef       `json:"tools,omitempty"`       // tool definitions for streaming
-	ToolChoice  interface{}     `json:"tool_choice,omitempty"` // "auto", "none", "required"
+	Model               string          `json:"model"`
+	Messages            []openaiMessage `json:"messages"`
+	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
+	Temperature         float64         `json:"temperature,omitempty"`
+	TopP                float64         `json:"top_p,omitempty"`
+	Stop                []string        `json:"stop,omitempty"`
+	Stream              bool            `json:"stream"`
+	Tools               []ToolDef       `json:"tools,omitempty"`       // tool definitions for streaming
+	ToolChoice          interface{}     `json:"tool_choice,omitempty"` // "auto", "none", "required"
 }
 
 type openaiStreamChunk struct {
@@ -297,14 +309,14 @@ func (p *OpenAIProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 	}
 
 	body := openaiStreamRequest{
-		Model:       model,
-		Messages:    msgs,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		Stop:        req.Stop,
-		Stream:      true,
-		Tools:       req.Tools,
+		Model:               model,
+		Messages:            msgs,
+		MaxCompletionTokens: req.MaxTokens,
+		Temperature:         req.Temperature,
+		TopP:                req.TopP,
+		Stop:                req.Stop,
+		Stream:              true,
+		Tools:               req.Tools,
 	}
 	if req.ToolChoice != "" {
 		body.ToolChoice = req.ToolChoice

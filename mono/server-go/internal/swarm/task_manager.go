@@ -43,6 +43,12 @@ const HeartbeatCheckInterval = 15 * time.Second
 // being marked offline.
 const HeartbeatTimeout = 60 * time.Second
 
+// StaleReapInterval is how often offline agents/teams are purged from the DB.
+const StaleReapInterval = 5 * time.Minute
+
+// StaleOfflineThreshold is how long a row must be offline before deletion.
+const StaleOfflineThreshold = 10 * time.Minute
+
 // MaxRetries is the maximum number of times a failed/timed-out task can be retried.
 const MaxRetries = 3
 
@@ -130,8 +136,15 @@ func (m *TaskManager) Start(ctx context.Context) {
 	// Ensure consumer group exists.
 	_ = m.redis.XGroupCreateMkStream(ctx, streamPending, consumerGroup, "0").Err()
 
+	// On startup, reconcile DB state with reality: any agent whose
+	// heartbeat key is missing from Redis (server was down, worker
+	// restarted, etc.) gets marked offline immediately so stale idle
+	// teams don't get assigned new tasks.
+	m.reconcileOnStartup(ctx)
+
 	go m.assignLoop(ctx)
 	go m.heartbeatMonitor(ctx)
+	go m.staleReaper(ctx)
 	go m.metricsRefreshLoop(ctx)
 	slog.Info("swarm task_manager started",
 		"assign_interval", AssignLoopInterval,
@@ -929,18 +942,18 @@ func (m *TaskManager) RecordAgentContribution(ctx context.Context, taskID, agent
 
 // SwarmOverview holds a snapshot of the swarm's current state.
 type SwarmOverview struct {
-	ActiveTasks   int              `json:"active_tasks"`
-	PendingTasks  int              `json:"pending_tasks"`
-	CompletedAll  int              `json:"completed_all_time"`
-	FailedAll     int              `json:"failed_all_time"`
-	ActiveTeams   int              `json:"active_teams"`
-	BusyTeams     int              `json:"busy_teams"`
-	OnlineAgents  int              `json:"online_agents"`
-	BusyAgents    int              `json:"busy_agents"`
-	AvgDurationS  float64          `json:"avg_duration_seconds"`
-	TotalRetries  int              `json:"total_retries"`
-	LLMPercentage float64          `json:"llm_percentage"`
-	Agents        []AgentSnapshot  `json:"agents,omitempty"`
+	ActiveTasks   int             `json:"active_tasks"`
+	PendingTasks  int             `json:"pending_tasks"`
+	CompletedAll  int             `json:"completed_all_time"`
+	FailedAll     int             `json:"failed_all_time"`
+	ActiveTeams   int             `json:"active_teams"`
+	BusyTeams     int             `json:"busy_teams"`
+	OnlineAgents  int             `json:"online_agents"`
+	BusyAgents    int             `json:"busy_agents"`
+	AvgDurationS  float64         `json:"avg_duration_seconds"`
+	TotalRetries  int             `json:"total_retries"`
+	LLMPercentage float64         `json:"llm_percentage"`
+	Agents        []AgentSnapshot `json:"agents,omitempty"`
 }
 
 // AgentSnapshot is a lightweight view of an agent for the overview.
@@ -1190,5 +1203,94 @@ func (m *TaskManager) refreshMetrics(ctx context.Context) {
 		SwarmAgentUtilisation.Set(float64(busyAgents) / float64(onlineAgents))
 	} else {
 		SwarmAgentUtilisation.Set(0)
+	}
+}
+
+// ── Startup Reconciliation & Stale Reaper ───────────────────────────────────
+
+// reconcileOnStartup marks agents without a valid Redis heartbeat as offline.
+// This handles the case where the Go server restarted but Python workers
+// didn't — their old agent rows sit as "idle" in Postgres with no heartbeat
+// key, and GetIdleTeam could hand a dead team to a new task.
+func (m *TaskManager) reconcileOnStartup(ctx context.Context) {
+	rows, err := m.db.Query(ctx, `
+		SELECT id, team_id, status FROM swarm_agents WHERE status != 'offline'`)
+	if err != nil {
+		slog.Error("swarm reconcile: failed to query agents", "error", err)
+		return
+	}
+	defer rows.Close()
+
+	now := time.Now().UTC()
+	var reconciled int
+	for rows.Next() {
+		var agentID uuid.UUID
+		var teamID *uuid.UUID
+		var status string
+		if err := rows.Scan(&agentID, &teamID, &status); err != nil {
+			continue
+		}
+
+		hbKey := fmt.Sprintf("swarm:agent:heartbeat:%s", agentID)
+		_, err := m.redis.Get(ctx, hbKey).Int64()
+		if err == redis.Nil {
+			m.markAgentOffline(ctx, agentID, teamID, status, now)
+			reconciled++
+		}
+	}
+
+	if reconciled > 0 {
+		slog.Info("swarm reconcile: marked stale agents offline on startup", "count", reconciled)
+	}
+}
+
+// staleReaper periodically deletes agents and teams that have been offline
+// longer than StaleOfflineThreshold.  This prevents unbounded row growth
+// across server/worker restarts.
+func (m *TaskManager) staleReaper(ctx context.Context) {
+	ticker := time.NewTicker(StaleReapInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			m.reapStaleRows(ctx)
+		}
+	}
+}
+
+func (m *TaskManager) reapStaleRows(ctx context.Context) {
+	cutoff := time.Now().UTC().Add(-StaleOfflineThreshold)
+
+	// Delete offline agents whose last registration is older than the threshold.
+	agentResult, err := m.db.Exec(ctx, `
+		DELETE FROM swarm_agents
+		WHERE status = 'offline' AND registered_at < $1`, cutoff)
+	if err != nil {
+		slog.Error("swarm reaper: failed to delete stale agents", "error", err)
+		return
+	}
+	agentCount := agentResult.RowsAffected()
+
+	// Delete offline teams that have no remaining agents.
+	teamResult, err := m.db.Exec(ctx, `
+		DELETE FROM swarm_teams
+		WHERE status = 'offline'
+		  AND NOT EXISTS (
+			SELECT 1 FROM swarm_agents WHERE team_id = swarm_teams.id
+		  )`)
+	if err != nil {
+		slog.Error("swarm reaper: failed to delete stale teams", "error", err)
+		return
+	}
+	teamCount := teamResult.RowsAffected()
+
+	if agentCount > 0 || teamCount > 0 {
+		slog.Info("swarm reaper: purged stale rows",
+			"agents_deleted", agentCount,
+			"teams_deleted", teamCount,
+		)
 	}
 }

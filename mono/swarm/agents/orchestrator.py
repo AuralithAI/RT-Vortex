@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from ..sdk.agent import Agent, AgentResult, Task
@@ -95,6 +96,10 @@ Use `report_plan` to submit a structured plan with:
 
         The orchestrator's main output is a plan document submitted via
         the report_plan tool. We also capture the final assistant message.
+
+        If the LLM wrote the plan in its text response instead of calling
+        report_plan (truncation, model behaviour, etc.), we attempt to
+        extract a structured plan from the text as a fallback.
         """
         output_parts: list[str] = []
         plan: dict | None = None
@@ -123,7 +128,53 @@ Use `report_plan` to submit a structured plan with:
 
         final_output = output_parts[-1] if output_parts else "Plan submitted."
 
+        # Fallback: if the LLM never called report_plan (e.g. truncation lost
+        # the tool call, or the model wrote the plan as text), try to extract
+        # a structured plan from the last assistant message.
+        if plan is None and output_parts:
+            plan = self._extract_plan_from_text(final_output)
+            if plan:
+                logger.info("Extracted plan from assistant text (report_plan tool was not called)")
+
         return AgentResult(
             output=final_output,
             plan=plan,
         )
+
+    @staticmethod
+    def _extract_plan_from_text(text: str) -> dict | None:
+        """Best-effort extraction of a plan from free-form assistant text.
+
+        Looks for JSON blocks first, then falls back to treating the entire
+        text as a summary with a single step.
+
+        Returns:
+            A plan dict, or ``None`` if the text is too short to be useful.
+        """
+        if not text or len(text) < 50:
+            return None
+
+        # Try to find an embedded JSON plan object.
+        json_blocks = re.findall(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+        for block in json_blocks:
+            try:
+                candidate = json.loads(block)
+                if "summary" in candidate or "steps" in candidate:
+                    return {
+                        "summary": candidate.get("summary", text[:200]),
+                        "steps": candidate.get("steps", [{"description": text[:500]}]),
+                        "affected_files": candidate.get("affected_files", []),
+                        "estimated_complexity": candidate.get("estimated_complexity", "medium"),
+                    }
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        # Fallback: use the text itself as the plan summary.  The LLM
+        # clearly produced planning output; losing it because it skipped a
+        # tool call shouldn't fail the entire task.
+        return {
+            "summary": text[:500],
+            "steps": [{"description": text}],
+            "affected_files": [],
+            "estimated_complexity": "medium",
+        }

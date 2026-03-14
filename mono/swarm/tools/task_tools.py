@@ -32,6 +32,36 @@ def _get_client() -> GoClient:
     return _go_client
 
 
+def _normalize_step(step: Any) -> dict:
+    """Normalize a plan step to ``{description, files?}``.
+
+    LLMs produce steps with varying keys (title/details, action, step/description,
+    etc.).  The UI expects ``{description: str, files?: str[]}``.
+    """
+    if isinstance(step, str):
+        return {"description": step}
+    if not isinstance(step, dict):
+        return {"description": str(step)}
+
+    # Already has the expected key.
+    if "description" in step:
+        desc = step["description"]
+    else:
+        # Common LLM variants: title+details, action, summary, name, etc.
+        title = step.get("title", "")
+        details = step.get("details", "") or step.get("action", "") or step.get("summary", "")
+        if title and details:
+            desc = f"{title}: {details}"
+        else:
+            desc = title or details or str(step)
+
+    result: dict = {"description": desc}
+    files = step.get("files")
+    if isinstance(files, list):
+        result["files"] = files
+    return result
+
+
 # ── Tools ────────────────────────────────────────────────────────────────────
 
 
@@ -65,6 +95,10 @@ async def report_plan(
         steps_list = json.loads(steps)
     except (json.JSONDecodeError, TypeError):
         steps_list = [{"description": steps}]
+
+    # Normalize steps to the schema the UI expects: {description, files?}.
+    # LLMs may use varying key names (title/details/step/action/etc.).
+    steps_list = [_normalize_step(s) for s in steps_list]
 
     try:
         files_list = json.loads(affected_files)

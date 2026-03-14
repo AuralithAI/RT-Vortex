@@ -80,17 +80,36 @@ async def agent_loop(
         finish_reason = choice.get("finish_reason", "")
         messages.append(message)
 
-        # Warn on truncated response — the Go server's smart routing should
-        # have retried with a different provider, but if ALL providers
-        # truncated, we log it so the user can increase max_tokens or pick a
-        # model with a larger output window.
+        # Handle truncated responses — finish_reason == "length" means the
+        # model hit its output token limit before completing the answer.
+        # The Go server's smart routing retries with another provider, but
+        # if ALL providers truncated (or only one is healthy), the truncated
+        # response lands here.  When truncation drops tool calls, we retry
+        # the same turn with a nudge so the LLM can finish its work.
         if finish_reason == "length":
             model = response.get("model", "unknown")
             logger.warning(
-                "agent_loop: response truncated (finish_reason=length, model=%s, turn=%d). "
-                "Consider increasing llm_max_tokens or using a model with a larger output window.",
+                "agent_loop: response truncated (finish_reason=length, model=%s, turn=%d)",
                 model, turn + 1,
             )
+
+            # If the model was trying to produce tool calls but got cut off,
+            # the tool_calls field will be empty/missing.  Nudge the LLM to
+            # retry with a shorter output rather than silently dropping it.
+            if not message.get("tool_calls"):
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Your previous response was truncated before you could finish. "
+                        "Please try again — be more concise and call the required tool "
+                        "directly without lengthy preamble."
+                    ),
+                })
+                logger.info(
+                    "agent_loop: nudging LLM to retry after truncation (turn %d)",
+                    turn + 1,
+                )
+                continue  # re-enter the loop for another turn
 
         # Check for tool calls.
         tool_calls = message.get("tool_calls")

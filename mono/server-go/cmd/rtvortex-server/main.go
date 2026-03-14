@@ -388,21 +388,24 @@ func main() {
 	}
 
 	// Apply role-based model routing from config.
-	// If the user configured routes in XML, use those. Otherwise apply sensible
-	// defaults: complex-reasoning roles (orchestrator, architect, security) get
-	// the strongest configured model, while implementation roles (junior_dev,
-	// docs) can use faster/cheaper models.
-	if len(cfg.LLM.Routes) > 0 {
+	// Priority: UI routes (vault) > XML routes > smart defaults.
+	// LoadFromVault() above already restored any UI-configured routes.
+	if len(llmRegistry.GetRoutes()) > 0 {
+		// Vault-persisted routes (configured by the user in the UI) take
+		// highest priority — they represent the user's most recent explicit
+		// choice and should never be overwritten by XML or defaults.
+		slog.Info("LLM role-based routing: using UI-configured routes from vault",
+			"routes", len(llmRegistry.GetRoutes()))
+	} else if len(cfg.LLM.Routes) > 0 {
+		// No UI routes — fall back to XML-configured routes.
 		routes := make(map[string]llm.ModelRoute, len(cfg.LLM.Routes))
 		for role, rc := range cfg.LLM.Routes {
 			routes[role] = llm.ModelRoute{Provider: rc.Provider, Model: rc.Model}
 		}
 		llmRegistry.SetRoutes(routes)
-		slog.Info("LLM role-based routing configured", "routes", len(routes))
+		slog.Info("LLM role-based routing configured from XML", "routes", len(routes))
 	} else {
-		// Smart defaults: if both Anthropic and OpenAI are configured,
-		// route complex-reasoning roles to Anthropic (stronger at planning)
-		// and leave implementation roles on the primary (usually OpenAI).
+		// No UI routes and no XML routes — apply smart defaults.
 		anthropicMeta, anthropicOK := llmRegistry.GetMeta("anthropic")
 		_, openaiOK := llmRegistry.GetMeta("openai")
 		if anthropicOK && anthropicMeta.Configured && openaiOK {

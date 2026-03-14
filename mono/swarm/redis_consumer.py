@@ -305,6 +305,7 @@ async def _run_full_pipeline(
         review_agents = [a for a in implementation_agents if a.role in ("qa", "security")]
 
         # Run code agents in parallel.
+        agent_failures: list[str] = []
         if code_agents:
             code_tasks = [a.run(task) for a in code_agents]
             code_results: list[AgentResult] = await asyncio.gather(
@@ -315,6 +316,7 @@ async def _run_full_pipeline(
                 if isinstance(result, Exception):
                     logger.error("Team %s: %s agent failed: %s",
                                  team_id[:8], agent.role, result)
+                    agent_failures.append(f"{agent.role}: {result}")
                     continue
                 if result.diffs:
                     all_diffs.extend(result.diffs)
@@ -336,17 +338,27 @@ async def _run_full_pipeline(
             except Exception as e:
                 logger.error("Team %s: %s agent failed: %s",
                              team_id[:8], agent.role, e)
+                agent_failures.append(f"{agent.role}: {e}")
 
-        # ── Step 5: Complete the task ───────────────────────────────────
-        # All diffs are submitted in real-time by the report_diff tool call
-        # during the agent loop.  The diffs collected in all_diffs via
-        # parse_result are already on the server — no need to re-submit.
-        if all_diffs:
-            logger.info("Team %s: Total diffs produced: %d", team_id[:8], len(all_diffs))
+        # ── Step 5: Complete or fail the task ───────────────────────────
+        total_agents = len(code_agents) + len(review_agents)
+        if agent_failures and len(agent_failures) == total_agents:
+            # Every implementation agent failed — mark the task as failed
+            # instead of silently completing with no diffs.
+            failure_summary = "; ".join(agent_failures)
+            await go_client.fail_task(task.id, f"All agents failed: {failure_summary}")
+            logger.error("Team %s: Task %s failed — all %d agents errored",
+                         team_id[:8], task.id, total_agents)
+        else:
+            if all_diffs:
+                logger.info("Team %s: Total diffs produced: %d", team_id[:8], len(all_diffs))
+            if agent_failures:
+                logger.warning("Team %s: %d/%d agents failed, completing with partial results",
+                               team_id[:8], len(agent_failures), total_agents)
 
-        # Mark task complete — Go triggers PR creation.
-        await go_client.report_result(task.id)
-        logger.info("Team %s: Task %s completed successfully", team_id[:8], task.id)
+            # Mark task complete — Go triggers PR creation.
+            await go_client.report_result(task.id)
+            logger.info("Team %s: Task %s completed successfully", team_id[:8], task.id)
 
     except Exception as e:
         logger.error("Team %s: Fatal pipeline error: %s", team_id[:8], e, exc_info=True)

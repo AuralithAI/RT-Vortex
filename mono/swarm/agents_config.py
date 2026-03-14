@@ -247,7 +247,7 @@ class AgentsConfig:
     max_teams: int = 5
     max_agents_per_team: int = 10
     min_agents_per_team: int = 2
-    llm_max_tokens: int = 4096
+    llm_max_tokens: int = 16384
     llm_timeout: float = 120.0
     heartbeat_interval: int = 30
     task_poll_interval: float = 1.0
@@ -301,7 +301,7 @@ class AgentsConfig:
         llm_timeout_ms = xml.get("llm_timeout_ms", "")
         llm_timeout = float(llm_timeout_ms) / 1000 if llm_timeout_ms else 120.0
 
-        llm_max_tokens = int(xml.get("llm_max_tokens", 4096))
+        llm_max_tokens = int(xml.get("llm_max_tokens", 16384))
 
         # Read build version from mono/VERSION (same as Makefile).
         version = _read_version()
