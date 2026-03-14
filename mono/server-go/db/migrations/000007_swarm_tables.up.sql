@@ -30,9 +30,12 @@ CREATE TABLE IF NOT EXISTS swarm_teams (
 );
 
 -- Back-reference: agent → team
-ALTER TABLE swarm_agents
-    ADD CONSTRAINT fk_swarm_agents_team
-    FOREIGN KEY (team_id) REFERENCES swarm_teams(id) ON DELETE SET NULL;
+DO $$ BEGIN
+    ALTER TABLE swarm_agents
+        ADD CONSTRAINT fk_swarm_agents_team
+        FOREIGN KEY (team_id) REFERENCES swarm_teams(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
 
 -- ── Tasks ───────────────────────────────────────────────────────────────────
 

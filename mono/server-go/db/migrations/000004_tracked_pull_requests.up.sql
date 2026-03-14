@@ -52,6 +52,7 @@ CREATE INDEX IF NOT EXISTS idx_tracked_prs_synced ON tracked_pull_requests(synce
 CREATE INDEX IF NOT EXISTS idx_tracked_prs_updated ON tracked_pull_requests(updated_at DESC);
 
 -- Auto-update updated_at
+DROP TRIGGER IF EXISTS trg_tracked_prs_updated_at ON tracked_pull_requests;
 CREATE TRIGGER trg_tracked_prs_updated_at
     BEFORE UPDATE ON tracked_pull_requests FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
