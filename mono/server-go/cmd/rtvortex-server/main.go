@@ -526,6 +526,7 @@ func main() {
 	swarmAuthSvc := swarmauth.NewService([]byte(jwtSecret), swarmServiceSecret, redisClient.Client())
 	swarmTeamMgr := swarm.NewTeamManager(db.Pool)
 	swarmTaskMgr := swarm.NewTaskManager(db.Pool, redisClient.Client(), swarmTeamMgr)
+	swarmTaskMgr.SetAuthService(swarmAuthSvc)
 	swarmLLMProxy := swarm.NewLLMProxy(llmRegistry)
 	swarmELO := swarm.NewELOService(db.Pool)
 	swarmWSHub := swarm.NewWSHub(wsHub)

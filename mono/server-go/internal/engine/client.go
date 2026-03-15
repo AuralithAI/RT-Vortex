@@ -6,15 +6,22 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	pb "github.com/AuralithAI/rtvortex-server/internal/engine/pb"
 )
+
+// SearchCacheTTL controls how long cached search results stay valid.
+const SearchCacheTTL = 60 * time.Second
 
 // ── Client wraps Pool and exposes typed RPC methods ─────────────────────────
 
@@ -23,6 +30,14 @@ import (
 type Client struct {
 	pool           *Pool
 	defaultTimeout time.Duration
+
+	searchCache sync.Map
+	searchGroup singleflight.Group
+}
+
+type cachedSearch struct {
+	result    *SearchResult
+	expiresAt time.Time
 }
 
 // NewClient creates an engine client backed by the connection pool.
@@ -499,6 +514,40 @@ func (c *Client) Search(ctx context.Context, repoID, query string, touchedSymbol
 		}
 	}
 	return result, nil
+}
+
+// SearchCached wraps Search with a TTL cache and singleflight deduplication.
+// Concurrent identical queries share a single gRPC call; repeated queries
+// within SearchCacheTTL return cached results without any gRPC round-trip.
+func (c *Client) SearchCached(ctx context.Context, repoID, query string, touchedSymbols []string, cfg SearchConfig) (*SearchResult, error) {
+	key := searchCacheKey(repoID, query)
+
+	if cached, ok := c.searchCache.Load(key); ok {
+		entry := cached.(cachedSearch)
+		if time.Now().Before(entry.expiresAt) {
+			return entry.result, nil
+		}
+		c.searchCache.Delete(key)
+	}
+
+	val, err, _ := c.searchGroup.Do(key, func() (interface{}, error) {
+		return c.Search(ctx, repoID, query, touchedSymbols, cfg)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	result := val.(*SearchResult)
+	c.searchCache.Store(key, cachedSearch{
+		result:    result,
+		expiresAt: time.Now().Add(SearchCacheTTL),
+	})
+	return result, nil
+}
+
+func searchCacheKey(repoID, query string) string {
+	h := sha256.Sum256([]byte(repoID + "\x00" + query))
+	return hex.EncodeToString(h[:16]) // 128-bit key — collision-safe
 }
 
 // ── Review Context Building ─────────────────────────────────────────────────

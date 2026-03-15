@@ -391,6 +391,7 @@ func (s *Server) setupRouter() {
 			r.Get("/tasks/{id}", sh.GetTaskUser)
 			r.Post("/tasks/{id}/plan-action", sh.PlanAction)
 			r.Get("/tasks/{id}/diffs", sh.GetDiffsUser)
+			r.Get("/tasks/{id}/diffs/{diffId}/content", sh.GetDiffContent)
 			r.Post("/tasks/{id}/diffs/{diffId}/comments", sh.UserDiffComment)
 			r.Post("/tasks/{id}/diff-action", sh.DiffAction)
 			r.Post("/tasks/{id}/rate", sh.RateTaskUser)

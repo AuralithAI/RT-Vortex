@@ -169,6 +169,22 @@ class GoClient:
             )
             resp.raise_for_status()
 
+    async def revoke_agent(self, agent_id: str) -> None:
+        """Revoke an agent's JWT token via Go.
+
+        Called in the ``finally`` block of ``_run_full_pipeline`` to ensure
+        tokens are cleaned up even if the completion/failure call failed.
+        """
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.delete(
+                    f"{self.base_url}/internal/swarm/auth/revoke",
+                    headers=self._headers(),
+                )
+                resp.raise_for_status()
+            except Exception:
+                pass  # Best-effort — Go heartbeat timeout is the backstop.
+
     async def declare_team_size(self, task_id: str, size: int) -> None:
         """Request a specific team size for *task_id*.
 

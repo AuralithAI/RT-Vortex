@@ -5,23 +5,25 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   FileCode,
   CheckCircle,
   XCircle,
   ChevronDown,
   ChevronRight,
+  Loader2,
   Plus,
   Minus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { SwarmDiff, DiffStatus } from "@/types/swarm";
+import type { SwarmDiff, SwarmDiffMeta, DiffStatus } from "@/types/swarm";
 
 interface DiffViewerProps {
-  diff: SwarmDiff;
+  diff: SwarmDiff | SwarmDiffMeta;
   onApprove?: (diffId: string) => void;
   onReject?: (diffId: string) => void;
+  onExpand?: () => void;
   readOnly?: boolean;
 }
 
@@ -129,10 +131,22 @@ export function DiffViewer({
   diff,
   onApprove,
   onReject,
+  onExpand,
   readOnly = false,
 }: DiffViewerProps) {
   const [expanded, setExpanded] = useState(true);
-  const parsed = parseDiff(diff.unified_diff || "");
+  const [contentLoading, setContentLoading] = useState(false);
+
+  const hasContent = "unified_diff" in diff && !!diff.unified_diff;
+  const parsed = hasContent ? parseDiff((diff as SwarmDiff).unified_diff) : [];
+
+  // Fetch content on first expand when content is not yet loaded.
+  useEffect(() => {
+    if (expanded && !hasContent && onExpand && !contentLoading) {
+      setContentLoading(true);
+      Promise.resolve(onExpand()).finally(() => setContentLoading(false));
+    }
+  }, [expanded, hasContent, onExpand, contentLoading]);
 
   const additions = parsed.filter((l) => l.type === "added").length;
   const deletions = parsed.filter((l) => l.type === "removed").length;
@@ -191,7 +205,13 @@ export function DiffViewer({
       </div>
 
       {/* Diff Content */}
-      {expanded && (
+      {expanded && contentLoading && (
+        <div className="flex items-center justify-center py-8 text-muted-foreground">
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          <span className="text-xs">Loading diff…</span>
+        </div>
+      )}
+      {expanded && !contentLoading && hasContent && (
         <div className="overflow-x-auto">
           <table className="w-full border-collapse font-mono text-xs">
             <tbody>

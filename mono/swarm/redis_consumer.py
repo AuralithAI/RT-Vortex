@@ -191,7 +191,7 @@ async def _run_full_pipeline(
 
     # Initialise shared tools.
     if engine_client:
-        init_engine_tools(engine_client)
+        init_engine_tools(engine_client, redis_url=get_config().redis_url)
     init_task_tools(go_client)
 
     # Track all agent IDs for heartbeats.
@@ -375,6 +375,16 @@ async def _run_full_pipeline(
             try:
                 await heartbeat_task
             except (asyncio.CancelledError, Exception):
+                pass
+
+        # Best-effort token revocation for all agents on this team.
+        # Go already revokes in CompleteTask/FailTask, but if those calls
+        # failed (network error, pod crash), this ensures Python proactively
+        # cleans up. The revoke endpoint is idempotent.
+        for aid in agent_ids:
+            try:
+                await go_client.revoke_agent(aid)
+            except Exception:
                 pass
 
 

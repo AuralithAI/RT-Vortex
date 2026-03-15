@@ -54,7 +54,7 @@ async def run() -> None:
     go_client = GoClient()
 
     # ── Initialise tool modules with shared clients ─────────────────────────
-    init_engine_tools(engine)
+    init_engine_tools(engine, redis_url=cfg.redis_url)
     init_task_tools(go_client)
 
     # ── Choose consumer strategy ────────────────────────────────────────────

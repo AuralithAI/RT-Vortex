@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
+
+	swarmauth "github.com/AuralithAI/rtvortex-server/internal/swarm/auth"
 )
 
 // ── Task Statuses ───────────────────────────────────────────────────────────
@@ -44,7 +46,7 @@ const HeartbeatCheckInterval = 15 * time.Second
 const HeartbeatTimeout = 60 * time.Second
 
 // StaleReapInterval is how often offline agents/teams are purged from the DB.
-const StaleReapInterval = 5 * time.Minute
+const StaleReapInterval = 30 * time.Second
 
 // StaleOfflineThreshold is how long a row must be offline before deletion.
 const StaleOfflineThreshold = 10 * time.Minute
@@ -106,10 +108,11 @@ type TaskSummary struct {
 // TaskManager handles task lifecycle: creation, assignment, state transitions,
 // and the assignLoop that matches pending tasks to idle teams.
 type TaskManager struct {
-	db    *pgxpool.Pool
-	redis *redis.Client
-	tm    *TeamManager
-	wsHub *WSHub
+	db      *pgxpool.Pool
+	redis   *redis.Client
+	tm      *TeamManager
+	authSvc *swarmauth.Service
+	wsHub   *WSHub
 
 	mu     sync.Mutex
 	cancel context.CancelFunc
@@ -127,6 +130,11 @@ func NewTaskManager(db *pgxpool.Pool, redisClient *redis.Client, teamMgr *TeamMa
 // SetWSHub sets the WebSocket hub for broadcasting events.
 func (m *TaskManager) SetWSHub(hub *WSHub) {
 	m.wsHub = hub
+}
+
+// SetAuthService sets the swarm auth service for token revocation on cleanup.
+func (m *TaskManager) SetAuthService(svc *swarmauth.Service) {
+	m.authSvc = svc
 }
 
 // Start launches the assignLoop, heartbeat monitor, and metrics refresh goroutines.
@@ -363,6 +371,36 @@ func (m *TaskManager) SetPlan(ctx context.Context, taskID uuid.UUID, plan json.R
 	return nil
 }
 
+// revokeTeamTokens revokes JWT tokens and deletes heartbeat keys for all
+// agents on a team. Called on task completion/failure to prevent ghost tokens
+// lingering until the 3h Redis TTL.
+func (m *TaskManager) revokeTeamTokens(ctx context.Context, teamID uuid.UUID) {
+	if m.authSvc == nil {
+		return
+	}
+	rows, err := m.db.Query(ctx,
+		`SELECT id FROM swarm_agents WHERE team_id = $1`, teamID)
+	if err != nil {
+		slog.Warn("revokeTeamTokens: query failed", "team_id", teamID, "error", err)
+		return
+	}
+	defer rows.Close()
+
+	var revoked int
+	for rows.Next() {
+		var agentID uuid.UUID
+		if err := rows.Scan(&agentID); err != nil {
+			continue
+		}
+		_ = m.authSvc.Revoke(ctx, agentID.String())
+		m.redis.Del(ctx, fmt.Sprintf("swarm:agent:heartbeat:%s", agentID))
+		revoked++
+	}
+	if revoked > 0 {
+		slog.Debug("revokeTeamTokens: revoked", "team_id", teamID, "count", revoked)
+	}
+}
+
 // CompleteTask marks a task as completed.
 func (m *TaskManager) CompleteTask(ctx context.Context, taskID uuid.UUID) error {
 	now := time.Now().UTC()
@@ -385,8 +423,9 @@ func (m *TaskManager) CompleteTask(ctx context.Context, taskID uuid.UUID) error 
 		SwarmTaskDuration.Observe(duration)
 	}
 
-	// Release the team.
+	// Revoke agent tokens and release the team.
 	if task != nil && task.AssignedTeamID != nil {
+		m.revokeTeamTokens(ctx, *task.AssignedTeamID)
 		m.tm.ReleaseTeam(ctx, *task.AssignedTeamID)
 	}
 
@@ -408,6 +447,18 @@ type TaskDiff struct {
 	AgentID     *uuid.UUID `json:"agent_id,omitempty"`
 	Status      string     `json:"status"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// DiffMeta is a lightweight diff projection without file content.
+type DiffMeta struct {
+	ID         uuid.UUID  `json:"id"`
+	TaskID     uuid.UUID  `json:"task_id"`
+	FilePath   string     `json:"file_path"`
+	ChangeType string     `json:"change_type"`
+	AgentID    *uuid.UUID `json:"agent_id,omitempty"`
+	Status     string     `json:"status"`
+	CreatedAt  time.Time  `json:"created_at"`
+	LineCount  int        `json:"line_count"`
 }
 
 // AddDiff inserts a new file diff for a task.
@@ -454,6 +505,49 @@ func (m *TaskManager) ListDiffs(ctx context.Context, taskID uuid.UUID) ([]TaskDi
 		diffs = append(diffs, d)
 	}
 	return diffs, nil
+}
+
+// ListDiffsMeta returns lightweight diff metadata without file content.
+func (m *TaskManager) ListDiffsMeta(ctx context.Context, taskID uuid.UUID) ([]DiffMeta, error) {
+	rows, err := m.db.Query(ctx, `
+		SELECT id, task_id, file_path, change_type, agent_id, status, created_at,
+		       COALESCE(array_length(string_to_array(unified_diff, E'\n'), 1), 0)
+		FROM swarm_task_diffs WHERE task_id = $1 ORDER BY created_at`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("listing diff meta: %w", err)
+	}
+	defer rows.Close()
+
+	var metas []DiffMeta
+	for rows.Next() {
+		var d DiffMeta
+		if err := rows.Scan(
+			&d.ID, &d.TaskID, &d.FilePath, &d.ChangeType,
+			&d.AgentID, &d.Status, &d.CreatedAt, &d.LineCount,
+		); err != nil {
+			return nil, fmt.Errorf("scanning diff meta: %w", err)
+		}
+		metas = append(metas, d)
+	}
+	return metas, nil
+}
+
+// GetDiff returns a single diff by ID including full content.
+func (m *TaskManager) GetDiff(ctx context.Context, diffID uuid.UUID) (*TaskDiff, error) {
+	row := m.db.QueryRow(ctx, `
+		SELECT id, task_id, file_path, change_type, original, proposed,
+		       unified_diff, agent_id, status, created_at
+		FROM swarm_task_diffs WHERE id = $1`, diffID)
+
+	var d TaskDiff
+	err := row.Scan(
+		&d.ID, &d.TaskID, &d.FilePath, &d.ChangeType, &d.Original, &d.Proposed,
+		&d.UnifiedDiff, &d.AgentID, &d.Status, &d.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("querying diff %s: %w", diffID, err)
+	}
+	return &d, nil
 }
 
 // ── Diff Comments ───────────────────────────────────────────────────────────
@@ -559,7 +653,37 @@ func (m *TaskManager) assignLoop(ctx context.Context) {
 	}
 }
 
+// cleanupInconsistentAgents finds agents marked busy on idle/offline teams
+// and sets them offline. This catches orphaned state from Python pod crashes
+// or partial pipeline failures. Cost: 1 DB query per call.
+func (m *TaskManager) cleanupInconsistentAgents(ctx context.Context) {
+	rows, err := m.db.Query(ctx, `
+		SELECT a.id FROM swarm_agents a
+		JOIN swarm_teams t ON a.team_id = t.id
+		WHERE t.status IN ('idle', 'offline') AND a.status = 'busy'`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var agentID uuid.UUID
+		if rows.Scan(&agentID) != nil {
+			continue
+		}
+		if m.authSvc != nil {
+			_ = m.authSvc.Revoke(ctx, agentID.String())
+		}
+		m.redis.Del(ctx, fmt.Sprintf("swarm:agent:heartbeat:%s", agentID))
+		_, _ = m.db.Exec(ctx, `UPDATE swarm_agents SET status = 'offline' WHERE id = $1`, agentID)
+	}
+}
+
 func (m *TaskManager) processAssignments(ctx context.Context) {
+	// Fix inconsistent state: agents marked busy on teams that are idle or
+	// offline (crash recovery, partial pipeline failures).
+	m.cleanupInconsistentAgents(ctx)
+
 	// First, re-process any previously delivered but un-ACKed (pending) messages.
 	// These arise when a team:create was published but the task wasn't assigned
 	// because no idle team existed yet at that time.
@@ -751,9 +875,10 @@ func (m *TaskManager) checkTimeouts(ctx context.Context) {
 			})
 		}
 
-		// Release the team.
+		// Revoke agent tokens and release the team.
 		task, err := m.GetTask(ctx, taskID)
 		if err == nil && task.AssignedTeamID != nil {
+			m.revokeTeamTokens(ctx, *task.AssignedTeamID)
 			m.tm.ReleaseTeam(ctx, *task.AssignedTeamID)
 		}
 	}
@@ -833,9 +958,10 @@ func (m *TaskManager) FailTask(ctx context.Context, taskID uuid.UUID, reason str
 	SwarmTasksTotal.WithLabelValues(StatusFailed).Inc()
 	SwarmTasksActive.Dec()
 
-	// Release the team.
+	// Revoke agent tokens and release the team.
 	task, tErr := m.GetTask(ctx, taskID)
 	if tErr == nil && task.AssignedTeamID != nil {
+		m.revokeTeamTokens(ctx, *task.AssignedTeamID)
 		m.tm.ReleaseTeam(ctx, *task.AssignedTeamID)
 	}
 
@@ -1263,6 +1389,22 @@ func (m *TaskManager) staleReaper(ctx context.Context) {
 
 func (m *TaskManager) reapStaleRows(ctx context.Context) {
 	cutoff := time.Now().UTC().Add(-StaleOfflineThreshold)
+
+	// Revoke tokens for stale agents before deleting them from the DB.
+	if m.authSvc != nil {
+		rows, err := m.db.Query(ctx,
+			`SELECT id FROM swarm_agents WHERE status = 'offline' AND registered_at < $1`, cutoff)
+		if err == nil {
+			for rows.Next() {
+				var agentID uuid.UUID
+				if rows.Scan(&agentID) == nil {
+					_ = m.authSvc.Revoke(ctx, agentID.String())
+					m.redis.Del(ctx, fmt.Sprintf("swarm:agent:heartbeat:%s", agentID))
+				}
+			}
+			rows.Close()
+		}
+	}
 
 	// Delete offline agents whose last registration is older than the threshold.
 	agentResult, err := m.db.Exec(ctx, `

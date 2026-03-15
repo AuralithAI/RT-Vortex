@@ -597,8 +597,49 @@ func (h *Handler) PlanAction(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetDiffsUser handles GET /api/v1/swarm/tasks/{id}/diffs.
+// Returns metadata-only diffs by default. Pass ?full=true for full content.
 func (h *Handler) GetDiffsUser(w http.ResponseWriter, r *http.Request) {
-	h.ListDiffs(w, r) // Reuses agent endpoint logic.
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	if r.URL.Query().Get("full") == "true" {
+		h.ListDiffs(w, r)
+		return
+	}
+
+	metas, err := h.TaskMgr.ListDiffsMeta(r.Context(), taskID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+	if metas == nil {
+		metas = []DiffMeta{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{"diffs": metas})
+}
+
+// GetDiffContent handles GET /api/v1/swarm/tasks/{id}/diffs/{diffId}/content.
+// Returns full content for a single diff (original, proposed, unified_diff).
+func (h *Handler) GetDiffContent(w http.ResponseWriter, r *http.Request) {
+	diffID, err := uuid.Parse(chi.URLParam(r, "diffId"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid diff id"}`, http.StatusBadRequest)
+		return
+	}
+
+	diff, err := h.TaskMgr.GetDiff(r.Context(), diffID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(diff)
 }
 
 // UserDiffComment handles POST /api/v1/swarm/tasks/{id}/diffs/{diffId}/comments.

@@ -69,7 +69,7 @@ func (p *AnthropicProvider) Name() string { return "anthropic" }
 type anthropicRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
+	System    json.RawMessage    `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Tools     []anthropicToolDef `json:"tools,omitempty"`
 }
@@ -96,9 +96,22 @@ type anthropicContentBlock struct {
 
 // anthropicToolDef is Anthropic's tool definition format.
 type anthropicToolDef struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  json.RawMessage        `json:"input_schema"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+// anthropicCacheControl enables Anthropic prompt caching on a content block.
+type anthropicCacheControl struct {
+	Type string `json:"type"` // "ephemeral"
+}
+
+// anthropicSystemBlock is a content block in the system message array.
+type anthropicSystemBlock struct {
+	Type         string                 `json:"type"` // "text"
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicResponse struct {
@@ -182,6 +195,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 	}
 
 	// Convert tool definitions: OpenAI format → Anthropic format.
+	// Mark the last tool with cache_control so Anthropic caches the tool list.
 	var tools []anthropicToolDef
 	for _, t := range req.Tools {
 		tools = append(tools, anthropicToolDef{
@@ -190,11 +204,29 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 			InputSchema: t.Function.Parameters,
 		})
 	}
+	if len(tools) > 0 {
+		tools[len(tools)-1].CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+	}
+
+	// Build system content block array with cache_control on the last block.
+	var systemJSON json.RawMessage
+	if systemMsg != "" {
+		sysBlocks := []anthropicSystemBlock{{
+			Type:         "text",
+			Text:         systemMsg,
+			CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+		}}
+		var err error
+		systemJSON, err = json.Marshal(sysBlocks)
+		if err != nil {
+			return nil, fmt.Errorf("marshal system blocks: %w", err)
+		}
+	}
 
 	body := anthropicRequest{
 		Model:     model,
 		MaxTokens: maxTokens,
-		System:    systemMsg,
+		System:    systemJSON,
 		Messages:  msgs,
 		Tools:     tools,
 	}
@@ -211,6 +243,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.apiKey)
 	httpReq.Header.Set("anthropic-version", p.apiVersion)
+	httpReq.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
@@ -343,7 +376,7 @@ func (p *AnthropicProvider) Healthy(ctx context.Context) bool {
 type anthropicStreamRequest struct {
 	Model     string             `json:"model"`
 	MaxTokens int                `json:"max_tokens"`
-	System    string             `json:"system,omitempty"`
+	System    json.RawMessage    `json:"system,omitempty"`
 	Messages  []anthropicMessage `json:"messages"`
 	Stream    bool               `json:"stream"`
 	Tools     []anthropicToolDef `json:"tools,omitempty"`
@@ -408,11 +441,28 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 			InputSchema: t.Function.Parameters,
 		})
 	}
+	if len(tools) > 0 {
+		tools[len(tools)-1].CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+	}
+
+	var systemJSON json.RawMessage
+	if systemMsg != "" {
+		sysBlocks := []anthropicSystemBlock{{
+			Type:         "text",
+			Text:         systemMsg,
+			CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+		}}
+		sysBytes, marshalErr := json.Marshal(sysBlocks)
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal system blocks: %w", marshalErr)
+		}
+		systemJSON = sysBytes
+	}
 
 	body := anthropicStreamRequest{
 		Model:     model,
 		MaxTokens: maxTokens,
-		System:    systemMsg,
+		System:    systemJSON,
 		Messages:  msgs,
 		Stream:    true,
 		Tools:     tools,
@@ -430,6 +480,7 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.apiKey)
 	httpReq.Header.Set("anthropic-version", p.apiVersion)
+	httpReq.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {

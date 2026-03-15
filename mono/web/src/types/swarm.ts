@@ -99,6 +99,16 @@ export interface SwarmDiff {
   created_at: string;
 }
 
+export interface SwarmDiffMeta {
+  id: string;
+  task_id: string;
+  file_path: string;
+  change_type: ChangeType;
+  agent_id?: string;
+  status: DiffStatus;
+  created_at: string;
+}
+
 export interface DiffComment {
   id: string;
   diff_id: string;

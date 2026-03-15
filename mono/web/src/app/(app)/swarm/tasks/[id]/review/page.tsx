@@ -24,13 +24,15 @@ import { useSwarmEvents } from "@/hooks/use-swarm-events";
 import type {
   SwarmTask,
   SwarmDiff,
+  SwarmDiffMeta,
   PlanDocument,
 } from "@/types/swarm";
 
 export default function SwarmDiffReviewPage() {
   const params = useParams<{ id: string }>();
   const [task, setTask] = useState<SwarmTask | null>(null);
-  const [diffs, setDiffs] = useState<SwarmDiff[]>([]);
+  const [diffsMeta, setDiffsMeta] = useState<SwarmDiffMeta[]>([]);
+  const [diffContentCache, setDiffContentCache] = useState<Record<string, SwarmDiff>>({});
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -48,7 +50,7 @@ export default function SwarmDiffReviewPage() {
       if (taskRes.ok) setTask(await taskRes.json());
       if (diffsRes.ok) {
         const data = await diffsRes.json();
-        setDiffs(data.diffs || []);
+        setDiffsMeta(data.diffs || []);
       }
     } catch {
       // Handled by error boundary.
@@ -76,6 +78,19 @@ export default function SwarmDiffReviewPage() {
 
   // ── Actions ─────────────────────────────────────────────────────────────
 
+  const fetchDiffContent = useCallback(async (diffId: string): Promise<SwarmDiff | null> => {
+    if (diffContentCache[diffId]) return diffContentCache[diffId];
+    try {
+      const res = await fetch(`/api/v1/swarm/tasks/${params.id}/diffs/${diffId}/content`);
+      if (!res.ok) return null;
+      const data: SwarmDiff = await res.json();
+      setDiffContentCache((prev) => ({ ...prev, [diffId]: data }));
+      return data;
+    } catch {
+      return null;
+    }
+  }, [params.id, diffContentCache]);
+
   const handleDiffAction = async (diffId: string, action: "approve" | "reject") => {
     setActionLoading(true);
     try {
@@ -91,7 +106,7 @@ export default function SwarmDiffReviewPage() {
   const handleBatchAction = async (action: "approve" | "reject") => {
     setActionLoading(true);
     try {
-      const pending = diffs.filter((d) => d.status === "pending");
+      const pending = diffsMeta.filter((d) => d.status === "pending");
       await Promise.all(
         pending.map((d) =>
           fetch(`/api/v1/swarm/tasks/${params.id}/diffs/${d.id}/${action}`, {
@@ -150,9 +165,9 @@ export default function SwarmDiffReviewPage() {
   }
 
   const plan = task.plan_document as PlanDocument | undefined;
-  const pendingCount = diffs.filter((d) => d.status === "pending").length;
-  const approvedCount = diffs.filter((d) => d.status === "approved").length;
-  const rejectedCount = diffs.filter((d) => d.status === "rejected").length;
+  const pendingCount = diffsMeta.filter((d) => d.status === "pending").length;
+  const approvedCount = diffsMeta.filter((d) => d.status === "approved").length;
+  const rejectedCount = diffsMeta.filter((d) => d.status === "rejected").length;
 
   return (
     <div className="space-y-6">
@@ -193,12 +208,12 @@ export default function SwarmDiffReviewPage() {
           )}
 
           {/* Diff Summary Bar */}
-          {diffs.length > 0 && (
+          {diffsMeta.length > 0 && (
             <div className="flex items-center justify-between rounded-lg border bg-card px-4 py-3">
               <div className="flex items-center gap-4 text-sm">
                 <span className="flex items-center gap-1.5 font-medium">
                   <FileCode className="h-4 w-4" />
-                  {diffs.length} file{diffs.length !== 1 ? "s" : ""} changed
+                  {diffsMeta.length} file{diffsMeta.length !== 1 ? "s" : ""} changed
                 </span>
                 {pendingCount > 0 && (
                   <span className="text-muted-foreground">
@@ -241,16 +256,17 @@ export default function SwarmDiffReviewPage() {
           )}
 
           {/* Individual Diffs */}
-          {diffs.map((diff) => (
+          {diffsMeta.map((meta) => (
             <DiffViewer
-              key={diff.id}
-              diff={diff}
+              key={meta.id}
+              diff={diffContentCache[meta.id] || meta}
               onApprove={(id) => handleDiffAction(id, "approve")}
               onReject={(id) => handleDiffAction(id, "reject")}
+              onExpand={() => fetchDiffContent(meta.id)}
             />
           ))}
 
-          {diffs.length === 0 && task.status !== "plan_review" && (
+          {diffsMeta.length === 0 && task.status !== "plan_review" && (
             <div className="rounded-lg border bg-card py-12 text-center">
               <Bot className="mx-auto mb-3 h-10 w-10 text-muted-foreground/50" />
               <p className="text-sm text-muted-foreground">

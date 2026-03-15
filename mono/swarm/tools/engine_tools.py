@@ -6,9 +6,12 @@ and check index status through the agentic loop.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from typing import Any
+
+import redis.asyncio as aioredis
 
 from ..engine_client import EngineClient
 from ..sdk.tool import tool
@@ -17,12 +20,19 @@ logger = logging.getLogger(__name__)
 
 # Module-level engine client — set via init_engine_tools().
 _engine: EngineClient | None = None
+_redis: aioredis.Redis | None = None
+_SEARCH_CACHE_TTL = 300  # 5 minutes
 
 
-def init_engine_tools(engine_client: EngineClient) -> None:
+def init_engine_tools(
+    engine_client: EngineClient,
+    redis_url: str | None = None,
+) -> None:
     """Set the engine client for all engine tools. Call once at startup."""
-    global _engine
+    global _engine, _redis
     _engine = engine_client
+    if redis_url and _redis is None:
+        _redis = aioredis.from_url(redis_url, decode_responses=True)
 
 
 def _get_engine() -> EngineClient:
@@ -52,8 +62,39 @@ async def search_code(query: str, repo_id: str, top_k: int = 10) -> str:
         JSON string of search results with code chunks, file paths, and scores.
     """
     engine = _get_engine()
-    result = await engine.search(query=query, repo_id=repo_id, top_k=top_k)
+    result = await _cached_search(engine, query=query, repo_id=repo_id, top_k=top_k)
     return json.dumps(result, indent=2)
+
+
+async def _cached_search(
+    engine: EngineClient,
+    *,
+    query: str,
+    repo_id: str,
+    top_k: int,
+) -> Any:
+    """Search with optional Redis caching."""
+    if _redis is None:
+        return await engine.search(query=query, repo_id=repo_id, top_k=top_k)
+
+    key_hash = hashlib.sha256(f"{repo_id}:{query}:{top_k}".encode()).hexdigest()[:16]
+    cache_key = f"search:{repo_id}:{key_hash}"
+
+    try:
+        cached = await _redis.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        pass
+
+    result = await engine.search(query=query, repo_id=repo_id, top_k=top_k)
+
+    try:
+        await _redis.setex(cache_key, _SEARCH_CACHE_TTL, json.dumps(result))
+    except Exception:
+        pass
+
+    return result
 
 
 @tool(description=(
@@ -116,7 +157,7 @@ async def find_callers(query: str, repo_id: str, symbol_name: str) -> str:
     """
     engine = _get_engine()
     caller_query = f"calls to {symbol_name}: {query}"
-    result = await engine.search(query=caller_query, repo_id=repo_id, top_k=15)
+    result = await _cached_search(engine, query=caller_query, repo_id=repo_id, top_k=15)
     return json.dumps(result, indent=2)
 
 
