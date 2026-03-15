@@ -306,7 +306,7 @@ public:
     {
         // Build TMS config from EngineConfig
         tms::TMSConfig tms_cfg;
-        tms_cfg.embedding_dimension   = config.embed_provider == EmbedProvider::LOCAL_ONNX ? 384 : config.embed_dimensions;
+        tms_cfg.embedding_dimension   = config.embed_dimensions;
         tms_cfg.embedding_model       = config.embed_model;
         tms_cfg.storage_path          = config.storage_path + "/tms";
         tms_cfg.ltm_capacity          = 10000000;

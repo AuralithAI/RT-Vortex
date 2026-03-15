@@ -456,10 +456,13 @@ bool ensureModelFiles(const std::string& model_dir,
     }
 
     for (const auto& f : extra_files) {
-        std::string fpath = (fs::path(model_dir) / f).string();
+        // f may contain a subpath (e.g. "onnx/model.onnx_data").
+        // Save using only the filename locally.
+        std::string local_name = fs::path(f).filename().string();
+        std::string fpath = (fs::path(model_dir) / local_name).string();
         if (!fileExists(fpath)) {
             std::string url = hf_base_url + "/" + f;
-            LOG_INFO("Downloading " + f + "...");
+            LOG_INFO("Downloading " + local_name + "...");
             downloadFile(url, fpath);
         }
     }
@@ -481,7 +484,7 @@ static const std::vector<OnnxModelInfo>& getModelRegistry() {
             "bge-m3", 1024,
             "https://huggingface.co/BAAI/bge-m3/resolve/main",
             "onnx/model.onnx",
-            {"tokenizer.json"}
+            {"onnx/model.onnx_data", "onnx/Constant_7_attr__value", "tokenizer.json"}
         },
         {
             "minilm", 384,

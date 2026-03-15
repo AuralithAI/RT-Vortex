@@ -88,12 +88,11 @@ static CurlGlobalInit s_curlInit;
  */
 class BertTokenizer {
 public:
-    // Well-known BERT special token IDs
-    static constexpr int64_t PAD_TOKEN_ID   = 0;
-    static constexpr int64_t UNK_TOKEN_ID   = 100;
-    static constexpr int64_t CLS_TOKEN_ID   = 101;
-    static constexpr int64_t SEP_TOKEN_ID   = 102;
-    static constexpr int64_t MASK_TOKEN_ID  = 103;
+    // Default BERT special token IDs (overridden when loading vocab)
+    int64_t pad_token_id_   = 0;
+    int64_t unk_token_id_   = 100;
+    int64_t cls_token_id_   = 101;
+    int64_t sep_token_id_   = 102;
 
     BertTokenizer() = default;
 
@@ -139,7 +138,7 @@ public:
 
         // 2. WordPiece each word
         std::vector<int64_t> tokens;
-        tokens.push_back(CLS_TOKEN_ID);
+        tokens.push_back(cls_token_id_);
 
         for (const auto& word : words) {
             auto wp_ids = wordpiece(word);
@@ -149,12 +148,12 @@ public:
             }
             if (static_cast<int64_t>(tokens.size()) >= max_seq_len - 1) break;
         }
-        tokens.push_back(SEP_TOKEN_ID);
+        tokens.push_back(sep_token_id_);
 
         int64_t actual_len = static_cast<int64_t>(tokens.size());
 
         // 3. Pad to max_seq_len
-        input_ids.resize(static_cast<size_t>(max_seq_len), PAD_TOKEN_ID);
+        input_ids.resize(static_cast<size_t>(max_seq_len), pad_token_id_);
         attention_mask.resize(static_cast<size_t>(max_seq_len), 0);
         token_type_ids.resize(static_cast<size_t>(max_seq_len), 0);
 
@@ -182,10 +181,22 @@ private:
         try {
             json j = json::parse(f);
 
-            // HuggingFace tokenizer.json: model.vocab is { token: id, ... }
             if (j.contains("model") && j["model"].contains("vocab")) {
-                for (auto& [token, id_val] : j["model"]["vocab"].items()) {
-                    token_to_id_[token] = id_val.get<int64_t>();
+                const auto& vocab = j["model"]["vocab"];
+                if (vocab.is_object()) {
+                    // BERT WordPiece: { token: id, ... }
+                    for (auto& [token, id_val] : vocab.items()) {
+                        token_to_id_[token] = id_val.get<int64_t>();
+                    }
+                } else if (vocab.is_array()) {
+                    // Unigram/SentencePiece: [[token, score], ...] — id is the index
+                    int64_t idx = 0;
+                    for (const auto& entry : vocab) {
+                        if (entry.is_array() && entry.size() >= 1 && entry[0].is_string()) {
+                            token_to_id_[entry[0].get<std::string>()] = idx;
+                        }
+                        ++idx;
+                    }
                 }
             }
             // Also check for added_tokens
@@ -203,12 +214,22 @@ private:
                 do_lower_case_ = j["normalizer"]["lowercase"].get<bool>();
             }
 
-            std::cout << "[INFO] BERT tokenizer loaded: " << token_to_id_.size()
+            // Resolve special token IDs — BERT uses [CLS]/[SEP], XLMRoberta uses <s>/</s>
+            auto resolve = [&](int64_t& id, const std::string& a, const std::string& b) {
+                if (token_to_id_.count(a)) id = token_to_id_[a];
+                else if (token_to_id_.count(b)) id = token_to_id_[b];
+            };
+            resolve(cls_token_id_, "[CLS]", "<s>");
+            resolve(sep_token_id_, "[SEP]", "</s>");
+            resolve(pad_token_id_, "[PAD]", "<pad>");
+            resolve(unk_token_id_, "[UNK]", "<unk>");
+
+            std::cout << "[INFO] Tokenizer loaded: " << token_to_id_.size()
                       << " tokens from tokenizer.json\n";
             return !token_to_id_.empty();
 
         } catch (const json::exception& e) {
-            std::cerr << "[ERROR] Failed to parse tokenizer.json: " << e.what() << "\n";
+            std::cerr << "[TOKENIZER] Failed to load tokenizer.json: " << e.what() << "\n";
             return false;
         }
     }
@@ -265,7 +286,7 @@ private:
 
     std::vector<int64_t> wordpiece(const std::string& word) const {
         if (word.size() > MAX_WORD_CHARS) {
-            return { UNK_TOKEN_ID };
+            return { unk_token_id_ };
         }
 
         std::vector<int64_t> output;
@@ -292,7 +313,7 @@ private:
             if (found_id < 0) {
                 // No subword found — entire word is unknown
                 output.clear();
-                output.push_back(UNK_TOKEN_ID);
+                output.push_back(unk_token_id_);
                 return output;
             }
 

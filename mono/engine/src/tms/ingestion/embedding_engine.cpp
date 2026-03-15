@@ -46,16 +46,34 @@ public:
 
             // Load vocab from model.vocab
             auto& vocab = j["model"]["vocab"];
-            for (auto it = vocab.begin(); it != vocab.end(); ++it) {
-                token_to_id_[it.key()] = it.value().get<int>();
-                id_to_token_[it.value().get<int>()] = it.key();
+            if (vocab.is_object()) {
+                // BERT WordPiece: { token: id, ... }
+                for (auto it = vocab.begin(); it != vocab.end(); ++it) {
+                    token_to_id_[it.key()] = it.value().get<int>();
+                    id_to_token_[it.value().get<int>()] = it.key();
+                }
+            } else if (vocab.is_array()) {
+                // Unigram/SentencePiece: [[token, score], ...] — id is the index
+                int idx = 0;
+                for (const auto& entry : vocab) {
+                    if (entry.is_array() && entry.size() >= 1 && entry[0].is_string()) {
+                        std::string token = entry[0].get<std::string>();
+                        token_to_id_[token] = idx;
+                        id_to_token_[idx] = token;
+                    }
+                    ++idx;
+                }
             }
 
-            // Special tokens
+            // Special tokens — BERT uses [CLS]/[SEP], XLMRoberta uses <s>/</s>
             if (token_to_id_.count("[CLS]")) cls_id_ = token_to_id_["[CLS]"];
+            else if (token_to_id_.count("<s>")) cls_id_ = token_to_id_["<s>"];
             if (token_to_id_.count("[SEP]")) sep_id_ = token_to_id_["[SEP]"];
+            else if (token_to_id_.count("</s>")) sep_id_ = token_to_id_["</s>"];
             if (token_to_id_.count("[PAD]")) pad_id_ = token_to_id_["[PAD]"];
+            else if (token_to_id_.count("<pad>")) pad_id_ = token_to_id_["<pad>"];
             if (token_to_id_.count("[UNK]")) unk_id_ = token_to_id_["[UNK]"];
+            else if (token_to_id_.count("<unk>")) unk_id_ = token_to_id_["<unk>"];
 
             loaded_ = true;
             return true;
