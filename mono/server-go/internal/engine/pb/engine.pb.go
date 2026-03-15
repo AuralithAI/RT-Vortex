@@ -3143,6 +3143,7 @@ type EngineMetricsSnapshot struct {
 	IndexSizesBytes     map[string]uint64 `protobuf:"bytes,4,rep,name=index_sizes_bytes,json=indexSizesBytes,proto3" json:"index_sizes_bytes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"` // Per-repo index file sizes
 	KnowledgeGraphNodes uint64            `protobuf:"varint,5,opt,name=knowledge_graph_nodes,json=knowledgeGraphNodes,proto3" json:"knowledge_graph_nodes,omitempty"`                                                               // Total KG nodes
 	KnowledgeGraphEdges uint64            `protobuf:"varint,6,opt,name=knowledge_graph_edges,json=knowledgeGraphEdges,proto3" json:"knowledge_graph_edges,omitempty"`                                                               // Total KG edges
+	MigrationStatus     string            `protobuf:"bytes,7,opt,name=migration_status,json=migrationStatus,proto3" json:"migration_status,omitempty"`                                                                              // "idle" | "migrating" | "done"
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -3217,6 +3218,13 @@ func (x *EngineMetricsSnapshot) GetKnowledgeGraphEdges() uint64 {
 		return x.KnowledgeGraphEdges
 	}
 	return 0
+}
+
+func (x *EngineMetricsSnapshot) GetMigrationStatus() string {
+	if x != nil {
+		return x.MigrationStatus
+	}
+	return ""
 }
 
 type FileContentRequest struct {
@@ -3624,14 +3632,15 @@ const file_engine_proto_rawDesc = "" +
 	"\x03p50\x18\x06 \x01(\x01R\x03p50\x12\x10\n" +
 	"\x03p90\x18\a \x01(\x01R\x03p90\x12\x10\n" +
 	"\x03p95\x18\b \x01(\x01R\x03p95\x12\x10\n" +
-	"\x03p99\x18\t \x01(\x01R\x03p99\"\x95\x04\n" +
+	"\x03p99\x18\t \x01(\x01R\x03p99\"\xc0\x04\n" +
 	"\x15EngineMetricsSnapshot\x12!\n" +
 	"\ftimestamp_ms\x18\x01 \x01(\x04R\vtimestampMs\x12L\n" +
 	"\ametrics\x18\x02 \x03(\v22.aipr.engine.v1.EngineMetricsSnapshot.MetricsEntryR\ametrics\x12\x19\n" +
 	"\buptime_s\x18\x03 \x01(\x04R\auptimeS\x12f\n" +
 	"\x11index_sizes_bytes\x18\x04 \x03(\v2:.aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntryR\x0findexSizesBytes\x122\n" +
 	"\x15knowledge_graph_nodes\x18\x05 \x01(\x04R\x13knowledgeGraphNodes\x122\n" +
-	"\x15knowledge_graph_edges\x18\x06 \x01(\x04R\x13knowledgeGraphEdges\x1a\\\n" +
+	"\x15knowledge_graph_edges\x18\x06 \x01(\x04R\x13knowledgeGraphEdges\x12)\n" +
+	"\x10migration_status\x18\a \x01(\tR\x0fmigrationStatus\x1a\\\n" +
 	"\fMetricsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x126\n" +
 	"\x05value\x18\x02 \x01(\v2 .aipr.engine.v1.MetricValueProtoR\x05value:\x028\x01\x1aB\n" +
