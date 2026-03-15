@@ -17,9 +17,13 @@ std::vector<ValidationError> ConfigValidator::validate(const EngineConfig& confi
     }
 
     if (config.embed_provider == EmbedProvider::LOCAL_ONNX) {
-        if (config.embed_dimensions != 384) {
+        const auto& name = config.onnx_model_name;
+        if (name == "minilm" && config.embed_dimensions != 384) {
             errors.push_back({"embed_dimensions",
-                "LOCAL_ONNX provider requires 384 dimensions (MiniLM-L6-v2)"});
+                "minilm model requires 384 dimensions"});
+        } else if (name == "bge-m3" && config.embed_dimensions != 1024) {
+            errors.push_back({"embed_dimensions",
+                "bge-m3 model requires 1024 dimensions"});
         }
         if (!config.onnx_model_path.empty() &&
             !fs::exists(config.onnx_model_path)) {

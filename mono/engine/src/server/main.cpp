@@ -39,6 +39,7 @@
 #include <ctime>
 #include <iomanip>
 #include <filesystem>
+#include <curl/curl.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -396,6 +397,107 @@ std::string readFile(const std::string& path) {
 bool fileExists(const std::string& path) {
     std::ifstream file(path);
     return file.good();
+}
+
+//=============================================================================
+// Runtime model download (curl)
+//=============================================================================
+
+static size_t writeFileCallback(void* ptr, size_t size, size_t nmemb, FILE* stream) {
+    return fwrite(ptr, size, nmemb, stream);
+}
+
+// Download a file from url to dest_path. Returns true on success.
+bool downloadFile(const std::string& url, const std::string& dest_path) {
+    FILE* fp = fopen(dest_path.c_str(), "wb");
+    if (!fp) return false;
+
+    CURL* curl = curl_easy_init();
+    if (!curl) { fclose(fp); return false; }
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeFileCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, fp);
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 600L);  // 10 min max for large models
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+
+    CURLcode res = curl_easy_perform(curl);
+    long http_code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_easy_cleanup(curl);
+    fclose(fp);
+
+    if (res != CURLE_OK || http_code != 200) {
+        fs::remove(dest_path);
+        return false;
+    }
+    return true;
+}
+
+// Ensure a model directory has all required files. Downloads missing ones.
+// Returns true if model.onnx is present after the call.
+bool ensureModelFiles(const std::string& model_dir,
+                      const std::string& hf_base_url,
+                      const std::string& onnx_subpath,
+                      const std::vector<std::string>& extra_files) {
+    fs::create_directories(model_dir);
+
+    std::string model_path = (fs::path(model_dir) / "model.onnx").string();
+    if (!fileExists(model_path)) {
+        std::string url = hf_base_url + "/" + onnx_subpath;
+        LOG_INFO("Downloading ONNX model from: " + url);
+        LOG_INFO("This may take a few minutes on first run...");
+        if (!downloadFile(url, model_path)) {
+            LOG_WARN("Failed to download ONNX model from: " + url);
+            return false;
+        }
+        LOG_INFO("Model downloaded: " + model_path);
+    }
+
+    for (const auto& f : extra_files) {
+        std::string fpath = (fs::path(model_dir) / f).string();
+        if (!fileExists(fpath)) {
+            std::string url = hf_base_url + "/" + f;
+            LOG_INFO("Downloading " + f + "...");
+            downloadFile(url, fpath);
+        }
+    }
+    return fileExists(model_path);
+}
+
+// Model registry: maps model name → { dimensions, hf_url, onnx_path, extra_files }
+struct OnnxModelInfo {
+    std::string name;
+    size_t dimensions;
+    std::string hf_base_url;
+    std::string onnx_subpath;
+    std::vector<std::string> extra_files;
+};
+
+static const std::vector<OnnxModelInfo>& getModelRegistry() {
+    static const std::vector<OnnxModelInfo> registry = {
+        {
+            "bge-m3", 1024,
+            "https://huggingface.co/BAAI/bge-m3/resolve/main",
+            "onnx/model.onnx",
+            {"tokenizer.json"}
+        },
+        {
+            "minilm", 384,
+            "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main",
+            "onnx/model.onnx",
+            {"tokenizer.json", "vocab.txt"}
+        },
+    };
+    return registry;
+}
+
+static const OnnxModelInfo* findModel(const std::string& name) {
+    for (const auto& m : getModelRegistry()) {
+        if (m.name == name) return &m;
+    }
+    return nullptr;
 }
 
 //=============================================================================
@@ -912,31 +1014,57 @@ void runServer(const ServerConfig& config) {
         }
     }
     
-    // Resolve model path relative to RTVORTEX_HOME if not absolute
-    if (!engine_config.onnx_model_path.empty() &&
-        !fs::path(engine_config.onnx_model_path).is_absolute()) {
-        std::string resolved = (fs::path(g_env.models_dir) / 
-            fs::path(engine_config.onnx_model_path).filename()).string();
-        if (fileExists(resolved)) {
-            engine_config.onnx_model_path = resolved;
-            LOG_INFO("ONNX model: " + resolved);
-        } else {
-            LOG_WARN("ONNX model not found: " + resolved);
-            LOG_WARN("Download from: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2");
+    // ── Resolve ONNX model from onnx_model_name ────────────────────────────
+    // Model registry maps names (e.g. "bge-m3", "minilm") to their
+    // subdirectory under RTVORTEX_HOME/models/, expected dimensions, and
+    // HuggingFace download URLs. MiniLM is downloaded at build time by CMake.
+    // BGE-M3 is downloaded here at runtime on first use.
+    {
+        const std::string& model_name = engine_config.onnx_model_name;
+        const auto* model_info = findModel(model_name);
+        if (!model_info) {
+            LOG_WARN("Unknown ONNX model name: " + model_name + ", falling back to minilm");
+            engine_config.onnx_model_name = "minilm";
+            model_info = findModel("minilm");
         }
-    }
 
-    // Resolve tokenizer path relative to RTVORTEX_HOME if not absolute
-    if (!engine_config.onnx_tokenizer_path.empty() &&
-        !fs::path(engine_config.onnx_tokenizer_path).is_absolute()) {
-        std::string resolved = (fs::path(g_env.models_dir) / 
-            fs::path(engine_config.onnx_tokenizer_path).filename()).string();
-        if (fileExists(resolved)) {
-            engine_config.onnx_tokenizer_path = resolved;
-            LOG_INFO("Tokenizer: " + resolved);
-        } else {
-            LOG_WARN("Tokenizer not found: " + resolved);
+        std::string model_dir = (fs::path(g_env.models_dir) / model_info->name).string();
+        std::string model_path = (fs::path(model_dir) / "model.onnx").string();
+
+        if (!fileExists(model_path)) {
+            LOG_INFO("Model '" + model_info->name + "' not found locally, downloading...");
+            if (!ensureModelFiles(model_dir, model_info->hf_base_url,
+                                  model_info->onnx_subpath, model_info->extra_files)) {
+                // Fall back to minilm if download fails and it's available
+                if (model_name != "minilm") {
+                    LOG_WARN("Download failed, falling back to minilm");
+                    engine_config.onnx_model_name = "minilm";
+                    model_info = findModel("minilm");
+                    model_dir = (fs::path(g_env.models_dir) / "minilm").string();
+                    model_path = (fs::path(model_dir) / "model.onnx").string();
+                }
+            }
         }
+
+        engine_config.onnx_model_path = model_path;
+        engine_config.embed_dimensions = model_info->dimensions;
+
+        // Resolve tokenizer from same model directory
+        std::string tok_path = (fs::path(model_dir) / "tokenizer.json").string();
+        if (fileExists(tok_path)) {
+            engine_config.onnx_tokenizer_path = tok_path;
+        } else {
+            // Try vocab.txt as fallback (MiniLM uses BERT WordPiece)
+            std::string vocab_path = (fs::path(model_dir) / "vocab.txt").string();
+            if (fileExists(vocab_path)) {
+                engine_config.onnx_tokenizer_path = vocab_path;
+            }
+        }
+
+        LOG_INFO("ONNX model: " + model_info->name +
+                 " (" + std::to_string(model_info->dimensions) + "d)");
+        LOG_INFO("ONNX path:  " + engine_config.onnx_model_path);
+        LOG_INFO("Tokenizer:  " + engine_config.onnx_tokenizer_path);
     }
     
     // Point storage_path into RTVORTEX_HOME/data so the engine writes

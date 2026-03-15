@@ -1162,8 +1162,20 @@ void TMSMemorySystem::reconfigureEmbedding(
 
     if (backend == "onnx") {
         embed_config.backend = EmbeddingBackend::ONNX_RUNTIME;
-        embed_config.onnx_model_path = config_.onnx_model_path;
-        embed_config.tokenizer_path = config_.onnx_tokenizer_path;
+        if (!model.empty()) {
+            // Model name passed from Go server — resolve paths from it.
+            std::string models_dir = config_.storage_path + "/../models";
+            if (!config_.onnx_model_path.empty() &&
+                config_.onnx_model_path.find("models/") != std::string::npos) {
+                models_dir = config_.onnx_model_path.substr(
+                    0, config_.onnx_model_path.find("models/") + 6);
+            }
+            embed_config.onnx_model_path = models_dir + "/" + model + "/model.onnx";
+            embed_config.tokenizer_path = models_dir + "/" + model + "/tokenizer.json";
+        } else {
+            embed_config.onnx_model_path = config_.onnx_model_path;
+            embed_config.tokenizer_path = config_.onnx_tokenizer_path;
+        }
     } else if (backend == "http") {
         embed_config.backend = EmbeddingBackend::HTTP_API;
         embed_config.api_endpoint = endpoint;

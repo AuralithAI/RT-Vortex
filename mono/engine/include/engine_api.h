@@ -33,7 +33,7 @@ namespace aipr {
  */
 enum class EmbedProvider {
     HTTP,         // OpenAI-compatible HTTP API
-    LOCAL_ONNX,   // Local ONNX Runtime with all-MiniLM-L6-v2
+    LOCAL_ONNX,   // Local ONNX Runtime (bge-m3 or minilm)
     CUSTOM        // Custom provider via config
 };
 
@@ -66,8 +66,12 @@ struct AIPR_API EngineConfig {
     size_t embed_timeout_seconds = 60;
     
     // Local ONNX model settings (when embed_provider == LOCAL_ONNX)
-    std::string onnx_model_path = "models/all-MiniLM-L6-v2.onnx";
-    std::string onnx_tokenizer_path = "models/tokenizer.json";
+    // onnx_model_name selects which bundled model to use:
+    //   "bge-m3"  — BAAI/bge-m3, 1024 dimensions (default, highest quality)
+    //   "minilm"  — all-MiniLM-L6-v2, 384 dimensions (lightweight, fast)
+    std::string onnx_model_name = "bge-m3";
+    std::string onnx_model_path = "models/bge-m3/model.onnx";
+    std::string onnx_tokenizer_path = "models/bge-m3/tokenizer.json";
     
     // Load from YAML file
     static EngineConfig load(const std::string& config_path);

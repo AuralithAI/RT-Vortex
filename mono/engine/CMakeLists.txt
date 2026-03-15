@@ -899,47 +899,49 @@ if(AIPR_BUILD_SERVER)
     # ---------------------------------------------------------------------------
     set(_ENGINE_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR})
     set(_MODELS_SRC_DIR "${_ENGINE_SRC_DIR}/models")
-    set(_ONNX_MODEL_FILE "all-MiniLM-L6-v2.onnx")
-    set(_ONNX_MODEL_PATH "${_MODELS_SRC_DIR}/${_ONNX_MODEL_FILE}")
 
-    # ── Auto-download ONNX embedding model if not present ──────────────────
-    # The .onnx file is ~87 MB and excluded from git via .gitignore.
-    # On first cmake run we download it from Hugging Face so the developer
-    # doesn't have to do it manually.
-    if(NOT EXISTS "${_ONNX_MODEL_PATH}")
+    # ── Auto-download MiniLM ONNX model into models/minilm/ ───────────────
+    # MiniLM (~87 MB) is downloaded at build time — it's the lightweight
+    # fallback model. BGE-M3 (~2.3 GB) is downloaded at engine runtime on
+    # first use to avoid bloating the build.
+    set(_MINILM_DIR "${_MODELS_SRC_DIR}/minilm")
+    set(_MINILM_MODEL "${_MINILM_DIR}/model.onnx")
+    if(NOT EXISTS "${_MINILM_MODEL}")
         set(_HF_BASE "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main")
 
-        file(MAKE_DIRECTORY "${_MODELS_SRC_DIR}")
+        file(MAKE_DIRECTORY "${_MINILM_DIR}")
 
         message(STATUS "Downloading ONNX embedding model (all-MiniLM-L6-v2, ~87 MB)...")
         file(DOWNLOAD
             "${_HF_BASE}/onnx/model.onnx"
-            "${_ONNX_MODEL_PATH}"
+            "${_MINILM_MODEL}"
             SHOW_PROGRESS
             STATUS _dl_status
         )
         list(GET _dl_status 0 _dl_code)
         if(NOT _dl_code EQUAL 0)
-            message(WARNING "Failed to download ONNX model (status: ${_dl_status}). "
+            message(WARNING "Failed to download MiniLM ONNX model (status: ${_dl_status}). "
                             "Server will start but local embeddings will be unavailable. "
                             "Download manually from: ${_HF_BASE}/onnx/model.onnx")
-            file(REMOVE "${_ONNX_MODEL_PATH}")  # clean up partial download
+            file(REMOVE "${_MINILM_MODEL}")
         else()
-            message(STATUS "ONNX model downloaded: ${_ONNX_MODEL_PATH}")
+            message(STATUS "MiniLM model downloaded: ${_MINILM_MODEL}")
         endif()
 
-        # Also grab tokenizer.json and vocab.txt if missing
         foreach(_f tokenizer.json vocab.txt)
-            if(NOT EXISTS "${_MODELS_SRC_DIR}/${_f}")
+            if(NOT EXISTS "${_MINILM_DIR}/${_f}")
                 message(STATUS "Downloading ${_f}...")
                 file(DOWNLOAD
                     "${_HF_BASE}/${_f}"
-                    "${_MODELS_SRC_DIR}/${_f}"
+                    "${_MINILM_DIR}/${_f}"
                     STATUS _dl2_status
                 )
             endif()
         endforeach()
     endif()
+
+    # Create empty bge-m3 directory structure (model downloaded at runtime).
+    file(MAKE_DIRECTORY "${_MODELS_SRC_DIR}/bge-m3")
 
     # models/ → mono/engine/models  (symlink to avoid duplicating ~90 MB ONNX file)
     if(EXISTS "${_ENGINE_SRC_DIR}/models" AND NOT EXISTS "${CMAKE_BINARY_DIR}/models")

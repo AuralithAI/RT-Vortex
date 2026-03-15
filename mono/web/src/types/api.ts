@@ -283,8 +283,10 @@ export const AGENT_ROLE_META: Record<AgentRoleId, { label: string; description: 
 
 export interface BuiltinEmbeddingModel {
   name: string;
+  display_name: string;
   provider: string;
   dimensions: number;
+  size_mb: number;
   description: string;
 }
 
@@ -309,12 +311,14 @@ export interface EmbeddingsConfig {
   use_builtin: boolean;
   active_provider: string;
   active_model: string;
-  builtin_model: BuiltinEmbeddingModel;
+  active_builtin_model: string;
+  builtin_models: BuiltinEmbeddingModel[];
   external_providers: ExternalEmbeddingProvider[];
 }
 
 export interface EmbeddingsUpdateRequest {
   use_builtin: boolean;
+  builtin_model?: string;
   provider?: string;
   endpoint?: string;
   model?: string;
@@ -324,6 +328,7 @@ export interface EmbeddingsUpdateRequest {
 
 export interface EmbeddingsUpdateResult {
   use_builtin: boolean;
+  builtin_model: string;
   provider: string;
   model: string;
   dimensions: number;

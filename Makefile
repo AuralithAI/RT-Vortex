@@ -42,7 +42,7 @@ NPM          := $(shell which npm 2>/dev/null || echo "npm")
 MVN          := $(shell which mvn 2>/dev/null || echo "mvn")
 NPROC        := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 MODELS_SRC   := $(ENGINE_DIR)/models
-ONNX_MODEL   := all-MiniLM-L6-v2.onnx
+ONNX_MODEL   := model.onnx
 ONNX_URL     := https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx
 
 # ── Version ──────────────────────────────────────────────────────────────────
@@ -96,6 +96,9 @@ engine: rt_home ## Build the C++ RTVortex engine
 		-DAIPR_BUILD_DOCTOR=OFF
 	cd $(BUILD_DIR) && $(MAKE) -j$(NPROC) aipr-engine-server
 	@cp -f $(BUILD_DIR)/bin/rtvortex $(RT_HOME)/bin/
+	@mkdir -p $(RT_HOME)/models/minilm $(RT_HOME)/models/bge-m3
+	@cp -rf $(BUILD_DIR)/models/minilm/* $(RT_HOME)/models/minilm/ 2>/dev/null || true
+	@cp -rf $(BUILD_DIR)/models/bge-m3/* $(RT_HOME)/models/bge-m3/ 2>/dev/null || true
 	@echo "  rt_home/bin/rtvortex ($$(du -h $(RT_HOME)/bin/rtvortex | cut -f1))"
 
 # ==============================================================================
@@ -133,20 +136,18 @@ config: rt_home ## Copy configuration files to rt_home
 # ==============================================================================
 
 models: rt_home ## Download ONNX model and copy to rt_home/models
-	@if [ ! -f "$(MODELS_SRC)/$(ONNX_MODEL)" ]; then \
-		echo "Downloading ONNX embedding model (all-MiniLM-L6-v2, ~87 MB)..."; \
-		mkdir -p $(MODELS_SRC); \
-		curl -L --progress-bar -o "$(MODELS_SRC)/$(ONNX_MODEL)" "$(ONNX_URL)"; \
-		curl -sL -o "$(MODELS_SRC)/tokenizer.json" \
+	@mkdir -p $(RT_HOME)/models/minilm $(RT_HOME)/models/bge-m3
+	@if [ ! -f "$(RT_HOME)/models/minilm/$(ONNX_MODEL)" ]; then \
+		echo "Downloading ONNX embedding model (MiniLM-L6-v2, ~87 MB)..."; \
+		curl -L --progress-bar -o "$(RT_HOME)/models/minilm/$(ONNX_MODEL)" "$(ONNX_URL)"; \
+		curl -sL -o "$(RT_HOME)/models/minilm/tokenizer.json" \
 			"https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json"; \
-		curl -sL -o "$(MODELS_SRC)/vocab.txt" \
+		curl -sL -o "$(RT_HOME)/models/minilm/vocab.txt" \
 			"https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt"; \
-		echo " ONNX model downloaded"; \
+		echo " MiniLM model downloaded"; \
 	fi
-	@cp -f $(MODELS_SRC)/$(ONNX_MODEL) $(RT_HOME)/models/ 2>/dev/null || true
-	@cp -f $(MODELS_SRC)/tokenizer.json $(RT_HOME)/models/ 2>/dev/null || true
-	@cp -f $(MODELS_SRC)/vocab.txt $(RT_HOME)/models/ 2>/dev/null || true
 	@echo " rt_home/models/ updated ($$(du -sh $(RT_HOME)/models/ | cut -f1))"
+	@echo " BGE-M3 will be downloaded on first engine start (~2.3 GB)"
 
 # ==============================================================================
 # Proto Code Generation

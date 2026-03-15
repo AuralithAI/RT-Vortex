@@ -694,7 +694,7 @@ private:
     }
     
     //-------------------------------------------------------------------------
-    // Local ONNX Embedding (all-MiniLM-L6-v2)
+    // Local ONNX Embedding (bge-m3, minilm, or other ONNX models)
     //-------------------------------------------------------------------------
     
 #ifdef AIPR_HAS_ONNX
@@ -709,26 +709,31 @@ private:
             std::ifstream f(model_path);
             if (!f.good()) {
                 std::cerr << "[WARN] ONNX model not found: " << model_path << "\n";
-                std::cerr << "[WARN] Download all-MiniLM-L6-v2.onnx from Hugging Face\n";
                 return;
             }
             f.close();
             
             onnx_session_ = std::make_unique<Ort::Session>(*onnx_env_, model_path.c_str(), session_options);
-            dimensions_ = 384;  // MiniLM outputs 384 dimensions
+
+            // Resolve dimensions from model name.
+            const std::string& model_name = config_.onnx_model_name;
+            if (model_name == "bge-m3") {
+                dimensions_ = 1024;
+            } else if (model_name == "minilm") {
+                dimensions_ = 384;
+            } else {
+                // Use config dimensions as fallback for unknown models.
+                dimensions_ = config_.embed_dimensions > 0 ? config_.embed_dimensions : 384;
+            }
             
-            // Load BERT WordPiece tokenizer
-            // Try configured path first, then common alternatives
+            // Load tokenizer — try configured path first, then fallbacks.
             std::string tok_path = config_.onnx_tokenizer_path;
             if (!tokenizer_.load(tok_path)) {
-                // Try vocab.txt next to the model
                 std::string model_dir = model_path.substr(0, model_path.find_last_of('/'));
                 if (model_dir.empty()) model_dir = ".";
                 std::vector<std::string> fallbacks = {
-                    model_dir + "/vocab.txt",
                     model_dir + "/tokenizer.json",
-                    "models/vocab.txt",
-                    "models/tokenizer.json"
+                    model_dir + "/vocab.txt",
                 };
                 for (const auto& fb : fallbacks) {
                     if (tokenizer_.load(fb)) break;
@@ -736,14 +741,12 @@ private:
             }
             
             if (!tokenizer_.isLoaded()) {
-                std::cerr << "[WARN] BERT tokenizer not found. Looked for:\n"
-                          << "  - " << tok_path << "\n"
-                          << "  Download vocab.txt or tokenizer.json from HuggingFace "
-                          << "sentence-transformers/all-MiniLM-L6-v2\n"
+                std::cerr << "[WARN] Tokenizer not found for model '" << model_name << "'\n"
                           << "  Falling back to hash-based tokenization (reduced quality)\n";
             }
             
-            std::cout << "[INFO] ONNX embedding model loaded: " << model_path << "\n";
+            std::cout << "[INFO] ONNX model loaded: " << model_name
+                      << " (" << dimensions_ << "d) from " << model_path << "\n";
             
         } catch (const Ort::Exception& e) {
             std::cerr << "[ERROR] Failed to load ONNX model: " << e.what() << "\n";

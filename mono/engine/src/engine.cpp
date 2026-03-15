@@ -101,6 +101,7 @@ EngineConfig EngineConfig::load(const std::string& config_path) {
             num("embed_timeout_seconds", config.embed_timeout_seconds);
             str("onnx_model_path",   config.onnx_model_path);
             str("onnx_tokenizer_path", config.onnx_tokenizer_path);
+            str("onnx_model_name",   config.onnx_model_name);
 
             if (j.contains("embed_provider")) {
                 auto p = j["embed_provider"].get<std::string>();
@@ -150,6 +151,7 @@ EngineConfig EngineConfig::load(const std::string& config_path) {
             else if (key == "embed_timeout_seconds") config.embed_timeout_seconds = std::stoull(value);
             else if (key == "onnx_model_path")    config.onnx_model_path = value;
             else if (key == "onnx_tokenizer_path")config.onnx_tokenizer_path = value;
+            else if (key == "onnx_model_name")    config.onnx_model_name = value;
             else if (key == "embed_provider") {
                 if      (value == "HTTP" || value == "http")            config.embed_provider = EmbedProvider::HTTP;
                 else if (value == "LOCAL_ONNX" || value == "onnx")      config.embed_provider = EmbedProvider::LOCAL_ONNX;

@@ -1,12 +1,6 @@
 // ─── Embeddings Settings ─────────────────────────────────────────────────────
-// Default: built-in MiniLM-L6-v2 via ONNX Runtime (no API key needed).
-// When unchecked, shows available external embedding providers with:
-//   - Model selection dropdown (per-provider model catalog)
-//   - Pre-filled (editable) endpoint URLs
-//   - Dedicated API key input (stored in user-scoped vault)
-//   - Test connectivity button
-//   - Check credits / billing status
-//   - Custom / self-hosted endpoint support (ollama, vLLM)
+// Default: built-in BGE-M3 via ONNX Runtime (no API key needed).
+// Users can switch between builtin models (bge-m3, minilm) or external providers.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -16,7 +10,6 @@ import {
   Cpu,
   Cloud,
   CheckCircle,
-  Info,
   Loader2,
   Link,
   Key,
@@ -49,7 +42,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { ExternalEmbeddingProvider, EmbeddingModelOption } from "@/types/api";
+import type { ExternalEmbeddingProvider, EmbeddingModelOption, BuiltinEmbeddingModel } from "@/types/api";
 
 export function EmbeddingsSettings() {
   const { data: config, isLoading } = useEmbeddingsConfig();
@@ -58,6 +51,7 @@ export function EmbeddingsSettings() {
   const checkCredits = useCheckEmbeddingCredits();
 
   const [useBuiltin, setUseBuiltin] = useState(true);
+  const [selectedBuiltinModel, setSelectedBuiltinModel] = useState("bge-m3");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
   // Per-provider endpoint URLs (pre-filled from backend, editable by user).
   const [endpoints, setEndpoints] = useState<Record<string, string>>({});
@@ -71,8 +65,8 @@ export function EmbeddingsSettings() {
   useEffect(() => {
     if (config) {
       setUseBuiltin(config.use_builtin);
+      setSelectedBuiltinModel(config.active_builtin_model || "bge-m3");
       setSelectedProvider(config.active_provider || "");
-      // Pre-fill endpoint URLs and models from backend response.
       const eps: Record<string, string> = {};
       const models: Record<string, string> = {};
       for (const ep of config.external_providers ?? []) {
@@ -89,10 +83,19 @@ export function EmbeddingsSettings() {
     if (checked) {
       updateEmbeddings.mutate({
         use_builtin: true,
+        builtin_model: selectedBuiltinModel,
       });
       setSelectedProvider("");
       setEmbeddingApiKey("");
     }
+  };
+
+  const handleSelectBuiltinModel = (name: string) => {
+    setSelectedBuiltinModel(name);
+    updateEmbeddings.mutate({
+      use_builtin: true,
+      builtin_model: name,
+    });
   };
 
   const handleSelectProvider = (providerName: string) => {
@@ -169,7 +172,7 @@ export function EmbeddingsSettings() {
                 <div className="flex items-center gap-2">
                   <Cpu className="h-4 w-4 text-primary" />
                   <Label htmlFor="builtin-toggle" className="text-sm font-semibold">
-                    Use built-in {config?.builtin_model.name ?? "MiniLM-L6-v2"}
+                    Use built-in local model
                   </Label>
                   <Badge variant="success" className="text-xs">
                     <CheckCircle className="mr-1 h-3 w-3" />
@@ -177,24 +180,8 @@ export function EmbeddingsSettings() {
                   </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground ml-6">
-                  {config?.builtin_model.description ??
-                    "Lightweight local embedding model — no API key required. Runs on the C++ engine via ONNX Runtime."}
+                  Runs entirely on your server via ONNX Runtime — no API key required, no data leaves your infrastructure.
                 </p>
-                <div className="flex gap-3 ml-6 text-xs text-muted-foreground">
-                  <span>
-                    Provider:{" "}
-                    <span className="font-medium text-foreground">
-                      {config?.builtin_model.provider ??
-                        "Sentence Transformers (HuggingFace)"}
-                    </span>
-                  </span>
-                  <span>
-                    Dimensions:{" "}
-                    <span className="font-medium text-foreground">
-                      {config?.builtin_model.dimensions ?? 384}
-                    </span>
-                  </span>
-                </div>
               </div>
               <Switch
                 id="builtin-toggle"
@@ -204,15 +191,54 @@ export function EmbeddingsSettings() {
               />
             </div>
 
-            {/* Info banner */}
+            {/* Builtin model selector */}
             {useBuiltin && (
-              <div className="flex items-start gap-2 rounded-md bg-blue-50 p-3 dark:bg-blue-950">
-                <Info className="h-4 w-4 text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
-                <p className="text-xs text-blue-700 dark:text-blue-300">
-                  The built-in model runs entirely on your server — no data leaves
-                  your infrastructure. It processes embeddings locally via ONNX
-                  Runtime in the C++ engine with zero external API calls.
-                </p>
+              <div className="space-y-3">
+                <p className="text-sm font-medium">Select Model</p>
+                <div className="grid gap-2">
+                  {(config?.builtin_models ?? []).map((m: BuiltinEmbeddingModel) => {
+                    const isSelected = selectedBuiltinModel === m.name;
+                    return (
+                      <div
+                        key={m.name}
+                        className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
+                          isSelected ? "border-primary bg-primary/5" : "hover:border-muted-foreground/30"
+                        }`}
+                        onClick={() => handleSelectBuiltinModel(m.name)}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") handleSelectBuiltinModel(m.name);
+                        }}
+                      >
+                        <div className="mt-0.5">
+                          <div className={`h-4 w-4 rounded-full border-2 flex items-center justify-center ${
+                            isSelected ? "border-primary" : "border-muted-foreground/40"
+                          }`}>
+                            {isSelected && <div className="h-2 w-2 rounded-full bg-primary" />}
+                          </div>
+                        </div>
+                        <div className="flex-1 space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium">{m.display_name}</span>
+                            <Badge variant="outline" className="text-[10px]">{m.dimensions}d</Badge>
+                            {m.name === "bge-m3" && (
+                              <Badge variant="success" className="text-[10px]">Best Quality</Badge>
+                            )}
+                            {m.name === "minilm" && (
+                              <Badge variant="secondary" className="text-[10px]">Lightweight</Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground">{m.description}</p>
+                          <div className="flex gap-3 text-[10px] text-muted-foreground">
+                            <span>Provider: {m.provider}</span>
+                            <span>Size: {m.size_mb >= 1000 ? `${(m.size_mb / 1000).toFixed(1)} GB` : `${m.size_mb} MB`}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
