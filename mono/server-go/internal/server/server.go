@@ -169,6 +169,9 @@ func (s *Server) setupRouter() {
 	if s.deps.MetricsCollector != nil {
 		h.MetricsCollector = s.deps.MetricsCollector
 	}
+	if s.deps.Redis != nil {
+		h.EmbedCache = engine.NewEmbedCacheService(s.deps.Redis.Client())
+	}
 
 	// ── Health & readiness (no auth required) ───────────────────────────
 	healthHandler := api.NewHealthHandler(s.deps.DB, s.deps.Redis, s.deps.EnginePool, s.deps.Version)
@@ -322,6 +325,10 @@ func (s *Server) setupRouter() {
 					metricsWSHandler := ws.NewMetricsHandler(s.deps.WSHub)
 					r.Get("/metrics/ws", metricsWSHandler.ServeHTTP)
 				}
+
+				// Internal: Redis-backed embedding cache for C++ engine
+				r.Get("/embed-cache/{repoID}/{chunkHash}", h.GetEmbedCache)
+				r.Put("/embed-cache/{repoID}/{chunkHash}", h.PutEmbedCache)
 			})
 
 			// Admin

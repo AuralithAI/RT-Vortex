@@ -10,6 +10,8 @@
 #include "review_signals.h"
 #include "logging.h"
 #include "version.h"
+#include "config_validator.h"
+#include "storage_migration.h"
 #include "tms/tms_memory_system.h"
 #include "tms/tms_types.h"
 #include "tms/repo_parser.h"
@@ -881,6 +883,14 @@ private:
 // =============================================================================
 
 std::unique_ptr<Engine> Engine::create(const EngineConfig& config) {
+    auto errors = ConfigValidator::validate(config);
+    if (!errors.empty()) {
+        std::string msg = "EngineConfig validation failed:";
+        for (const auto& e : errors) {
+            msg += "\n  " + e.field + ": " + e.message;
+        }
+        throw std::runtime_error(msg);
+    }
     return std::make_unique<EngineImpl>(config);
 }
 

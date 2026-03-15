@@ -347,6 +347,63 @@ private:
 };
 
 //=============================================================================
+// Embedding Circuit Breaker
+//=============================================================================
+
+class CircuitBreaker {
+public:
+    explicit CircuitBreaker(int threshold = 5,
+                            std::chrono::seconds cooldown = std::chrono::seconds(60))
+        : threshold_(threshold), cooldown_(cooldown) {}
+
+    bool allowRequest() {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (state_ == State::CLOSED) return true;
+        if (state_ == State::OPEN) {
+            auto elapsed = std::chrono::steady_clock::now() - opened_at_;
+            if (elapsed >= cooldown_) {
+                state_ = State::HALF_OPEN;
+                return true;
+            }
+            return false;
+        }
+        // HALF_OPEN: allow one probe
+        return true;
+    }
+
+    void recordSuccess() {
+        std::lock_guard<std::mutex> lock(mu_);
+        failures_ = 0;
+        state_ = State::CLOSED;
+    }
+
+    void recordFailure() {
+        std::lock_guard<std::mutex> lock(mu_);
+        ++failures_;
+        if (failures_ >= threshold_) {
+            state_ = State::OPEN;
+            opened_at_ = std::chrono::steady_clock::now();
+            metrics::Registry::instance().incCounter(metrics::CIRCUIT_BREAKER_TRIPS);
+        }
+    }
+
+    bool isOpen() const {
+        std::lock_guard<std::mutex> lock(mu_);
+        return state_ == State::OPEN;
+    }
+
+private:
+    enum class State { CLOSED, OPEN, HALF_OPEN };
+
+    mutable std::mutex mu_;
+    State state_ = State::CLOSED;
+    int failures_ = 0;
+    int threshold_;
+    std::chrono::seconds cooldown_;
+    std::chrono::steady_clock::time_point opened_at_;
+};
+
+//=============================================================================
 // Embedding Client Implementation
 //=============================================================================
 
@@ -401,7 +458,17 @@ public:
             
             switch (provider_) {
                 case EmbedProvider::HTTP:
-                    batch_response = embedViaHttp(batch);
+                    if (http_circuit_breaker_.allowRequest()) {
+                        try {
+                            batch_response = embedViaHttp(batch);
+                            http_circuit_breaker_.recordSuccess();
+                        } catch (...) {
+                            http_circuit_breaker_.recordFailure();
+                            batch_response = embedViaOnnx(batch);
+                        }
+                    } else {
+                        batch_response = embedViaOnnx(batch);
+                    }
                     break;
                     
                 case EmbedProvider::LOCAL_ONNX:
@@ -497,6 +564,7 @@ private:
     size_t timeout_seconds_;
     std::string api_key_;
     EmbedContentCache embed_cache_;
+    CircuitBreaker http_circuit_breaker_;
     
 #ifdef AIPR_HAS_ONNX
     std::unique_ptr<Ort::Session> onnx_session_;

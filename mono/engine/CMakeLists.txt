@@ -681,6 +681,7 @@ set(REVIEW_SOURCES
 set(STORAGE_SOURCES
     src/storage/local_storage.cpp
     src/storage/cloud_storage.cpp
+    src/storage/migration.cpp
 )
 
 # Source files - Memory System (Brain-inspired RAG)
@@ -717,6 +718,7 @@ set(UTIL_SOURCES
     src/util/fs.cpp
     src/util/perf_timer.cpp
     src/util/metrics.cpp
+    src/util/config_validator.cpp
 )
 
 # Main engine library

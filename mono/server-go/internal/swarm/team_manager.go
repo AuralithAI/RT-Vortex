@@ -303,3 +303,25 @@ func (m *TeamManager) activeTeamCount(ctx context.Context) (int, error) {
 	err := m.db.QueryRow(ctx, `SELECT COUNT(*) FROM swarm_teams WHERE status != 'offline'`).Scan(&count)
 	return count, err
 }
+
+// FindIdleTeamWithCapacity returns an idle team that has at least minAgents
+// registered agents, or nil if none qualifies. Used by task carving to
+// borrow agents from an existing team for small tasks.
+func (m *TeamManager) FindIdleTeamWithCapacity(ctx context.Context, minAgents int) *Team {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	row := m.db.QueryRow(ctx, `
+		SELECT t.id, t.name, t.lead_agent_id, t.status, t.agent_ids
+		FROM swarm_teams t
+		WHERE t.status = 'idle'
+		  AND COALESCE(array_length(t.agent_ids, 1), 0) >= $1
+		LIMIT 1`, minAgents)
+
+	var t Team
+	err := row.Scan(&t.ID, &t.Name, &t.LeadAgentID, &t.Status, &t.AgentIDs)
+	if err != nil {
+		return nil
+	}
+	return &t
+}

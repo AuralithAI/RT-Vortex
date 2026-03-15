@@ -68,9 +68,10 @@ type Handler struct {
 	PRSyncWorker     *prsync.Worker
 	ChatRepo         *store.ChatRepository
 	ChatService      *chat.Service
-	Vault            *vault.FileVault         // shared file vault — user-scoped via vault token
-	VCSPlatformRepo  *store.VCSPlatformRepo   // per-user VCS platform config (URLs, usernames)
-	MetricsCollector *engine.MetricsCollector // engine metrics stream consumer
+	Vault            *vault.FileVault          // shared file vault — user-scoped via vault token
+	VCSPlatformRepo  *store.VCSPlatformRepo    // per-user VCS platform config (URLs, usernames)
+	MetricsCollector *engine.MetricsCollector  // engine metrics stream consumer
+	EmbedCache       *engine.EmbedCacheService // Redis-backed L2 embedding cache
 
 	// Runtime embedding configuration — guarded by embedMu.
 	embedMu     sync.RWMutex

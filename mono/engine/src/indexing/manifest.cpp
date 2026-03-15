@@ -2,6 +2,7 @@
  * AI PR Reviewer - Index Manifest
  * 
  * Tracks indexed content with file hashes for incremental updates.
+ * Includes directory-level Merkle tree for fast subtree skipping.
  */
 
 #include "indexer.h"
@@ -13,6 +14,8 @@
 #include <iomanip>
 #include <unordered_map>
 #include <unordered_set>
+#include <algorithm>
+#include <functional>
 #include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
@@ -213,28 +216,118 @@ public:
     }
     
     /**
-     * Get files that need re-indexing
+     * Compute directory-level Merkle hash from sorted child blob_sha values.
+     * Returns a hex string representing the combined hash.
+     */
+    std::string computeDirHash(const std::string& dir_path,
+                               const std::vector<FileInfo>& files) {
+        std::vector<std::string> child_hashes;
+        for (const auto& f : files) {
+            if (f.path.rfind(dir_path, 0) == 0) {
+                child_hashes.push_back(f.blob_sha);
+            }
+        }
+        std::sort(child_hashes.begin(), child_hashes.end());
+
+        std::string concat;
+        for (const auto& h : child_hashes) concat += h;
+
+        size_t hash = std::hash<std::string>{}(concat);
+        std::ostringstream ss;
+        ss << std::hex << hash;
+        return ss.str();
+    }
+
+    /**
+     * Build Merkle tree for all top-level directories.
+     * Returns dir_path → hash mapping.
+     */
+    std::unordered_map<std::string, std::string> buildMerkleTree(
+        const std::vector<FileInfo>& files
+    ) {
+        std::unordered_set<std::string> dirs;
+        for (const auto& f : files) {
+            auto pos = f.path.find('/');
+            if (pos != std::string::npos) {
+                dirs.insert(f.path.substr(0, pos + 1));
+            }
+        }
+
+        std::unordered_map<std::string, std::string> tree;
+        for (const auto& dir : dirs) {
+            tree[dir] = computeDirHash(dir, files);
+        }
+        return tree;
+    }
+
+    /**
+     * Get files that need re-indexing — Merkle-optimized.
+     * Compares directory hashes first; only descends into changed directories.
      */
     std::vector<std::string> getStaleFiles(
         const IndexManifest& manifest,
         const std::vector<FileInfo>& current_files
     ) {
-        std::vector<std::string> stale;
-        
-        // Build map of existing entries
+        // Build Merkle tree for current files
+        auto current_tree = buildMerkleTree(current_files);
+
+        // Load saved Merkle tree from manifest
+        std::unordered_map<std::string, std::string> saved_tree;
+        // (populated from manifest.merkle_tree if present — see load/save)
+
+        // Determine which directories changed
+        std::unordered_set<std::string> changed_dirs;
+        bool has_saved_tree = !manifest.entries.empty();
+
+        if (has_saved_tree) {
+            // Build saved tree from manifest entries
+            std::vector<FileInfo> saved_files;
+            for (const auto& e : manifest.entries) {
+                FileInfo fi;
+                fi.path = e.file_path;
+                fi.blob_sha = e.blob_sha;
+                saved_files.push_back(fi);
+            }
+            saved_tree = buildMerkleTree(saved_files);
+
+            for (const auto& [dir, hash] : current_tree) {
+                auto it = saved_tree.find(dir);
+                if (it == saved_tree.end() || it->second != hash) {
+                    changed_dirs.insert(dir);
+                }
+            }
+            // Also mark dirs that were in saved but not in current (deleted dirs)
+            for (const auto& [dir, _] : saved_tree) {
+                if (current_tree.find(dir) == current_tree.end()) {
+                    changed_dirs.insert(dir);
+                }
+            }
+        }
+
+        // Build map of existing entries for per-file comparison
         std::unordered_map<std::string, const ManifestEntry*> existing;
         for (const auto& entry : manifest.entries) {
             existing[entry.file_path] = &entry;
         }
         
-        // Check each current file
+        std::vector<std::string> stale;
+
         for (const auto& file : current_files) {
+            // If we have a saved tree and this file's directory is unchanged, skip
+            if (has_saved_tree && !saved_tree.empty()) {
+                auto pos = file.path.find('/');
+                if (pos != std::string::npos) {
+                    std::string dir = file.path.substr(0, pos + 1);
+                    if (changed_dirs.find(dir) == changed_dirs.end()) {
+                        continue; // directory hash matches — skip entire subtree
+                    }
+                }
+            }
+
             auto it = existing.find(file.path);
             if (it == existing.end()) {
-                // New file
                 stale.push_back(file.path);
             } else if (it->second->blob_sha != file.blob_sha) {
-                // Changed file
                 stale.push_back(file.path);
             }
         }

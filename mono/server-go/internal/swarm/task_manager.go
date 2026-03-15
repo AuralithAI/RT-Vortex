@@ -784,6 +784,24 @@ func (m *TaskManager) handleStreamMessages(ctx context.Context, messages []redis
 			continue
 		}
 
+		// Task carving: for small tasks, borrow agents from an existing
+		// idle team with enough capacity instead of creating a new team.
+		complexity := classifyTaskComplexity(task.Description)
+		if complexity == ComplexitySmall {
+			lender := m.tm.FindIdleTeamWithCapacity(ctx, 3)
+			if lender != nil {
+				if err := m.assignTask(ctx, taskID, lender.ID); err != nil {
+					slog.Error("swarm assignLoop: carve-assign failed",
+						"task_id", taskID, "lender_team", lender.ID, "error", err)
+					continue
+				}
+				slog.Info("swarm assignLoop: carved small task into existing team",
+					"task_id", taskID, "team_id", lender.ID)
+				m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
+				continue
+			}
+		}
+
 		// No idle team — request team creation if under max.
 		if m.tm.CanCreateTeam() {
 			// Publish creation event — Python will pick this up.
@@ -835,6 +853,48 @@ func (m *TaskManager) assignTask(ctx context.Context, taskID, teamID uuid.UUID) 
 // between the Python consumer creating teams on demand and the Go assign loop).
 func (m *TaskManager) AssignTaskToTeam(ctx context.Context, taskID, teamID uuid.UUID) error {
 	return m.assignTask(ctx, taskID, teamID)
+}
+
+// ── Task Carving ────────────────────────────────────────────────────────────
+
+// TaskComplexity classifies a task description for smart team assignment.
+type TaskComplexity string
+
+const (
+	ComplexitySmall  TaskComplexity = "small"
+	ComplexityMedium TaskComplexity = "medium"
+	ComplexityLarge  TaskComplexity = "large"
+)
+
+// multiFileKeywords indicate a task likely touches multiple files.
+var multiFileKeywords = []string{
+	"all", "across", "refactor", "migrate", "system",
+	"architecture", "schema change", "entire", "every",
+}
+
+// classifyTaskComplexity uses heuristics (word count + keyword presence) to
+// classify a task. No LLM call needed.
+func classifyTaskComplexity(description string) TaskComplexity {
+	words := strings.Fields(description)
+	wordCount := len(words)
+	lower := strings.ToLower(description)
+
+	for _, kw := range multiFileKeywords {
+		if strings.Contains(lower, kw) {
+			if wordCount > 150 {
+				return ComplexityLarge
+			}
+			return ComplexityMedium
+		}
+	}
+
+	if wordCount < 50 {
+		return ComplexitySmall
+	}
+	if wordCount > 150 {
+		return ComplexityLarge
+	}
+	return ComplexityMedium
 }
 
 func (m *TaskManager) checkTimeouts(ctx context.Context) {

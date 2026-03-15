@@ -345,6 +345,10 @@ struct TMSConfig {
     bool confidence_gate_enabled = false;   // When true, skip LLM if retrieval is high-confidence
     float confidence_gate_threshold = 0.85f; // Min max-retrieval score to skip LLM
     int query_timeout_seconds = 5;          // Hard timeout for forward() queries
+
+    // Config versioning
+    uint32_t config_version = 1;            // Schema version for storage migration
+    bool auto_migrate = false;              // Auto-migrate storage on version bump
 };
 
 // =============================================================================

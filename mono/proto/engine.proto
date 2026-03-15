@@ -466,6 +466,7 @@ message EngineMetricsSnapshot {
     map<string, uint64> index_sizes_bytes = 4;      // Per-repo index file sizes
     uint64 knowledge_graph_nodes = 5;               // Total KG nodes
     uint64 knowledge_graph_edges = 6;               // Total KG edges
+    string migration_status = 7;                    // "idle" | "migrating" | "done"
 }
 
 // ============================================================================

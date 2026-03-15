@@ -53,6 +53,9 @@ _APPROVAL_POLL_INTERVAL = 5
 # Maximum wait time for plan approval before timing out (10 minutes).
 _APPROVAL_TIMEOUT = 600
 
+# Pre-warmed agent pool size (Orchestrator + SeniorDev ready at startup).
+_WARM_POOL_SIZE = 2
+
 
 def _make_agent(role: str, team_id: str, agent_config: AgentConfig) -> Agent:
     """Instantiate an agent by role name.
@@ -411,6 +414,9 @@ class RedisConsumer:
         self._controller_id: str | None = None
         self._controller_hb_task: asyncio.Task | None = None
         self._controller_hb_stop = asyncio.Event()
+        self._warm_pool: list[tuple[str, str]] = []
+        self._warm_pool_hb_stop = asyncio.Event()
+        self._warm_pool_hb_task: asyncio.Task | None = None
 
     async def _reregister_controller(self) -> None:
         """Re-register the controller agent and update the GoClient token.
@@ -483,9 +489,64 @@ class RedisConsumer:
         self._running = True
         logger.info("Redis consumer started on %s (consumer=%s)", _STREAM_KEY, _CONSUMER_NAME)
 
+        # Start warm pool — pre-register agents so the first task has no cold-start.
+        await self._start_warm_pool()
+
+    async def _start_warm_pool(self) -> None:
+        """Pre-register a small pool of agents that maintain heartbeats.
+
+        When a task arrives, these agents are already registered with Go and
+        have active heartbeats. This removes the 2-5s cold registration path
+        from the first task's critical path.
+        """
+        pool_team_id = "00000000-0000-0000-0000-000000000001"
+        pool_ids: list[str] = []
+        for i in range(_WARM_POOL_SIZE):
+            agent_id = f"pool-{i}-{uuid.uuid4().hex[:6]}"
+            try:
+                _, canonical_id = await register_agent(
+                    agent_id=agent_id,
+                    role="pool",
+                    team_id=pool_team_id,
+                    hostname=__import__("socket").gethostname(),
+                )
+                pool_ids.append(canonical_id)
+                self._warm_pool.append((canonical_id, ""))
+                logger.info("Warm pool agent registered: %s", canonical_id)
+            except Exception as e:
+                logger.warning("Warm pool agent %d registration failed: %s", i, e)
+
+        if pool_ids and self._go_client:
+            self._warm_pool_hb_stop.clear()
+            self._warm_pool_hb_task = asyncio.create_task(
+                _heartbeat_loop(
+                    self._go_client, pool_ids, self._warm_pool_hb_stop,
+                ),
+                name="heartbeat-warm-pool",
+            )
+            logger.info("Warm pool started with %d agents", len(pool_ids))
+
+    def _take_warm_agent(self) -> str | None:
+        """Pop a pre-registered agent from the warm pool (if any)."""
+        if self._warm_pool:
+            agent_id, _ = self._warm_pool.pop(0)
+            return agent_id
+        return None
+
     async def stop(self) -> None:
         """Stop consuming and cancel active teams."""
         self._running = False
+
+        # Stop warm pool heartbeat.
+        self._warm_pool_hb_stop.set()
+        if self._warm_pool_hb_task:
+            self._warm_pool_hb_task.cancel()
+            try:
+                await self._warm_pool_hb_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._warm_pool_hb_task = None
+        self._warm_pool.clear()
 
         # Stop controller heartbeat.
         self._controller_hb_stop.set()
