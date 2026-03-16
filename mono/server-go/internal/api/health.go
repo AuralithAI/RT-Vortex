@@ -98,7 +98,7 @@ func (h *HealthHandler) Version(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
@@ -113,7 +113,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func writeValidationError(w http.ResponseWriter, ve interface{ StatusCode() int }) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnprocessableEntity)
-	json.NewEncoder(w).Encode(ve)
+	_ = json.NewEncoder(w).Encode(ve)
 }
 
 func readJSON(r *http.Request, v interface{}) error {

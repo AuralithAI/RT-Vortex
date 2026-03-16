@@ -96,17 +96,6 @@ var vcsPlatformDefs = map[string]struct {
 // vcsPlatformOrder is the display order.
 var vcsPlatformOrder = []string{"github", "gitlab", "bitbucket", "azure_devops"}
 
-// dbFieldKeys maps platform non-secret fields to the UserVCSPlatform model fields.
-// Key = field key from vcsPlatformDefs, value is used for DB storage.
-var dbFieldKeys = map[string]bool{
-	"base_url":     true,
-	"api_url":      true,
-	"organization": true,
-	"username":     true,
-	"tenant_id":    true,
-	"client_id":    true,
-}
-
 // getDBFieldValue extracts a non-secret field value from the DB model.
 func getDBFieldValue(p *model.UserVCSPlatform, key string) string {
 	if p == nil {

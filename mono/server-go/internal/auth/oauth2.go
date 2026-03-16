@@ -101,28 +101,6 @@ func (r *ProviderRegistry) List() []ProviderName {
 	return names
 }
 
-// ── Base Provider ───────────────────────────────────────────────────────────
-
-// baseProvider implements common OAuth2 logic shared across providers.
-type baseProvider struct {
-	name   ProviderName
-	config *oauth2.Config
-}
-
-func (b *baseProvider) Name() ProviderName {
-	return b.name
-}
-
-func (b *baseProvider) AuthURL(state string) string {
-	return b.config.AuthCodeURL(state, oauth2.AccessTypeOffline)
-}
-
-func (b *baseProvider) Exchange(ctx context.Context, code string) (*oauth2.Token, error) {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	return b.config.Exchange(ctx, code)
-}
-
 // FetchJSON is a helper that fetches a URL with the token and decodes JSON.
 func FetchJSON(ctx context.Context, token *oauth2.Token, url string, dest interface{}) error {
 	client := oauth2.NewClient(ctx, oauth2.StaticTokenSource(token))

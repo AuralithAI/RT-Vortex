@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -114,7 +113,6 @@ type TaskManager struct {
 	authSvc *swarmauth.Service
 	wsHub   *WSHub
 
-	mu     sync.Mutex
 	cancel context.CancelFunc
 }
 

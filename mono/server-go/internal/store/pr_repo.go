@@ -228,7 +228,6 @@ func (r *PullRequestRepo) buildFilterClause(repoID uuid.UUID, f model.PRListFilt
 	if f.TargetBranch != "" {
 		conditions = append(conditions, fmt.Sprintf("target_branch = $%d", idx))
 		args = append(args, f.TargetBranch)
-		idx++
 	}
 
 	return "WHERE " + strings.Join(conditions, " AND "), args

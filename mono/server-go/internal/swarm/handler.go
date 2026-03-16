@@ -68,7 +68,7 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // RevokeAgent handles DELETE /internal/swarm/auth/revoke.
@@ -105,7 +105,7 @@ func (h *Handler) GetTaskInternal(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(task)
+	_ = json.NewEncoder(w).Encode(task)
 }
 
 // GetTaskStatus handles GET /internal/swarm/tasks/{id}/status — lightweight
@@ -124,7 +124,7 @@ func (h *Handler) GetTaskStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"status": task.Status,
 	})
 }
@@ -153,7 +153,7 @@ func (h *Handler) GetNextTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(tasks[0])
+		_ = json.NewEncoder(w).Encode(tasks[0])
 		return
 	}
 
@@ -168,7 +168,7 @@ func (h *Handler) GetNextTask(w http.ResponseWriter, r *http.Request) {
 	for _, t := range tasks {
 		if t.AssignedTeamID != nil && *t.AssignedTeamID == teamID {
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(t)
+			_ = json.NewEncoder(w).Encode(t)
 			return
 		}
 	}
@@ -209,7 +209,7 @@ func (h *Handler) SubmitPlan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"plan_review"}`))
+	_, _ = w.Write([]byte(`{"status":"plan_review"}`))
 }
 
 // SubmitDiff handles POST /internal/swarm/tasks/{id}/diffs.
@@ -249,7 +249,7 @@ func (h *Handler) SubmitDiff(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // ListDiffs handles GET /internal/swarm/tasks/{id}/diffs.
@@ -271,7 +271,7 @@ func (h *Handler) ListDiffs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"diffs": diffs})
+	_ = json.NewEncoder(w).Encode(map[string]any{"diffs": diffs})
 }
 
 // AddDiffComment handles POST /internal/swarm/tasks/{id}/diffs/{diffId}/comments.
@@ -303,7 +303,7 @@ func (h *Handler) AddDiffComment(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // CompleteTask handles POST /internal/swarm/tasks/{id}/complete.
@@ -335,7 +335,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"completed"}`))
+	_, _ = w.Write([]byte(`{"status":"completed"}`))
 }
 
 // DeclareTeamSize handles POST /internal/swarm/tasks/{id}/declare-size.
@@ -400,7 +400,7 @@ func (h *Handler) DeclareTeamSize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte(`{"status":"scaling_acknowledged"}`))
+	_, _ = w.Write([]byte(`{"status":"scaling_acknowledged"}`))
 }
 
 // FailTask handles POST /internal/swarm/tasks/{id}/fail.
@@ -428,7 +428,7 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"failed"}`))
+	_, _ = w.Write([]byte(`{"status":"failed"}`))
 }
 
 // Heartbeat handles POST /internal/swarm/heartbeat/{id}.
@@ -483,7 +483,7 @@ func (h *Handler) CreateTaskUser(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(task)
+	_ = json.NewEncoder(w).Encode(task)
 }
 
 // ListTasksUser handles GET /api/v1/swarm/tasks.
@@ -497,7 +497,7 @@ func (h *Handler) ListTasksUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tasks)
+	_ = json.NewEncoder(w).Encode(tasks)
 }
 
 // GetTaskUser handles GET /api/v1/swarm/tasks/{id}.
@@ -515,7 +515,7 @@ func (h *Handler) GetTaskUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(task)
+	_ = json.NewEncoder(w).Encode(task)
 }
 
 // GetTaskAgents handles GET /api/v1/swarm/tasks/{id}/agents.
@@ -536,7 +536,7 @@ func (h *Handler) GetTaskAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"agents": agents})
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{"agents": agents})
 }
 
 // PlanAction handles POST /api/v1/swarm/tasks/{id}/plan-action.
@@ -593,7 +593,7 @@ func (h *Handler) PlanAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(fmt.Sprintf(`{"status":"%s"}`, body.Action)))
+	_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"%s"}`, body.Action)))
 }
 
 // GetDiffsUser handles GET /api/v1/swarm/tasks/{id}/diffs.
@@ -620,7 +620,7 @@ func (h *Handler) GetDiffsUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"diffs": metas})
+	_ = json.NewEncoder(w).Encode(map[string]any{"diffs": metas})
 }
 
 // GetDiffContent handles GET /api/v1/swarm/tasks/{id}/diffs/{diffId}/content.
@@ -639,7 +639,7 @@ func (h *Handler) GetDiffContent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(diff)
+	_ = json.NewEncoder(w).Encode(diff)
 }
 
 // UserDiffComment handles POST /api/v1/swarm/tasks/{id}/diffs/{diffId}/comments.
@@ -667,7 +667,7 @@ func (h *Handler) UserDiffComment(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // DiffAction handles POST /api/v1/swarm/tasks/{id}/diff-action.
@@ -716,7 +716,7 @@ func (h *Handler) DiffAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(fmt.Sprintf(`{"status":"%s"}`, body.Action)))
+	_, _ = w.Write([]byte(fmt.Sprintf(`{"status":"%s"}`, body.Action)))
 }
 
 // RateTask handles POST /api/v1/swarm/tasks/{id}/rate.
@@ -781,7 +781,7 @@ func (h *Handler) ListAgentsUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(agents)
+	_ = json.NewEncoder(w).Encode(agents)
 }
 
 // ListTeamsUser handles GET /api/v1/swarm/teams.
@@ -792,7 +792,7 @@ func (h *Handler) ListTeamsUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(teams)
+	_ = json.NewEncoder(w).Encode(teams)
 }
 
 // RetryTask handles POST /api/v1/swarm/tasks/{id}/retry (user JWT required).
@@ -809,7 +809,7 @@ func (h *Handler) RetryTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"retried"}`))
+	_, _ = w.Write([]byte(`{"status":"retried"}`))
 }
 
 // CancelTask handles POST /api/v1/swarm/tasks/{id}/cancel (user JWT required).
@@ -851,7 +851,7 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	w.Write([]byte(`{"status":"cancelled"}`))
+	_, _ = w.Write([]byte(`{"status":"cancelled"}`))
 }
 
 // DeleteTaskUser handles DELETE /api/v1/swarm/tasks/{id} (user JWT required).
@@ -898,7 +898,7 @@ func (h *Handler) TaskHistory(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"tasks":  summaries,
 		"total":  total,
 		"limit":  limit,
@@ -915,7 +915,7 @@ func (h *Handler) SwarmOverview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(overview)
+	_ = json.NewEncoder(w).Encode(overview)
 }
 
 // RecordContribution handles POST /internal/swarm/tasks/{id}/contribution.
@@ -959,7 +959,7 @@ func (h *Handler) RecordContribution(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	w.Write([]byte(`{"status":"recorded"}`))
+	_, _ = w.Write([]byte(`{"status":"recorded"}`))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

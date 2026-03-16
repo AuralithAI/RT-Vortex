@@ -381,10 +381,6 @@ func (p *Pipeline) matchesSkipPattern(filename string) bool {
 	return false
 }
 
-func (p *Pipeline) analyzeFiles(ctx context.Context, pr *vcs.PullRequest, files []vcs.DiffFile) ([]*model.ReviewComment, error) {
-	return p.analyzeFilesWithContext(ctx, pr, files, nil)
-}
-
 // analyzeFilesWithContext sends each file's diff to the LLM for review.
 // When contextPack is non-nil, it enriches the prompt with engine-retrieved
 // code context (related functions, callers, etc.) — this produces more
@@ -607,47 +603,6 @@ func (p *Pipeline) buildSummary(pr *vcs.PullRequest, comments []*model.ReviewCom
 *Powered by [RTVortex](https://github.com/AuralithAI/rtvortex) — AI Code Review Engine*`,
 		pr.Title, pr.Number, duration.Round(time.Millisecond),
 		len(comments), critCount, highCount, medCount, lowCount,
-	)
-}
-
-// ── Prompts ─────────────────────────────────────────────────────────────────
-
-const systemPrompt = `You are RTVortex, an expert AI code reviewer. Analyze the given code diff and provide actionable review comments.
-
-For each issue found, respond with a JSON array of objects:
-[
-  {
-    "line": <int>,
-    "severity": "critical|high|medium|low|info",
-    "category": "security|performance|bug|style|maintainability|testing",
-    "title": "Brief issue title",
-    "body": "Detailed explanation",
-    "suggestion": "Optional suggested fix code"
-  }
-]
-
-Focus on:
-- Security vulnerabilities (injection, XSS, auth bypass, secrets)
-- Bugs and logic errors
-- Performance issues
-- Best practices and code quality
-- Missing error handling
-
-If the code looks good, return an empty array [].`
-
-func buildFileReviewPrompt(pr *vcs.PullRequest, file vcs.DiffFile) string {
-	return fmt.Sprintf(`## Pull Request Context
-- **Title:** %s
-- **Author:** %s
-- **Branch:** %s → %s
-
-## File: %s (%s)
-
-### Diff:
-%s`,
-		pr.Title, pr.Author, pr.SourceBranch, pr.TargetBranch,
-		file.Filename, file.Status,
-		file.Patch,
 	)
 }
 
