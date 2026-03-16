@@ -183,6 +183,7 @@ jobs:
           cmake --build . --config Release --parallel 4
           sudo cmake --install . --config Release
           sudo ldconfig
+          rm -rf /tmp/faiss
 
       - name: Refresh ldconfig for cached FAISS (Ubuntu)
         if: runner.os == 'Linux' && steps.cache-faiss-linux.outputs.cache-hit == 'true'
@@ -245,6 +246,8 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
           cmake --build . --config Release --parallel 4
           cmake --install . --config Release --prefix C:\faiss-install
+          cd C:\
+          Remove-Item -Recurse -Force C:\faiss -ErrorAction SilentlyContinue
       
       - name: Setup CMake
         uses: lukka/get-cmake@latest

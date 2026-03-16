@@ -325,6 +325,7 @@ jobs:
           cmake --build . --config Release --parallel $(nproc)
           sudo cmake --install . --config Release
           sudo ldconfig
+          rm -rf /tmp/faiss
 
       - name: Refresh ldconfig for cached FAISS (Ubuntu)
         if: runner.os == 'Linux' && steps.cache-faiss-linux.outputs.cache-hit == 'true'
@@ -368,6 +369,8 @@ jobs:
           cmake --build . --config Release --parallel 4
           cmake --install . --config Release --prefix C:\faiss-install
           echo "faiss_DIR=C:\faiss-install" >> $env:GITHUB_ENV
+          cd C:\
+          Remove-Item -Recurse -Force C:\faiss -ErrorAction SilentlyContinue
 
       - name: Setup CMake
         uses: lukka/get-cmake@latest
