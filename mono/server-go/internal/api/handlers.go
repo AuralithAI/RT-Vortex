@@ -83,11 +83,11 @@ type Handler struct {
 type embeddingRuntimeConfig struct {
 	UseBuiltin   bool   `json:"use_builtin"`   // true → LOCAL_ONNX
 	BuiltinModel string `json:"builtin_model"` // "bge-m3" or "minilm"
-	Provider     string `json:"provider"`       // "openai", "cohere", "voyage" (only when UseBuiltin=false)
-	Endpoint     string `json:"endpoint"`       // embedding API URL
-	Model        string `json:"model"`          // e.g. "text-embedding-3-small"
-	Dimensions   uint32 `json:"dimensions"`     // e.g. 1536
-	APIKey       string `json:"-"`              // never serialised
+	Provider     string `json:"provider"`      // "openai", "cohere", "voyage" (only when UseBuiltin=false)
+	Endpoint     string `json:"endpoint"`      // embedding API URL
+	Model        string `json:"model"`         // e.g. "text-embedding-3-small"
+	Dimensions   uint32 `json:"dimensions"`    // e.g. 1536
+	APIKey       string `json:"-"`             // never serialised
 }
 
 // DefaultEmbeddingConfig returns the default built-in embedding configuration.
@@ -1750,20 +1750,20 @@ func (h *Handler) GetEmbeddingsConfig(w http.ResponseWriter, r *http.Request) {
 		"active_builtin_model": activeBuiltin,
 		"builtin_models": []map[string]interface{}{
 			{
-				"name":        "bge-m3",
+				"name":         "bge-m3",
 				"display_name": "BGE-M3",
-				"provider":    "BAAI (HuggingFace)",
-				"dimensions":  1024,
-				"size_mb":     2300,
-				"description": "High-quality multilingual embedding model — 1024 dimensions. Best retrieval accuracy. Downloaded on first use (~2.3 GB).",
+				"provider":     "BAAI (HuggingFace)",
+				"dimensions":   1024,
+				"size_mb":      2300,
+				"description":  "High-quality multilingual embedding model — 1024 dimensions. Best retrieval accuracy. Downloaded on first use (~2.3 GB).",
 			},
 			{
-				"name":        "minilm",
+				"name":         "minilm",
 				"display_name": "MiniLM-L6-v2",
-				"provider":    "Sentence Transformers (HuggingFace)",
-				"dimensions":  384,
-				"size_mb":     87,
-				"description": "Lightweight local embedding model — 384 dimensions. Fast inference, lower memory. Bundled with the engine.",
+				"provider":     "Sentence Transformers (HuggingFace)",
+				"dimensions":   384,
+				"size_mb":      87,
+				"description":  "Lightweight local embedding model — 384 dimensions. Fast inference, lower memory. Bundled with the engine.",
 			},
 		},
 		"external_providers": externalProviders,
@@ -1782,11 +1782,11 @@ func (h *Handler) UpdateEmbeddingsConfig(w http.ResponseWriter, r *http.Request)
 	var req struct {
 		UseBuiltin   bool   `json:"use_builtin"`
 		BuiltinModel string `json:"builtin_model"` // "bge-m3" or "minilm"
-		Provider     string `json:"provider"`       // "openai", "cohere", "voyage", "custom"
-		Endpoint     string `json:"endpoint"`       // embedding API URL
-		Model        string `json:"model"`          // e.g. "text-embedding-3-small"
-		Dimensions   uint32 `json:"dimensions"`     // e.g. 1536
-		APIKey       string `json:"api_key"`         // optional — re-use LLM key if empty
+		Provider     string `json:"provider"`      // "openai", "cohere", "voyage", "custom"
+		Endpoint     string `json:"endpoint"`      // embedding API URL
+		Model        string `json:"model"`         // e.g. "text-embedding-3-small"
+		Dimensions   uint32 `json:"dimensions"`    // e.g. 1536
+		APIKey       string `json:"api_key"`       // optional — re-use LLM key if empty
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -1838,12 +1838,12 @@ func (h *Handler) UpdateEmbeddingsConfig(w http.ResponseWriter, r *http.Request)
 	)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"use_builtin":    req.UseBuiltin,
-		"builtin_model":  req.BuiltinModel,
-		"provider":       req.Provider,
-		"model":          req.Model,
-		"dimensions":     req.Dimensions,
-		"configured":     apiKey != "" || req.UseBuiltin || req.Provider == "custom",
+		"use_builtin":   req.UseBuiltin,
+		"builtin_model": req.BuiltinModel,
+		"provider":      req.Provider,
+		"model":         req.Model,
+		"dimensions":    req.Dimensions,
+		"configured":    apiKey != "" || req.UseBuiltin || req.Provider == "custom",
 	})
 }
 

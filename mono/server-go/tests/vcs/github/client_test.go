@@ -6,8 +6,8 @@ import (
 	"encoding/hex"
 	"testing"
 
-	ghclient "github.com/AuralithAI/rtvortex-server/internal/vcs/github"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
+	ghclient "github.com/AuralithAI/rtvortex-server/internal/vcs/github"
 )
 
 func TestClient_Type(t *testing.T) {
