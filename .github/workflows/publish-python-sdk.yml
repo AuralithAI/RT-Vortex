@@ -1,9 +1,6 @@
-name: Publish Python SDK to PyPI
+name: Publish Python SDK to PyPI (disabled)
 
 on:
-  push:
-    tags:
-      - 'python-sdk-v*'
   workflow_dispatch:
 
 permissions:
@@ -16,6 +13,7 @@ defaults:
 
 jobs:
   test:
+    if: false
     name: Test Python SDK (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
@@ -48,6 +46,7 @@ jobs:
           retention-days: 7
 
   typecheck:
+    if: false
     name: Type check
     runs-on: ubuntu-latest
     steps:

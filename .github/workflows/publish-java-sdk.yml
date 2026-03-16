@@ -1,9 +1,6 @@
-name: Publish Java SDK to Maven Central
+name: Publish Java SDK to Maven Central (disabled)
 
 on:
-  push:
-    tags:
-      - 'java-sdk-v*'
   workflow_dispatch:
 
 permissions:
@@ -15,6 +12,7 @@ defaults:
 
 jobs:
   test:
+    if: false
     name: Test Java SDK (Java ${{ matrix.java-version }})
     runs-on: ubuntu-latest
     strategy:

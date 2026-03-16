@@ -75,8 +75,8 @@ jobs:
             os: ubuntu-latest
             cmake_extra: ""
           - target: linux-arm64
-            os: ubuntu-latest
-            cmake_extra: "-DCMAKE_SYSTEM_PROCESSOR=aarch64"
+            os: ubuntu-24.04-arm
+            cmake_extra: ""
           - target: darwin-x64
             os: macos-latest
             cmake_extra: ""
@@ -121,9 +121,9 @@ jobs:
             /usr/local/lib/cmake/faiss
             /usr/local/include/faiss
             /usr/local/share/faiss
-          key: faiss-ubuntu-v1.7.4-${{ hashFiles('.github/workflows/engine.yml') }}
+          key: faiss-${{ matrix.target }}-v1.7.4-${{ hashFiles('.github/workflows/engine.yml') }}
           restore-keys: |
-            faiss-ubuntu-v1.7.4-
+            faiss-${{ matrix.target }}-v1.7.4-
 
       - name: Install Dependencies (Ubuntu)
         if: runner.os == 'Linux'
@@ -269,19 +269,19 @@ jobs:
       - name: Download Embedding Model
         shell: bash
         run: |
-          mkdir -p mono/engine/models
-          curl -fSL -o mono/engine/models/all-MiniLM-L6-v2.onnx \
+          mkdir -p mono/engine/models/minilm
+          curl -fSL -o mono/engine/models/minilm/model.onnx \
             "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"
-          curl -fSL -o mono/engine/models/tokenizer.json \
+          curl -fSL -o mono/engine/models/minilm/tokenizer.json \
             "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json"
-          curl -fSL -o mono/engine/models/vocab.txt \
+          curl -fSL -o mono/engine/models/minilm/vocab.txt \
             "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt"
-          ls -lh mono/engine/models/
+          ls -lhR mono/engine/models/
 
       - name: Package Artifacts
         shell: bash
         run: |
-          mkdir -p dist/bin dist/lib dist/models dist/config
+          mkdir -p dist/bin dist/lib dist/models/minilm dist/config
           
           # Copy server executable
           if [ -f "build/bin/rtvortex" ]; then
@@ -298,13 +298,17 @@ jobs:
           cp build/lib/*.dylib dist/lib/ 2>/dev/null || true
           cp build/lib/Release/*.dll dist/lib/ 2>/dev/null || true
           
-          # Bundle ONNX embedding model (required for LOCAL_ONNX provider)
-          cp mono/engine/models/all-MiniLM-L6-v2.onnx dist/models/
-          cp mono/engine/models/tokenizer.json dist/models/
-          cp mono/engine/models/vocab.txt dist/models/
+          # Bundle ONNX Runtime shared library (required at runtime)
+          cp build/_deps/onnxruntime-src/lib/libonnxruntime* dist/lib/ 2>/dev/null || true
+          cp build/_deps/onnxruntime-src/lib/onnxruntime.dll dist/lib/ 2>/dev/null || true
           
-          # Bundle default config
-          cp mono/config/default.yml dist/config/
+          # Bundle MiniLM ONNX model (subdirectory layout)
+          cp mono/engine/models/minilm/model.onnx dist/models/minilm/
+          cp mono/engine/models/minilm/tokenizer.json dist/models/minilm/
+          cp mono/engine/models/minilm/vocab.txt dist/models/minilm/
+          
+          # Bundle config files (matches Makefile config target)
+          cp -r mono/config/* dist/config/ 2>/dev/null || true
           
           # Create archive
           tar -czvf rtvortex-${{ matrix.target }}.tar.gz -C dist .
@@ -338,6 +342,9 @@ jobs:
           mkdir -p engine-dist
           tar -xzf artifacts/rtvortex-linux-x64.tar.gz -C engine-dist
           chmod +x engine-dist/bin/rtvortex
+          
+          export LD_LIBRARY_PATH="${GITHUB_WORKSPACE}/engine-dist/lib:${LD_LIBRARY_PATH}"
+          export RTVORTEX_HOME="${GITHUB_WORKSPACE}/engine-dist"
           
           # Start engine in background
           ./engine-dist/bin/rtvortex --port 50051 &

@@ -1,9 +1,6 @@
-name: Publish CLI to PyPI
+name: Publish CLI to PyPI (disabled)
 
 on:
-  push:
-    tags:
-      - 'cli-v*'
   workflow_dispatch:
 
 permissions:
@@ -16,6 +13,7 @@ defaults:
 
 jobs:
   test:
+    if: false
     name: Test CLI (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:

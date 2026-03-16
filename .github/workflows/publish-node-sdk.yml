@@ -1,9 +1,6 @@
-name: Publish Node.js SDK to npm
+name: Publish Node.js SDK to npm (disabled)
 
 on:
-  push:
-    tags:
-      - 'node-sdk-v*'
   workflow_dispatch:
 
 permissions:
@@ -16,6 +13,7 @@ defaults:
 
 jobs:
   test:
+    if: false
     name: Test Node.js SDK (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
     strategy:

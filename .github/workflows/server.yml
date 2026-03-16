@@ -127,7 +127,10 @@ jobs:
 
       - name: Build
         run: |
-          go build -v -ldflags="-s -w -X main.Version=$(cat ../../mono/VERSION 2>/dev/null || echo dev)" \
+          go build -v -trimpath \
+            -ldflags="-s -w \
+              -X main.version=$(cat ../../mono/VERSION 2>/dev/null || echo dev) \
+              -X main.commit=${{ github.sha }}" \
             ./cmd/rtvortex-server/
 
       - name: Run Unit Tests

@@ -158,7 +158,12 @@ jobs:
           cache-dependency-path: ${{ env.MONO_DIR }}/server-go/go.sum
 
       - name: Build
-        run: go build -v ./...
+        run: |
+          go build -v -trimpath \
+            -ldflags "-s -w \
+              -X main.version=$(cat ../../${{ env.MONO_DIR }}/VERSION 2>/dev/null || echo dev) \
+              -X main.commit=${{ github.sha }}" \
+            ./cmd/rtvortex-server/
 
       - name: Run Tests with Coverage
         run: |
@@ -241,8 +246,9 @@ jobs:
           path: |
             C:\vcpkg\installed
             C:\vcpkg\packages
-          key: vcpkg-windows-x64-${{ hashFiles('.github/workflows/ci.yml') }}
+          key: vcpkg-windows-x64-grpc-${{ hashFiles('.github/workflows/ci.yml') }}
           restore-keys: |
+            vcpkg-windows-x64-grpc-
             vcpkg-windows-x64-
 
       - name: Cache FAISS build (Windows)
@@ -253,6 +259,20 @@ jobs:
           key: faiss-windows-x64-v1.7.4
           restore-keys: |
             faiss-windows-x64-v1.7.4
+
+      - name: Cache FAISS build (Ubuntu)
+        if: runner.os == 'Linux'
+        id: cache-faiss-linux
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/libfaiss*
+            /usr/local/lib/cmake/faiss
+            /usr/local/include/faiss
+            /usr/local/share/faiss
+          key: faiss-${{ matrix.artifact }}-v1.7.4-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: |
+            faiss-${{ matrix.artifact }}-v1.7.4-
 
       - name: Install Dependencies (Ubuntu)
         if: runner.os == 'Linux'
@@ -268,12 +288,8 @@ jobs:
             libgflags-dev
 
       - name: Build FAISS from source (Ubuntu)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.cache-faiss-linux.outputs.cache-hit != 'true'
         run: |
-          if ldconfig -p | grep -q libfaiss; then
-            echo "FAISS already installed, skipping build"
-            exit 0
-          fi
           git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git /tmp/faiss
           cd /tmp/faiss && mkdir build && cd build
           cmake .. \
@@ -288,10 +304,14 @@ jobs:
           sudo cmake --install . --config Release
           sudo ldconfig
 
+      - name: Refresh ldconfig for cached FAISS (Ubuntu)
+        if: runner.os == 'Linux' && steps.cache-faiss-linux.outputs.cache-hit == 'true'
+        run: sudo ldconfig
+
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install libomp openblas faiss grpc protobuf
+          brew install libomp openblas faiss protobuf grpc abseil
           echo "OpenBLAS_HOME=$(brew --prefix openblas)" >> $GITHUB_ENV
           echo "OpenMP_ROOT=$(brew --prefix libomp)" >> $GITHUB_ENV
           echo "CMAKE_PREFIX_PATH=$(brew --prefix)/lib/cmake:$(brew --prefix grpc)/lib/cmake:$(brew --prefix protobuf)/lib/cmake:$(brew --prefix abseil)/lib/cmake" >> $GITHUB_ENV
@@ -299,7 +319,8 @@ jobs:
       - name: Install Dependencies (Windows)
         if: runner.os == 'Windows'
         run: |
-          vcpkg install curl:x64-windows openblas:x64-windows
+          vcpkg install curl:x64-windows openblas:x64-windows --clean-after-build
+          vcpkg install grpc:x64-windows protobuf:x64-windows --clean-after-build
         env:
           VCPKG_DEFAULT_TRIPLET: x64-windows
 
@@ -368,15 +389,23 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          mkdir -p dist/bin dist/lib
+          mkdir -p dist/bin dist/lib dist/models/minilm dist/config
           cp build/bin/rtvortex dist/bin/ 2>/dev/null || true
           cp build/bin/Release/rtvortex.exe dist/bin/ 2>/dev/null || true
           cp build/bin/rtvortex.exe dist/bin/ 2>/dev/null || true
-          cp build/lib* dist/lib/ 2>/dev/null || true
-          cp build/*.dll dist/lib/ 2>/dev/null || true
-          cp build/*.dylib dist/lib/ 2>/dev/null || true
-          cp build/*.so dist/lib/ 2>/dev/null || true
-          cp build/Release/*.dll dist/lib/ 2>/dev/null || true
+          cp build/lib/*.so dist/lib/ 2>/dev/null || true
+          cp build/lib/*.dll dist/lib/ 2>/dev/null || true
+          cp build/lib/*.dylib dist/lib/ 2>/dev/null || true
+          cp build/lib/Release/*.dll dist/lib/ 2>/dev/null || true
+          # Bundle ONNX Runtime shared library
+          cp build/_deps/onnxruntime-src/lib/libonnxruntime* dist/lib/ 2>/dev/null || true
+          cp build/_deps/onnxruntime-src/lib/onnxruntime.dll dist/lib/ 2>/dev/null || true
+          # Bundle MiniLM model (subdirectory layout)
+          cp build/models/minilm/model.onnx dist/models/minilm/ 2>/dev/null || true
+          cp build/models/minilm/tokenizer.json dist/models/minilm/ 2>/dev/null || true
+          cp build/models/minilm/vocab.txt dist/models/minilm/ 2>/dev/null || true
+          # Bundle config files (matches Makefile config target)
+          cp -r ${{ env.MONO_DIR }}/config/* dist/config/ 2>/dev/null || true
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -598,6 +627,9 @@ jobs:
       - name: Start Engine Server
         run: |
           chmod +x engine-dist/bin/rtvortex
+
+          export LD_LIBRARY_PATH="${GITHUB_WORKSPACE}/engine-dist/lib:${LD_LIBRARY_PATH}"
+          export RTVORTEX_HOME="${GITHUB_WORKSPACE}/engine-dist"
 
           ENGINE_HOST=0.0.0.0 ENGINE_PORT=50051 ENGINE_TLS_ENABLED=false \
             engine-dist/bin/rtvortex --port 50051 &

@@ -90,7 +90,7 @@ jobs:
           - target: linux-x64
             os: ubuntu-latest
           - target: linux-arm64
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
           - target: darwin-x64
             os: macos-latest
           - target: darwin-arm64
@@ -123,22 +123,30 @@ jobs:
           key: faiss-windows-x64-v1.7.4
           restore-keys: |
             faiss-windows-x64-v1.7.4
+
+      - name: Cache FAISS build (Ubuntu)
+        if: runner.os == 'Linux'
+        id: cache-faiss-linux
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/libfaiss*
+            /usr/local/lib/cmake/faiss
+            /usr/local/include/faiss
+            /usr/local/share/faiss
+          key: faiss-${{ matrix.target }}-v1.7.4-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            faiss-${{ matrix.target }}-v1.7.4-
       
       - name: Install Dependencies (Ubuntu)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libcurl4-openssl-dev libomp-dev libopenblas-dev liblapack-dev libgflags-dev
+          sudo apt-get install -y build-essential libcurl4-openssl-dev libssl-dev libomp-dev libopenblas-dev liblapack-dev libgflags-dev
 
       - name: Build FAISS from source (Ubuntu)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && steps.cache-faiss-linux.outputs.cache-hit != 'true'
         run: |
-          # Check if FAISS is already installed
-          if ldconfig -p | grep -q libfaiss; then
-            echo "FAISS already installed, skipping build"
-            exit 0
-          fi
-          
           git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git /tmp/faiss
           cd /tmp/faiss
           mkdir build && cd build
@@ -153,6 +161,10 @@ jobs:
           cmake --build . --config Release --parallel 4
           sudo cmake --install . --config Release
           sudo ldconfig
+
+      - name: Refresh ldconfig for cached FAISS (Ubuntu)
+        if: runner.os == 'Linux' && steps.cache-faiss-linux.outputs.cache-hit == 'true'
+        run: sudo ldconfig
       
       - name: Install Dependencies (macOS)
         if: runner.os == 'macOS'
@@ -253,7 +265,7 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          mkdir -p dist/bin dist/lib
+          mkdir -p dist/bin dist/lib dist/models/minilm dist/config
           
           # Copy engine executable
           cp build/bin/rtvortex dist/bin/ 2>/dev/null || true
@@ -261,11 +273,28 @@ jobs:
           cp build/bin/rtvortex.exe dist/bin/ 2>/dev/null || true
           
           # Copy libraries
-          cp build/lib* dist/lib/ 2>/dev/null || true
-          cp build/*.dll dist/lib/ 2>/dev/null || true
-          cp build/*.dylib dist/lib/ 2>/dev/null || true
-          cp build/*.so dist/lib/ 2>/dev/null || true
-          cp build/Release/*.dll dist/lib/ 2>/dev/null || true
+          cp build/lib/*.so dist/lib/ 2>/dev/null || true
+          cp build/lib/*.dll dist/lib/ 2>/dev/null || true
+          cp build/lib/*.dylib dist/lib/ 2>/dev/null || true
+          cp build/lib/Release/*.dll dist/lib/ 2>/dev/null || true
+          
+          # Bundle ONNX Runtime shared library
+          cp build/_deps/onnxruntime-src/lib/libonnxruntime* dist/lib/ 2>/dev/null || true
+          cp build/_deps/onnxruntime-src/lib/onnxruntime.dll dist/lib/ 2>/dev/null || true
+          
+          # Bundle MiniLM model (CMake downloads at configure into mono/engine/models/minilm/)
+          if [ -d "build/models/minilm" ]; then
+            cp build/models/minilm/model.onnx dist/models/minilm/ 2>/dev/null || true
+            cp build/models/minilm/tokenizer.json dist/models/minilm/ 2>/dev/null || true
+            cp build/models/minilm/vocab.txt dist/models/minilm/ 2>/dev/null || true
+          elif [ -d "${{ env.MONO_DIR }}/engine/models/minilm" ]; then
+            cp ${{ env.MONO_DIR }}/engine/models/minilm/model.onnx dist/models/minilm/ 2>/dev/null || true
+            cp ${{ env.MONO_DIR }}/engine/models/minilm/tokenizer.json dist/models/minilm/ 2>/dev/null || true
+            cp ${{ env.MONO_DIR }}/engine/models/minilm/vocab.txt dist/models/minilm/ 2>/dev/null || true
+          fi
+          
+          # Bundle config files (matches Makefile config target)
+          cp -r ${{ env.MONO_DIR }}/config/* dist/config/ 2>/dev/null || true
           
           tar -czvf rtvortex-engine-${{ matrix.target }}.tar.gz -C dist .
       
