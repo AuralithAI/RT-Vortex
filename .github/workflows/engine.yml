@@ -67,6 +67,7 @@ jobs:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     needs: lint
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:

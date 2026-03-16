@@ -83,6 +83,7 @@ jobs:
     name: Build Engine (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     needs: version
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
