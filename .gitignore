@@ -87,6 +87,7 @@ yarn-error.log*
 .npm
 .yarn/
 package-lock.json
+!mono/sdks/node/package-lock.json
 yarn.lock
 
 # Logs
