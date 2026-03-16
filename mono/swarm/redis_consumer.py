@@ -166,6 +166,7 @@ async def _run_full_pipeline(
     task_data: dict[str, Any],
     engine_client: EngineClient | None,
     go_client: GoClient,
+    warm_pool_cb: Callable[[], str | None] | None = None,
 ) -> None:
     """Execute the full multi-agent pipeline for a task.
 
@@ -182,6 +183,9 @@ async def _run_full_pipeline(
         task_data: Raw task dict from Go.
         engine_client: Optional engine gRPC client.
         go_client: Go HTTP client.
+        warm_pool_cb: Optional callback that pops a pre-registered agent ID
+            from the warm pool.  The agent is re-registered under the real
+            team, skipping the cold registration round-trip.
     """
     task = Task(
         id=task_data["id"],
@@ -234,6 +238,12 @@ async def _run_full_pipeline(
 
         # ── Step 1: Orchestrator produces the plan ──────────────────────
         orchestrator = _make_agent("orchestrator", team_id, agent_config)
+        # Reuse a warm-pool agent ID if available (skip cold registration).
+        warm_id = warm_pool_cb() if warm_pool_cb else None
+        if warm_id:
+            orchestrator.agent_id = warm_id
+            logger.info("Team %s: Reusing warm-pool agent %s for orchestrator",
+                        team_id[:8], warm_id)
         await orchestrator.register()
         agent_ids.append(orchestrator.agent_id)
 
@@ -299,6 +309,11 @@ async def _run_full_pipeline(
 
         for role in roles:
             agent = _make_agent(role, team_id, agent_config)
+            warm_id = warm_pool_cb() if warm_pool_cb else None
+            if warm_id:
+                agent.agent_id = warm_id
+                logger.info("Team %s: Reusing warm-pool agent %s for %s",
+                            team_id[:8], warm_id, role)
             await agent.register()
             agent_ids.append(agent.agent_id)
             implementation_agents.append(agent)
@@ -533,6 +548,42 @@ class RedisConsumer:
             return agent_id
         return None
 
+    async def _replenish_warm_pool(self) -> None:
+        """Top up the warm pool back to _WARM_POOL_SIZE after agents are consumed."""
+        pool_team_id = "00000000-0000-0000-0000-000000000001"
+        while len(self._warm_pool) < _WARM_POOL_SIZE:
+            agent_id = f"pool-r-{uuid.uuid4().hex[:6]}"
+            try:
+                _, canonical_id = await register_agent(
+                    agent_id=agent_id,
+                    role="pool",
+                    team_id=pool_team_id,
+                    hostname=__import__("socket").gethostname(),
+                )
+                self._warm_pool.append((canonical_id, ""))
+                # Add to the heartbeat loop's agent list.
+                if self._warm_pool_hb_task and not self._warm_pool_hb_task.done():
+                    # Restart heartbeat with updated agent list.
+                    self._warm_pool_hb_stop.set()
+                    self._warm_pool_hb_task.cancel()
+                    try:
+                        await self._warm_pool_hb_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+                    pool_ids = [aid for aid, _ in self._warm_pool]
+                    self._warm_pool_hb_stop.clear()
+                    self._warm_pool_hb_task = asyncio.create_task(
+                        _heartbeat_loop(
+                            self._go_client, pool_ids, self._warm_pool_hb_stop,
+                        ),
+                        name="heartbeat-warm-pool",
+                    )
+                logger.info("Warm pool replenished: %s (pool_size=%d)",
+                            canonical_id, len(self._warm_pool))
+            except Exception as e:
+                logger.warning("Warm pool replenish failed: %s", e)
+                break
+
     async def stop(self) -> None:
         """Stop consuming and cancel active teams."""
         self._running = False
@@ -707,7 +758,7 @@ class RedisConsumer:
         # Skip tasks that are no longer waiting for assignment (stale messages
         # from dead consumers or previous runs).
         task_status = task_data.get("status", "")
-        if task_status not in ("submitted", "assigning"):
+        if task_status not in ("submitted", "assigning", "planning"):
             logger.info("Skipping task %s — already in status %r", task_id, task_status)
             return
 
@@ -720,13 +771,19 @@ class RedisConsumer:
         # Spin up a team for this task.
         team_id = str(uuid.uuid4())
         team_task = asyncio.create_task(
-            _run_full_pipeline(team_id, task_data, self._engine, self._go_client),
+            _run_full_pipeline(
+                team_id, task_data, self._engine, self._go_client,
+                warm_pool_cb=self._take_warm_agent,
+            ),
             name=f"team-{team_id[:8]}",
         )
         self._active_teams[team_id] = team_task
 
         # Clean up when done.
         team_task.add_done_callback(lambda _: self._active_teams.pop(team_id, None))
+
+        # Replenish warm pool in the background.
+        asyncio.create_task(self._replenish_warm_pool(), name="replenish-pool")
 
 
 class TaskPollingConsumer:

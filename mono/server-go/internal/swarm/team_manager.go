@@ -13,6 +13,12 @@ import (
 // MaxTeams is the maximum number of concurrent teams.
 const MaxTeams = 5
 
+// Sentinel team IDs used by the Python warm pool — never assign tasks to these.
+var warmPoolTeamIDs = []string{
+	"00000000-0000-0000-0000-000000000000", // controller
+	"00000000-0000-0000-0000-000000000001", // warm pool
+}
+
 // Team represents a swarm team from the database.
 type Team struct {
 	ID          uuid.UUID   `json:"id"`
@@ -68,13 +74,18 @@ func (m *TeamManager) CreateTeam(ctx context.Context, name string) (*Team, error
 }
 
 // GetIdleTeam returns the first idle team, or nil if none is idle.
+// Excludes warm-pool sentinel teams that are not real working teams.
 func (m *TeamManager) GetIdleTeam(ctx context.Context) *Team {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	row := m.db.QueryRow(ctx, `
 		SELECT id, name, lead_agent_id, status, agent_ids
-		FROM swarm_teams WHERE status = 'idle' LIMIT 1`)
+		FROM swarm_teams
+		WHERE status = 'idle'
+		  AND id NOT IN ($1::uuid, $2::uuid)
+		LIMIT 1`,
+		warmPoolTeamIDs[0], warmPoolTeamIDs[1])
 
 	var t Team
 	err := row.Scan(&t.ID, &t.Name, &t.LeadAgentID, &t.Status, &t.AgentIDs)
@@ -298,9 +309,14 @@ type AgentInfo struct {
 }
 
 // activeTeamCount returns the number of non-offline teams. Must be called under lock.
+// Excludes warm-pool sentinel teams.
 func (m *TeamManager) activeTeamCount(ctx context.Context) (int, error) {
 	var count int
-	err := m.db.QueryRow(ctx, `SELECT COUNT(*) FROM swarm_teams WHERE status != 'offline'`).Scan(&count)
+	err := m.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM swarm_teams
+		WHERE status != 'offline'
+		  AND id NOT IN ($1::uuid, $2::uuid)`,
+		warmPoolTeamIDs[0], warmPoolTeamIDs[1]).Scan(&count)
 	return count, err
 }
 
@@ -315,8 +331,9 @@ func (m *TeamManager) FindIdleTeamWithCapacity(ctx context.Context, minAgents in
 		SELECT t.id, t.name, t.lead_agent_id, t.status, t.agent_ids
 		FROM swarm_teams t
 		WHERE t.status = 'idle'
-		  AND COALESCE(array_length(t.agent_ids, 1), 0) >= $1
-		LIMIT 1`, minAgents)
+		  AND t.id NOT IN ($1::uuid, $2::uuid)
+		  AND COALESCE(array_length(t.agent_ids, 1), 0) >= $3
+		LIMIT 1`, warmPoolTeamIDs[0], warmPoolTeamIDs[1], minAgents)
 
 	var t Team
 	err := row.Scan(&t.ID, &t.Name, &t.LeadAgentID, &t.Status, &t.AgentIDs)
