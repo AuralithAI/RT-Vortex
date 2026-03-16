@@ -35,6 +35,21 @@ func (m *mockPlatform) ValidateWebhookSignature(_ []byte, _ string) bool {
 func (m *mockPlatform) ListOpenPullRequests(_ context.Context, _, _ string, _ int) ([]vcs.PullRequest, error) {
 	return nil, nil
 }
+func (m *mockPlatform) CreateBranch(_ context.Context, _, _ string, _ *vcs.CreateBranchRequest) error {
+	return nil
+}
+func (m *mockPlatform) CreateOrUpdateFile(_ context.Context, _, _, _ string, _ *vcs.FileCommit) (string, error) {
+	return "", nil
+}
+func (m *mockPlatform) CreatePullRequest(_ context.Context, _, _ string, _ *vcs.CreatePullRequestRequest) (*vcs.PullRequest, error) {
+	return nil, nil
+}
+func (m *mockPlatform) GetDefaultBranch(_ context.Context, _, _ string) (string, error) {
+	return "main", nil
+}
+func (m *mockPlatform) GetBranchSHA(_ context.Context, _, _, _ string) (string, error) {
+	return "", nil
+}
 
 // ── Registry Tests ──────────────────────────────────────────────────────────
 
