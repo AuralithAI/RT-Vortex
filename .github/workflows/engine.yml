@@ -260,7 +260,7 @@ jobs:
             -DCMAKE_PREFIX_PATH="C:\faiss-install"
 
       - name: Build
-        run: cmake --build build --config ${{ github.event.inputs.build_type || 'Release' }} --parallel
+        run: cmake --build build --config ${{ github.event.inputs.build_type || 'Release' }} --parallel 4
 
       - name: Run Unit Tests
         run: ctest --test-dir build --output-on-failure -C ${{ github.event.inputs.build_type || 'Release' }}

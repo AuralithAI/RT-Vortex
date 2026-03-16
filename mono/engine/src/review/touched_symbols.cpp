@@ -6,6 +6,7 @@
 
 #include "types.h"
 #include <string>
+#include <sstream>
 #include <vector>
 #include <regex>
 #include <unordered_map>

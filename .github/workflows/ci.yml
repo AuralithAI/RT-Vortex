@@ -366,7 +366,7 @@ jobs:
             -DAIPR_USE_FAISS=ON \
             -DAIPR_USE_TREE_SITTER=ON \
             $CMAKE_EXTRA_ARGS
-          cmake --build build --config Release --parallel
+          cmake --build build --config Release --parallel 4
 
       - name: Configure & Build (Windows)
         if: runner.os == 'Windows'
