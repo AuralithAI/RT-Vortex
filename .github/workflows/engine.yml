@@ -90,6 +90,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Cache CMake FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: cmake-deps-${{ matrix.target }}-${{ hashFiles('mono/engine/CMakeLists.txt') }}
+          restore-keys: |
+            cmake-deps-${{ matrix.target }}-
+
+      - name: Cache Homebrew packages (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /usr/local/Cellar
+            /usr/local/opt
+            /opt/homebrew/Cellar
+            /opt/homebrew/opt
+          key: brew-${{ matrix.target }}-${{ hashFiles('.github/workflows/engine.yml') }}
+          restore-keys: |
+            brew-${{ matrix.target }}-
+
       - name: Cache vcpkg packages (Windows)
         if: runner.os == 'Windows'
         uses: actions/cache@v4
