@@ -125,6 +125,14 @@ func (p *LLMProxy) Complete(ctx context.Context, req *LLMCompleteRequest) (*LLMC
 
 // HandleComplete is the HTTP handler for POST /internal/swarm/llm/complete.
 func (p *LLMProxy) HandleComplete(w http.ResponseWriter, r *http.Request) {
+	// Extend the write deadline for this handler only. LLM calls can take
+	// well over the default server WriteTimeout (60s) when large context
+	// packs are sent (e.g. senior_dev reviewing 700+ chunks). Without
+	// this, Go's http.Server closes the connection mid-flight and the
+	// Python swarm sees "Server disconnected without sending a response."
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(5 * time.Minute))
+
 	var req LLMCompleteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
