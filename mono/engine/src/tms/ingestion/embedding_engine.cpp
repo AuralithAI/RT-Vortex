@@ -687,18 +687,45 @@ private:
 
             // Run inference
             try {
-                const char* input_names[] = {"input_ids", "attention_mask", "token_type_ids"};
-                const char* output_names[] = {"last_hidden_state"};
+                Ort::AllocatorWithDefaultOptions allocator;
+
+                // Query actual model input names (BGE-M3 has 2, MiniLM has 3).
+                // Reserve upfront so push_back never reallocates and
+                // invalidates the c_str() pointers we store.
+                size_t num_model_inputs = ort_session_->GetInputCount();
+                std::vector<std::string> input_name_strs;
+                input_name_strs.reserve(num_model_inputs);
+                for (size_t i = 0; i < num_model_inputs; ++i) {
+                    auto name = ort_session_->GetInputNameAllocated(i, allocator);
+                    input_name_strs.push_back(name.get());
+                }
+                std::vector<const char*> input_names_ptrs;
+                input_names_ptrs.reserve(num_model_inputs);
+                for (auto& s : input_name_strs) input_names_ptrs.push_back(s.c_str());
+
+                // Query actual model output names
+                size_t num_model_outputs = ort_session_->GetOutputCount();
+                std::vector<std::string> output_name_strs;
+                output_name_strs.reserve(num_model_outputs);
+                for (size_t i = 0; i < num_model_outputs; ++i) {
+                    auto name = ort_session_->GetOutputNameAllocated(i, allocator);
+                    output_name_strs.push_back(name.get());
+                }
+                std::vector<const char*> output_names_ptrs;
+                output_names_ptrs.reserve(num_model_outputs);
+                for (auto& s : output_name_strs) output_names_ptrs.push_back(s.c_str());
 
                 std::vector<Ort::Value> inputs;
                 inputs.push_back(std::move(input_ids_tensor));
                 inputs.push_back(std::move(attention_mask_tensor));
-                inputs.push_back(std::move(token_type_ids_tensor));
+                if (num_model_inputs >= 3) {
+                    inputs.push_back(std::move(token_type_ids_tensor));
+                }
 
                 auto outputs = ort_session_->Run(
                     Ort::RunOptions{nullptr},
-                    input_names, inputs.data(), inputs.size(),
-                    output_names, 1);
+                    input_names_ptrs.data(), inputs.data(), inputs.size(),
+                    output_names_ptrs.data(), output_names_ptrs.size());
 
                 // Extract embeddings via mean pooling over token dimension
                 auto& output_tensor = outputs[0];

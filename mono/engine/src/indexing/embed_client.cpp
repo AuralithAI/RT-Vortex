@@ -843,21 +843,25 @@ private:
 
             size_t num_inputs = onnx_session_->GetInputCount();
             std::vector<std::string> input_names_str;
-            std::vector<const char*> input_names;
+            input_names_str.reserve(num_inputs);
             for (size_t i = 0; i < num_inputs; ++i) {
                 auto name = onnx_session_->GetInputNameAllocated(i, allocator);
                 input_names_str.push_back(name.get());
-                input_names.push_back(input_names_str.back().c_str());
             }
+            std::vector<const char*> input_names;
+            input_names.reserve(num_inputs);
+            for (auto& s : input_names_str) input_names.push_back(s.c_str());
             
             size_t num_outputs = onnx_session_->GetOutputCount();
             std::vector<std::string> output_names_str;
-            std::vector<const char*> output_names;
+            output_names_str.reserve(num_outputs);
             for (size_t i = 0; i < num_outputs; ++i) {
                 auto name = onnx_session_->GetOutputNameAllocated(i, allocator);
                 output_names_str.push_back(name.get());
-                output_names.push_back(output_names_str.back().c_str());
             }
+            std::vector<const char*> output_names;
+            output_names.reserve(num_outputs);
+            for (auto& s : output_names_str) output_names.push_back(s.c_str());
             
             std::vector<Ort::Value> ort_inputs;
             ort_inputs.push_back(std::move(ids_tensor));
