@@ -1,7 +1,11 @@
 """Senior Dev agent — primary code generation role.
 
 The senior dev receives subtasks or the full task, reads the
-relevant code, and produces unified diffs implementing the changes.
+relevant code, and produces changes via workspace edit tools.
+
+Instead of hallucinating unified diffs, the senior dev makes targeted
+edits (search-and-replace) through the VirtualWorkspace. The system
+computes the final diff from the changeset automatically.
 """
 
 from __future__ import annotations
@@ -14,21 +18,22 @@ from ..sdk.agent import Agent, AgentResult, Task
 from ..sdk.tool import ToolDef
 from ..models import Diff
 from ..tools.engine_tools import ENGINE_TOOLS
-from ..tools.task_tools import report_diff, complete_task
+from ..tools.task_tools import complete_task
+from ..tools.workspace_tools import WORKSPACE_TOOLS
 
 logger = logging.getLogger(__name__)
 
 
 class SeniorDevAgent(Agent):
-    """Code generation agent — produces file diffs from approved plans.
+    """Code generation agent — edits files via workspace tools.
 
     Capabilities:
-    - Read files from the codebase
-    - Generate unified diffs for code changes
-    - Submit diffs for human review
-    - Work on delegated subtasks from orchestrator
-    - Coordinate with QA for test generation
-    - Self-review before submission
+    - Search code semantically via the engine
+    - Read files from the repository via VCS API
+    - Edit files with targeted search-and-replace operations
+    - Create new files
+    - Delete files
+    - Review workspace status before completing
     """
 
     def __init__(self, agent_id: str, team_id: str, **kwargs):
@@ -38,8 +43,8 @@ class SeniorDevAgent(Agent):
             team_id=team_id,
             **kwargs,
         )
-        # Senior dev gets engine tools for reading code + diff submission tools.
-        self.tools: list[ToolDef] = list(ENGINE_TOOLS) + [report_diff, complete_task]
+        # Workspace tools for reading/editing files + complete_task to signal done.
+        self.tools: list[ToolDef] = list(WORKSPACE_TOOLS) + list(ENGINE_TOOLS) + [complete_task]
 
     def build_system_prompt(self, task: Task) -> str:
         plan_section = ""
@@ -61,8 +66,8 @@ Your agent ID is {self.agent_id}. You are responsible for writing production-qua
 You are responsible for:
 1. Reading the existing code to understand the codebase
 2. Implementing the changes described in the task or approved plan
-3. Producing high-quality unified diffs for each modified file
-4. Submitting diffs for human review
+3. Making precise, targeted edits to files
+4. Creating new files when needed
 
 ## Current Task
 - Task ID: {task.id}
@@ -70,100 +75,72 @@ You are responsible for:
 - Description: {task.description}
 {plan_section}
 
+## Available Tools
+
+### Reading Code
+- `workspace_read_file(path)` — Read a file's full content
+- `workspace_search(query)` — Semantic search across the codebase
+- `workspace_list_dir(path)` — List directory contents
+- `search_code(query, repo_id)` — Search via the engine (alternative)
+- `get_file_content(repo_id, file_path)` — Read via engine (alternative)
+
+### Making Changes
+- `workspace_edit_file(path, old_str, new_str)` — Edit a file by replacing exact text
+- `workspace_create_file(path, content)` — Create a new file
+- `workspace_delete_file(path)` — Delete a file
+- `workspace_status()` — See what files you've changed
+
+### Completing
+- `complete_task(task_id)` — Mark the task as done
+
 ## Instructions
 
-### Step 1: Read Existing Code
-Use `get_file_content` to read each file that needs to be modified.
-Use `search_code` to find related code, patterns, or imports you need to understand.
+### Step 1: Read & Understand
+Use `workspace_read_file` and `workspace_search` to understand the existing code.
+Read each file you plan to modify BEFORE editing it.
 
-### Step 2: Generate Changes
-For each file that needs modification:
-1. Read the full original file content
-2. Write the complete proposed file content with your changes
-3. Generate a standard git unified diff
+### Step 2: Make Changes
+For each change needed:
+1. Read the file first with `workspace_read_file`
+2. Use `workspace_edit_file` with the EXACT text to find and its replacement
+3. For new files, use `workspace_create_file` with the full content
 
-### Step 3: Submit Diffs
-For each changed file, use `report_diff` with:
-- `file_path`: Path to the file
-- `change_type`: "modified", "added", "deleted", or "renamed"
-- `original`: The full original file content (empty for new files)
-- `proposed`: The full proposed file content (empty for deletions)
-- `unified_diff`: Standard git unified diff format
+### Step 3: Verify & Complete
+1. Use `workspace_status` to review all your changes
+2. Call `complete_task` when all changes are done
 
 ## Code Quality Rules
 - Match the existing code style (indentation, naming conventions, patterns)
 - Include proper error handling
 - Add doc comments for new public functions/methods
 - Do NOT remove existing functionality unless explicitly requested
-- Keep changes minimal — only modify what's needed for the task
-- If adding a new file, set change_type to "added" and original to empty string
-- Generate valid unified diff format:
-  ```
-  --- a/path/to/file
-  +++ b/path/to/file
-  @@ -start,count +start,count @@
-   context line
-  -removed line
-  +added line
-   context line
-  ```
-
-## Diff Format
-When creating unified diffs, use standard git format:
-- 3 lines of context before and after each change
-- Proper @@ hunk headers with line numbers
-- Use 'a/' and 'b/' prefixes for file paths
+- Keep changes minimal — only modify what's needed
+- The `old_str` in `workspace_edit_file` MUST exactly match the file content
+  (including whitespace and indentation)
 
 ## CRITICAL RULES
-- You MUST call `report_diff` for every file you change or create. Do NOT just
-  describe changes in text — the system only accepts diffs via the tool.
-- For NEW files, set change_type to "added", original to "", and provide the
-  full file content as proposed.
-- If you cannot find a file, create it as a new file rather than giving up.
-- Do NOT end your turn without submitting at least one diff unless the plan
-  explicitly has no code changes for your step.
+- Always READ a file before editing it
+- The `old_str` must be an EXACT match of existing text in the file
+- Include enough context in `old_str` to be unambiguous (3-5 lines)
+- Do NOT call `complete_task` until all changes are made
+- Use `workspace_status` to verify your changes before completing
 """
 
     def parse_result(self, messages: list[dict]) -> AgentResult:
-        """Extract diffs from the conversation history.
+        """Extract results from the conversation history.
 
-        The senior dev's main outputs are file diffs submitted via report_diff.
+        The senior dev's main outputs are workspace edits. The actual diffs
+        are computed by the VirtualWorkspace, not extracted from tool calls.
+        We still return a summary output from the conversation.
         """
         output_parts: list[str] = []
-        diffs: list[dict] = []
 
         for msg in messages:
             if msg.get("role") == "assistant" and msg.get("content"):
                 output_parts.append(msg["content"])
 
-            tool_calls = msg.get("tool_calls", [])
-            for tc in tool_calls:
-                fn = tc.get("function", {})
-                if fn.get("name") == "report_diff":
-                    try:
-                        args = json.loads(fn.get("arguments", "{}"))
-                        diffs.append({
-                            "file_path": args.get("file_path", ""),
-                            "change_type": args.get("change_type", "modified"),
-                            "original": args.get("original", ""),
-                            "proposed": args.get("proposed", ""),
-                            "unified_diff": args.get("unified_diff", ""),
-                        })
-                    except (json.JSONDecodeError, TypeError) as e:
-                        logger.warning("Failed to parse diff from tool call: %s", e)
+        final_output = output_parts[-1] if output_parts else "Changes applied via workspace."
 
-        final_output = output_parts[-1] if output_parts else "Diffs submitted."
-
-        return AgentResult(
-            output=final_output,
-            diffs=[
-                Diff(
-                    file_path=d["file_path"],
-                    change_type=d["change_type"],
-                    original=d["original"],
-                    proposed=d["proposed"],
-                    unified_diff=d["unified_diff"],
-                )
-                for d in diffs
-            ],
-        )
+        # Diffs are now extracted from the VirtualWorkspace by the pipeline,
+        # not from tool calls. Return empty diffs here.
+        return AgentResult(output=final_output, diffs=[])

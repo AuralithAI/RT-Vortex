@@ -5,6 +5,10 @@ and overrides :meth:`build_system_prompt` and :meth:`parse_result`.
 
 The agent registers with the Go server on first use, obtaining a short-lived
 JWT.  All subsequent LLM and task-management calls use that token.
+
+If a :class:`~mono.swarm.conversation.SharedConversation` is attached, all
+LLM responses and tool calls are broadcast to the shared conversation for
+live UI display.
 """
 
 from __future__ import annotations
@@ -12,13 +16,17 @@ from __future__ import annotations
 import logging
 import socket
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from ..agents_config import get_config, _read_version
 from .loop import agent_loop
 from .tool import ToolDef
+
+if TYPE_CHECKING:
+    from ..conversation import SharedConversation
+    from ..workspace import VirtualWorkspace
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +82,8 @@ class Agent:
         self.config = agent_config or AgentConfig()
         self.token: str | None = None
         self.tools: list[ToolDef] = []
+        self.conversation: SharedConversation | None = None
+        self.workspace: VirtualWorkspace | None = None
 
     async def register(self) -> None:
         """Register with Go and obtain a short-lived agent JWT.
@@ -117,6 +127,10 @@ class Agent:
         a role-specific system prompt and hands off to :func:`agent_loop`,
         which iterates tool calls until the LLM signals completion.
 
+        If a :attr:`conversation` is attached, the system prompt is augmented
+        with a summary of what other agents have said so far, and every LLM
+        response / tool call is broadcast to the conversation.
+
         Args:
             task: The task to execute, received from the Go server.
 
@@ -127,6 +141,13 @@ class Agent:
             await self.register()
 
         system_prompt = self.build_system_prompt(task)
+
+        # Inject conversation context so this agent sees what others did.
+        if self.conversation and self.conversation.message_count > 0:
+            summary = self.conversation.get_summary_for(self.role)
+            if summary:
+                system_prompt += f"\n\n{summary}\n"
+
         initial_message = f"Task: {task.description}\nRepo: {task.repo_id}"
 
         messages = await agent_loop(
@@ -137,6 +158,8 @@ class Agent:
             go_base_url=self.config.go_base_url,
             initial_message=initial_message,
             agent_role=self.role,
+            agent_id=self.agent_id,
+            conversation=self.conversation,
         )
 
         return self.parse_result(messages)

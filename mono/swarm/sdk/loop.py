@@ -12,16 +12,23 @@ Implements the standard tool-use loop used by every agent role:
 The loop is provider-agnostic because the Go server normalises every LLM
 backend (OpenAI, Anthropic, Gemini, Ollama, …) into the OpenAI
 chat-completion wire format before returning the response.
+
+If a :class:`~mono.swarm.conversation.SharedConversation` is provided, each
+LLM response and tool call is also broadcast to the shared conversation so
+other agents and the browser UI can follow along in real time.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Callable, Coroutine
+from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from .go_llm_client import llm_complete
 from .tool import ToolDef
+
+if TYPE_CHECKING:
+    from ..conversation import SharedConversation
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +42,8 @@ async def agent_loop(
     max_turns: int = 25,
     initial_message: str = "",
     agent_role: str = "",
+    agent_id: str = "",
+    conversation: SharedConversation | None = None,
 ) -> list[dict]:
     """Run the provider-agnostic agentic loop.
 
@@ -47,6 +56,8 @@ async def agent_loop(
         max_turns: Maximum tool-call round trips.
         initial_message: Optional first user message to kick off the loop.
         agent_role: Agent role hint for smart model routing.
+        agent_id: Agent identifier for conversation messages.
+        conversation: Optional shared conversation for live UI broadcast.
 
     Returns:
         Full message history.
@@ -79,6 +90,14 @@ async def agent_loop(
         message = choice.get("message", {})
         finish_reason = choice.get("finish_reason", "")
         messages.append(message)
+
+        # Broadcast assistant thinking to the shared conversation.
+        if conversation and message.get("content"):
+            await conversation.append_thinking(
+                agent_id=agent_id,
+                agent_role=agent_role,
+                content=message["content"],
+            )
 
         # Handle truncated responses — finish_reason == "length" means the
         # model hit its output token limit before completing the answer.
@@ -128,6 +147,15 @@ async def agent_loop(
                 fn_args = {}
 
             logger.debug("agent_loop: calling tool %s(%s)", fn_name, fn_args)
+
+            # Broadcast tool call to conversation.
+            if conversation:
+                await conversation.append_tool_call(
+                    agent_id=agent_id,
+                    agent_role=agent_role,
+                    tool_name=fn_name,
+                    tool_args=fn_args,
+                )
 
             try:
                 result = await tool_executor(fn_name, fn_args)

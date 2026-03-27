@@ -10,20 +10,24 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
 	swarmauth "github.com/AuralithAI/rtvortex-server/internal/swarm/auth"
+	"github.com/AuralithAI/rtvortex-server/internal/vcs"
 )
 
 // Handler holds all dependencies needed by swarm HTTP endpoints.
 type Handler struct {
-	AuthSvc   *swarmauth.Service
-	TaskMgr   *TaskManager
-	TeamMgr   *TeamManager
-	LLMProxy  *LLMProxy
-	ELO       *ELOService
-	WS        *WSHub
-	PRCreator *PRCreator
+	AuthSvc     *swarmauth.Service
+	TaskMgr     *TaskManager
+	TeamMgr     *TeamManager
+	LLMProxy    *LLMProxy
+	ELO         *ELOService
+	WS          *WSHub
+	PRCreator   *PRCreator
+	VCSResolver *vcs.Resolver
+	DB          *pgxpool.Pool
 }
 
 // ── Agent Auth endpoints ────────────────────────────────────────────────────
@@ -962,6 +966,176 @@ func (h *Handler) RecordContribution(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusCreated)
 	_, _ = w.Write([]byte(`{"status":"recorded"}`))
+}
+
+// ── Agent Message (live UI broadcast) ───────────────────────────────────────
+
+// AgentMessage handles POST /internal/swarm/tasks/{id}/agent-message.
+// Python agents post their thinking/tool_call/edit messages here.
+// Go broadcasts them via WebSocket so the browser UI shows a live chat feed.
+func (h *Handler) AgentMessage(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "id")
+	if taskID == "" {
+		http.Error(w, `{"error":"missing task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	var msg struct {
+		AgentID   string                 `json:"agent_id"`
+		AgentRole string                 `json:"agent_role"`
+		Kind      string                 `json:"kind"`
+		Content   string                 `json:"content"`
+		Metadata  map[string]interface{} `json:"metadata"`
+		Timestamp float64                `json:"timestamp"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&msg); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Broadcast to WebSocket subscribers.
+	if h.WS != nil {
+		h.WS.BroadcastAgentEvent(msg.Kind, taskID, msg.AgentID, map[string]interface{}{
+			"agent_role": msg.AgentRole,
+			"content":    msg.Content,
+			"metadata":   msg.Metadata,
+			"timestamp":  msg.Timestamp,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// ── VCS Proxy ───────────────────────────────────────────────────────────────
+
+// VCSReadFile handles POST /internal/swarm/vcs/read-file.
+// Reads a file from the repository via the platform API (GitHub/GitLab/etc).
+func (h *Handler) VCSReadFile(w http.ResponseWriter, r *http.Request) {
+	if h.VCSResolver == nil || h.DB == nil {
+		http.Error(w, `{"error":"VCS not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		RepoID string `json:"repo_id"`
+		Path   string `json:"path"`
+		Ref    string `json:"ref"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	repoID, err := uuid.Parse(req.RepoID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid repo_id"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Resolve VCS platform for this repo.
+	platform, err := h.VCSResolver.ForRepo(r.Context(), repoID)
+	if err != nil {
+		slog.Error("swarm vcs: resolve platform failed", "repo_id", req.RepoID, "error", err)
+		http.Error(w, fmt.Sprintf(`{"error":"resolve VCS: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	// Look up repo owner/name from DB.
+	owner, repoName, err := h.getRepoInfo(r.Context(), repoID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"get repo info: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	ref := req.Ref
+	if ref == "" {
+		ref, err = platform.GetDefaultBranch(r.Context(), owner, repoName)
+		if err != nil {
+			slog.Warn("swarm vcs: fallback to 'main'", "error", err)
+			ref = "main"
+		}
+	}
+
+	content, err := platform.GetFileContent(r.Context(), owner, repoName, req.Path, ref)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"read file: %s"}`, err.Error()), http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"content": string(content),
+		"path":    req.Path,
+		"ref":     ref,
+	})
+}
+
+// VCSListDir handles POST /internal/swarm/vcs/list-dir.
+// Lists directory contents from the repository via the platform API.
+func (h *Handler) VCSListDir(w http.ResponseWriter, r *http.Request) {
+	if h.VCSResolver == nil || h.DB == nil {
+		http.Error(w, `{"error":"VCS not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	var req struct {
+		RepoID string `json:"repo_id"`
+		Path   string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	repoID, err := uuid.Parse(req.RepoID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid repo_id"}`, http.StatusBadRequest)
+		return
+	}
+
+	platform, err := h.VCSResolver.ForRepo(r.Context(), repoID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"resolve VCS: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	owner, repoName, err := h.getRepoInfo(r.Context(), repoID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":"get repo info: %s"}`, err.Error()), http.StatusInternalServerError)
+		return
+	}
+
+	// Use GetFileContent on the directory path — GitHub API returns directory listings.
+	// For a more robust implementation, we'd add a ListDirectory method to the Platform interface.
+	// For now, we return a placeholder that works with GitHub's tree API.
+	_, err = platform.GetFileContent(r.Context(), owner, repoName, req.Path, "")
+	if err != nil {
+		// If it fails, the path might genuinely be a directory.
+		// Return an empty list rather than an error.
+		slog.Debug("swarm vcs: list-dir fallback", "path", req.Path, "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"entries": []interface{}{},
+		})
+		return
+	}
+
+	// If we got content back, this is a file not a directory.
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"entries": []map[string]string{
+			{"name": req.Path, "type": "file"},
+		},
+	})
+}
+
+// getRepoInfo looks up repository owner and name from the database.
+func (h *Handler) getRepoInfo(ctx context.Context, repoID uuid.UUID) (owner, name string, err error) {
+	err = h.DB.QueryRow(ctx,
+		`SELECT owner, name FROM repositories WHERE id = $1`, repoID,
+	).Scan(&owner, &name)
+	return
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

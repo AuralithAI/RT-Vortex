@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { PlanReviewCard } from "@/components/swarm/plan-review-card";
 import { DiffViewer } from "@/components/swarm/diff-viewer";
 import { ActivityFeed } from "@/components/swarm/activity-feed";
+import { AgentChat } from "@/components/swarm/agent-chat";
 import { TaskAgentList } from "@/components/swarm/task-agent-list";
 import { useSwarmEvents } from "@/hooks/use-swarm-events";
 import type { SwarmTask, SwarmDiff, PlanDocument } from "@/types/swarm";
@@ -233,6 +234,9 @@ export default function SwarmTaskDetailPage() {
               onComment={handlePlanComment}
             />
           )}
+
+          {/* Agent Conversation — live chat feed */}
+          <AgentChat events={events} />
 
           {/* Diffs Section */}
           {diffs.length > 0 && (

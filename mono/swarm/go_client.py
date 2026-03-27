@@ -198,3 +198,72 @@ class GoClient:
                 json={"additional_agents": size},
             )
             resp.raise_for_status()
+
+    # ── VCS proxy methods ────────────────────────────────────────────────
+
+    async def vcs_read_file(self, repo_id: str, path: str, ref: str = "") -> str:
+        """Read a file's content via the Go VCS proxy.
+
+        Go resolves the repo's platform (GitHub/GitLab/Bitbucket) and token,
+        fetches the file via the provider API, and returns the content.
+
+        Args:
+            repo_id: Repository UUID.
+            path: File path relative to repo root.
+            ref: Optional git ref (branch/tag/SHA). Empty = default branch.
+
+        Returns:
+            File content as a string.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/vcs/read-file",
+                headers=self._headers(),
+                json={"repo_id": repo_id, "path": path, "ref": ref},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("content", "")
+
+    async def vcs_list_dir(self, repo_id: str, path: str = "") -> list[dict]:
+        """List directory contents via the Go VCS proxy.
+
+        Args:
+            repo_id: Repository UUID.
+            path: Directory path relative to repo root. Empty for root.
+
+        Returns:
+            List of dicts with 'name' and 'type' keys.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/vcs/list-dir",
+                headers=self._headers(),
+                json={"repo_id": repo_id, "path": path},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("entries", [])
+
+    # ── Agent message (for live UI) ──────────────────────────────────────
+
+    async def post_agent_message(self, task_id: str, message: dict) -> None:
+        """Post an agent message for WebSocket broadcast to the browser UI.
+
+        The Go server receives the message and broadcasts it via the swarm
+        WebSocket hub so the frontend can display a live agent chat feed.
+
+        Args:
+            task_id: Task UUID.
+            message: Dict with agent_id, agent_role, kind, content, metadata.
+        """
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.post(
+                    f"{self.base_url}/internal/swarm/tasks/{task_id}/agent-message",
+                    headers=self._headers(),
+                    json=message,
+                )
+                resp.raise_for_status()
+            except Exception:
+                pass  # Best-effort — don't fail the agent if WS broadcast fails.

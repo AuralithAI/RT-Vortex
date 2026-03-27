@@ -31,11 +31,14 @@ from .agents.qa import QAAgent
 from .agents.security import SecurityAgent
 from .agents.senior_dev import SeniorDevAgent
 from .auth import register_agent
+from .conversation import SharedConversation
 from .engine_client import EngineClient
 from .go_client import GoClient
 from .sdk.agent import Agent, AgentConfig, AgentResult, Task
 from .tools.engine_tools import init_engine_tools
 from .tools.task_tools import init_task_tools
+from .tools.workspace_tools import init_workspace_tools
+from .workspace import VirtualWorkspace
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +204,19 @@ async def _run_full_pipeline(
         init_engine_tools(engine_client, redis_url=get_config().redis_url)
     init_task_tools(go_client)
 
+    # Create shared workspace (in-memory, backed by VCS API) and conversation.
+    workspace = VirtualWorkspace(
+        task_id=task.id,
+        repo_id=task.repo_id,
+        go_client=go_client,
+    )
+    init_workspace_tools(workspace)
+
+    conversation = SharedConversation(
+        task_id=task.id,
+        go_client=go_client,
+    )
+
     # Track all agent IDs for heartbeats.
     agent_ids: list[str] = []
     stop_heartbeat = asyncio.Event()
@@ -238,6 +254,8 @@ async def _run_full_pipeline(
 
         # ── Step 1: Orchestrator produces the plan ──────────────────────
         orchestrator = _make_agent("orchestrator", team_id, agent_config)
+        orchestrator.conversation = conversation
+        orchestrator.workspace = workspace
         # Reuse a warm-pool agent ID if available (skip cold registration).
         warm_id = warm_pool_cb() if warm_pool_cb else None
         if warm_id:
@@ -304,11 +322,12 @@ async def _run_full_pipeline(
         await go_client.declare_team_size(task.id, len(roles) + 1)  # +1 for orchestrator
 
         # ── Step 4: Run implementation agents ───────────────────────────
-        all_diffs: list[dict] = []
         implementation_agents: list[Agent] = []
 
         for role in roles:
             agent = _make_agent(role, team_id, agent_config)
+            agent.conversation = conversation
+            agent.workspace = workspace
             warm_id = warm_pool_cb() if warm_pool_cb else None
             if warm_id:
                 agent.agent_id = warm_id
@@ -336,40 +355,42 @@ async def _run_full_pipeline(
                                  team_id[:8], agent.role, result)
                     agent_failures.append(f"{agent.role}: {result}")
                     continue
-                if result.diffs:
-                    all_diffs.extend(result.diffs)
-                    logger.info("Team %s: %s produced %d diffs",
-                                team_id[:8], agent.role, len(result.diffs))
-                else:
-                    logger.info("Team %s: %s completed (no diffs)", team_id[:8], agent.role)
+                logger.info("Team %s: %s completed", team_id[:8], agent.role)
 
-        # Run review agents sequentially so they can see prior diffs.
+        # Run review agents sequentially so they can see prior edits.
         for agent in review_agents:
             try:
                 result = await agent.run(task)
-                if result.diffs:
-                    all_diffs.extend(result.diffs)
-                    logger.info("Team %s: %s produced %d diffs",
-                                team_id[:8], agent.role, len(result.diffs))
-                else:
-                    logger.info("Team %s: %s completed (no diffs)", team_id[:8], agent.role)
+                logger.info("Team %s: %s completed", team_id[:8], agent.role)
             except Exception as e:
                 logger.error("Team %s: %s agent failed: %s",
                              team_id[:8], agent.role, e)
                 agent_failures.append(f"{agent.role}: {e}")
 
-        # ── Step 5: Complete or fail the task ───────────────────────────
+        # ── Step 5: Extract changeset from workspace and submit diffs ───
         total_agents = len(code_agents) + len(review_agents)
         if agent_failures and len(agent_failures) == total_agents:
-            # Every implementation agent failed — mark the task as failed
-            # instead of silently completing with no diffs.
             failure_summary = "; ".join(agent_failures)
             await go_client.fail_task(task.id, f"All agents failed: {failure_summary}")
             logger.error("Team %s: Task %s failed — all %d agents errored",
                          team_id[:8], task.id, total_agents)
         else:
-            if all_diffs:
-                logger.info("Team %s: Total diffs produced: %d", team_id[:8], len(all_diffs))
+            # Extract diffs from the shared VirtualWorkspace.
+            changeset = workspace.get_changeset()
+            if changeset:
+                logger.info("Team %s: Workspace has %d changed files",
+                            team_id[:8], len(changeset))
+                for diff in changeset:
+                    try:
+                        await go_client.report_diff(task.id, diff)
+                        logger.info("Team %s: Submitted diff for %s",
+                                    team_id[:8], diff["file_path"])
+                    except Exception as e:
+                        logger.error("Team %s: Failed to submit diff for %s: %s",
+                                     team_id[:8], diff["file_path"], e)
+            else:
+                logger.info("Team %s: No workspace changes (no diffs)", team_id[:8])
+
             if agent_failures:
                 logger.warning("Team %s: %d/%d agents failed, completing with partial results",
                                team_id[:8], len(agent_failures), total_agents)

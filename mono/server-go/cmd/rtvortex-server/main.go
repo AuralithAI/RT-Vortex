@@ -537,13 +537,15 @@ func main() {
 	swarmPRCreator := swarm.NewPRCreator(db.Pool, vcsResolver, swarmTaskMgr, swarmWSHub)
 
 	swarmHandler := &swarm.Handler{
-		AuthSvc:   swarmAuthSvc,
-		TaskMgr:   swarmTaskMgr,
-		TeamMgr:   swarmTeamMgr,
-		LLMProxy:  swarmLLMProxy,
-		ELO:       swarmELO,
-		WS:        swarmWSHub,
-		PRCreator: swarmPRCreator,
+		AuthSvc:     swarmAuthSvc,
+		TaskMgr:     swarmTaskMgr,
+		TeamMgr:     swarmTeamMgr,
+		LLMProxy:    swarmLLMProxy,
+		ELO:         swarmELO,
+		WS:          swarmWSHub,
+		PRCreator:   swarmPRCreator,
+		VCSResolver: vcsResolver,
+		DB:          db.Pool,
 	}
 
 	// Start the swarm task assignment loop.

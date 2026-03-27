@@ -376,7 +376,12 @@ func (s *Server) setupRouter() {
 				r.Post("/tasks/{id}/fail", sh.FailTask)
 				r.Post("/tasks/{id}/declare-size", sh.DeclareTeamSize)
 				r.Post("/tasks/{id}/contribution", sh.RecordContribution)
+				r.Post("/tasks/{id}/agent-message", sh.AgentMessage)
 				r.Post("/heartbeat/{id}", sh.Heartbeat)
+
+				// VCS proxy for agent workspace reads.
+				r.Post("/vcs/read-file", sh.VCSReadFile)
+				r.Post("/vcs/list-dir", sh.VCSListDir)
 
 				// LLM proxy.
 				if s.deps.SwarmLLMProxy != nil {
