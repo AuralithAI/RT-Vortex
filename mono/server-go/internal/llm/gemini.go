@@ -133,6 +133,18 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		model = p.defaultModel
 	}
 
+	// Build a tool_call_id → function name lookup so we can resolve names
+	// for tool result messages. OpenAI's format puts the name on the
+	// assistant's tool_call, not on the tool result; Gemini requires it.
+	tcNameByID := make(map[string]string)
+	for _, m := range req.Messages {
+		for _, tc := range m.ToolCalls {
+			if tc.ID != "" && tc.Function.Name != "" {
+				tcNameByID[tc.ID] = tc.Function.Name
+			}
+		}
+	}
+
 	var systemInstruct *geminiContent
 	var contents []geminiContent
 	for _, m := range req.Messages {
@@ -150,11 +162,18 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 				// If not valid JSON, wrap in a result object.
 				respObj = map[string]interface{}{"result": m.Content}
 			}
+			funcName := m.Name
+			if funcName == "" {
+				funcName = tcNameByID[m.ToolCallID]
+			}
+			if funcName == "" {
+				funcName = "tool_result"
+			}
 			contents = append(contents, geminiContent{
 				Role: "function",
 				Parts: []geminiPart{{
 					FunctionResponse: &geminiFuncResp{
-						Name:     m.Name,
+						Name:     funcName,
 						Response: respObj,
 					},
 				}},

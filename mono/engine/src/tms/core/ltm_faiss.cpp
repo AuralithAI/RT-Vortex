@@ -227,9 +227,15 @@ public:
             }
             default:
                 // AUTO - will be set later based on data size
-                type_ = FAISSIndexType::FLAT_L2;
-                auto flat = new faiss::IndexFlatL2(config_.dimension);
-                index_ = new faiss::IndexIDMap(flat);
+                if (config_.use_cosine_similarity) {
+                    type_ = FAISSIndexType::FLAT_IP;
+                    auto flat = new faiss::IndexFlatIP(config_.dimension);
+                    index_ = new faiss::IndexIDMap(flat);
+                } else {
+                    type_ = FAISSIndexType::FLAT_L2;
+                    auto flat = new faiss::IndexFlatL2(config_.dimension);
+                    index_ = new faiss::IndexIDMap(flat);
+                }
                 trained_ = true;
                 break;
         }
@@ -576,6 +582,8 @@ std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
     // RRF (Reciprocal Rank Fusion)
     const float k = 60.0f;  // RRF parameter
     std::unordered_map<std::string, float> combined_scores;
+    std::unordered_map<std::string, float> vector_scores;
+    std::unordered_map<std::string, float> lexical_scores;
     
     // Add vector scores
     for (size_t rank = 0; rank < v_ids.size(); ++rank) {
@@ -593,6 +601,7 @@ std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
             }
             float rrf_score = alpha / (k + rank + 1);
             combined_scores[it->second] += rrf_score;
+            vector_scores[it->second] = rrf_score;
         }
     }
     
@@ -608,6 +617,7 @@ std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
         }
         float rrf_score = (1.0f - alpha) / (k + rank + 1);
         combined_scores[lexical_results[rank].first] += rrf_score;
+        lexical_scores[lexical_results[rank].first] = rrf_score;
     }
     
     // Sort by combined score
@@ -630,6 +640,10 @@ std::vector<RetrievedChunk> LTMFaiss::hybridSearch(
         RetrievedChunk result;
         result.chunk = chunk_it->second;
         result.combined_score = score;
+        auto vs_it = vector_scores.find(chunk_id);
+        result.similarity_score = vs_it != vector_scores.end() ? vs_it->second : 0.0f;
+        auto ls_it = lexical_scores.find(chunk_id);
+        result.lexical_score = ls_it != lexical_scores.end() ? ls_it->second : 0.0f;
         result.memory_source = "LTM";
         
         if (metadata_.count(chunk_id)) {
@@ -1086,6 +1100,17 @@ void LTMFaiss::load(const std::string& path) {
 
         chunks_[chunk_id] = std::move(chunk);
     }
+
+    // Rebuild the in-memory BM25 lexical index from loaded chunks.
+    // The lexical index is not persisted to disk, so it must be
+    // reconstructed on every load.
+    for (const auto& [cid, c] : chunks_) {
+        lexical_index_->add(cid, c.content);
+    }
+
+    LOG_INFO("[LTM] loaded " + std::to_string(chunks_.size()) +
+             " chunks, rebuilt lexical index (" +
+             std::to_string(chunks_.size()) + " docs)");
 }
 
 // =============================================================================
@@ -1137,11 +1162,20 @@ size_t LTMFaiss::getRepoChunkCount(const std::string& repo_id) const {
 // =============================================================================
 
 FAISSIndexType LTMFaiss::selectIndexType(size_t expected_size) {
+    // When cosine similarity is enabled, embeddings are L2-normalised before
+    // insertion.  Inner Product on normalised vectors == cosine similarity,
+    // so we must use IP-based indices to get meaningful distance values.
+    if (config_.use_cosine_similarity) {
+        if (expected_size < 10000) {
+            return FAISSIndexType::FLAT_IP;
+        }
+        // HNSW uses L2 internally — fall through to FLAT_IP for safety.
+        return FAISSIndexType::FLAT_IP;
+    }
+
     if (expected_size < 10000) {
         return FAISSIndexType::FLAT_L2;
     } else if (expected_size < 1000000) {
-        // HNSW is effective up to ~1M vectors; keeps recall high without
-        // the training overhead of IVF.
         return FAISSIndexType::HNSW_FLAT;
     } else if (expected_size < 10000000) {
         return FAISSIndexType::IVF_FLAT;

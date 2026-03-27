@@ -277,6 +277,7 @@ func main() {
 	// LLM provider registry — all providers pre-registered with default URLs.
 	// API keys come from environment variables or the dashboard settings UI — never from XML.
 	llmRegistry := llm.NewRegistry()
+	llmRegistry.SetTimeout(cfg.LLM.Timeout)
 
 	// API keys are sourced exclusively from env vars (or set at runtime via dashboard).
 	envKey := func(envVar string) string {
@@ -301,6 +302,7 @@ func main() {
 		llm.NewOpenAIProvider(llm.OpenAIConfig{
 			APIKey: openaiKey, BaseURL: cfgURL("openai", "https://api.openai.com/v1"),
 			DefaultModel: cfgModel("openai", "gpt-4o"),
+			Timeout:      cfg.LLM.Timeout,
 		}),
 		llm.ProviderMeta{
 			DisplayName: "OpenAI", BaseURL: cfgURL("openai", "https://api.openai.com/v1"),
@@ -315,6 +317,7 @@ func main() {
 		llm.NewAnthropicProvider(llm.AnthropicConfig{
 			APIKey: anthropicKey, BaseURL: cfgURL("anthropic", "https://api.anthropic.com/v1"),
 			DefaultModel: cfgModel("anthropic", "claude-sonnet-4-20250514"),
+			Timeout:      cfg.LLM.Timeout,
 		}),
 		llm.ProviderMeta{
 			DisplayName: "Anthropic", BaseURL: cfgURL("anthropic", "https://api.anthropic.com/v1"),
@@ -329,6 +332,7 @@ func main() {
 		llm.NewGeminiProvider(llm.GeminiConfig{
 			APIKey: geminiKey, BaseURL: cfgURL("gemini", "https://generativelanguage.googleapis.com/v1beta"),
 			DefaultModel: cfgModel("gemini", "gemini-2.5-flash"),
+			Timeout:      cfg.LLM.Timeout,
 		}),
 		llm.ProviderMeta{
 			DisplayName: "Google Gemini", BaseURL: cfgURL("gemini", "https://generativelanguage.googleapis.com/v1beta"),
@@ -342,7 +346,7 @@ func main() {
 	llmRegistry.RegisterWithMeta(
 		llm.NewGrokProvider(llm.GrokConfig{
 			APIKey: grokKey, BaseURL: cfgURL("grok", "https://api.x.ai/v1"),
-			DefaultModel: cfgModel("grok", "grok-3-mini"),
+			DefaultModel: cfgModel("grok", "grok-3-mini"), Timeout: cfg.LLM.Timeout,
 		}),
 		llm.ProviderMeta{
 			DisplayName: "Grok (xAI)", BaseURL: cfgURL("grok", "https://api.x.ai/v1"),
@@ -355,7 +359,7 @@ func main() {
 	llmRegistry.RegisterWithMeta(
 		llm.NewOllamaProvider(llm.OllamaConfig{
 			BaseURL:      cfgURL("ollama", "http://localhost:11434"),
-			DefaultModel: cfgModel("ollama", "llama3.1:8b"),
+			DefaultModel: cfgModel("ollama", "llama3.1:8b"), Timeout: cfg.LLM.Timeout,
 		}),
 		llm.ProviderMeta{
 			DisplayName: "Ollama (Local)", BaseURL: cfgURL("ollama", "http://localhost:11434"),

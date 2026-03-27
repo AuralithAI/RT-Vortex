@@ -152,10 +152,10 @@ struct MemoryMetadata {
 
 struct RetrievedChunk {
     CodeChunk chunk;
-    float similarity_score;                 // Vector similarity (0-1)
-    float lexical_score;                    // BM25/keyword match score
-    float combined_score;                   // Final score (after RRF fusion)
-    float attention_weight;                 // Cross-memory attention weight
+    float similarity_score = 0.0f;          // Vector similarity (0-1)
+    float lexical_score = 0.0f;             // BM25/keyword match score
+    float combined_score = 0.0f;            // Final score (after RRF fusion)
+    float attention_weight = 0.0f;          // Cross-memory attention weight
     std::string memory_source;              // "LTM", "STM", "MTM"
     MemoryMetadata metadata;
 };
@@ -273,9 +273,9 @@ struct CrossMemoryOutput {
     std::vector<std::vector<float>> per_head_mtm_weights;
     
     // Metrics
-    double confidence_score;
-    std::chrono::milliseconds computation_time;
-    size_t total_tokens_in_context;
+    double confidence_score = 0.0;
+    std::chrono::milliseconds computation_time{};
+    size_t total_tokens_in_context = 0;
 };
 
 // =============================================================================

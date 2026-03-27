@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 )
 
 // ── Errors ──────────────────────────────────────────────────────────────────
@@ -171,6 +172,7 @@ type Registry struct {
 	fallbacks []string
 	vault     SecretStore           // optional — if set, API keys are persisted
 	routes    map[string]ModelRoute // role → preferred provider/model
+	timeout   time.Duration         // LLM request timeout passed to re-created providers
 }
 
 // NewRegistry creates an empty LLM provider registry.
@@ -226,6 +228,11 @@ func (r *Registry) GetRoutes() map[string]ModelRoute {
 // SetVault attaches a secret store for persisting API keys across restarts.
 func (r *Registry) SetVault(v SecretStore) {
 	r.vault = v
+}
+
+// SetTimeout stores the LLM request timeout for use when re-creating providers.
+func (r *Registry) SetTimeout(d time.Duration) {
+	r.timeout = d
 }
 
 // Register adds a provider. The first registered becomes the primary.
@@ -294,23 +301,23 @@ func (r *Registry) UpdateAPIKey(name, apiKey string) bool {
 	switch name {
 	case "openai":
 		r.providers[name] = NewOpenAIProvider(OpenAIConfig{
-			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel, Timeout: r.timeout,
 		})
 	case "anthropic":
 		r.providers[name] = NewAnthropicProvider(AnthropicConfig{
-			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel, Timeout: r.timeout,
 		})
 	case "gemini":
 		r.providers[name] = NewGeminiProvider(GeminiConfig{
-			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel, Timeout: r.timeout,
 		})
 	case "grok":
 		r.providers[name] = NewGrokProvider(GrokConfig{
-			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel, Timeout: r.timeout,
 		})
 	case "ollama":
 		r.providers[name] = NewOllamaProvider(OllamaConfig{
-			BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+			BaseURL: m.BaseURL, DefaultModel: m.DefaultModel, Timeout: r.timeout,
 		})
 	default:
 		return false
@@ -423,23 +430,23 @@ func (r *Registry) updateAPIKeyInternal(name, apiKey string) bool {
 	switch name {
 	case "openai":
 		r.providers[name] = NewOpenAIProvider(OpenAIConfig{
-			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel, Timeout: r.timeout,
 		})
 	case "anthropic":
 		r.providers[name] = NewAnthropicProvider(AnthropicConfig{
-			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel, Timeout: r.timeout,
 		})
 	case "gemini":
 		r.providers[name] = NewGeminiProvider(GeminiConfig{
-			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel, Timeout: r.timeout,
 		})
 	case "grok":
 		r.providers[name] = NewGrokProvider(GrokConfig{
-			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+			APIKey: apiKey, BaseURL: m.BaseURL, DefaultModel: m.DefaultModel, Timeout: r.timeout,
 		})
 	case "ollama":
 		r.providers[name] = NewOllamaProvider(OllamaConfig{
-			BaseURL: m.BaseURL, DefaultModel: m.DefaultModel,
+			BaseURL: m.BaseURL, DefaultModel: m.DefaultModel, Timeout: r.timeout,
 		})
 	default:
 		return false

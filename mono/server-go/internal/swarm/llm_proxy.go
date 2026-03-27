@@ -147,6 +147,9 @@ func (p *LLMProxy) HandleComplete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Log the context the agent is sending.
+	logAgentContext(&req)
+
 	start := time.Now()
 	resp, err := p.Complete(ctx, &req)
 	duration := time.Since(start)
@@ -171,4 +174,54 @@ func (p *LLMProxy) HandleComplete(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// logAgentContext logs a summary of every message the agent sends to the LLM,
+// including role, content length, tool call names, and tool result IDs.
+func logAgentContext(req *LLMCompleteRequest) {
+	roleCounts := map[string]int{}
+	totalChars := 0
+	for _, m := range req.Messages {
+		roleCounts[string(m.Role)]++
+		totalChars += len(m.Content)
+	}
+
+	slog.Info("swarm llm request",
+		"agent_role", req.AgentRole,
+		"model", req.Model,
+		"messages", len(req.Messages),
+		"tools", len(req.Tools),
+		"roles", roleCounts,
+		"total_chars", totalChars,
+	)
+
+	for i, m := range req.Messages {
+		attrs := []any{
+			"idx", i,
+			"role", m.Role,
+			"len", len(m.Content),
+		}
+		if m.Name != "" {
+			attrs = append(attrs, "name", m.Name)
+		}
+		if m.ToolCallID != "" {
+			attrs = append(attrs, "tool_call_id", m.ToolCallID)
+		}
+		if len(m.ToolCalls) > 0 {
+			names := make([]string, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				names[j] = tc.Function.Name
+			}
+			attrs = append(attrs, "tool_calls", names)
+		}
+
+		// Truncate content for log readability.
+		preview := m.Content
+		if len(preview) > 200 {
+			preview = preview[:200] + "..."
+		}
+		attrs = append(attrs, "content", preview)
+
+		slog.Debug("swarm llm msg", attrs...)
+	}
 }

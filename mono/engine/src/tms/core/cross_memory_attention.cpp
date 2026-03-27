@@ -299,8 +299,8 @@ AttentionScores CrossMemoryAttention::computeAttentionWeights(
     // Project query
     auto q_projected = linear(query, w_q_);
     
-    // Split into heads
-    int head_dim = config_.embed_dim / config_.num_heads;
+    // Split into heads (must match config_.head_dim used for weight init)
+    int head_dim = config_.head_dim;
     
     for (int h = 0; h < config_.num_heads; ++h) {
         // Extract this head's query slice
@@ -625,8 +625,11 @@ std::vector<float> CrossMemoryAttention::layerNorm(
     // Normalize
     std::vector<float> result(x.size());
     float eps = 1e-5f;
+    float denom = std::sqrt(var + eps);
+    if (!std::isfinite(denom) || denom < eps) denom = 1.0f;
     for (size_t i = 0; i < x.size(); ++i) {
-        result[i] = gamma[i] * (x[i] - mean) / std::sqrt(var + eps) + beta[i];
+        float val = gamma[i] * (x[i] - mean) / denom + beta[i];
+        result[i] = std::isfinite(val) ? val : 0.0f;
     }
     
     return result;
@@ -645,8 +648,13 @@ std::vector<float> CrossMemoryAttention::softmax(const std::vector<float>& x) {
         sum += result[i];
     }
     
-    for (float& v : result) {
-        v /= sum;
+    if (sum < 1e-12f) {
+        float uniform = 1.0f / static_cast<float>(x.size());
+        std::fill(result.begin(), result.end(), uniform);
+    } else {
+        for (float& v : result) {
+            v /= sum;
+        }
     }
     
     return result;

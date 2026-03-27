@@ -71,6 +71,7 @@ void TMSMemorySystem::initialize() {
     ltm_config.pq_m = config_.ltm_m;
     ltm_config.pq_bits = config_.ltm_bits;
     ltm_config.use_gpu = config_.ltm_use_gpu;
+    ltm_config.use_cosine_similarity = true;
     ltm_config.default_top_k = config_.ltm_default_top_k;
     ltm_config.storage_path = config_.storage_path + "/ltm";
     

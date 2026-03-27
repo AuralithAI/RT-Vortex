@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -179,6 +180,14 @@ func (mc *MetricsCollector) stream(ctx context.Context) error {
 
 // ── Conversion ──────────────────────────────────────────────────────────────
 
+// sanitizeFloat64 replaces NaN and ±Inf with 0 so JSON marshal never fails.
+func sanitizeFloat64(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	return v
+}
+
 func convertMetricsSnapshot(msg *pb.EngineMetricsSnapshot) *EngineMetricsSnapshot {
 	snap := &EngineMetricsSnapshot{
 		TimestampMs:         msg.TimestampMs,
@@ -201,23 +210,23 @@ func convertMetricsSnapshot(msg *pb.EngineMetricsSnapshot) *EngineMetricsSnapsho
 		switch mv.Type {
 		case pb.MetricValueProto_COUNTER:
 			val.Type = "counter"
-			val.Scalar = mv.Scalar
+			val.Scalar = sanitizeFloat64(mv.Scalar)
 		case pb.MetricValueProto_GAUGE:
 			val.Type = "gauge"
-			val.Scalar = mv.Scalar
+			val.Scalar = sanitizeFloat64(mv.Scalar)
 		case pb.MetricValueProto_HISTOGRAM:
 			val.Type = "histogram"
 			if mv.Histogram != nil {
 				val.Histogram = &HistogramSnapshot{
 					Count:  mv.Histogram.Count,
-					Sum:    mv.Histogram.Sum,
-					MinVal: mv.Histogram.MinVal,
-					MaxVal: mv.Histogram.MaxVal,
-					Avg:    mv.Histogram.Avg,
-					P50:    mv.Histogram.P50,
-					P90:    mv.Histogram.P90,
-					P95:    mv.Histogram.P95,
-					P99:    mv.Histogram.P99,
+					Sum:    sanitizeFloat64(mv.Histogram.Sum),
+					MinVal: sanitizeFloat64(mv.Histogram.MinVal),
+					MaxVal: sanitizeFloat64(mv.Histogram.MaxVal),
+					Avg:    sanitizeFloat64(mv.Histogram.Avg),
+					P50:    sanitizeFloat64(mv.Histogram.P50),
+					P90:    sanitizeFloat64(mv.Histogram.P90),
+					P95:    sanitizeFloat64(mv.Histogram.P95),
+					P99:    sanitizeFloat64(mv.Histogram.P99),
 				}
 			}
 		}
