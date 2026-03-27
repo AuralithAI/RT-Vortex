@@ -28,9 +28,10 @@ all: deps build ## Build everything
 
 build: ## Build the server binary
 	@echo "Building $(BINARY) $(VERSION)..."
-	@mkdir -p $(RT_HOME)/bin $(RT_HOME)/config $(RT_HOME)/data/sql $(RT_HOME)/temp $(RT_HOME)/models
+	@mkdir -p $(RT_HOME)/bin $(RT_HOME)/config $(RT_HOME)/data/sql $(RT_HOME)/data/migrations $(RT_HOME)/temp $(RT_HOME)/models
 	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(RT_HOME)/bin/$(BINARY) $(CMD_DIR)
 	@cp -f db/sql/*.sql $(RT_HOME)/data/sql/ 2>/dev/null || true
+	@cp -f db/migrations/*.sql $(RT_HOME)/data/migrations/ 2>/dev/null || true
 	@cp -n ../config/rtserverprops.xml $(RT_HOME)/config/ 2>/dev/null || true
 	@echo "Built: $(RT_HOME)/bin/$(BINARY)"
 	@ls -lh $(RT_HOME)/bin/$(BINARY)
@@ -130,6 +131,11 @@ db-init: ## Initialize schema tables (run after db-create)
 
 db-status: ## Show current schema version
 	psql -U rtvortex -d rtvortex -c "SELECT * FROM schema_info ORDER BY version;"
+
+db-drop: ## Drop the rtvortex database (destructive!)
+	psql -U postgres -c "DROP DATABASE IF EXISTS rtvortex;"
+
+db-reset: db-drop db-create db-init ## Drop, recreate, and re-init the database
 
 db-install: db-create db-init ## Full database setup (create + init)
 
