@@ -51,7 +51,7 @@ COMMIT       := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown"
 BUILD_DATE   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 .PHONY: all engine server config models clean clean-all run run-engine run-server run-web \
-        test test-engine test-server db-create db-init db-install \
+        test test-engine test-server db-create db-init db-drop db-status db-reset db-install \
         cli sdk-python sdk-node sdk-java sdks \
         test-cli test-sdk-python test-sdk-node test-sdk-java test-sdks test-all \
         build-cli build-sdk-python build-sdk-node build-sdk-java build-sdks \
@@ -108,6 +108,7 @@ engine: rt_home ## Build the C++ RTVortex engine
 server: rt_home proto-go ## Build the Go RTVortexGo API server
 	@echo ""
 	@echo "──── Building Go API Server ─────────────────────────────"
+	@mkdir -p $(RT_HOME)/data/migrations
 	cd $(SERVER_DIR) && $(GO) build -trimpath \
 		-ldflags "-s -w \
 			-X main.version=$(VERSION) \
@@ -116,6 +117,7 @@ server: rt_home proto-go ## Build the Go RTVortexGo API server
 		-o $(RT_HOME)/bin/RTVortexGo \
 		./cmd/rtvortex-server/
 	@cp -f $(SERVER_DIR)/db/sql/*.sql $(RT_HOME)/data/sql/ 2>/dev/null || true
+	@cp -f $(SERVER_DIR)/db/migrations/*.sql $(RT_HOME)/data/migrations/ 2>/dev/null || true
 	@echo "  rt_home/bin/RTVortexGo ($$(du -h $(RT_HOME)/bin/RTVortexGo | cut -f1))"
 
 # ==============================================================================
@@ -413,11 +415,20 @@ test-server-unit: ## Run Go server unit tests (tests/ dir only)
 # Database
 # ==============================================================================
 
-db-create: rt_home config ## Create PostgreSQL role and database (run as postgres superuser)
+db-create: rt_home config ## Create PostgreSQL role and database
 	psql -U postgres -f $(RT_HOME)/data/sql/create_database.sql
 
 db-init: rt_home config ## Initialize schema tables (run after db-create)
 	psql -U rtvortex -d rtvortex -f $(RT_HOME)/data/sql/initData.sql
+
+db-drop: ## Drop the rtvortex database (destructive!)
+	psql -U postgres -c "DROP DATABASE IF EXISTS rtvortex;"
+
+db-status: ## Show current migration version
+	psql -U rtvortex -d rtvortex -c "SELECT * FROM schema_migrations ORDER BY version DESC LIMIT 5;" 2>/dev/null || \
+	psql -U rtvortex -d rtvortex -c "SELECT * FROM schema_info ORDER BY version;"
+
+db-reset: db-drop db-create db-init ## Drop, recreate, and re-init the database
 
 db-install: all db-create db-init ## Full setup: build + create DB + init schema
 
