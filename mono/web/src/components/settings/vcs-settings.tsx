@@ -44,29 +44,26 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getVCSIcon } from "@/components/icons/brand-icons";
 
-// Platform icons / brand colors
+// Platform brand colors and docs links
 const platformMeta: Record<
   string,
-  { icon: string; color: string; docsUrl: string }
+  { color: string; docsUrl: string }
 > = {
   github: {
-    icon: "🐙",
     color: "border-l-zinc-800 dark:border-l-zinc-200",
     docsUrl: "https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/creating-a-personal-access-token",
   },
   gitlab: {
-    icon: "🦊",
     color: "border-l-orange-500",
     docsUrl: "https://docs.gitlab.com/ee/user/profile/personal_access_tokens.html",
   },
   bitbucket: {
-    icon: "🪣",
     color: "border-l-blue-500",
     docsUrl: "https://support.atlassian.com/bitbucket-cloud/docs/create-an-app-password/",
   },
   azure_devops: {
-    icon: "☁️",
     color: "border-l-sky-500",
     docsUrl: "https://learn.microsoft.com/en-us/azure/devops/organizations/accounts/use-personal-access-tokens-to-authenticate",
   },
@@ -200,7 +197,7 @@ export function VCSSettings() {
 
 interface PlatformCardProps {
   platform: VCSPlatformInfo;
-  meta?: { icon: string; color: string; docsUrl: string };
+  meta?: { color: string; docsUrl: string };
   tokenCapabilities: VCSTokenCapability[];
   fieldValues: Record<string, string>;
   showSecrets: Record<string, boolean>;
@@ -233,6 +230,7 @@ function PlatformCard({
 }: PlatformCardProps) {
   const hasChanges = Object.keys(fieldValues).some((k) => fieldValues[k] !== "");
   const [showCapabilities, setShowCapabilities] = useState(false);
+  const BrandIcon = getVCSIcon(platform.name);
 
   // Separate secret fields from config fields for visual grouping
   const secretFields = platform.fields.filter((f) => f.secret);
@@ -246,8 +244,10 @@ function PlatformCard({
     >
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-lg">{meta?.icon ?? "🔗"}</span>
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center">
+            {BrandIcon ? <BrandIcon size={22} /> : <GitBranch className="h-5 w-5 text-muted-foreground" />}
+          </span>
           <p className="text-sm font-semibold">{platform.display_name}</p>
           {platform.configured ? (
             <Badge variant="success" className="text-xs">

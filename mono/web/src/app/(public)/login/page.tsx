@@ -7,11 +7,13 @@
 
 import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
+import { KeyRound } from "lucide-react";
 import { useAuthProviders } from "@/lib/api/queries";
 import { getApiBaseUrl } from "@/lib/utils";
 import { clearAccessToken } from "@/lib/api/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { queryKeys } from "@/lib/api/queries";
+import { getAuthProviderIcon } from "@/components/icons/brand-icons";
 
 function LoginContent() {
   const searchParams = useSearchParams();
@@ -93,16 +95,25 @@ function LoginContent() {
             </div>
           )}
 
-          {Array.isArray(providers) && providers.map((provider) => (
-            <button
-              key={provider.name}
-              onClick={() => handleLogin(provider.name)}
-              className="flex w-full items-center gap-3 rounded-lg border border-gray-200 px-4 py-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-800 dark:text-gray-300 dark:hover:bg-gray-900"
-            >
-              <ProviderIcon provider={provider.name} />
-              <span>Continue with {provider.display_name || provider.name}</span>
-            </button>
-          ))}
+          {Array.isArray(providers) && providers.map((provider) => {
+            const BrandIcon = getAuthProviderIcon(provider.name);
+            return (
+              <button
+                key={provider.name}
+                onClick={() => handleLogin(provider.name)}
+                className="flex w-full items-center gap-3 rounded-lg border border-gray-200 px-4 py-3.5 text-sm font-medium text-gray-700 transition-all hover:bg-gray-50 hover:shadow-sm dark:border-gray-800 dark:text-gray-300 dark:hover:bg-gray-900"
+              >
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+                  {BrandIcon ? (
+                    <BrandIcon size={20} />
+                  ) : (
+                    <KeyRound className="h-5 w-5 text-muted-foreground" />
+                  )}
+                </span>
+                <span>Sign in with {provider.display_name || provider.name}</span>
+              </button>
+            );
+          })}
         </div>
 
         {/* Footer */}
@@ -111,23 +122,6 @@ function LoginContent() {
         </p>
       </div>
     </div>
-  );
-}
-
-function ProviderIcon({ provider }: { provider: string }) {
-  const iconMap: Record<string, string> = {
-    github: "🐙",
-    gitlab: "🦊",
-    bitbucket: "🪣",
-    google: "🔍",
-    microsoft: "🪟",
-    apple: "🍎",
-    x: "𝕏",
-  };
-  return (
-    <span className="flex h-6 w-6 items-center justify-center text-lg">
-      {iconMap[provider.toLowerCase()] ?? "🔑"}
-    </span>
   );
 }
 

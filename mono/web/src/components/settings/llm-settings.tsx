@@ -47,6 +47,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { getLLMIcon } from "@/components/icons/brand-icons";
 
 export function LLMSettings() {
   const { data: llmData, isLoading } = useLLMProviders();
@@ -136,6 +137,7 @@ export function LLMSettings() {
                 checkBalance.variables === provider.name;
               const balance = balanceResults[provider.name];
               const isLocal = !provider.requires_key; // Ollama, local providers
+              const ProviderBrandIcon = getLLMIcon(provider.name);
 
               return (
                 <div
@@ -144,7 +146,12 @@ export function LLMSettings() {
                 >
                   {/* Header row */}
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2.5">
+                      {ProviderBrandIcon && (
+                        <span className="flex h-6 w-6 shrink-0 items-center justify-center">
+                          <ProviderBrandIcon size={22} />
+                        </span>
+                      )}
                       <p className="text-sm font-semibold">
                         {provider.display_name || provider.name}
                       </p>

@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { getLLMIcon } from "@/components/icons/brand-icons";
 
 /** Sentinel value for "use primary / default" (no explicit route). */
 const USE_DEFAULT = "__default__";
@@ -296,11 +297,17 @@ export function AgentOrchestration() {
                         <SelectItem value={USE_DEFAULT} className="text-xs">
                           Primary ({displayName(primaryProvider)})
                         </SelectItem>
-                        {configuredProviders.map((p) => (
-                          <SelectItem key={p.name} value={p.name} className="text-xs">
-                            {p.display_name || p.name}
-                          </SelectItem>
-                        ))}
+                        {configuredProviders.map((p) => {
+                          const PIcon = getLLMIcon(p.name);
+                          return (
+                            <SelectItem key={p.name} value={p.name} className="text-xs">
+                              <span className="flex items-center gap-1.5">
+                                {PIcon && <PIcon size={14} />}
+                                {p.display_name || p.name}
+                              </span>
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
 
