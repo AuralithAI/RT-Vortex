@@ -44,6 +44,29 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import type { ExternalEmbeddingProvider, EmbeddingModelOption, BuiltinEmbeddingModel } from "@/types/api";
 
+// Client-side fallback — always show these models even if the backend doesn't
+// return them (e.g. first boot, config not yet seeded, API issue).
+const FALLBACK_BUILTIN_MODELS: BuiltinEmbeddingModel[] = [
+  {
+    name: "bge-m3",
+    display_name: "BAAI BGE-M3",
+    provider: "ONNX Runtime (local)",
+    dimensions: 1024,
+    size_mb: 2200,
+    description:
+      "State-of-the-art multilingual embedding model from BAAI. Best quality for semantic code search across 100+ languages.",
+  },
+  {
+    name: "minilm",
+    display_name: "MiniLM-L6",
+    provider: "ONNX Runtime (local)",
+    dimensions: 384,
+    size_mb: 80,
+    description:
+      "Lightweight, fast embedding model. Lower quality but 25× smaller. Good for quick evaluation or resource-constrained environments.",
+  },
+];
+
 export function EmbeddingsSettings() {
   const { data: config, isLoading } = useEmbeddingsConfig();
   const updateEmbeddings = useUpdateEmbeddings();
@@ -191,12 +214,15 @@ export function EmbeddingsSettings() {
               />
             </div>
 
-            {/* Builtin model selector */}
+            {/* Builtin model selector — always visible when builtin is on */}
             {useBuiltin && (
               <div className="space-y-3">
                 <p className="text-sm font-medium">Select Model</p>
                 <div className="grid gap-2">
-                  {(config?.builtin_models ?? []).map((m: BuiltinEmbeddingModel) => {
+                  {(config?.builtin_models?.length
+                    ? config.builtin_models
+                    : FALLBACK_BUILTIN_MODELS
+                  ).map((m: BuiltinEmbeddingModel) => {
                     const isSelected = selectedBuiltinModel === m.name;
                     return (
                       <div

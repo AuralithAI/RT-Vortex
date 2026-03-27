@@ -4,7 +4,7 @@
 
 "use client";
 
-import { LogOut, User as UserIcon, Moon, Sun } from "lucide-react";
+import { LogOut, User as UserIcon } from "lucide-react";
 import { useAuth } from "@/lib/auth/context";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -16,26 +16,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { AnimatedThemeSwitch } from "@/components/ui/animated-theme-switch";
 import { useUIStore } from "@/lib/stores/ui";
 import { cn } from "@/lib/utils";
-import { useEffect, useState } from "react";
 
 export function TopBar() {
   const { user, logout, isLoggingOut } = useAuth();
   const { sidebarOpen } = useUIStore();
-  const [dark, setDark] = useState(false);
-
-  useEffect(() => {
-    const isDark = document.documentElement.classList.contains("dark");
-    setDark(isDark);
-  }, []);
-
-  const toggleTheme = () => {
-    const next = !dark;
-    setDark(next);
-    document.documentElement.classList.toggle("dark", next);
-    localStorage.setItem("theme", next ? "dark" : "light");
-  };
 
   const initials =
     user?.name
@@ -53,9 +40,9 @@ export function TopBar() {
       )}
     >
       {/* Theme toggle */}
-      <Button variant="ghost" size="icon" onClick={toggleTheme} className="mr-2">
-        {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-      </Button>
+      <div className="mr-3">
+        <AnimatedThemeSwitch />
+      </div>
 
       {/* User dropdown */}
       <DropdownMenu>
