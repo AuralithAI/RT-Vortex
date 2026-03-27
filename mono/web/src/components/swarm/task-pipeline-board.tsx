@@ -191,7 +191,7 @@ function TaskCard({ task }: { task: SwarmTask }) {
       <div className="group cursor-pointer rounded-md border bg-card p-3 shadow-sm transition-colors hover:border-primary/50">
         <div className="flex items-start justify-between gap-1">
           <p className="line-clamp-2 text-xs font-medium leading-tight">
-            {task.description}
+            {task.title || task.description}
           </p>
           <button
             onClick={handleDelete}

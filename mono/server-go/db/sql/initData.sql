@@ -351,6 +351,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS swarm_tasks (
     id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     repo_id           TEXT NOT NULL,
+    title             TEXT DEFAULT '',
     description       TEXT NOT NULL,
     status            TEXT DEFAULT 'submitted',
     plan_document     JSONB,

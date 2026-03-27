@@ -186,11 +186,14 @@ func (c *PRCreator) getRepoInfo(ctx context.Context, repoID uuid.UUID) (owner, r
 
 // buildPRTitle generates a PR title from the task description.
 func (c *PRCreator) buildPRTitle(task *Task) string {
-	desc := task.Description
-	if len(desc) > 72 {
-		desc = desc[:69] + "..."
+	label := task.Title
+	if label == "" {
+		label = task.Description
 	}
-	return fmt.Sprintf("[Swarm] %s", desc)
+	if len(label) > 72 {
+		label = label[:69] + "..."
+	}
+	return fmt.Sprintf("[Swarm] %s", label)
 }
 
 // buildPRBody generates a structured PR description.

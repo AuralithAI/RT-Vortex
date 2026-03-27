@@ -124,7 +124,7 @@ export default function SwarmTaskDetailPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={task.description}
+        title={task.title || task.description}
         description={`${task.repo_id} • ${task.status.replace(/_/g, " ")}`}
         actions={
           <div className="flex items-center gap-3">

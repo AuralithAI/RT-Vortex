@@ -33,6 +33,7 @@ export type ChangeType = "modified" | "added" | "deleted" | "renamed";
 export interface SwarmTask {
   id: string;
   repo_id: string;
+  title: string;
   description: string;
   status: TaskStatus;
   plan_document?: PlanDocument;
@@ -151,6 +152,7 @@ export interface AgentSnapshot {
 export interface TaskSummary {
   id: string;
   repo_id: string;
+  title: string;
   description: string;
   status: TaskStatus;
   retry_count: number;
@@ -173,5 +175,6 @@ export interface TaskHistoryResponse {
 
 export interface TaskSubmission {
   repo_id: string;
+  title: string;
   description: string;
 }

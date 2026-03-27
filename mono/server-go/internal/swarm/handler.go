@@ -453,6 +453,7 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateTaskUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		RepoID      string `json:"repo_id"`
+		Title       string `json:"title"`
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -467,7 +468,7 @@ func (h *Handler) CreateTaskUser(w http.ResponseWriter, r *http.Request) {
 	// Extract user ID from context (set by user auth middleware).
 	userID := userIDFromRequest(r)
 
-	task, err := h.TaskMgr.CreateTask(r.Context(), body.RepoID, body.Description, userID)
+	task, err := h.TaskMgr.CreateTask(r.Context(), body.RepoID, body.Title, body.Description, userID)
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
 		return
@@ -477,6 +478,7 @@ func (h *Handler) CreateTaskUser(w http.ResponseWriter, r *http.Request) {
 	if h.WS != nil {
 		h.WS.BroadcastTaskEvent("created", task.ID.String(), map[string]interface{}{
 			"repo_id":     body.RepoID,
+			"title":       body.Title,
 			"description": body.Description,
 		})
 	}

@@ -40,6 +40,7 @@ export default function SwarmDashboardPage() {
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [repoId, setRepoId] = useState("");
+  const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>("pipeline");
@@ -75,12 +76,13 @@ export default function SwarmDashboardPage() {
       const res = await fetch("/api/v1/swarm/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repo_id: repoId, description }),
+        body: JSON.stringify({ repo_id: repoId, title, description }),
       });
       if (res.ok) {
         const task = await res.json();
         setTasks((prev) => [task, ...prev]);
         setRepoId("");
+        setTitle("");
         setDescription("");
         setShowForm(false);
       }
@@ -152,6 +154,19 @@ export default function SwarmDashboardPage() {
                   </a>
                 </p>
               )}
+            </div>
+            <div>
+              <label className="mb-1 block text-sm font-medium">
+                Title
+              </label>
+              <input
+                type="text"
+                className="w-full rounded-md border bg-background px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+                placeholder="Short title for this task…"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                disabled={submitting}
+              />
             </div>
             <div>
               <label className="mb-1 block text-sm font-medium">
@@ -306,37 +321,49 @@ export default function SwarmDashboardPage() {
           <div className="border-b px-6 py-4">
             <h3 className="text-lg font-semibold">Recent Tasks</h3>
           </div>
-          <div className="divide-y">
-            {tasks.length === 0 ? (
-              <div className="px-6 py-12 text-center text-muted-foreground">
-                <Bot className="mx-auto mb-3 h-10 w-10 opacity-50" />
-                <p>No tasks yet. Submit a task to get started.</p>
-              </div>
-            ) : (
-              tasks.map((task) => (
-                <a
-                  key={task.id}
-                  href={`/swarm/tasks/${task.id}`}
-                  className="block px-6 py-4 transition-colors hover:bg-muted/50"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="space-y-1">
-                      <p className="font-medium">{task.description}</p>
-                      <p className="text-sm text-muted-foreground">
-                        {task.repo_id} •{" "}
-                        {new Date(task.created_at).toLocaleDateString()}
-                      </p>
-                    </div>
-                    <span
-                      className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(task.status)}`}
-                    >
-                      {task.status.replace(/_/g, " ")}
-                    </span>
-                  </div>
-                </a>
-              ))
-            )}
-          </div>
+          {tasks.length === 0 ? (
+            <div className="px-6 py-12 text-center text-muted-foreground">
+              <Bot className="mx-auto mb-3 h-10 w-10 opacity-50" />
+              <p>No tasks yet. Submit a task to get started.</p>
+            </div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-muted-foreground">
+                  <th className="px-6 py-3 font-medium">Title</th>
+                  <th className="px-6 py-3 font-medium">Repo</th>
+                  <th className="px-6 py-3 font-medium">Status</th>
+                  <th className="px-6 py-3 font-medium">Created</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {tasks.map((task) => (
+                  <tr
+                    key={task.id}
+                    className="cursor-pointer transition-colors hover:bg-muted/50"
+                    onClick={() => (window.location.href = `/swarm/tasks/${task.id}`)}
+                  >
+                    <td className="px-6 py-3 font-medium">
+                      {task.title || task.description}
+                    </td>
+                    <td className="px-6 py-3 text-muted-foreground">
+                      {task.repo_id}
+                    </td>
+                    <td className="px-6 py-3">
+                      <span
+                        className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${statusColor(task.status)}`}
+                      >
+                        {task.status.replace(/_/g, " ")}
+                      </span>
+                    </td>
+                    <td className="px-6 py-3 text-muted-foreground">
+                      {new Date(task.created_at).toLocaleDateString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
 
         {/* Live Agent Panel */}

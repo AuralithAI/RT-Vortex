@@ -68,6 +68,7 @@ const consumerGroup = "swarm-controller"
 type Task struct {
 	ID             uuid.UUID       `json:"id"`
 	RepoID         string          `json:"repo_id"`
+	Title          string          `json:"title"`
 	Description    string          `json:"description"`
 	Status         string          `json:"status"`
 	PlanDocument   json.RawMessage `json:"plan_document,omitempty"`
@@ -89,6 +90,7 @@ type Task struct {
 type TaskSummary struct {
 	ID          uuid.UUID  `json:"id"`
 	RepoID      string     `json:"repo_id"`
+	Title       string     `json:"title"`
 	Description string     `json:"description"`
 	Status      string     `json:"status"`
 	RetryCount  int        `json:"retry_count"`
@@ -171,7 +173,7 @@ func (m *TaskManager) Stop() {
 // ── Task CRUD ───────────────────────────────────────────────────────────────
 
 // CreateTask inserts a new task and publishes it to the Redis stream.
-func (m *TaskManager) CreateTask(ctx context.Context, repoID, description string, submittedBy uuid.UUID) (*Task, error) {
+func (m *TaskManager) CreateTask(ctx context.Context, repoID, title, description string, submittedBy uuid.UUID) (*Task, error) {
 	// If repoID looks like a slug ("owner/name"), resolve it to the
 	// repository UUID.  The engine indexes by UUID, so all downstream
 	// consumers (Python swarm, engine gRPC calls) need the UUID.
@@ -195,6 +197,7 @@ func (m *TaskManager) CreateTask(ctx context.Context, repoID, description string
 	task := &Task{
 		ID:          uuid.New(),
 		RepoID:      repoID,
+		Title:       title,
 		Description: description,
 		Status:      StatusSubmitted,
 		SubmittedBy: &submittedBy,
@@ -202,9 +205,9 @@ func (m *TaskManager) CreateTask(ctx context.Context, repoID, description string
 	}
 
 	_, err := m.db.Exec(ctx, `
-		INSERT INTO swarm_tasks (id, repo_id, description, status, submitted_by, created_at, retry_count)
-		VALUES ($1, $2, $3, $4, $5, $6, 0)`,
-		task.ID, task.RepoID, task.Description, task.Status, task.SubmittedBy, task.CreatedAt,
+		INSERT INTO swarm_tasks (id, repo_id, title, description, status, submitted_by, created_at, retry_count)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 0)`,
+		task.ID, task.RepoID, task.Title, task.Description, task.Status, task.SubmittedBy, task.CreatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("inserting task: %w", err)
@@ -230,7 +233,7 @@ func (m *TaskManager) CreateTask(ctx context.Context, repoID, description string
 // GetTask returns a single task by ID.
 func (m *TaskManager) GetTask(ctx context.Context, taskID uuid.UUID) (*Task, error) {
 	row := m.db.QueryRow(ctx, `
-		SELECT id, repo_id, description, status, plan_document,
+		SELECT id, repo_id, COALESCE(title, ''), description, status, plan_document,
 		       assigned_team_id, assigned_agents,
 		       COALESCE(pr_url, ''), COALESCE(pr_number, 0),
 		       human_rating, COALESCE(human_comment, ''), submitted_by,
@@ -240,7 +243,7 @@ func (m *TaskManager) GetTask(ctx context.Context, taskID uuid.UUID) (*Task, err
 
 	var t Task
 	err := row.Scan(
-		&t.ID, &t.RepoID, &t.Description, &t.Status, &t.PlanDocument,
+		&t.ID, &t.RepoID, &t.Title, &t.Description, &t.Status, &t.PlanDocument,
 		&t.AssignedTeamID, &t.AssignedAgents, &t.PRUrl, &t.PRNumber,
 		&t.HumanRating, &t.HumanComment, &t.SubmittedBy,
 		&t.RetryCount, &t.FailureReason,
@@ -254,7 +257,7 @@ func (m *TaskManager) GetTask(ctx context.Context, taskID uuid.UUID) (*Task, err
 
 // ListTasks returns tasks filtered by optional repo_id and status.
 func (m *TaskManager) ListTasks(ctx context.Context, repoID, status string, limit int) ([]Task, error) {
-	query := `SELECT id, repo_id, description, status, plan_document,
+	query := `SELECT id, repo_id, COALESCE(title, ''), description, status, plan_document,
 	                 assigned_team_id, assigned_agents,
 	                 COALESCE(pr_url, ''), COALESCE(pr_number, 0),
 	                 human_rating, COALESCE(human_comment, ''), submitted_by,
@@ -290,7 +293,7 @@ func (m *TaskManager) ListTasks(ctx context.Context, repoID, status string, limi
 	for rows.Next() {
 		var t Task
 		if err := rows.Scan(
-			&t.ID, &t.RepoID, &t.Description, &t.Status, &t.PlanDocument,
+			&t.ID, &t.RepoID, &t.Title, &t.Description, &t.Status, &t.PlanDocument,
 			&t.AssignedTeamID, &t.AssignedAgents, &t.PRUrl, &t.PRNumber,
 			&t.HumanRating, &t.HumanComment, &t.SubmittedBy,
 			&t.RetryCount, &t.FailureReason,
@@ -1059,7 +1062,7 @@ func (m *TaskManager) ListTaskHistory(ctx context.Context, repoID string, limit,
 
 	// Fetch rows with aggregates.
 	query := `
-		SELECT t.id, t.repo_id, t.description, t.status,
+		SELECT t.id, t.repo_id, COALESCE(t.title, ''), t.description, t.status,
 		       COALESCE(t.retry_count, 0), COALESCE(t.pr_url, ''), COALESCE(t.pr_number, 0),
 		       t.human_rating, t.created_at, t.completed_at,
 		       (SELECT COUNT(*) FROM swarm_task_diffs d WHERE d.task_id = t.id) AS diff_count,
@@ -1090,7 +1093,7 @@ func (m *TaskManager) ListTaskHistory(ctx context.Context, repoID string, limit,
 	for rows.Next() {
 		var s TaskSummary
 		if err := rows.Scan(
-			&s.ID, &s.RepoID, &s.Description, &s.Status,
+			&s.ID, &s.RepoID, &s.Title, &s.Description, &s.Status,
 			&s.RetryCount, &s.PRUrl, &s.PRNumber,
 			&s.HumanRating, &s.CreatedAt, &s.CompletedAt,
 			&s.DiffCount, &s.AgentCount, &s.DurationSec,

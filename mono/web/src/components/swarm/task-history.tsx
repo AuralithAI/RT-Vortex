@@ -122,7 +122,7 @@ export function TaskHistory() {
           <thead>
             <tr className="border-b text-left text-xs font-medium text-muted-foreground">
               <th className="p-3">Status</th>
-              <th className="p-3">Description</th>
+              <th className="p-3">Title</th>
               <th className="p-3 text-center">Diffs</th>
               <th className="p-3 text-center">Agents</th>
               <th className="p-3 text-center">Duration</th>
@@ -145,7 +145,7 @@ export function TaskHistory() {
                     href={`/swarm/tasks/${task.id}`}
                     className="line-clamp-1 text-sm font-medium hover:underline"
                   >
-                    {task.description}
+                    {task.title || task.description}
                   </Link>
                 </td>
                 <td className="p-3 text-center text-sm">{task.diff_count}</td>
