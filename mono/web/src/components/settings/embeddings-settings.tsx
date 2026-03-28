@@ -6,6 +6,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import * as SwitchPrimitives from "@radix-ui/react-switch";
+import { motion } from "framer-motion";
 import {
   Cpu,
   Cloud,
@@ -24,7 +26,6 @@ import { useEmbeddingsConfig } from "@/lib/api/queries";
 import { useUpdateEmbeddings, useTestEmbedding, useCheckEmbeddingCredits } from "@/lib/api/mutations";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import {
@@ -189,13 +190,16 @@ export function EmbeddingsSettings() {
           <Skeleton className="h-40 w-full" />
         ) : (
           <>
-            {/* Built-in toggle */}
             <div className="flex items-start justify-between rounded-lg border p-4">
               <div className="space-y-2 flex-1">
                 <div className="flex items-center gap-2">
-                  <Cpu className="h-4 w-4 text-primary" />
+                  {useBuiltin ? (
+                    <Cpu className="h-4 w-4 text-primary" />
+                  ) : (
+                    <Cloud className="h-4 w-4 text-primary" />
+                  )}
                   <Label htmlFor="builtin-toggle" className="text-sm font-semibold">
-                    Use built-in local model
+                    Use built-in embedding model
                   </Label>
                   <Badge variant="success" className="text-xs">
                     <CheckCircle className="mr-1 h-3 w-3" />
@@ -203,20 +207,50 @@ export function EmbeddingsSettings() {
                   </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground ml-6">
-                  Runs entirely on your server via ONNX Runtime — no API key required, no data leaves your infrastructure.
+                  {useBuiltin
+                    ? "Runs entirely on your server via ONNX Runtime — no API key required, no data leaves your infrastructure."
+                    : "Using an external cloud provider for embeddings. Switch back to run locally."}
                 </p>
               </div>
-              <Switch
+              <SwitchPrimitives.Root
                 id="builtin-toggle"
                 checked={useBuiltin}
                 onCheckedChange={handleToggleBuiltin}
                 disabled={updateEmbeddings.isPending}
-              />
+                className="group relative inline-flex h-8 w-14 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-indigo-600 data-[state=unchecked]:bg-zinc-300 dark:data-[state=unchecked]:bg-zinc-600 dark:data-[state=checked]:bg-indigo-500"
+              >
+                <span className="pointer-events-none absolute inset-0 rounded-full opacity-0 transition-opacity group-hover:opacity-100 group-hover:shadow-[0_0_8px_2px_rgba(99,102,241,0.25)] dark:group-hover:shadow-[0_0_8px_2px_rgba(129,140,248,0.3)]" />
+                <SwitchPrimitives.Thumb asChild>
+                  <motion.span
+                    layout
+                    transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                    className="pointer-events-none flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-lg data-[state=unchecked]:translate-x-0.5 data-[state=checked]:translate-x-[1.625rem]"
+                  >
+                    <motion.span
+                      animate={{ rotate: useBuiltin ? 0 : 180 }}
+                      transition={{ duration: 0.4, ease: "easeInOut" }}
+                      className="flex items-center justify-center"
+                    >
+                      {useBuiltin ? (
+                        <Cpu className="h-3.5 w-3.5 text-indigo-600" />
+                      ) : (
+                        <Cloud className="h-3.5 w-3.5 text-zinc-500" />
+                      )}
+                    </motion.span>
+                  </motion.span>
+                </SwitchPrimitives.Thumb>
+              </SwitchPrimitives.Root>
             </div>
 
             {/* Builtin model selector — always visible when builtin is on */}
             {useBuiltin && (
-              <div className="space-y-3">
+              <motion.div
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.25, ease: "easeOut" }}
+                className="space-y-3"
+              >
                 <p className="text-sm font-medium">Select Model</p>
                 <div className="grid gap-2">
                   {(config?.builtin_models?.length
@@ -225,10 +259,14 @@ export function EmbeddingsSettings() {
                   ).map((m: BuiltinEmbeddingModel) => {
                     const isSelected = selectedBuiltinModel === m.name;
                     return (
-                      <div
+                      <motion.div
                         key={m.name}
-                        className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${
-                          isSelected ? "border-primary bg-primary/5" : "hover:border-muted-foreground/30"
+                        whileHover={{ scale: 1.01 }}
+                        whileTap={{ scale: 0.99 }}
+                        className={`flex items-start gap-3 rounded-lg border-2 p-3 cursor-pointer transition-colors ${
+                          isSelected
+                            ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30 shadow-sm"
+                            : "border-transparent bg-muted/40 hover:bg-muted/70"
                         }`}
                         onClick={() => handleSelectBuiltinModel(m.name)}
                         role="button"
@@ -238,15 +276,25 @@ export function EmbeddingsSettings() {
                         }}
                       >
                         <div className="mt-0.5">
-                          <div className={`h-4 w-4 rounded-full border-2 flex items-center justify-center ${
-                            isSelected ? "border-primary" : "border-muted-foreground/40"
+                          <div className={`h-5 w-5 rounded-full border-2 flex items-center justify-center transition-colors ${
+                            isSelected ? "border-indigo-500 bg-indigo-500" : "border-muted-foreground/40"
                           }`}>
-                            {isSelected && <div className="h-2 w-2 rounded-full bg-primary" />}
+                            {isSelected && (
+                              <motion.div
+                                initial={{ scale: 0 }}
+                                animate={{ scale: 1 }}
+                                transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                              >
+                                <CheckCircle className="h-3 w-3 text-white" />
+                              </motion.div>
+                            )}
                           </div>
                         </div>
                         <div className="flex-1 space-y-1">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium">{m.display_name}</span>
+                            <span className={`text-sm font-medium ${isSelected ? "text-indigo-700 dark:text-indigo-300" : ""}`}>
+                              {m.display_name}
+                            </span>
                             <Badge variant="outline" className="text-[10px]">{m.dimensions}d</Badge>
                             {m.name === "bge-m3" && (
                               <Badge variant="success" className="text-[10px]">Best Quality</Badge>
@@ -261,11 +309,11 @@ export function EmbeddingsSettings() {
                             <span>Size: {m.size_mb >= 1000 ? `${(m.size_mb / 1000).toFixed(1)} GB` : `${m.size_mb} MB`}</span>
                           </div>
                         </div>
-                      </div>
+                      </motion.div>
                     );
                   })}
                 </div>
-              </div>
+              </motion.div>
             )}
 
             {/* External providers (shown when built-in is unchecked) */}
