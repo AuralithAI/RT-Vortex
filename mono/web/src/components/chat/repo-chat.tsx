@@ -780,6 +780,7 @@ function CodeBlock({ code, language }: { code: string; language?: string }) {
 
 function CitationList({ citations }: { citations: ChatCitation[] }) {
   const [expanded, setExpanded] = useState(false);
+  const [viewingCitation, setViewingCitation] = useState<ChatCitation | null>(null);
   const visibleCitations = expanded ? citations : citations.slice(0, 3);
 
   return (
@@ -788,12 +789,20 @@ function CitationList({ citations }: { citations: ChatCitation[] }) {
         <BookOpen className="h-3 w-3" />
         Sources ({citations.length})
       </div>
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delayDuration={200}>
         <div className="flex flex-wrap gap-1.5">
           {visibleCitations.map((c, i) => (
             <Tooltip key={i}>
               <TooltipTrigger asChild>
-                <button className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 border border-zinc-200 dark:border-zinc-700 text-[11px] text-zinc-800 dark:text-zinc-200 font-medium shadow-sm transition-colors">
+                <button
+                  onClick={() => setViewingCitation(viewingCitation?.file_path === c.file_path && viewingCitation?.start_line === c.start_line ? null : c)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium shadow-sm transition-all cursor-pointer",
+                    viewingCitation?.file_path === c.file_path && viewingCitation?.start_line === c.start_line
+                      ? "bg-emerald-500/15 border-emerald-500/40 text-emerald-300 ring-1 ring-emerald-500/20"
+                      : "bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 border-zinc-200 dark:border-zinc-700 text-zinc-800 dark:text-zinc-200",
+                  )}
+                >
                   <FileCode2 className="h-3 w-3 text-emerald-500" />
                   <span className="font-mono truncate max-w-[160px]">
                     {c.file_path.split("/").pop()}
@@ -803,9 +812,12 @@ function CitationList({ citations }: { citations: ChatCitation[] }) {
                   </span>
                 </button>
               </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-sm">
-                <p className="font-mono text-xs font-medium">{c.file_path}</p>
-                <p className="text-xs text-muted-foreground mt-1">
+              <TooltipContent
+                side="top"
+                className="max-w-sm bg-zinc-900 dark:bg-zinc-900 border-zinc-700 text-zinc-100 shadow-xl"
+              >
+                <p className="font-mono text-xs font-medium text-zinc-100">{c.file_path}</p>
+                <p className="text-xs text-zinc-400 mt-1">
                   Lines {c.start_line}–{c.end_line} • {c.language}
                   {c.relevance_score > 0 && ` • ${(c.relevance_score * 100).toFixed(0)}% relevant`}
                 </p>
@@ -814,11 +826,13 @@ function CitationList({ citations }: { citations: ChatCitation[] }) {
                     Symbols: {c.symbols.join(", ")}
                   </p>
                 )}
+                <p className="text-[10px] text-zinc-500 mt-1.5 italic">Click to view source</p>
               </TooltipContent>
             </Tooltip>
           ))}
         </div>
       </TooltipProvider>
+
       {citations.length > 3 && (
         <button
           onClick={() => setExpanded(!expanded)}
@@ -828,7 +842,76 @@ function CitationList({ citations }: { citations: ChatCitation[] }) {
           {expanded ? "Show less" : `+${citations.length - 3} more`}
         </button>
       )}
+
+      {/* Inline code viewer */}
+      {viewingCitation && (
+        <div className="mt-2 rounded-lg border border-zinc-700 bg-zinc-900 overflow-hidden shadow-lg">
+          {/* Header */}
+          <div className="flex items-center justify-between px-3 py-2 bg-zinc-800 border-b border-zinc-700">
+            <div className="flex items-center gap-2 min-w-0">
+              <FileCode2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+              <span className="font-mono text-xs text-zinc-200 truncate">{viewingCitation.file_path}</span>
+              <Badge variant="outline" className="text-[10px] shrink-0 border-zinc-600 text-zinc-400">
+                {viewingCitation.language}
+              </Badge>
+              <span className="text-[10px] text-zinc-500 shrink-0">
+                L{viewingCitation.start_line}–{viewingCitation.end_line}
+              </span>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <CopyCodeButton text={viewingCitation.content} />
+              <button
+                onClick={() => setViewingCitation(null)}
+                className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+          {/* Code content */}
+          <div className="overflow-auto max-h-[400px]">
+            <pre className="p-3 text-xs leading-relaxed">
+              <code className="text-zinc-300 font-mono">
+                {viewingCitation.content.split("\n").map((line, lineIdx) => (
+                  <div key={lineIdx} className="flex">
+                    <span className="select-none text-zinc-600 w-10 text-right pr-3 shrink-0">
+                      {viewingCitation.start_line + lineIdx}
+                    </span>
+                    <span className="flex-1 whitespace-pre-wrap break-all">{line}</span>
+                  </div>
+                ))}
+              </code>
+            </pre>
+          </div>
+          {/* Footer with symbols */}
+          {viewingCitation.symbols && viewingCitation.symbols.length > 0 && (
+            <div className="px-3 py-2 border-t border-zinc-700 bg-zinc-800/50">
+              <p className="text-[10px] text-zinc-500">
+                <span className="text-emerald-400 font-medium">Symbols:</span>{" "}
+                {viewingCitation.symbols.join(", ")}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
+  );
+}
+
+/** Small copy button used inside the code viewer. */
+function CopyCodeButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={() => {
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }}
+      className="p-1 rounded hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+    >
+      {copied ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
   );
 }
 
