@@ -126,24 +126,35 @@ export function GeminiIcon(props: IconProps) {
   const p = defaults(props);
   return (
     <svg viewBox="0 0 24 24" fill="none" {...p}>
-      <path d="M12 24A14.3 14.3 0 0 0 0 12 14.3 14.3 0 0 0 12 0a14.3 14.3 0 0 0 0 24Z" fill="url(#gemini-grad)" />
+      <path
+        d="M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3.81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81"
+        fill="url(#gemini-g)"
+      />
       <defs>
-        <linearGradient id="gemini-grad" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+        <linearGradient id="gemini-g" x1="0" y1="24" x2="24" y2="0" gradientUnits="userSpaceOnUse">
           <stop stopColor="#1C7CEA" />
-          <stop offset=".33" stopColor="#1C7CEA" />
-          <stop offset=".67" stopColor="#A084EE" />
-          <stop offset="1" stopColor="#F28B82" />
+          <stop offset="1" stopColor="#A084EE" />
         </linearGradient>
       </defs>
     </svg>
   );
 }
 
-export function XAIIcon(props: IconProps) {
+export function XIcon(props: IconProps) {
   const p = defaults(props);
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
       <path d="m3 2 7.5 10.476L3 22h1.71l6.574-8.357L16.5 22H22l-7.875-11L21 2h-1.71l-6.198 7.881L8 2H3Zm2.46 1.384h2.7l10.38 17.232h-2.7L5.46 3.384Z" />
+    </svg>
+  );
+}
+
+export function GrokIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M2.8 1.6v6.4L12 14.4l9.2-6.4V1.6L12 8 2.8 1.6Z" fill="currentColor" />
+      <path d="M21.2 22.4V16L12 9.6 2.8 16v6.4L12 16l9.2 6.4Z" fill="currentColor" />
     </svg>
   );
 }
@@ -177,7 +188,7 @@ export function getAuthProviderIcon(name: string): React.ComponentType<IconProps
     google: GoogleIcon,
     microsoft: MicrosoftIcon,
     apple: AppleIcon,
-    x: XAIIcon,
+    x: XIcon,
   };
   return map[name.toLowerCase()] ?? null;
 }
@@ -200,8 +211,8 @@ export function getLLMIcon(name: string): React.ComponentType<IconProps> | null 
     anthropic: AnthropicIcon,
     gemini: GeminiIcon,
     google: GeminiIcon,
-    grok: XAIIcon,
-    xai: XAIIcon,
+    grok: GrokIcon,
+    xai: GrokIcon,
     ollama: OllamaIcon,
     meta: MetaIcon,
     llama: MetaIcon,

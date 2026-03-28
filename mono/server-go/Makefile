@@ -20,7 +20,8 @@ RT_HOME     := ../../rt_home
 PROTO_DIR   := ../proto
 PROTO_OUT   := ./internal/engine/pb
 
-.PHONY: all build run test lint clean proto deps docker help
+.PHONY: all build run test lint clean proto deps docker help \
+        db-create db-init db-drop db-status db-reset db-fix-owner db-install
 
 all: deps build ## Build everything
 
@@ -136,6 +137,17 @@ db-drop: ## Drop the rtvortex database (destructive!)
 	psql -U postgres -c "DROP DATABASE IF EXISTS rtvortex;"
 
 db-reset: db-drop db-create db-init ## Drop, recreate, and re-init the database
+
+db-fix-owner: ## Transfer ownership of all DB objects to rtvortex
+	psql -U postgres -d rtvortex -c " \
+		DO \$$\$$ BEGIN \
+			EXECUTE (SELECT string_agg('ALTER TABLE public.' || quote_ident(tablename) || ' OWNER TO rtvortex;', ' ') \
+				FROM pg_tables WHERE schemaname = 'public' AND tableowner <> 'rtvortex'); \
+			EXECUTE (SELECT coalesce(string_agg('ALTER SEQUENCE public.' || quote_ident(sequencename) || ' OWNER TO rtvortex;', ' '), '') \
+				FROM pg_sequences WHERE schemaname = 'public' AND sequenceowner <> 'rtvortex'); \
+		END \$$\$$; \
+		ALTER SCHEMA public OWNER TO rtvortex; \
+		ALTER DATABASE rtvortex OWNER TO rtvortex;"
 
 db-install: db-create db-init ## Full database setup (create + init)
 

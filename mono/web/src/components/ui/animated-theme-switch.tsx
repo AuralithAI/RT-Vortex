@@ -36,7 +36,7 @@ export function AnimatedThemeSwitch() {
         <motion.span
           layout
           transition={{ type: "spring", stiffness: 500, damping: 30 }}
-          className="pointer-events-none flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-lg"
+          className="pointer-events-none flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-lg data-[state=unchecked]:translate-x-0.5 data-[state=checked]:translate-x-[1.625rem]"
         >
           <motion.span
             animate={{ rotate: isDark ? 360 : 0 }}

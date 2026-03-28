@@ -51,7 +51,7 @@ COMMIT       := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown"
 BUILD_DATE   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 .PHONY: all engine server config models clean clean-all run run-engine run-server run-web \
-        test test-engine test-server db-create db-init db-drop db-status db-reset db-install \
+        test test-engine test-server db-create db-init db-drop db-status db-reset db-fix-owner db-install \
         cli sdk-python sdk-node sdk-java sdks \
         test-cli test-sdk-python test-sdk-node test-sdk-java test-sdks test-all \
         build-cli build-sdk-python build-sdk-node build-sdk-java build-sdks \
@@ -429,6 +429,17 @@ db-status: ## Show current migration version
 	psql -U rtvortex -d rtvortex -c "SELECT * FROM schema_info ORDER BY version;"
 
 db-reset: db-drop db-create db-init ## Drop, recreate, and re-init the database
+
+db-fix-owner: ## Transfer ownership of all DB objects to rtvortex
+	psql -U postgres -d rtvortex -c " \
+		DO \$$\$$ BEGIN \
+			EXECUTE (SELECT string_agg('ALTER TABLE public.' || quote_ident(tablename) || ' OWNER TO rtvortex;', ' ') \
+				FROM pg_tables WHERE schemaname = 'public' AND tableowner <> 'rtvortex'); \
+			EXECUTE (SELECT coalesce(string_agg('ALTER SEQUENCE public.' || quote_ident(sequencename) || ' OWNER TO rtvortex;', ' '), '') \
+				FROM pg_sequences WHERE schemaname = 'public' AND sequenceowner <> 'rtvortex'); \
+		END \$$\$$; \
+		ALTER SCHEMA public OWNER TO rtvortex; \
+		ALTER DATABASE rtvortex OWNER TO rtvortex;"
 
 db-install: all db-create db-init ## Full setup: build + create DB + init schema
 
