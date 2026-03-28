@@ -26,6 +26,11 @@ set(TEST_SOURCES
     test_retriever.cpp
     test_parser.cpp
     test_heuristics.cpp
+    test_hierarchy_builder.cpp
+    test_chunk_prefixer.cpp
+    test_knowledge_graph.cpp
+    test_memory_accounts.cpp
+    test_repo_type.cpp
 )
 
 # Create test executable

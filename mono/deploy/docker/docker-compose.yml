@@ -1,60 +1,132 @@
 version: '3.8'
 
+# =============================================================================
+# RTVortex — Docker Compose
+# =============================================================================
+#
+# Architecture:
+#   - server:    Go REST API (port 8080)
+#   - engine:    C++ gRPC server (port 50051, internal)
+#   - postgres:  Database
+#   - redis:     Cache
+#
+# Quick Start:
+#   export LLM_API_KEY=your_api_key
+#   docker compose up -d
+#
+# =============================================================================
+
 services:
-  # Main server
-  server:
+  # ===========================================================================
+  # C++ Engine — gRPC Server
+  # ===========================================================================
+  engine:
     build:
       context: ../..
-      dockerfile: deploy/docker/Dockerfile
-    container_name: aipr-server
-    ports:
-      - "8080:8080"
-      - "50051:50051"
+      dockerfile: deploy/docker/Dockerfile.engine
+    image: rtvortex-engine:latest
+    container_name: rtvortex-engine
     environment:
-      - SPRING_PROFILES_ACTIVE=production
-      - DATABASE_URL=jdbc:postgresql://postgres:5432/aipr
-      - DATABASE_USER=aipr
-      - DATABASE_PASSWORD=${DB_PASSWORD:-aipr}
-      - LLM_PROVIDER=${LLM_PROVIDER:-openai-compatible}
-      - LLM_API_KEY=${LLM_API_KEY}
-      - LLM_MODEL=${LLM_MODEL:-gpt-4-turbo-preview}
-      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
-      - STORAGE_TYPE=local
-      - STORAGE_PATH=/app/data
+      - ENGINE_HOST=0.0.0.0
+      - ENGINE_PORT=50051
+      - ENGINE_TLS_ENABLED=false
+      - ENGINE_DEFAULT_MODEL=${ENGINE_DEFAULT_MODEL:-}
+      - ENGINE_AUTO_DETECT_REPO_TYPE=${ENGINE_AUTO_DETECT_REPO_TYPE:-true}
+      - ENGINE_HIERARCHY_LEVELS=${ENGINE_HIERARCHY_LEVELS:-0}
     volumes:
-      - aipr-data:/app/data
-      - aipr-logs:/app/logs
-    depends_on:
-      postgres:
-        condition: service_healthy
+      - rtvortex-data:/app/data
+      - rtvortex-temp:/app/temp
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     deploy:
       resources:
         limits:
           cpus: '2'
-          memory: 4G
+          memory: 2G
         reservations:
           cpus: '0.5'
-          memory: 1G
+          memory: 512M
     restart: unless-stopped
 
-  # PostgreSQL database
-  postgres:
-    image: postgres:15-alpine
-    container_name: aipr-postgres
+  # ===========================================================================
+  # Go Server — REST API
+  # ===========================================================================
+  server:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile
+    image: rtvortex-server:latest
+    container_name: rtvortex-server
+    # Port 8080 is exposed internally; nginx proxies externally
+    expose:
+      - "8080"
     environment:
-      - POSTGRES_USER=aipr
-      - POSTGRES_PASSWORD=${DB_PASSWORD:-aipr}
-      - POSTGRES_DB=aipr
+      - RTVORTEX_HOME=/app
+      # Database
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=rtvortex
+      - DATABASE_USER=rtvortex
+      - DATABASE_PASSWORD=${DB_PASSWORD:-rtvortex}
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      # Engine (connects to engine container via gRPC)
+      - ENGINE_HOST=engine
+      - ENGINE_PORT=50051
+      - ENGINE_NEGOTIATION=PLAINTEXT
+      # LLM
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai-compatible}
+      - LLM_API_KEY=${LLM_API_KEY}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4-turbo-preview}
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://api.openai.com/v1}
+      # Server
+      - SERVER_PORT=8080
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - rtvortex-data:/app/data
+      - rtvortex-temp:/app/temp
+    depends_on:
+      engine:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    restart: unless-stopped
+
+  # ===========================================================================
+  # PostgreSQL Database
+  # ===========================================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: rtvortex-postgres
+    environment:
+      - POSTGRES_USER=rtvortex
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-rtvortex}
+      - POSTGRES_DB=rtvortex
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aipr"]
+      test: ["CMD-SHELL", "pg_isready -U rtvortex"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -65,10 +137,12 @@ services:
           memory: 1G
     restart: unless-stopped
 
-  # Redis for caching (optional)
+  # ===========================================================================
+  # Redis Cache
+  # ===========================================================================
   redis:
     image: redis:7-alpine
-    container_name: aipr-redis
+    container_name: rtvortex-redis
     command: redis-server --appendonly yes
     volumes:
       - redis-data:/data
@@ -84,12 +158,75 @@ services:
           memory: 512M
     restart: unless-stopped
 
-  # Prometheus for metrics
+  # ===========================================================================
+  # Web UI — Next.js Standalone (Option A)
+  # ===========================================================================
+  web:
+    build:
+      context: ../../web
+      dockerfile: Dockerfile
+      target: standalone
+    image: rtvortex-web:latest
+    container_name: rtvortex-web
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Nginx — Reverse Proxy (terminates external traffic)
+  # ===========================================================================
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: rtvortex-nginx
+    ports:
+      - "${WEB_PORT:-80}:80"
+      - "8080:8080"    # Direct API access (optional)
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - web
+      - server
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 128M
+    restart: unless-stopped
+
+  # ===========================================================================
+  # Prometheus (Metrics)
+  # ===========================================================================
   prometheus:
     image: prom/prometheus:v2.47.0
-    container_name: aipr-prometheus
+    container_name: rtvortex-prometheus
     ports:
-      - "9090:9090"
+      - "9091:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -101,12 +238,14 @@ services:
       - server
     restart: unless-stopped
 
-  # Grafana for dashboards
+  # ===========================================================================
+  # Grafana (Dashboards)
+  # ===========================================================================
   grafana:
     image: grafana/grafana:10.2.0
-    container_name: aipr-grafana
+    container_name: rtvortex-grafana
     ports:
-      - "3000:3000"
+      - "3001:3000"    # Moved from 3000 to avoid Next.js conflict
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
@@ -118,8 +257,8 @@ services:
     restart: unless-stopped
 
 volumes:
-  aipr-data:
-  aipr-logs:
+  rtvortex-data:
+  rtvortex-temp:
   postgres-data:
   redis-data:
   prometheus-data:
@@ -127,4 +266,4 @@ volumes:
 
 networks:
   default:
-    name: aipr-network
+    name: rtvortex-network

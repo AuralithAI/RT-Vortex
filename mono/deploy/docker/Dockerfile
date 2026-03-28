@@ -1,84 +1,89 @@
-# AI PR Reviewer Server
-# Multi-stage build for minimal image size
+# ==============================================================================
+# RTVortex — Multi-stage Docker Build
+# ==============================================================================
+# Architecture:
+#   - Go API Server:  REST API on port 8080, connects to Engine via gRPC
+#   - C++ Engine:     gRPC server on port 50051 (separate container or sidecar)
+#
+# Build from the mono/ directory:
+#   docker build -f deploy/docker/Dockerfile -t rtvortex-server .
+# ==============================================================================
 
-# Stage 1: Build engine
-FROM ubuntu:22.04 AS engine-builder
+# =============================================================================
+# Stage 1: Build Go Server
+# =============================================================================
+FROM golang:1.24-alpine AS builder
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    cmake \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-
-COPY core/engine-cpp/ ./engine-cpp/
-
-RUN cmake -B build -S engine-cpp \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DAIPR_BUILD_TESTS=OFF \
-    && cmake --build build --parallel $(nproc)
-
-
-# Stage 2: Build server
-FROM eclipse-temurin:17-jdk AS server-builder
+RUN apk add --no-cache git ca-certificates tzdata
 
 WORKDIR /build
 
-# Copy Gradle files
-COPY settings.gradle build.gradle gradlew ./
-COPY gradle/ ./gradle/
-COPY build-logic/ ./build-logic/
+# Cache dependencies first
+COPY server-go/go.mod server-go/go.sum ./server-go/
+WORKDIR /build/server-go
+RUN go mod download
 
-# Copy source
-COPY server/ ./server/
+# Copy source and build
+COPY server-go/ ./
 
-# Build
-RUN ./gradlew :server:bootJar --no-daemon
+ARG VERSION=dev
+ARG COMMIT=unknown
 
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -trimpath \
+    -ldflags "-s -w \
+      -X main.version=${VERSION} \
+      -X main.commit=${COMMIT} \
+      -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    -o /build/bin/RTVortexGo \
+    ./cmd/rtvortex-server/
 
-# Stage 3: Final image
-FROM eclipse-temurin:17-jre-jammy
+# =============================================================================
+# Stage 2: Runtime
+# =============================================================================
+FROM alpine:3.19
 
-# Labels
-LABEL org.opencontainers.image.title="AI PR Reviewer"
-LABEL org.opencontainers.image.description="AI-powered code review server"
-LABEL org.opencontainers.image.source="https://github.com/your-org/ai-pr-reviewer"
+LABEL org.opencontainers.image.title="RTVortex Server"
+LABEL org.opencontainers.image.description="RTVortex AI code review API server (Go)"
+LABEL org.opencontainers.image.source="https://github.com/AuralithAI/RT-AI-PR-Reviewer"
+LABEL org.opencontainers.image.vendor="AuralithAI"
 
-# Create non-root user
-RUN groupadd -r aipr && useradd -r -g aipr aipr
+RUN apk add --no-cache ca-certificates tzdata curl && \
+    addgroup -S rtvortex && \
+    adduser -S -G rtvortex rtvortex
 
 WORKDIR /app
 
-# Copy engine library
-COPY --from=engine-builder /build/build/lib* /app/lib/
+# Copy binary
+COPY --from=builder /build/bin/RTVortexGo /app/RTVortexGo
 
-# Copy server JAR
-COPY --from=server-builder /build/server/build/libs/*.jar /app/server.jar
+# Copy SQL files for schema bootstrap
+COPY --from=builder /build/server-go/db/sql /app/db/sql
+COPY --from=builder /build/server-go/db/migrations /app/db/migrations
 
-# Copy config
+# Copy config and schema files
 COPY config/ /app/config/
 COPY schemas/ /app/schemas/
-COPY core/prompting/ /app/prompting/
-
-# Set library path
-ENV LD_LIBRARY_PATH=/app/lib
+COPY prompting/ /app/prompting/
 
 # Create data directories
-RUN mkdir -p /app/data /app/logs && chown -R aipr:aipr /app
+RUN mkdir -p /app/temp /app/data /app/config && \
+    chown -R rtvortex:rtvortex /app
 
-USER aipr
+ENV RTVORTEX_HOME=/app
 
-# Expose ports
-EXPOSE 8080 50051
+USER rtvortex
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:8080/actuator/health || exit 1
+# Expose REST API port
+EXPOSE 8080
+
+# Health check against the Go server /health endpoint
+HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \
+    CMD curl -sf http://localhost:8080/health || exit 1
 
 # Default environment
-ENV JAVA_OPTS="-Xms512m -Xmx2g -XX:+UseG1GC"
-ENV SPRING_PROFILES_ACTIVE=production
+ENV ENGINE_HOST="engine"
+ENV ENGINE_PORT="50051"
+ENV ENGINE_NEGOTIATION="PLAINTEXT"
 
-# Entry point
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/server.jar"]
+ENTRYPOINT ["/app/RTVortexGo"]

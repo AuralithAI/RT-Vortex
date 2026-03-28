@@ -1,0 +1,1541 @@
+openapi: "3.0.3"
+info:
+  title: RTVortex API
+  description: |
+    RTVortex is an AI-powered code review engine. This API provides endpoints for
+    managing repositories, triggering reviews, handling OAuth authentication,
+    configuring LLM providers, and receiving webhook events from VCS platforms.
+  version: "1.0.0"
+  contact:
+    name: AuralithAI
+    url: https://github.com/AuralithAI/rtvortex
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://api.rtvortex.example.com
+    description: Production
+
+tags:
+  - name: Health
+    description: Liveness, readiness, version, and metrics endpoints
+  - name: Auth
+    description: OAuth2 authentication and session management
+  - name: User
+    description: Current user profile management
+  - name: Organizations
+    description: Organization and team management
+  - name: Repositories
+    description: Repository registration and indexing
+  - name: Reviews
+    description: Code review management and WebSocket streaming
+  - name: LLM
+    description: LLM provider configuration and testing
+  - name: Admin
+    description: Administrative endpoints (admin role required)
+  - name: Webhooks
+    description: VCS platform webhook receivers
+
+# ── Security schemes ─────────────────────────────────────────────────────────
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT access token obtained from the OAuth flow.
+
+  # ── Reusable schemas ─────────────────────────────────────────────────────
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "Not Found"
+        message:
+          type: string
+          example: "resource not found"
+        status:
+          type: integer
+          example: 404
+      required: [error, message, status]
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        time:
+          type: string
+          format: date-time
+
+    ReadyResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+        checks:
+          type: object
+          properties:
+            postgres:
+              type: string
+            redis:
+              type: string
+            engine:
+              type: string
+        time:
+          type: string
+          format: date-time
+
+    VersionResponse:
+      type: object
+      properties:
+        version:
+          type: string
+          example: "1.0.0"
+        service:
+          type: string
+          example: "rtvortex-api"
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        avatar_url:
+          type: string
+          format: uri
+        role:
+          type: string
+          enum: [user, admin]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    Organization:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        owner_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+
+    OrgMember:
+      type: object
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [owner, admin, member]
+        joined_at:
+          type: string
+          format: date-time
+
+    Repository:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        owner:
+          type: string
+        platform:
+          type: string
+          enum: [github, gitlab, bitbucket, azure_devops]
+        clone_url:
+          type: string
+          format: uri
+        default_branch:
+          type: string
+        org_id:
+          type: string
+          format: uuid
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    Review:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        repo_id:
+          type: string
+          format: uuid
+        pr_number:
+          type: integer
+        pr_title:
+          type: string
+        pr_author:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, failed]
+        platform:
+          type: string
+        base_branch:
+          type: string
+        head_branch:
+          type: string
+        triggered_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+
+    ReviewComment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        review_id:
+          type: string
+          format: uuid
+        file_path:
+          type: string
+        line_number:
+          type: integer
+        severity:
+          type: string
+          enum: [critical, high, medium, low, info]
+        category:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        suggestion:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    TokenPair:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+          description: Seconds until the access token expires
+        token_type:
+          type: string
+          example: "Bearer"
+
+    IndexStatus:
+      type: object
+      properties:
+        repo_id:
+          type: string
+          format: uuid
+        index_version:
+          type: string
+        total_files:
+          type: integer
+        indexed_files:
+          type: integer
+        total_chunks:
+          type: integer
+        total_symbols:
+          type: integer
+        index_size_bytes:
+          type: integer
+        last_updated:
+          type: string
+        is_complete:
+          type: boolean
+        files_by_language:
+          type: object
+          additionalProperties:
+            type: integer
+
+    WSProgressEvent:
+      type: object
+      properties:
+        review_id:
+          type: string
+          format: uuid
+        step:
+          type: string
+          example: "analyze_files"
+        step_index:
+          type: integer
+          example: 8
+        total_steps:
+          type: integer
+          example: 12
+        status:
+          type: string
+          enum: [started, completed, failed]
+        message:
+          type: string
+        metadata:
+          type: object
+        timestamp:
+          type: string
+          format: date-time
+
+    LLMProvider:
+      type: object
+      properties:
+        name:
+          type: string
+          example: "openai"
+        healthy:
+          type: boolean
+
+    SystemStats:
+      type: object
+      properties:
+        engine:
+          type: object
+          description: Engine diagnostics (memory, indices)
+        llm_providers:
+          type: array
+          items:
+            type: string
+        vcs_platforms:
+          type: array
+          items:
+            type: string
+
+    CompletionRequest:
+      type: object
+      properties:
+        model:
+          type: string
+          description: Model identifier (provider-specific). Uses provider default if omitted.
+          example: "gpt-4o"
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role:
+                type: string
+                enum: [system, user, assistant]
+              content:
+                type: string
+            required: [role, content]
+        max_tokens:
+          type: integer
+          example: 2048
+        temperature:
+          type: number
+          format: double
+          example: 0.7
+        top_p:
+          type: number
+          format: double
+          example: 1.0
+        stop:
+          type: array
+          items:
+            type: string
+      required: [messages]
+
+    StreamChunk:
+      type: object
+      properties:
+        content:
+          type: string
+          description: Incremental text delta
+        model:
+          type: string
+        finish_reason:
+          type: string
+          description: Set when streaming is done (e.g. "stop")
+        done:
+          type: boolean
+          description: True on the final chunk
+        usage:
+          type: object
+          properties:
+            prompt_tokens:
+              type: integer
+            completion_tokens:
+              type: integer
+            total_tokens:
+              type: integer
+
+    DetailedHealth:
+      type: object
+      properties:
+        engine:
+          type: object
+          properties:
+            healthy:
+              type: boolean
+            version:
+              type: string
+            uptime_seconds:
+              type: integer
+        llm_providers:
+          type: object
+          additionalProperties:
+            type: boolean
+
+  parameters:
+    orgID:
+      name: orgID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    repoID:
+      name: repoID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    reviewID:
+      name: reviewID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    userID:
+      name: userID
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        X-RateLimit-Limit:
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+        X-RateLimit-Reset:
+          schema:
+            type: integer
+            description: Unix timestamp when the window resets
+        Retry-After:
+          schema:
+            type: integer
+            description: Seconds until the client should retry
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              retry_after_seconds:
+                type: integer
+
+# ── Paths ────────────────────────────────────────────────────────────────────
+
+paths:
+  # ── Health ───────────────────────────────────────────────────────────────
+
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness probe
+      description: Returns 200 if the server process is running.
+      operationId: health
+      responses:
+        "200":
+          description: Server is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /ready:
+    get:
+      tags: [Health]
+      summary: Readiness probe
+      description: Checks PostgreSQL, Redis, and engine gRPC pool.
+      operationId: ready
+      responses:
+        "200":
+          description: All dependencies ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+        "503":
+          description: One or more dependencies unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyResponse"
+
+  /version:
+    get:
+      tags: [Health]
+      summary: Server version
+      operationId: version
+      responses:
+        "200":
+          description: Build version info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionResponse"
+
+  /metrics:
+    get:
+      tags: [Health]
+      summary: Prometheus metrics
+      description: Returns Prometheus-formatted metrics for scraping.
+      operationId: metrics
+      responses:
+        "200":
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+
+  # ── Auth ─────────────────────────────────────────────────────────────────
+
+  /api/v1/auth/providers:
+    get:
+      tags: [Auth]
+      summary: List available OAuth providers
+      operationId: listAuthProviders
+      responses:
+        "200":
+          description: List of configured OAuth provider names
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      type: string
+                      example: "github"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/auth/login/{provider}:
+    get:
+      tags: [Auth]
+      summary: Initiate OAuth login
+      description: Redirects the user to the OAuth provider's authorization URL.
+      operationId: oauthLogin
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [google, github, gitlab, microsoft, bitbucket, linkedin]
+      responses:
+        "302":
+          description: Redirect to OAuth provider
+        "400":
+          description: Unknown provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/auth/callback/{provider}:
+    get:
+      tags: [Auth]
+      summary: OAuth callback
+      description: Handles the OAuth provider callback, creates/updates the user, and returns JWT tokens.
+      operationId: oauthCallback
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "400":
+          description: Invalid callback parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token:
+                  type: string
+              required: [refresh_token]
+      responses:
+        "200":
+          description: New token pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TokenPair"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Log out and invalidate session
+      operationId: logout
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Logged out successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  # ── User ─────────────────────────────────────────────────────────────────
+
+  /api/v1/user/me:
+    get:
+      tags: [User]
+      summary: Get current user profile
+      operationId: getCurrentUser
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    put:
+      tags: [User]
+      summary: Update current user profile
+      operationId: updateCurrentUser
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                display_name:
+                  type: string
+                avatar_url:
+                  type: string
+                  format: uri
+      responses:
+        "200":
+          description: Updated user profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  # ── Organizations ────────────────────────────────────────────────────────
+
+  /api/v1/orgs:
+    get:
+      tags: [Organizations]
+      summary: List organizations
+      operationId: listOrgs
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of organizations the user belongs to
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Organization"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      tags: [Organizations]
+      summary: Create a new organization
+      operationId: createOrg
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                slug:
+                  type: string
+              required: [name, slug]
+      responses:
+        "201":
+          description: Organization created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/orgs/{orgID}:
+    get:
+      tags: [Organizations]
+      summary: Get organization by ID
+      operationId: getOrg
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgID"
+      responses:
+        "200":
+          description: Organization details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    put:
+      tags: [Organizations]
+      summary: Update organization
+      operationId: updateOrg
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        "200":
+          description: Updated organization
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Organization"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/orgs/{orgID}/members:
+    get:
+      tags: [Organizations]
+      summary: List organization members
+      operationId: listOrgMembers
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgID"
+      responses:
+        "200":
+          description: List of members
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OrgMember"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      tags: [Organizations]
+      summary: Invite a member to the organization
+      operationId: inviteOrgMember
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                role:
+                  type: string
+                  enum: [admin, member]
+              required: [email, role]
+      responses:
+        "201":
+          description: Member invited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OrgMember"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/orgs/{orgID}/members/{userID}:
+    delete:
+      tags: [Organizations]
+      summary: Remove a member from the organization
+      operationId: removeOrgMember
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/orgID"
+        - $ref: "#/components/parameters/userID"
+      responses:
+        "200":
+          description: Member removed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  # ── Repositories ─────────────────────────────────────────────────────────
+
+  /api/v1/repos:
+    get:
+      tags: [Repositories]
+      summary: List registered repositories
+      operationId: listRepos
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of repositories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Repository"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      tags: [Repositories]
+      summary: Register a new repository
+      operationId: registerRepo
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                owner:
+                  type: string
+                platform:
+                  type: string
+                  enum: [github, gitlab, bitbucket, azure_devops]
+                clone_url:
+                  type: string
+                  format: uri
+                default_branch:
+                  type: string
+                  default: "main"
+                org_id:
+                  type: string
+                  format: uuid
+              required: [name, owner, platform]
+      responses:
+        "201":
+          description: Repository registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repository"
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/repos/{repoID}:
+    get:
+      tags: [Repositories]
+      summary: Get repository by ID
+      operationId: getRepo
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/repoID"
+      responses:
+        "200":
+          description: Repository details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repository"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    put:
+      tags: [Repositories]
+      summary: Update repository settings
+      operationId: updateRepo
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/repoID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                default_branch:
+                  type: string
+                is_active:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated repository
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Repository"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    delete:
+      tags: [Repositories]
+      summary: Unregister a repository
+      operationId: deleteRepo
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/repoID"
+      responses:
+        "200":
+          description: Repository deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/repos/{repoID}/index:
+    post:
+      tags: [Repositories]
+      summary: Trigger repository indexing
+      description: Starts a full re-index of the repository in the C++ engine.
+      operationId: triggerIndex
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/repoID"
+      responses:
+        "202":
+          description: Indexing started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  repo_id:
+                    type: string
+                    format: uuid
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/repos/{repoID}/index/status:
+    get:
+      tags: [Repositories]
+      summary: Get indexing status
+      operationId: getIndexStatus
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/repoID"
+      responses:
+        "200":
+          description: Index status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IndexStatus"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  # ── Reviews ──────────────────────────────────────────────────────────────
+
+  /api/v1/reviews:
+    get:
+      tags: [Reviews]
+      summary: List reviews
+      operationId: listReviews
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: List of reviews
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Review"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      tags: [Reviews]
+      summary: Trigger a new code review
+      description: Starts the 12-step review pipeline for a pull request.
+      operationId: triggerReview
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                repo_id:
+                  type: string
+                  format: uuid
+                pr_number:
+                  type: integer
+              required: [repo_id, pr_number]
+      responses:
+        "202":
+          description: Review pipeline started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  review_id:
+                    type: string
+                    format: uuid
+                  message:
+                    type: string
+        "400":
+          description: Invalid input
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/reviews/{reviewID}:
+    get:
+      tags: [Reviews]
+      summary: Get review by ID
+      operationId: getReview
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/reviewID"
+      responses:
+        "200":
+          description: Review details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Review"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/reviews/{reviewID}/comments:
+    get:
+      tags: [Reviews]
+      summary: Get review comments
+      operationId: getReviewComments
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/reviewID"
+      responses:
+        "200":
+          description: List of review comments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ReviewComment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/reviews/{reviewID}/ws:
+    get:
+      tags: [Reviews]
+      summary: WebSocket — review progress stream
+      description: |
+        Upgrades to a WebSocket connection that streams `ProgressEvent` JSON
+        messages as the review pipeline executes. Each message contains the
+        current step, status, and optional metadata.
+      operationId: reviewWebSocket
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/reviewID"
+      responses:
+        "101":
+          description: WebSocket upgrade successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WSProgressEvent"
+
+  # ── LLM ──────────────────────────────────────────────────────────────────
+
+  /api/v1/llm/providers:
+    get:
+      tags: [LLM]
+      summary: List configured LLM providers
+      operationId: listLLMProviders
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Provider names and health
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  providers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/LLMProvider"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/llm/providers/test:
+    post:
+      tags: [LLM]
+      summary: Test an LLM provider
+      description: Sends a small test prompt to verify provider connectivity.
+      operationId: testLLMProvider
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider:
+                  type: string
+                  example: "openai"
+              required: [provider]
+      responses:
+        "200":
+          description: Provider test result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  provider:
+                    type: string
+                  healthy:
+                    type: boolean
+                  response_ms:
+                    type: integer
+                  error:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/llm/stream:
+    post:
+      tags: [LLM]
+      summary: Stream an LLM completion (SSE)
+      description: |
+        Sends a completion request and returns a Server-Sent Events stream.
+        Each event is a JSON `StreamChunk` containing incremental content.
+        The stream ends with a `data: [DONE]` sentinel.
+
+        Supports OpenAI, Anthropic, and Ollama providers with native streaming.
+        Non-streaming providers fall back to a single-chunk response.
+      operationId: streamLLMCompletion
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompletionRequest"
+      responses:
+        "200":
+          description: SSE stream of completion chunks
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Newline-delimited SSE events:
+                  `data: {"content":"Hello","done":false}`
+                  `data: {"content":"","done":true,"finish_reason":"stop","usage":{...}}`
+                  `data: [DONE]`
+        "400":
+          description: Invalid request body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "502":
+          description: LLM provider error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ── Admin ────────────────────────────────────────────────────────────────
+
+  /api/v1/admin/stats:
+    get:
+      tags: [Admin]
+      summary: Get system-wide statistics
+      description: Requires admin role. Returns engine diagnostics, LLM providers, VCS platforms.
+      operationId: getSystemStats
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: System statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemStats"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/admin/health/detailed:
+    get:
+      tags: [Admin]
+      summary: Detailed health check
+      description: Requires admin role. Checks engine, all LLM providers in detail.
+      operationId: getDetailedHealth
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Detailed health status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetailedHealth"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  # ── Webhooks ─────────────────────────────────────────────────────────────
+
+  /api/v1/webhooks/github:
+    post:
+      tags: [Webhooks]
+      summary: GitHub webhook receiver
+      description: |
+        Receives GitHub webhook events (push, pull_request, etc.).
+        Authenticated via X-Hub-Signature-256 header.
+      operationId: handleGitHubWebhook
+      parameters:
+        - name: X-Hub-Signature-256
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook processed
+        "400":
+          description: Invalid signature or payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/webhooks/gitlab:
+    post:
+      tags: [Webhooks]
+      summary: GitLab webhook receiver
+      description: |
+        Receives GitLab webhook events.
+        Authenticated via X-Gitlab-Token header.
+      operationId: handleGitLabWebhook
+      parameters:
+        - name: X-Gitlab-Token
+          in: header
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook processed
+        "400":
+          description: Invalid signature or payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/webhooks/bitbucket:
+    post:
+      tags: [Webhooks]
+      summary: Bitbucket webhook receiver
+      operationId: handleBitbucketWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook processed
+        "400":
+          description: Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /api/v1/webhooks/azure-devops:
+    post:
+      tags: [Webhooks]
+      summary: Azure DevOps webhook receiver
+      operationId: handleAzureDevOpsWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Webhook processed
+        "400":
+          description: Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"

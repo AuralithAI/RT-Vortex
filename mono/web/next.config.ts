@@ -1,0 +1,38 @@
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  // Option A — standalone for Docker / self-hosted with nginx.
+  output: "standalone",
+  // Option B — static export for CDN (S3+CloudFront, Vercel, Netlify):
+  //   Set NEXT_OUTPUT=export and rebuild.
+  ...(process.env.NEXT_OUTPUT === "export" ? { output: "export" } : {}),
+
+  reactCompiler: true,
+  reactStrictMode: true,
+
+  // Allow all cross-origin dev requests — no host restrictions
+  allowedDevOrigins: ["*"],
+
+  images: {
+    remotePatterns: [{ protocol: "https", hostname: "**" }],
+    unoptimized: process.env.NEXT_OUTPUT === "export",
+  },
+
+  // Dev-mode proxy: rewrite /api/* → Go server on port 8080.
+  // In production nginx handles this (Option A) or NEXT_PUBLIC_API_URL is set (Option B).
+  // NOTE: When NEXT_PUBLIC_API_URL is set, the browser calls the Go server
+  // directly (CORS), so rewrites are not needed for /api/v1/* paths.
+  //
+  // API_BACKEND_URL overrides the default proxy target.
+  // For production with TLS: API_BACKEND_URL=https://your-domain:8080
+  async rewrites() {
+    if (process.env.NEXT_OUTPUT === "export") return [];
+    if (process.env.NEXT_PUBLIC_API_URL) return []; // browser calls directly
+    const apiUrl = process.env.API_BACKEND_URL || "http://localhost:8080";
+    return [
+      { source: "/api/v1/:path*", destination: `${apiUrl}/api/v1/:path*` },
+    ];
+  },
+};
+
+export default nextConfig;

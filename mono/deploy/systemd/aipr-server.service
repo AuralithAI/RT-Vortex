@@ -1,0 +1,88 @@
+# =============================================================================
+# AIPR Server - systemd Service Unit
+# =============================================================================
+#
+# Install:
+#   sudo cp aipr-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable aipr-server
+#   sudo systemctl start aipr-server
+#
+# View logs:
+#   journalctl -u aipr-server -f
+#
+# =============================================================================
+
+[Unit]
+Description=AIPR Review Server
+Documentation=https://github.com/AuralithAI/RT-AI-PR-Reviewer
+After=network.target postgresql.service redis.service aipr-engine.service
+Requires=aipr-engine.service
+Wants=postgresql.service redis.service
+
+[Service]
+Type=simple
+User=aipr
+Group=aipr
+
+# Working directory
+WorkingDirectory=/opt/aipr
+
+# Java environment
+Environment="JAVA_HOME=/usr/lib/jvm/java-21-openjdk"
+Environment="JAVA_OPTS=-Xms512m -Xmx2g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+Environment="RT_HOME=/opt/aipr"
+
+# Engine connection (assumes engine on same host)
+Environment="ENGINE_HOST=localhost"
+Environment="ENGINE_PORT=50051"
+Environment="ENGINE_NEGOTIATION=PLAINTEXT"
+
+# Database
+Environment="DATABASE_URL=jdbc:postgresql://localhost:5432/aipr"
+Environment="DATABASE_USER=aipr"
+# Note: Use EnvironmentFile for secrets
+
+# Redis
+Environment="REDIS_HOST=localhost"
+Environment="REDIS_PORT=6379"
+
+# Allow overrides from /etc/aipr/server.env (for secrets)
+EnvironmentFile=-/etc/aipr/server.env
+
+# Main executable (shell script that builds classpath)
+ExecStart=/opt/aipr/bin/aipr-server
+
+# Graceful shutdown
+ExecStop=/bin/kill -SIGTERM $MAINPID
+TimeoutStopSec=60
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aipr-server
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/aipr/data /opt/aipr/repos /var/log/aipr
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+MemoryMax=8G
+CPUQuota=400%
+
+[Install]
+WantedBy=multi-user.target

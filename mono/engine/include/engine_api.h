@@ -29,10 +29,19 @@
 namespace aipr {
 
 /**
+ * Embedding provider types
+ */
+enum class EmbedProvider {
+    HTTP,         // OpenAI-compatible HTTP API
+    LOCAL_ONNX,   // Local ONNX Runtime (bge-m3 or minilm)
+    CUSTOM        // Custom provider via config
+};
+
+/**
  * Engine configuration
  */
 struct AIPR_API EngineConfig {
-    std::string storage_path = ".aipr/index";
+    std::string storage_path = ".rtvortex/index";
     std::string config_profile = "default";
     
     // Indexing settings
@@ -48,9 +57,21 @@ struct AIPR_API EngineConfig {
     size_t graph_expand_depth = 2;
     
     // Embedding settings
-    std::string embed_provider = "http";
-    std::string embed_endpoint;
+    EmbedProvider embed_provider = EmbedProvider::HTTP;
+    std::string embed_endpoint = "https://api.openai.com/v1/embeddings";
+    std::string embed_api_key_env = "OPENAI_API_KEY";
+    std::string embed_model = "text-embedding-3-small";
     size_t embed_dimensions = 1536;
+    size_t embed_batch_size = 100;
+    size_t embed_timeout_seconds = 60;
+    
+    // Local ONNX model settings (when embed_provider == LOCAL_ONNX)
+    // onnx_model_name selects which bundled model to use:
+    //   "bge-m3"  — BAAI/bge-m3, 1024 dimensions (default, highest quality)
+    //   "minilm"  — all-MiniLM-L6-v2, 384 dimensions (lightweight, fast)
+    std::string onnx_model_name = "bge-m3";
+    std::string onnx_model_path = "models/bge-m3/model.onnx";
+    std::string onnx_tokenizer_path = "models/bge-m3/tokenizer.json";
     
     // Load from YAML file
     static EngineConfig load(const std::string& config_path);
@@ -136,6 +157,24 @@ public:
         const std::string& repo_path,
         ProgressCallback progress = nullptr
     ) = 0;
+
+    /**
+     * Index a repository with explicit action control.
+     *
+     * @param repo_id    Unique repository identifier
+     * @param repo_path  Path or URL to the repository
+     * @param action     "index" (default), "reindex" (skip git), "reclone" (force fresh clone)
+     * @param target_branch  Optional branch to checkout before indexing
+     * @param progress   Optional progress callback
+     * @return Index statistics
+     */
+    virtual IndexStats indexRepositoryWithAction(
+        const std::string& repo_id,
+        const std::string& repo_path,
+        const std::string& action,
+        const std::string& target_branch,
+        ProgressCallback progress = nullptr
+    ) { return indexRepository(repo_id, repo_path, progress); }
     
     /**
      * Update index incrementally based on changed files
@@ -219,11 +258,56 @@ public:
      * Get engine version
      */
     virtual std::string getVersion() const = 0;
+
+    /**
+     * Get the storage path used by this engine instance.
+     * Repo clones live at  <storage_path>/repos/<repo_id>.
+     */
+    virtual std::string getStoragePath() const { return ""; }
     
     /**
      * Run self-diagnostics
      */
     virtual DiagnosticResult runDiagnostics() = 0;
+    
+    /**
+     * Configure embedding provider at runtime (per-request override).
+     *
+     * Called by the gRPC layer before indexing to push the user's
+     * provider choice from the Go server. The API key is passed
+     * transiently — it is NOT persisted in the C++ engine.
+     *
+     * @param provider   "http", "onnx", or "mock"
+     * @param endpoint   API URL (for HTTP providers)
+     * @param model      Model name (e.g. "text-embedding-3-small")
+     * @param api_key    Transient API key — used for the current operation only
+     * @param dimensions Embedding vector dimensionality
+     */
+    virtual void configureEmbedding(
+        const std::string& provider,
+        const std::string& endpoint,
+        const std::string& model,
+        const std::string& api_key,
+        size_t dimensions
+    ) {
+        // Default no-op — overridden by EngineImpl.
+        (void)provider; (void)endpoint; (void)model; (void)api_key; (void)dimensions;
+    }
+
+    /**
+     * Set a transient VCS clone token for the next indexRepository call.
+     *
+     * The token is consumed once and cleared after use. It is injected
+     * into HTTPS clone URLs to authenticate git operations for private
+     * repositories. The token is NEVER persisted in the engine or in
+     * .git/config — the remote URL is reset to the clean URL after clone.
+     *
+     * @param token  VCS personal access token or OAuth token
+     */
+    virtual void setCloneToken(const std::string& token) {
+        // Default no-op — overridden by EngineImpl.
+        (void)token;
+    }
 
 protected:
     Engine() = default;

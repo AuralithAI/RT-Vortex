@@ -1,0 +1,600 @@
+// ─── Typed API Client ────────────────────────────────────────────────────────
+// All requests go via same-origin (/api/…) when behind nginx (Option A),
+// or to NEXT_PUBLIC_API_URL when deployed to CDN (Option B).
+// Auth token is read from the httpOnly cookie automatically (same-origin)
+// or sent as Authorization header (cross-origin).
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { getApiBaseUrl } from "@/lib/utils";
+import type {
+  AgentRoute,
+  AuthProvider,
+  ChatMessage,
+  ChatSession,
+  DetailedHealth,
+  EmbeddingCreditsResult,
+  EmbeddingsConfig,
+  EmbeddingsUpdateRequest,
+  EmbeddingsUpdateResult,
+  EmbeddingTestRequest,
+  EmbeddingTestResult,
+  IndexStatus,
+  LLMBalanceResult,
+  LLMConfigureRequest,
+  LLMConfigureResult,
+  LLMProvider,
+  LLMTestResult,
+  Org,
+  OrgMember,
+  PaginatedResponse,
+  PaginationParams,
+  PRListFilter,
+  PRStats,
+  Repo,
+  Review,
+  ReviewComment,
+  SystemStats,
+  TrackedPullRequest,
+  User,
+  VCSConfigureResult,
+  VCSPlatformInfo,
+  VCSTestResult,
+  VCSTokenCapability,
+  VCSCloneCheckResult,
+} from "@/types/api";
+
+// ── Error classes ───────────────────────────────────────────────────────────
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public statusText: string,
+    public body: unknown,
+  ) {
+    super(`${status} ${statusText}`);
+    this.name = "ApiError";
+  }
+}
+
+export class AuthError extends ApiError {
+  constructor(body: unknown) {
+    super(401, "Unauthorized", body);
+    this.name = "AuthError";
+  }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/** In-memory token store. Populated by the callback page after OAuth. */
+let _accessToken: string | null = null;
+
+/** Set the access token (called from callback page). */
+export function setAccessToken(token: string): void {
+  _accessToken = token;
+  // Also persist to localStorage so it survives page reloads.
+  if (typeof window !== "undefined") {
+    try { localStorage.setItem("rtvortex_token", token); } catch { /* ignore */ }
+  }
+}
+
+/** Clear the access token (called on logout). */
+export function clearAccessToken(): void {
+  _accessToken = null;
+  if (typeof window !== "undefined") {
+    try { localStorage.removeItem("rtvortex_token"); } catch { /* ignore */ }
+  }
+}
+
+/** Get the current access token. */
+function getAccessToken(): string | null {
+  if (_accessToken) return _accessToken;
+  // Try localStorage on first access.
+  if (typeof window !== "undefined") {
+    try {
+      const stored = localStorage.getItem("rtvortex_token");
+      if (stored) { _accessToken = stored; return stored; }
+    } catch { /* ignore */ }
+  }
+  // Fall back to cookie.
+  if (typeof document !== "undefined") {
+    const match = document.cookie.match(/(?:^|;\s*)token=([^;]*)/);
+    if (match?.[1]) return match[1];
+  }
+  return null;
+}
+
+// ── Core fetch wrapper ─────────────────────────────────────────────────────
+
+const BASE = getApiBaseUrl();
+
+/** Public endpoints that should never send an Authorization header. */
+const PUBLIC_PATHS = new Set([
+  "/api/v1/auth/providers",
+  "/api/v1/auth/refresh",
+]);
+
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<T> {
+  const url = `${BASE}${path}`;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(init?.headers as Record<string, string>),
+  };
+
+  // Inject Authorization header from stored token — but NOT for public
+  // auth endpoints, which must work regardless of token state.
+  const isPublic = PUBLIC_PATHS.has(path) || path.startsWith("/api/v1/auth/login/");
+  const token = getAccessToken();
+  if (token && !isPublic && !headers["Authorization"]) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, {
+    ...init,
+    headers,
+  });
+
+  if (res.status === 401 && !isPublic) {
+    // Try refresh once — the refresh handler returns a new token pair.
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      // Re-read token after refresh (tryRefreshToken calls setAccessToken).
+      const newToken = getAccessToken();
+      const retryHeaders = { ...headers };
+      if (newToken) {
+        retryHeaders["Authorization"] = `Bearer ${newToken}`;
+      }
+      const retry = await fetch(url, {
+        ...init,
+        headers: retryHeaders,
+      });
+      if (retry.ok) {
+        if (retry.status === 204) return undefined as T;
+        return retry.json() as Promise<T>;
+      }
+    }
+    throw new AuthError(await res.json().catch(() => null));
+  }
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(res.status, res.statusText, body);
+  }
+
+  if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+async function tryRefreshToken(): Promise<boolean> {
+  try {
+    // Build the request body — include the refresh token from localStorage
+    // so it works cross-origin (cookies are not sent cross-origin).
+    const body: Record<string, string> = {};
+    if (typeof window !== "undefined") {
+      try {
+        const rt = localStorage.getItem("rtvortex_refresh_token");
+        if (rt) body.refresh_token = rt;
+      } catch { /* ignore */ }
+    }
+
+    const res = await fetch(`${BASE}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include", // also send cookie if same-origin
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) return false;
+
+    // The server returns { access_token, refresh_token, expires_in }.
+    // Store the new tokens so subsequent requests use them.
+    const data = await res.json();
+    if (data.access_token) {
+      setAccessToken(data.access_token);
+      // Update the middleware route-protection cookie to match.
+      if (typeof document !== "undefined") {
+        const maxAge = data.expires_in ?? 3600; // default 1 hour
+        document.cookie = `token=${data.access_token}; path=/; max-age=${maxAge}; samesite=lax`;
+      }
+    }
+    if (data.refresh_token && typeof window !== "undefined") {
+      try { localStorage.setItem("rtvortex_refresh_token", data.refresh_token); } catch { /* ignore */ }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function qs(params?: PaginationParams): string {
+  if (!params) return "";
+  const parts: string[] = [];
+  if (params.limit != null) parts.push(`limit=${params.limit}`);
+  if (params.offset != null) parts.push(`offset=${params.offset}`);
+  return parts.length ? `?${parts.join("&")}` : "";
+}
+
+// ── Auth ────────────────────────────────────────────────────────────────────
+
+export const auth = {
+  providers: () =>
+    request<AuthProvider[]>("/api/v1/auth/providers"),
+
+  loginUrl: (provider: string, redirectUrl: string) =>
+    `${BASE}/api/v1/auth/login/${provider}?redirect_url=${encodeURIComponent(redirectUrl)}`,
+
+  logout: () => {
+    clearAccessToken();
+    // Also clear cookies and refresh token.
+    if (typeof document !== "undefined") {
+      document.cookie = "token=; path=/; max-age=0";
+    }
+    if (typeof window !== "undefined") {
+      try { localStorage.removeItem("rtvortex_refresh_token"); } catch { /* ignore */ }
+    }
+    return request<void>("/api/v1/auth/logout", { method: "POST" }).catch(() => {});
+  },
+};
+
+// ── User ────────────────────────────────────────────────────────────────────
+
+export const users = {
+  me: () =>
+    request<User>("/api/v1/user/me"),
+
+  updateMe: (fields: Record<string, string>) =>
+    request<User>("/api/v1/user/me", {
+      method: "PUT",
+      body: JSON.stringify(fields),
+    }),
+};
+
+// ── Organizations ───────────────────────────────────────────────────────────
+
+export const orgs = {
+  list: (p?: PaginationParams) =>
+    request<PaginatedResponse<Org>>(`/api/v1/orgs${qs(p)}`),
+
+  get: (id: string) =>
+    request<Org>(`/api/v1/orgs/${id}`),
+
+  create: (data: { name: string; slug: string; plan?: string }) =>
+    request<Org>("/api/v1/orgs", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  update: (id: string, fields: Partial<Org>) =>
+    request<Org>(`/api/v1/orgs/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(fields),
+    }),
+
+  members: (id: string, p?: PaginationParams) =>
+    request<PaginatedResponse<OrgMember>>(`/api/v1/orgs/${id}/members${qs(p)}`),
+
+  inviteMember: (orgId: string, email: string, role: string) =>
+    request<OrgMember>(`/api/v1/orgs/${orgId}/members`, {
+      method: "POST",
+      body: JSON.stringify({ email, role }),
+    }),
+
+  removeMember: (orgId: string, userId: string) =>
+    request<void>(`/api/v1/orgs/${orgId}/members/${userId}`, {
+      method: "DELETE",
+    }),
+};
+
+// ── Repositories ────────────────────────────────────────────────────────────
+
+export const repos = {
+  list: (p?: PaginationParams) =>
+    request<PaginatedResponse<Repo>>(`/api/v1/repos${qs(p)}`),
+
+  get: (id: string) =>
+    request<Repo>(`/api/v1/repos/${id}`),
+
+  create: (data: Record<string, string>) =>
+    request<Repo>("/api/v1/repos", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  update: (id: string, fields: Record<string, unknown>) =>
+    request<Repo>(`/api/v1/repos/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(fields),
+    }),
+
+  delete: (id: string) =>
+    request<void>(`/api/v1/repos/${id}`, { method: "DELETE" }),
+
+  triggerIndex: (id: string, body?: { action?: string; target_branch?: string }) =>
+    request<void>(`/api/v1/repos/${id}/index`, {
+      method: "POST",
+      body: body ? JSON.stringify(body) : undefined,
+    }),
+
+  indexStatus: (id: string) =>
+    request<IndexStatus>(`/api/v1/repos/${id}/index/status`),
+
+  branches: (id: string) =>
+    request<{ branches: string[]; default_branch: string; count: number }>(`/api/v1/repos/${id}/branches`),
+};
+
+// ── Reviews ─────────────────────────────────────────────────────────────────
+
+export const reviews = {
+  list: (p?: PaginationParams & { repo_id?: string }) => {
+    const params = new URLSearchParams();
+    if (p?.limit != null) params.set("limit", String(p.limit));
+    if (p?.offset != null) params.set("offset", String(p.offset));
+    if (p?.repo_id) params.set("repo_id", p.repo_id);
+    const q = params.toString();
+    return request<PaginatedResponse<Review>>(`/api/v1/reviews${q ? `?${q}` : ""}`);
+  },
+
+  get: (id: string) =>
+    request<Review>(`/api/v1/reviews/${id}`),
+
+  trigger: (data: { repo_id: string; pr_number: number; pr_url: string }) =>
+    request<Review>("/api/v1/reviews", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  comments: async (id: string) => {
+    const res = await request<{ comments: ReviewComment[]; count: number }>(`/api/v1/reviews/${id}/comments`);
+    return res.comments ?? [];
+  },
+};
+
+// ── LLM ─────────────────────────────────────────────────────────────────────
+
+export const llm = {
+  providers: async () => {
+    const res = await request<{ providers: LLMProvider[]; primary: string; count: number }>("/api/v1/llm/providers");
+    return { providers: res.providers ?? [], primary: res.primary ?? "" };
+  },
+
+  configure: (provider: string, data: LLMConfigureRequest) =>
+    request<LLMConfigureResult>(`/api/v1/llm/providers/${provider}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  setPrimary: (provider: string) =>
+    request<{ primary: string }>("/api/v1/llm/primary", {
+      method: "PUT",
+      body: JSON.stringify({ provider }),
+    }),
+
+  test: (data: {
+    provider: string;
+    api_key?: string;
+    model?: string;
+    base_url?: string;
+  }) =>
+    request<LLMTestResult>("/api/v1/llm/providers/test", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** Check credit/token balance for a cloud provider. */
+  balance: (provider: string) =>
+    request<LLMBalanceResult>(`/api/v1/llm/providers/${provider}/balance`, {
+      method: "POST",
+    }),
+
+  /** Get the current agent role → provider/model routing table. */
+  routes: () =>
+    request<{ routes: AgentRoute[]; primary: string }>("/api/v1/llm/routes"),
+
+  /** Update the agent role → provider/model routing table. */
+  setRoutes: (routes: AgentRoute[]) =>
+    request<{ routes: number; ok: boolean }>("/api/v1/llm/routes", {
+      method: "PUT",
+      body: JSON.stringify({ routes }),
+    }),
+};
+
+// ── Embeddings ──────────────────────────────────────────────────────────────
+
+export const embeddings = {
+  config: () =>
+    request<EmbeddingsConfig>("/api/v1/embeddings/config"),
+
+  update: (data: EmbeddingsUpdateRequest) =>
+    request<EmbeddingsUpdateResult>("/api/v1/embeddings/config", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  test: (data: EmbeddingTestRequest) =>
+    request<EmbeddingTestResult>("/api/v1/embeddings/test", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  credits: (data: { provider: string; endpoint?: string; api_key?: string }) =>
+    request<EmbeddingCreditsResult>("/api/v1/embeddings/credits", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+};
+
+// ── Admin ───────────────────────────────────────────────────────────────────
+
+export const admin = {
+  stats: () =>
+    request<SystemStats>("/api/v1/admin/stats"),
+
+  health: () =>
+    request<DetailedHealth>("/api/v1/admin/health/detailed"),
+};
+
+// ── Pull Requests ───────────────────────────────────────────────────────────
+
+export const pullRequests = {
+  list: (repoId: string, p?: PaginationParams, filter?: PRListFilter) => {
+    const params = new URLSearchParams();
+    if (p?.limit != null) params.set("limit", String(p.limit));
+    if (p?.offset != null) params.set("offset", String(p.offset));
+    if (filter?.sync_status) params.set("sync_status", filter.sync_status);
+    if (filter?.review_status) params.set("review_status", filter.review_status);
+    if (filter?.author) params.set("author", filter.author);
+    if (filter?.target_branch) params.set("target_branch", filter.target_branch);
+    const q = params.toString();
+    return request<PaginatedResponse<TrackedPullRequest>>(
+      `/api/v1/repos/${repoId}/pull-requests${q ? `?${q}` : ""}`,
+    );
+  },
+
+  get: (repoId: string, prId: string) =>
+    request<TrackedPullRequest>(`/api/v1/repos/${repoId}/pull-requests/${prId}`),
+
+  getByNumber: (repoId: string, prNumber: number) =>
+    request<TrackedPullRequest>(
+      `/api/v1/repos/${repoId}/pull-requests/by-number/${prNumber}`,
+    ),
+
+  sync: (repoId: string) =>
+    request<{ status: string; message: string }>(
+      `/api/v1/repos/${repoId}/pull-requests/sync`,
+      { method: "POST" },
+    ),
+
+  stats: (repoId: string) =>
+    request<PRStats>(`/api/v1/repos/${repoId}/pull-requests/stats`),
+
+  review: (repoId: string, prId: string) =>
+    request<{ status: string; message: string }>(
+      `/api/v1/repos/${repoId}/pull-requests/${prId}/review`,
+      { method: "POST" },
+    ),
+};
+
+// ── Chat ────────────────────────────────────────────────────────────────────
+
+export const chat = {
+  sessions: (repoId: string, p?: PaginationParams) => {
+    const params = new URLSearchParams();
+    if (p?.limit != null) params.set("limit", String(p.limit));
+    if (p?.offset != null) params.set("offset", String(p.offset));
+    const q = params.toString();
+    return request<{ sessions: ChatSession[]; count: number; total: number }>(
+      `/api/v1/repos/${repoId}/chat/sessions${q ? `?${q}` : ""}`,
+    );
+  },
+
+  getSession: (repoId: string, sessionId: string) =>
+    request<ChatSession>(`/api/v1/repos/${repoId}/chat/sessions/${sessionId}`),
+
+  createSession: (repoId: string, data?: { title?: string; model?: string; provider?: string }) =>
+    request<ChatSession>(`/api/v1/repos/${repoId}/chat/sessions`, {
+      method: "POST",
+      body: JSON.stringify(data ?? {}),
+    }),
+
+  updateSession: (repoId: string, sessionId: string, title: string) =>
+    request<ChatSession>(`/api/v1/repos/${repoId}/chat/sessions/${sessionId}`, {
+      method: "PUT",
+      body: JSON.stringify({ title }),
+    }),
+
+  deleteSession: (repoId: string, sessionId: string) =>
+    request<void>(`/api/v1/repos/${repoId}/chat/sessions/${sessionId}`, {
+      method: "DELETE",
+    }),
+
+  messages: (repoId: string, sessionId: string, p?: PaginationParams) => {
+    const params = new URLSearchParams();
+    if (p?.limit != null) params.set("limit", String(p.limit));
+    if (p?.offset != null) params.set("offset", String(p.offset));
+    const q = params.toString();
+    return request<{ messages: ChatMessage[]; count: number; total: number }>(
+      `/api/v1/repos/${repoId}/chat/sessions/${sessionId}/messages${q ? `?${q}` : ""}`,
+    );
+  },
+
+  /**
+   * Send a message and receive a streaming SSE response.
+   * Returns an EventSource-like interface for consuming events.
+   */
+  sendMessageStream: (
+    repoId: string,
+    sessionId: string,
+    content: string,
+    attachments?: import("@/types/api").ChatAttachment[],
+  ): { read: () => Promise<ReadableStream<string>>; abort: () => void } => {
+    const controller = new AbortController();
+    const token = getAccessToken();
+
+    const streamPromise = fetch(`${BASE}/api/v1/repos/${repoId}/chat/sessions/${sessionId}/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({ content, attachments }),
+      signal: controller.signal,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new ApiError(res.status, res.statusText, body);
+      }
+      return res.body!.pipeThrough(new TextDecoderStream());
+    });
+
+    return {
+      read: () => streamPromise,
+      abort: () => controller.abort(),
+    };
+  },
+};
+
+// ── VCS Platform Settings ───────────────────────────────────────────────────
+
+export const vcsPlatforms = {
+  list: async () => {
+    const res = await request<{ platforms: VCSPlatformInfo[] }>("/api/v1/vcs/platforms");
+    return res.platforms ?? [];
+  },
+
+  configure: (platform: string, fields: Record<string, string>) =>
+    request<VCSConfigureResult>(`/api/v1/vcs/platforms/${platform}`, {
+      method: "PUT",
+      body: JSON.stringify(fields),
+    }),
+
+  remove: (platform: string) =>
+    request<{ platform: string; deleted: number }>(`/api/v1/vcs/platforms/${platform}`, {
+      method: "DELETE",
+    }),
+
+  test: (platform: string) =>
+    request<VCSTestResult>(`/api/v1/vcs/platforms/${platform}/test`, {
+      method: "POST",
+    }),
+
+  checkClone: (platform: string, cloneUrl: string) =>
+    request<VCSCloneCheckResult>(`/api/v1/vcs/platforms/${platform}/check-clone`, {
+      method: "POST",
+      body: JSON.stringify({ clone_url: cloneUrl }),
+    }),
+
+  tokenCapabilities: async (platform?: string) => {
+    const qs = platform ? `?platform=${encodeURIComponent(platform)}` : "";
+    const res = await request<{ capabilities: Record<string, VCSTokenCapability[]> }>(
+      `/api/v1/vcs/token-capabilities${qs}`
+    );
+    return res.capabilities ?? {};
+  },
+};
+
+// ── Convenience export ──────────────────────────────────────────────────────
+
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms };
+export default api;

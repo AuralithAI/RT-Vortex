@@ -1,0 +1,75 @@
+# Ollama Local LLM Provider Configuration
+# 
+# Ollama runs locally at http://localhost:11434
+# No API key required - auto-discovered by LLMProviderManager
+#
+# Setup:
+#   1. Install Ollama: https://ollama.ai
+#   2. Pull a model: ollama pull codellama
+#   3. Start Ollama: ollama serve
+#
+# The server will auto-detect Ollama at startup.
+
+name: ollama
+type: ollama
+priority: 1  # Try Ollama first (local), fall back to cloud
+
+connection:
+  base_url: http://localhost:11434
+  timeout_ms: 120000
+  max_retries: 2
+  
+health_check:
+  endpoint: /api/tags
+  interval_ms: 30000
+
+# No authentication required for local Ollama
+authentication:
+  type: none
+
+# Default models for different tasks
+models:
+  # Code-focused models
+  code_review:
+    primary: codellama:13b
+    fallback: codellama:7b
+    
+  # General-purpose
+  general:
+    primary: llama2:13b
+    fallback: llama2:7b
+    
+  # Fast responses
+  quick:
+    primary: llama2:7b
+    fallback: mistral:7b
+
+# Request configuration
+requests:
+  # Temperature for code review (lower = more deterministic)
+  temperature: 0.3
+  
+  # Max tokens in response
+  max_tokens: 4096
+  
+  # Context window (depends on model)
+  context_length: 4096
+  
+  # Stop sequences
+  stop:
+    - "```"
+    - "</review>"
+
+# Ollama-specific options
+options:
+  # Number of threads (0 = auto)
+  num_thread: 0
+  
+  # GPU layers to offload (-1 = all, 0 = CPU only)
+  num_gpu: -1
+  
+  # Keep model loaded in memory
+  keep_alive: "5m"
+  
+  # Use mmap for faster loading
+  use_mmap: true

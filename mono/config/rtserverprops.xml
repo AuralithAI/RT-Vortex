@@ -1,18 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   ==============================================================================================
-  AI-PR-Reviewer Server Configuration
+  RTVortex Server Configuration
   ==============================================================================================
 
-  This file contains the configuration parameters for the AI-PR-Reviewer server.
-  Platform authentication settings are in vcsplatforms.xml.
+  This file contains the configuration parameters for the RTVortex server.
+  VCS platform credentials are configured per-user via the dashboard UI and
+  stored in the encrypted vault — no separate XML file is needed.
 
   Variables of the form ${ENV_VAR:default} are resolved at load time:
     1. Environment variable ENV_VAR
     2. The default value after the colon
     3. Empty string if neither is available
 
-  ${aipr.home} is replaced with the RT_HOME installation directory.
+  ${rtvortex.home} is replaced with the RTVORTEX_HOME installation directory.
   ==============================================================================================
 -->
 <serverproperties>
@@ -20,27 +21,36 @@
     <!-- ===================================================================== -->
     <!-- REST API Server                                                       -->
     <!-- ===================================================================== -->
-    <server port="${SERVER_PORT:8080}" shutdown="graceful" context-path="/"/>
+    <server host="${SERVER_HOST:0.0.0.0}" port="${SERVER_PORT:8080}" shutdown="graceful" context-path="/">
+        <!--
+            TLS for the REST API server.
+            When enabled, the server listens on HTTPS.
+            Disabled by default for local dev (HTTP on port 8080).
+            To enable: export SERVER_TLS_ENABLED=true
+            Generate your own certs (see docs/setup.md) or use the shipped dev certs.
+        -->
+        <tls enabled="${SERVER_TLS_ENABLED:false}"
+             cert-file="${SERVER_TLS_CERT:${rtvortex.home}/config/certificates/server.crt}"
+             key-file="${SERVER_TLS_KEY:${rtvortex.home}/config/certificates/server.key}"/>
+    </server>
 
     <!-- ===================================================================== -->
     <!-- Database (PostgreSQL)                                                 -->
     <!-- ===================================================================== -->
-    <database url="${DATABASE_URL:jdbc:postgresql://localhost:5432/aipr}"
-              username="${DATABASE_USER:aipr}"
-              password="${DATABASE_PASSWORD:aipr_secret}"
-              driver="org.postgresql.Driver">
+    <!--
+        URL format: postgresql://host:port/dbname  (or postgres://host:port/dbname)
+    -->
+    <database url="${DATABASE_URL:postgresql://localhost:5432/rtvortex}"
+              username="${DATABASE_USER:rtvortex}"
+              password="${DATABASE_PASSWORD:rtvortex_secret}">
 
-        <pool name="aipr-pool"
+        <pool name="rtvortex-pool"
               max-size="${DB_POOL_SIZE:20}"
               min-idle="5"
               connection-timeout-ms="30000"
               idle-timeout-ms="600000"
               max-lifetime-ms="1800000"
               leak-detection-threshold-ms="60000"/>
-
-        <flyway enabled="true"
-                locations="classpath:db/migration"
-                baseline-on-migrate="true"/>
     </database>
 
     <!-- ===================================================================== -->
@@ -59,32 +69,45 @@
     </redis>
 
     <!-- ===================================================================== -->
-    <!-- gRPC Server (Java — SDK clients, CLI connect here)                    -->
+    <!-- C++ Engine (gRPC connection from Go server → C++ engine)              -->
     <!-- ===================================================================== -->
-    <grpc-server port="${GRPC_SERVER_PORT:9090}">
+    <!--
+        The C++ engine runs as a standalone gRPC server process on port 50051.
+        The Go server connects to it as a gRPC client.
 
-        <security enabled="${GRPC_TLS_ENABLED:true}"
-                  cert-chain="${GRPC_SERVER_CERT:config/certificates/server.crt}"
-                  private-key="${GRPC_SERVER_KEY:config/certificates/server.key}"
-                  trust-certs="${GRPC_TRUST_CERT:config/certificates/ca.crt}"
-                  client-auth="${GRPC_CLIENT_AUTH:OPTIONAL}"/>
-    </grpc-server>
+        To start the engine:
+          RTVORTEX_HOME=/path/to/rt_home ./bin/rtvortex
 
-    <!-- ===================================================================== -->
-    <!-- gRPC Engine Client (C++ engine — internal communication)              -->
-    <!-- ===================================================================== -->
+        Environment overrides:
+          ENGINE_HOST, ENGINE_PORT, ENGINE_TLS_ENABLED, ENGINE_TLS_CERT,
+          ENGINE_TLS_KEY, ENGINE_TLS_CA, ENGINE_TLS_CLIENT_AUTH
+
+        The engine must be running before the Go server starts.
+
+        TLS flow (when ENGINE_NEGOTIATION=TLS):
+          1. The C++ engine starts with server.crt/server.key (env ENGINE_TLS_CERT/KEY)
+             and optionally loads ca.crt to verify clients (mTLS).
+          2. The Go server connects as a gRPC client, presenting client.crt/client.key
+             and verifying the engine's server.crt against ca.crt.
+          3. All certs must be signed by the same CA.
+
+        For development without TLS:
+          Set ENGINE_NEGOTIATION=PLAINTEXT (or export ENGINE_TLS_ENABLED=false
+          when starting the C++ engine).
+    -->
     <engine host="${ENGINE_HOST:localhost}"
             port="${ENGINE_PORT:50051}"
             timeout-ms="${ENGINE_TIMEOUT_MS:30000}"
             negotiation-type="${ENGINE_NEGOTIATION:TLS}">
 
         <!--
-            For TLS/mTLS to the C++ engine, provide client certificate paths.
-            For development: use PLAINTEXT negotiation and skip these.
+            Client certificates the Go server presents to the C++ engine.
+            Only used when negotiation-type is TLS or mTLS.
+            trust-certs (CA) is used to verify the engine's server certificate.
         -->
-        <tls cert-chain="${ENGINE_TLS_CERT:config/certificates/client.crt}"
-             private-key="${ENGINE_TLS_KEY:config/certificates/client.key}"
-             trust-certs="${ENGINE_TLS_CA:config/certificates/ca.crt}"/>
+        <tls cert-chain="${ENGINE_TLS_CERT:${rtvortex.home}/config/certificates/client.crt}"
+             private-key="${ENGINE_TLS_KEY:${rtvortex.home}/config/certificates/client.key}"
+             trust-certs="${ENGINE_TLS_CA:${rtvortex.home}/config/certificates/ca.crt}"/>
 
         <retry max-attempts="3"
                initial-backoff-ms="100"
@@ -95,15 +118,91 @@
     </engine>
 
     <!-- ===================================================================== -->
-    <!-- LLM Provider                                                          -->
+    <!-- LLM Providers                                                         -->
     <!-- ===================================================================== -->
-    <llm provider="${LLM_PROVIDER:openai-compatible}"
-         base-url="${LLM_BASE_URL:https://api.openai.com/v1}"
-         api-key="${LLM_API_KEY:}"
-         model="${LLM_MODEL:gpt-4-turbo-preview}"
+    <!--
+        Multiple LLM providers can be configured. The server uses the primary
+        provider and automatically fails over to the fallback if it goes down.
+        Health checks run every 60 seconds in a background goroutine.
+
+        Supported provider types:
+          openai            - OpenAI API (GPT-4, etc.)
+          anthropic         - Anthropic API (Claude)
+          azure-openai      - Azure OpenAI Service
+          ollama            - Local Ollama instance
+          openai-compatible - Any OpenAI-compatible API (vLLM, LMStudio, etc.)
+    -->
+    <llm primary="${LLM_PROVIDER:openai}"
+         fallback="${LLM_FALLBACK_PROVIDER:}"
+         auto-discover-local="${LLM_AUTO_DISCOVER_LOCAL:true}"
          max-tokens="${LLM_MAX_TOKENS:4096}"
          temperature="${LLM_TEMPERATURE:0.1}"
-         timeout-ms="${LLM_TIMEOUT_MS:120000}"/>
+         timeout-ms="${LLM_TIMEOUT_MS:120000}">
+
+        <!--
+            API keys are NEVER stored in this file.
+            Configure them via:
+              1. Dashboard Settings UI (recommended)
+              2. Environment variables (LLM_OPENAI_API_KEY, LLM_ANTHROPIC_API_KEY, etc.)
+
+            Models are NOT configured here either. Once a provider is configured
+            with an API key (via UI or env var), available models are fetched
+            dynamically from the provider's API. Users select their preferred
+            model in the Dashboard UI (Settings → LLM Configuration).
+        -->
+        <openai base-url="${LLM_OPENAI_BASE_URL:https://api.openai.com/v1}"/>
+
+        <anthropic base-url="${LLM_ANTHROPIC_BASE_URL:https://api.anthropic.com/v1}"/>
+
+        <gemini base-url="${LLM_GEMINI_BASE_URL:https://generativelanguage.googleapis.com/v1beta}"/>
+
+        <grok base-url="${LLM_GROK_BASE_URL:https://api.x.ai/v1}"/>
+
+        <azure-openai endpoint="${LLM_AZURE_OPENAI_ENDPOINT:}"
+                      deployment="${LLM_AZURE_OPENAI_DEPLOYMENT:}"/>
+
+        <ollama base-url="${LLM_OLLAMA_BASE_URL:http://localhost:11434}"
+                discovery-host="${LLM_OLLAMA_DISCOVERY_HOST:localhost}"
+                discovery-ports="${LLM_OLLAMA_DISCOVERY_PORTS:11434,11435,8080}"/>
+
+        <custom base-url="${LLM_CUSTOM_BASE_URL:}"/>
+
+        <!--
+            Agent orchestration / role-based routing (optional).
+            Maps agent roles to specific providers and models. When configured,
+            each agent in the review swarm can use the most appropriate model
+            for its task (e.g. Anthropic for complex reasoning, a fast model
+            for documentation).
+
+            This section is optional — if omitted, all agents use the primary
+            provider. Routes configured via the Dashboard UI override these
+            XML defaults and are persisted in the encrypted vault.
+
+            Available roles:
+              orchestrator  - Plans and coordinates the overall review
+              architect     - Analyses architecture, design patterns, trade-offs
+              senior_dev    - Deep code review, correctness, edge cases
+              junior_dev    - Style, formatting, simple improvements
+              qa            - Test coverage, test quality
+              security      - Security vulnerabilities, CVEs, OWASP
+              docs          - Documentation quality, comments, READMEs
+              ops           - CI/CD, deployment, infrastructure concerns
+
+            Example (uncomment to enable):
+        -->
+        <!--
+        <routing>
+            <route role="orchestrator" provider="anthropic" model="claude-sonnet-4-20250514"/>
+            <route role="architect"    provider="anthropic"/>
+            <route role="senior_dev"   provider="anthropic"/>
+            <route role="security"     provider="anthropic"/>
+            <route role="junior_dev"   provider="openai"    model="gpt-4o"/>
+            <route role="qa"           provider="openai"    model="gpt-4o"/>
+            <route role="docs"         provider="gemini"    model="gemini-2.5-flash"/>
+            <route role="ops"          provider="openai"    model="gpt-4o"/>
+        </routing>
+        -->
+    </llm>
 
     <!-- ===================================================================== -->
     <!-- Review Settings                                                       -->
@@ -124,17 +223,101 @@
     <!-- ===================================================================== -->
     <!-- Security                                                              -->
     <!-- ===================================================================== -->
+    <!--
+        Security settings.
+        IMPORTANT: In production, set JWT_SECRET and RTVORTEX_ENCRYPTION_KEY
+        via environment variables — do NOT commit real secrets to the repo.
+
+        Generate a JWT secret:
+          openssl rand -base64 48
+
+        Generate an AES-256 encryption key (64-char hex string = 32 bytes):
+          openssl rand -hex 32
+    -->
     <security jwt-secret="${JWT_SECRET:}"
               jwt-expiration-ms="${JWT_EXPIRATION_MS:3600000}"
               allowed-origins="${ALLOWED_ORIGINS:http://localhost:3000}"
-              encryption-key="${AIPR_ENCRYPTION_KEY:}"/>
+              encryption-key="${RTVORTEX_ENCRYPTION_KEY:}"/>
+
+    <!-- ===================================================================== -->
+    <!-- OAuth Login Providers                                                 -->
+    <!-- ===================================================================== -->
+    <!--
+        OAuth providers for user login.
+        VCS platform OAuth (GitHub, GitLab, Bitbucket) is configured per-user
+        via the dashboard UI and stored in the encrypted vault.
+
+        For Google:    https://console.cloud.google.com/apis/credentials
+        For Microsoft: https://portal.azure.com > App registrations
+        For Apple:     https://developer.apple.com > Certificates, Identifiers & Profiles > Services IDs
+        For X:         https://developer.x.com/en/portal/projects
+    -->
+    <auth-providers>
+        <provider name="google"
+                  client-id="${GOOGLE_CLIENT_ID:}"
+                  client-secret="${GOOGLE_CLIENT_SECRET:}"
+                  scopes="openid,email,profile"/>
+        <provider name="microsoft"
+                  client-id="${MICROSOFT_CLIENT_ID:}"
+                  client-secret="${MICROSOFT_CLIENT_SECRET:}"
+                  scopes="openid,email,profile,User.Read"/>
+        <provider name="apple"
+                  client-id="${APPLE_CLIENT_ID:}"
+                  client-secret="${APPLE_CLIENT_SECRET:}"
+                  scopes="name,email"/>
+        <provider name="x"
+                  client-id="${X_CLIENT_ID:}"
+                  client-secret="${X_CLIENT_SECRET:}"
+                  scopes="tweet.read,users.read"/>
+    </auth-providers>
 
     <!-- ===================================================================== -->
     <!-- Storage                                                               -->
     <!-- ===================================================================== -->
-    <storage type="${STORAGE_TYPE:local}">
+    <!--
+        Storage backend for index data and artifacts.
+        This config is pushed to the C++ engine via gRPC ConfigureStorage at startup.
+        Supported types: local, s3, gcs, azure, oci, minio, custom
+    -->
+    <storage type="${STORAGE_TYPE:local}"
+             timeout-ms="${STORAGE_TIMEOUT_MS:30000}"
+             max-retries="${STORAGE_MAX_RETRIES:3}"
+             use-ssl="${STORAGE_USE_SSL:true}"
+             verify-ssl="${STORAGE_VERIFY_SSL:true}"
+             ca-bundle-path="${STORAGE_CA_BUNDLE:}">
+
         <local base-path="${STORAGE_PATH:./data}"/>
-        <s3 bucket="${S3_BUCKET:}" region="${S3_REGION:us-east-1}"/>
+
+        <s3 bucket="${S3_BUCKET:}"
+            region="${S3_REGION:us-east-1}"
+            endpoint="${S3_ENDPOINT:}"
+            access-key="${AWS_ACCESS_KEY_ID:}"
+            secret-key="${AWS_SECRET_ACCESS_KEY:}"
+            session-token="${AWS_SESSION_TOKEN:}"
+            use-irsa="${S3_USE_IRSA:false}"
+            role-arn="${S3_ROLE_ARN:}"/>
+
+        <gcs bucket="${GCS_BUCKET:}"
+             use-workload-identity="${GCS_USE_WORKLOAD_IDENTITY:true}"/>
+
+        <azure account-name="${AZURE_STORAGE_ACCOUNT:}"
+               account-key="${AZURE_STORAGE_KEY:}"
+               sas-token="${AZURE_STORAGE_SAS_TOKEN:}"
+               container="${AZURE_STORAGE_CONTAINER:}"
+               use-azure-ad="${AZURE_STORAGE_USE_AD:false}"/>
+
+        <oci bucket="${OCI_BUCKET:}"
+             region="${OCI_REGION:}"
+             namespace="${OCI_NAMESPACE:}"
+             tenancy="${OCI_TENANCY:}"
+             user="${OCI_USER:}"
+             fingerprint="${OCI_FINGERPRINT:}"
+             key-file="${OCI_KEY_FILE:}"/>
+
+        <minio bucket="${MINIO_BUCKET:}"
+               endpoint="${MINIO_ENDPOINT:http://localhost:9000}"
+               access-key="${MINIO_ACCESS_KEY:}"
+               secret-key="${MINIO_SECRET_KEY:}"/>
     </storage>
 
     <!-- ===================================================================== -->

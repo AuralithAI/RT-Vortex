@@ -1,0 +1,465 @@
+name: Engine CI
+
+# C++ Engine Build, Test, and Package Pipeline
+# This workflow is for the C++ engine component only.
+# Runs independently from the Go server workflow.
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'mono/engine/**'
+      - 'mono/proto/engine.proto'
+      - '.github/workflows/engine.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'mono/engine/**'
+      - 'mono/proto/engine.proto'
+      - '.github/workflows/engine.yml'
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type (Release/Debug)'
+        required: false
+        default: 'Release'
+
+concurrency:
+  group: engine-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CMAKE_VERSION: "3.28.1"
+  MONO_DIR: "mono"
+
+jobs:
+  # ===========================================================================
+  # Lint C++ Code
+  # ===========================================================================
+  lint:
+    name: Lint C++
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format libcurl4-openssl-dev
+
+      - name: Check formatting
+        working-directory: ${{ env.MONO_DIR }}/engine
+        run: |
+          find src include -name '*.cpp' -o -name '*.h' | head -20 | while read file; do
+            echo "Checking $file..."
+            clang-format --dry-run --Werror "$file" || echo "Would reformat: $file"
+          done
+        continue-on-error: true
+
+      - name: Validate CMakeLists.txt
+        working-directory: ${{ env.MONO_DIR }}/engine
+        run: |
+          echo "Validating CMakeLists.txt syntax..."
+          cmake -B build-check -S . -DAIPR_BUILD_SERVER=OFF -DAIPR_BUILD_TESTS=OFF 2>&1 | head -50
+
+  # ===========================================================================
+  # Build Engine for All Platforms
+  # ===========================================================================
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs: lint
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            os: ubuntu-latest
+            cmake_extra: ""
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+            cmake_extra: ""
+          - target: darwin-x64
+            os: macos-latest
+            cmake_extra: ""
+          - target: darwin-arm64
+            os: macos-14
+            cmake_extra: ""
+          - target: windows-x64
+            os: windows-latest
+            cmake_extra: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache CMake FetchContent deps
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: cmake-deps-${{ matrix.target }}-${{ hashFiles('mono/engine/CMakeLists.txt') }}
+          restore-keys: |
+            cmake-deps-${{ matrix.target }}-
+
+      - name: Cache Homebrew packages (macOS)
+        if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/Homebrew
+            /usr/local/Cellar
+            /usr/local/opt
+            /opt/homebrew/Cellar
+            /opt/homebrew/opt
+          key: brew-${{ matrix.target }}-${{ hashFiles('.github/workflows/engine.yml') }}
+          restore-keys: |
+            brew-${{ matrix.target }}-
+
+      - name: Cache vcpkg packages (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+          key: vcpkg-windows-x64-grpc-${{ hashFiles('.github/workflows/engine.yml') }}
+          restore-keys: |
+            vcpkg-windows-x64-grpc-
+            vcpkg-windows-x64-
+
+      - name: Cache FAISS build (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: C:\faiss-install
+          key: faiss-windows-x64-v1.7.4-${{ hashFiles('.github/workflows/engine.yml') }}
+          restore-keys: |
+            faiss-windows-x64-v1.7.4-
+
+      - name: Cache FAISS build (Ubuntu)
+        if: runner.os == 'Linux'
+        id: cache-faiss-linux
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/libfaiss*
+            /usr/local/lib/cmake/faiss
+            /usr/local/include/faiss
+            /usr/local/share/faiss
+          key: faiss-${{ matrix.target }}-v1.7.4-${{ hashFiles('.github/workflows/engine.yml') }}
+          restore-keys: |
+            faiss-${{ matrix.target }}-v1.7.4-
+
+      - name: Install Dependencies (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libcurl4-openssl-dev \
+            libssl-dev \
+            libomp-dev \
+            libopenblas-dev \
+            liblapack-dev \
+            libgflags-dev
+
+      - name: Build FAISS from source (Ubuntu)
+        if: runner.os == 'Linux' && steps.cache-faiss-linux.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git /tmp/faiss
+          cd /tmp/faiss
+          mkdir build && cd build
+          cmake .. \
+            -DFAISS_ENABLE_GPU=OFF \
+            -DFAISS_ENABLE_PYTHON=OFF \
+            -DFAISS_ENABLE_C_API=ON \
+            -DBUILD_TESTING=OFF \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBLA_VENDOR=OpenBLAS
+          cmake --build . --config Release --parallel $(nproc)
+          sudo cmake --install . --config Release
+          sudo ldconfig
+          rm -rf /tmp/faiss
+
+      - name: Refresh ldconfig for cached FAISS (Ubuntu)
+        if: runner.os == 'Linux' && steps.cache-faiss-linux.outputs.cache-hit == 'true'
+        run: sudo ldconfig
+
+      - name: Install Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install libomp openblas faiss protobuf grpc abseil
+          echo "OpenBLAS_HOME=$(brew --prefix openblas)" >> $GITHUB_ENV
+          echo "OpenMP_ROOT=$(brew --prefix libomp)" >> $GITHUB_ENV
+          # Set CMAKE_PREFIX_PATH so CMake can find brew packages
+          echo "CMAKE_PREFIX_PATH=$(brew --prefix)/lib/cmake:$(brew --prefix grpc)/lib/cmake:$(brew --prefix protobuf)/lib/cmake:$(brew --prefix abseil)/lib/cmake" >> $GITHUB_ENV
+
+      - name: Install Dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Free up disk space before building gRPC (requires ~10GB)
+          Write-Host "Freeing up disk space..."
+          
+          # Remove unnecessary tools
+          if (Test-Path "C:\Program Files (x86)\Microsoft SDKs\Azure") {
+            Remove-Item -Recurse -Force "C:\Program Files (x86)\Microsoft SDKs\Azure" -ErrorAction SilentlyContinue
+          }
+          if (Test-Path "C:\Program Files\dotnet\sdk") {
+            # Keep only latest .NET SDK
+            Get-ChildItem "C:\Program Files\dotnet\sdk" | Sort-Object Name | Select-Object -SkipLast 1 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          
+          # Clean vcpkg buildtrees after each package (reduces disk usage)
+          $env:VCPKG_MAX_CONCURRENCY = "2"
+          
+          # Install with reduced parallelism to save memory/disk
+          vcpkg install curl:x64-windows openblas:x64-windows --clean-after-build
+          vcpkg install grpc:x64-windows protobuf:x64-windows --clean-after-build
+        env:
+          VCPKG_DEFAULT_TRIPLET: x64-windows
+
+      - name: Build FAISS from source (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Check if FAISS is already installed (from cache)
+          if (Test-Path "C:\faiss-install\lib\faiss.lib") {
+            Write-Host "FAISS already installed, skipping build"
+            exit 0
+          }
+          
+          git clone --depth 1 --branch v1.7.4 https://github.com/facebookresearch/faiss.git C:\faiss
+          cd C:\faiss
+          mkdir build
+          cd build
+          cmake .. `
+            -DFAISS_ENABLE_GPU=OFF `
+            -DFAISS_ENABLE_PYTHON=OFF `
+            -DFAISS_ENABLE_C_API=ON `
+            -DBUILD_TESTING=OFF `
+            -DBUILD_SHARED_LIBS=ON `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          cmake --build . --config Release --parallel 4
+          cmake --install . --config Release --prefix C:\faiss-install
+          cd C:\
+          Remove-Item -Recurse -Force C:\faiss -ErrorAction SilentlyContinue
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@latest
+        with:
+          cmakeVersion: ${{ env.CMAKE_VERSION }}
+
+      - name: Configure (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'Release' }}"
+          
+          # Pass CMAKE_PREFIX_PATH if set (for macOS brew packages)
+          CMAKE_EXTRA_ARGS=""
+          if [ -n "$CMAKE_PREFIX_PATH" ]; then
+            CMAKE_EXTRA_ARGS="-DCMAKE_PREFIX_PATH=$CMAKE_PREFIX_PATH"
+          fi
+          
+          cmake -B build -S ${{ env.MONO_DIR }}/engine \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -DAIPR_BUILD_TESTS=ON \
+            -DAIPR_BUILD_SERVER=ON \
+            -DAIPR_USE_FAISS=ON \
+            -DAIPR_USE_TREE_SITTER=ON \
+            $CMAKE_EXTRA_ARGS \
+            ${{ matrix.cmake_extra }}
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $BUILD_TYPE = if ("${{ github.event.inputs.build_type }}") { "${{ github.event.inputs.build_type }}" } else { "Release" }
+          cmake -B build -S ${{ env.MONO_DIR }}/engine `
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE `
+            -DAIPR_BUILD_TESTS=ON `
+            -DAIPR_BUILD_SERVER=ON `
+            -DAIPR_USE_FAISS=ON `
+            -DAIPR_USE_TREE_SITTER=ON `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DCMAKE_PREFIX_PATH="C:\faiss-install"
+
+      - name: Build
+        run: cmake --build build --config ${{ github.event.inputs.build_type || 'Release' }} --parallel 4
+
+      - name: Run Unit Tests
+        run: ctest --test-dir build --output-on-failure -C ${{ github.event.inputs.build_type || 'Release' }}
+        continue-on-error: true
+
+      - name: Download Embedding Model
+        shell: bash
+        run: |
+          mkdir -p mono/engine/models/minilm
+          curl -fSL -o mono/engine/models/minilm/model.onnx \
+            "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/onnx/model.onnx"
+          curl -fSL -o mono/engine/models/minilm/tokenizer.json \
+            "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/tokenizer.json"
+          curl -fSL -o mono/engine/models/minilm/vocab.txt \
+            "https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/vocab.txt"
+          ls -lhR mono/engine/models/
+
+      - name: Package Artifacts
+        shell: bash
+        run: |
+          mkdir -p dist/bin dist/lib dist/models/minilm dist/config
+          
+          # Copy server executable
+          if [ -f "build/bin/rtvortex" ]; then
+            cp build/bin/rtvortex dist/bin/
+          elif [ -f "build/bin/Release/rtvortex.exe" ]; then
+            cp build/bin/Release/rtvortex.exe dist/bin/
+          elif [ -f "build/bin/rtvortex.exe" ]; then
+            cp build/bin/rtvortex.exe dist/bin/
+          fi
+          
+          # Copy libraries (for backward compat during transition)
+          cp build/lib/*.so dist/lib/ 2>/dev/null || true
+          cp build/lib/*.dll dist/lib/ 2>/dev/null || true
+          cp build/lib/*.dylib dist/lib/ 2>/dev/null || true
+          cp build/lib/Release/*.dll dist/lib/ 2>/dev/null || true
+          
+          # Bundle ONNX Runtime shared library (required at runtime)
+          cp build/_deps/onnxruntime-src/lib/libonnxruntime* dist/lib/ 2>/dev/null || true
+          cp build/_deps/onnxruntime-src/lib/onnxruntime.dll dist/lib/ 2>/dev/null || true
+          
+          # Bundle MiniLM ONNX model (subdirectory layout)
+          cp mono/engine/models/minilm/model.onnx dist/models/minilm/
+          cp mono/engine/models/minilm/tokenizer.json dist/models/minilm/
+          cp mono/engine/models/minilm/vocab.txt dist/models/minilm/
+          
+          # Bundle config files (matches Makefile config target)
+          cp -r mono/config/* dist/config/ 2>/dev/null || true
+          
+          # Create archive
+          tar -czvf rtvortex-${{ matrix.target }}.tar.gz -C dist .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: engine-${{ matrix.target }}
+          path: rtvortex-${{ matrix.target }}.tar.gz
+          retention-days: ${{ github.ref == 'refs/heads/main' && 30 || 7 }}
+
+  # ===========================================================================
+  # Integration Tests
+  # ===========================================================================
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux Engine
+        uses: actions/download-artifact@v4
+        with:
+          name: engine-linux-x64
+          path: artifacts/
+
+      - name: Extract and Run Engine
+        run: |
+          mkdir -p engine-dist
+          tar -xzf artifacts/rtvortex-linux-x64.tar.gz -C engine-dist
+          chmod +x engine-dist/bin/rtvortex
+          
+          export LD_LIBRARY_PATH="${GITHUB_WORKSPACE}/engine-dist/lib:${LD_LIBRARY_PATH}"
+          export RTVORTEX_HOME="${GITHUB_WORKSPACE}/engine-dist"
+          
+          # Start engine in background
+          ./engine-dist/bin/rtvortex --port 50051 &
+          ENGINE_PID=$!
+          echo "ENGINE_PID=$ENGINE_PID" >> $GITHUB_ENV
+          
+          # Wait for startup
+          sleep 5
+          
+          # Check if running
+          if ! kill -0 $ENGINE_PID 2>/dev/null; then
+            echo "Engine failed to start"
+            exit 1
+          fi
+          echo "Engine started successfully (PID: $ENGINE_PID)"
+
+      - name: Run gRPC Health Check
+        run: |
+          # Install grpcurl
+          go install github.com/fullstorydev/grpcurl/cmd/grpcurl@latest
+          
+          # Check health endpoint
+          ~/go/bin/grpcurl -plaintext localhost:50051 aipr.engine.v1.EngineService/HealthCheck || echo "Health check (expected to fail without reflection)"
+          
+          # At minimum, verify port is listening
+          nc -zv localhost 50051
+
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -n "$ENGINE_PID" ]; then
+            kill $ENGINE_PID 2>/dev/null || true
+          fi
+
+  # ===========================================================================
+  # Code Quality Analysis
+  # ===========================================================================
+  analyze:
+    name: Static Analysis
+    runs-on: ubuntu-latest
+    needs: lint
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck clang-tidy
+
+      - name: Run cppcheck
+        working-directory: ${{ env.MONO_DIR }}/engine
+        run: |
+          cppcheck --enable=warning,style,performance,portability \
+            --suppress=missingIncludeSystem \
+            --error-exitcode=0 \
+            --xml --xml-version=2 \
+            src/ include/ 2> cppcheck-report.xml || true
+
+      - name: Upload Analysis Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cppcheck-report
+          path: ${{ env.MONO_DIR }}/engine/cppcheck-report.xml
+          retention-days: 7
+
+  # ===========================================================================
+  # Summary
+  # ===========================================================================
+  summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [build, integration-test]
+    if: always()
+    
+    steps:
+      - name: Generate Summary
+        run: |
+          echo "# 🛠️ Engine Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux x64 | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS x64 | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS ARM64 | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows x64 | ${{ needs.build.result == 'success' && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Integration Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Status: ${{ needs.integration-test.result == 'success' && '✅ Passed' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY

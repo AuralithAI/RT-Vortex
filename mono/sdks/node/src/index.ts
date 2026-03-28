@@ -1,25 +1,45 @@
 /**
- * AI-PR-Reviewer TypeScript/JavaScript SDK
- * @packageDocumentation
+ * @rtvortex/sdk — Official Node.js / TypeScript SDK for the RTVortex API.
+ *
+ * @example
+ * ```ts
+ * import { RTVortexClient } from "@rtvortex/sdk";
+ *
+ * const client = new RTVortexClient({ token: "your-token" });
+ * const user = await client.me();
+ * ```
  */
 
-export { AIPRClient, type AIPRClientOptions } from "./client";
+export { RTVortexClient } from "./client.js";
+export type { RTVortexClientOptions } from "./client.js";
+
 export {
-  type ReviewRequest,
-  type ReviewResponse,
-  type ReviewComment,
-  type ReviewMetrics,
-  type ReviewContext,
-  type FileChange,
-  type IndexRequest,
-  type IndexResponse,
-  ReviewStatus,
-  CommentSeverity,
-  CommentCategory,
-} from "./types";
-export {
-  AIPRError,
-  AIPRAPIError,
-  AIPRTimeoutError,
-  AIPRConnectionError,
-} from "./errors";
+  RTVortexError,
+  AuthenticationError,
+  NotFoundError,
+  ValidationError,
+  QuotaExceededError,
+  ServerError,
+} from "./errors.js";
+
+export { parseSSEBlock, iterSSEEvents } from "./streaming.js";
+
+export type {
+  User,
+  UserUpdateRequest,
+  Org,
+  OrgMember,
+  Repo,
+  Review,
+  ReviewComment,
+  ProgressEvent,
+  IndexStatus,
+  AdminStats,
+  HealthStatus,
+  PaginationOptions,
+  PaginatedResponse,
+  OrgListResponse,
+  MemberListResponse,
+  RepoListResponse,
+  ReviewListResponse,
+} from "./types.js";

@@ -1,5 +1,5 @@
-// AI-PR-Reviewer Engine gRPC Service Definition
-// This defines the communication protocol between Java Server and C++ Engine
+// RTVortex Engine gRPC Service Definition
+// This defines the communication protocol between the API Server and C++ Engine
 
 syntax = "proto3";
 
@@ -8,11 +8,13 @@ package aipr.engine.v1;
 option java_package = "ai.aipr.engine.grpc";
 option java_outer_classname = "EngineProto";
 option java_multiple_files = true;
+option go_package = "github.com/AuralithAI/rtvortex-server/internal/engine/pb";
 
 // Main Engine Service
 service EngineService {
     // Indexing Operations
     rpc IndexRepository(IndexRequest) returns (IndexResponse);
+    rpc IndexRepositoryStream(IndexRequest) returns (stream IndexProgressUpdate);
     rpc IncrementalIndex(IncrementalIndexRequest) returns (IndexResponse);
     rpc GetIndexStats(IndexStatsRequest) returns (IndexStatsResponse);
     rpc DeleteIndex(DeleteIndexRequest) returns (DeleteIndexResponse);
@@ -23,11 +25,22 @@ service EngineService {
 
     // Review Operations
     rpc BuildReviewContext(ReviewContextRequest) returns (ReviewContextResponse);
+    rpc BuildReviewContextStream(ReviewContextRequest) returns (stream PREmbedProgressUpdate);
     rpc RunHeuristics(HeuristicsRequest) returns (HeuristicsResponse);
+
+    // Configuration — API server pushes config to engine at startup
+    rpc ConfigureStorage(StorageConfigRequest) returns (StorageConfigResponse);
 
     // Health & Diagnostics
     rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
     rpc GetDiagnostics(DiagnosticsRequest) returns (DiagnosticsResponse);
+
+    // File Content — read a file from the engine's local clone for the swarm
+    rpc GetFileContent(FileContentRequest) returns (FileContentResponse);
+
+    // Metrics — server-streaming so the Go API server can relay to the dashboard.
+    // The engine pushes a snapshot every interval_ms (default 1000).
+    rpc StreamEngineMetrics(EngineMetricsRequest) returns (stream EngineMetricsSnapshot);
 }
 
 // ============================================================================
@@ -72,6 +85,51 @@ message IndexConfig {
     repeated string include_languages = 6;
     string embedding_endpoint = 7;
     uint32 embedding_dimensions = 8;
+    // Embedding provider type: "LOCAL_ONNX", "HTTP", "CUSTOM".
+    // When empty the engine uses its default (LOCAL_ONNX).
+    string embedding_provider = 9;
+    // Embedding model name (e.g. "text-embedding-3-small").
+    string embedding_model = 10;
+    // API key for the external embedding provider (passed at runtime, never stored in config files).
+    string embedding_api_key = 11;
+    // VCS clone token — used for authenticated git clone of private repositories.
+    // Resolved server-side from the user's vault; never stored in the engine.
+    string clone_token = 12;
+
+    // Per-repo model config ──────────────────────────────────────
+    // Default LLM model to use for this repo (e.g. "gpt-4o-mini").
+    string default_model = 13;
+    // Override memory account routing (force all chunks to this account).
+    string memory_account_override = 14;
+    // Max hierarchy depth for submodule scanning (0 = unlimited).
+    uint32 hierarchy_levels = 15;
+    // Auto-detect repo type (web_app, microservice, etc.) from manifest.
+    bool auto_detect_repo_type = 16;
+    // Explicit repo type override (takes precedence over auto-detection).
+    RepoType repo_type = 17;
+
+    // Index action: controls clone/index behaviour.
+    //   "index"   — (default) clone if needed, pull updates, then index.
+    //   "reindex" — skip git operations, re-parse existing local files.
+    //   "reclone" — delete local clone, re-clone from remote, then index.
+    string index_action = 18;
+
+    // Target branch to checkout before indexing (empty = use default).
+    string target_branch = 19;
+}
+
+// Repository type classification — used for tuning chunking/retrieval heuristics.
+enum RepoType {
+    REPO_TYPE_UNKNOWN      = 0;
+    REPO_TYPE_GENERIC      = 1;
+    REPO_TYPE_WEB_APP      = 2;
+    REPO_TYPE_MICROSERVICE = 3;
+    REPO_TYPE_ML_PIPELINE  = 4;
+    REPO_TYPE_MOBILE_APP   = 5;
+    REPO_TYPE_DATA_PIPELINE= 6;
+    REPO_TYPE_CLI_TOOL     = 7;
+    REPO_TYPE_LIBRARY      = 8;
+    REPO_TYPE_MONOLITH     = 9;
 }
 
 message IncrementalIndexRequest {
@@ -85,6 +143,21 @@ message IndexResponse {
     bool success = 1;
     string message = 2;
     IndexStats stats = 3;
+}
+
+// Progress update streamed during IndexRepositoryStream.
+message IndexProgressUpdate {
+    string repo_id = 1;
+    int32 progress = 2;              // 0-100
+    string phase = 3;                // "cloning", "scanning", "chunking", "embedding", "finalizing"
+    uint64 files_processed = 4;
+    uint64 files_total = 5;
+    string current_file = 6;
+    int64 eta_seconds = 7;           // estimated time remaining (-1 = unknown)
+    bool done = 8;                   // true on final message
+    bool success = 9;                // only meaningful when done=true
+    string error = 10;               // populated on failure
+    IndexStats final_stats = 11;     // populated only when done=true && success=true
 }
 
 message IndexStatsRequest {
@@ -141,6 +214,9 @@ message SearchConfig {
 message SearchResponse {
     repeated ContextChunk chunks = 1;
     SearchMetrics metrics = 2;
+    bool requires_llm = 3;             // False when confidence gate fires
+    float max_retrieval_score = 4;      // Highest similarity score in results
+    string llm_skip_reason = 5;         // Human-readable gate reason (empty when requires_llm=true)
 }
 
 message ContextChunk {
@@ -177,6 +253,22 @@ message ReviewContextRequest {
 
 message ReviewContextResponse {
     ContextPack context_pack = 1;
+}
+
+// Progress update streamed during BuildReviewContextStream.
+message PREmbedProgressUpdate {
+    string repo_id = 1;
+    int32 pr_number = 2;
+    int32 progress = 3;              // 0-100
+    string phase = 4;                // "parsing_diff", "resolving_symbols", "building_graph", "embedding_chunks", "finalizing"
+    uint32 files_processed = 5;
+    uint32 files_total = 6;
+    string current_file = 7;
+    int64 eta_seconds = 8;           // estimated time remaining (-1 = unknown)
+    bool done = 9;                   // true on final message
+    bool success = 10;               // only meaningful when done=true
+    string error = 11;               // populated on failure
+    ContextPack context_pack = 12;   // populated only when done=true && success=true
 }
 
 message ContextPack {
@@ -223,6 +315,7 @@ message HeuristicFinding {
     string evidence = 9;
     string rule_id = 10;
     uint32 end_line = 11;  // End line of the finding (0 = same as line)
+    string rule_name = 12; // Human-readable name of the rule
 }
 
 // ============================================================================
@@ -236,6 +329,8 @@ message HealthCheckResponse {
     string version = 2;
     uint64 uptime_seconds = 3;
     map<string, string> components = 4;
+    bool metrics_enabled = 5;           // true if StreamEngineMetrics is available
+    uint32 active_metric_streams = 6;   // number of connected metric subscribers
 }
 
 message DiagnosticsRequest {
@@ -260,4 +355,132 @@ message IndexInfo {
     uint64 size_bytes = 2;
     string last_updated = 3;
     bool is_loaded = 4;
+}
+
+// ============================================================================
+// Storage Configuration — pushed from API server to C++ engine at startup
+// ============================================================================
+
+// Cloud provider type
+enum StorageProvider {
+    STORAGE_PROVIDER_LOCAL = 0;
+    STORAGE_PROVIDER_AWS = 1;
+    STORAGE_PROVIDER_GCP = 2;
+    STORAGE_PROVIDER_AZURE = 3;
+    STORAGE_PROVIDER_OCI = 4;
+    STORAGE_PROVIDER_MINIO = 5;
+    STORAGE_PROVIDER_CUSTOM = 6;
+}
+
+// Request to configure storage backend on the C++ engine.
+// The API server reads rtserverprops.xml and pushes this to the engine once at startup.
+message StorageConfigRequest {
+    StorageProvider provider = 1;
+
+    // Common fields
+    string base_path = 2;              // For local storage
+    string bucket = 3;
+    string region = 4;
+    string endpoint_url = 5;           // Custom S3-compatible endpoint
+
+    // Authentication
+    string access_key = 6;
+    string secret_key = 7;
+    string session_token = 8;
+
+    // AWS specific
+    bool use_irsa = 9;                 // AWS IAM Roles for Service Accounts
+    string role_arn = 10;
+
+    // GCP specific
+    bool use_workload_identity = 11;
+
+    // Azure specific
+    string azure_account_name = 12;
+    string azure_account_key = 13;
+    string azure_sas_token = 14;
+    bool use_azure_ad = 15;
+
+    // OCI specific
+    string oci_tenancy = 16;
+    string oci_user = 17;
+    string oci_fingerprint = 18;
+    string oci_key_file = 19;
+    string oci_namespace = 20;
+
+    // Connection settings
+    int32 timeout_ms = 21;
+    int32 max_retries = 22;
+    bool use_ssl = 23;
+    bool verify_ssl = 24;
+    string ca_bundle_path = 25;
+}
+
+message StorageConfigResponse {
+    bool success = 1;
+    string message = 2;
+    string active_provider = 3;        // Echoes back the provider now in use
+}
+
+// ============================================================================
+// Engine Metrics
+// ============================================================================
+
+// Request to start the metrics stream.
+message EngineMetricsRequest {
+    uint32 interval_ms = 1;
+}
+
+// A single metric value in the snapshot.
+message MetricValueProto {
+    enum MetricType {
+        COUNTER   = 0;
+        GAUGE     = 1;
+        HISTOGRAM = 2;
+    }
+    MetricType type = 1;
+    double scalar = 2;                  // For COUNTER and GAUGE
+    HistogramProto histogram = 3;       // For HISTOGRAM
+}
+
+// Histogram percentile snapshot.
+message HistogramProto {
+    uint64 count   = 1;
+    double sum     = 2;
+    double min_val = 3;
+    double max_val = 4;
+    double avg     = 5;
+    double p50     = 6;
+    double p90     = 7;
+    double p95     = 8;
+    double p99     = 9;
+}
+
+// Full engine metrics snapshot pushed on each interval.
+message EngineMetricsSnapshot {
+    uint64 timestamp_ms = 1;                        // Unix epoch millis
+    map<string, MetricValueProto> metrics = 2;      // All metrics by name
+    uint64 uptime_s = 3;                            // Engine uptime in seconds
+
+    // ── Structured index/KG data ───────────────────────────────────
+    map<string, uint64> index_sizes_bytes = 4;      // Per-repo index file sizes
+    uint64 knowledge_graph_nodes = 5;               // Total KG nodes
+    uint64 knowledge_graph_edges = 6;               // Total KG edges
+    string migration_status = 7;                    // "idle" | "migrating" | "done"
+}
+
+// ============================================================================
+// File Content (Swarm)
+// ============================================================================
+
+message FileContentRequest {
+    string repo_id = 1;      // Repository identifier
+    string file_path = 2;    // Path within the repository
+    string ref = 3;          // Git ref (branch, tag, commit); empty = HEAD
+}
+
+message FileContentResponse {
+    string content = 1;      // File content (UTF-8 text)
+    string encoding = 2;     // "utf-8" or "base64" for binary files
+    bool is_binary = 3;      // True if file was detected as binary
 }

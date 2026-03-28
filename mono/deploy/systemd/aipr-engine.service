@@ -1,0 +1,79 @@
+# =============================================================================
+# AIPR Engine - systemd Service Unit
+# =============================================================================
+#
+# Install:
+#   sudo cp aipr-engine.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable aipr-engine
+#   sudo systemctl start aipr-engine
+#
+# View logs:
+#   journalctl -u aipr-engine -f
+#
+# =============================================================================
+
+[Unit]
+Description=AIPR Indexing & Retrieval Engine
+Documentation=https://github.com/AuralithAI/RT-AI-PR-Reviewer
+After=network.target
+
+# Optional: if running on same host as server
+# Before=aipr-server.service
+
+[Service]
+Type=simple
+User=aipr
+Group=aipr
+
+# Working directory
+WorkingDirectory=/opt/aipr
+
+# Environment
+Environment="ENGINE_HOST=0.0.0.0"
+Environment="ENGINE_PORT=50051"
+Environment="ENGINE_CONFIG=/etc/aipr/engine.yml"
+Environment="ENGINE_TLS_ENABLED=false"
+
+# Allow overrides from /etc/aipr/engine.env
+EnvironmentFile=-/etc/aipr/engine.env
+
+# Main executable
+ExecStart=/opt/aipr/bin/aipr-engine \
+    --host ${ENGINE_HOST} \
+    --port ${ENGINE_PORT} \
+    --config ${ENGINE_CONFIG}
+
+# Graceful shutdown
+ExecStop=/bin/kill -SIGTERM $MAINPID
+TimeoutStopSec=30
+
+# Restart policy
+Restart=on-failure
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aipr-engine
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/aipr/data /var/log/aipr
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+MemoryMax=4G
+CPUQuota=200%
+
+[Install]
+WantedBy=multi-user.target

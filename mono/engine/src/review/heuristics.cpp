@@ -30,10 +30,10 @@ std::vector<HeuristicFinding> SecretsDetector::check(const ParsedDiff& diff) {
         {"OpenAI API Key", std::regex(R"(sk-[a-zA-Z0-9]{48})")},
         {"Slack Token", std::regex(R"(xox[baprs]-[0-9a-zA-Z-]{10,})")},
         {"Private Key", std::regex(R"(-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----)")},
-        {"Generic API Key", std::regex(R"((?i)(api[_-]?key|apikey)\s*[:=]\s*['"]?[a-zA-Z0-9_-]{20,}['"]?)")},
-        {"Generic Secret", std::regex(R"((?i)(secret|password|passwd|pwd)\s*[:=]\s*['"]?[^\s'"]{8,}['"]?)")},
+        {"Generic API Key", std::regex(R"((api[_-]?key|apikey)\s*[:=]\s*['"]?[a-zA-Z0-9_-]{20,}['"]?)", std::regex::icase)},
+        {"Generic Secret", std::regex(R"((secret|password|passwd|pwd)\s*[:=]\s*['"]?[^\s'"]{8,}['"]?)", std::regex::icase)},
         {"JWT Token", std::regex(R"(eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*)")},
-        {"Connection String", std::regex(R"((?i)(mongodb|postgres|mysql|redis|amqp)://[^\s'"]+)")},
+        {"Connection String", std::regex(R"((mongodb|postgres|mysql|redis|amqp)://[^\s'"]+)", std::regex::icase)},
     };
     
     for (const auto& hunk : diff.hunks) {
@@ -137,13 +137,13 @@ std::vector<HeuristicFinding> RiskyApiDetector::check(const ParsedDiff& diff) {
 }
 
 // ============================================================================
-// TODO Detector
+// TodoDetector — finds leftover TODO/FIXME/HACK markers in added lines
 // ============================================================================
 
 std::vector<HeuristicFinding> TodoDetector::check(const ParsedDiff& diff) {
     std::vector<HeuristicFinding> findings;
     
-    std::regex todo_pattern(R"((?i)\b(TODO|FIXME|HACK|XXX|BUG|OPTIMIZE)\b[:\s]*(.*))", 
+    std::regex todo_pattern(R"(\b(TODO|FIXME|HACK|XXX|BUG|OPTIMIZE)\b[:\s]*(.*))", 
                            std::regex::icase);
     
     for (const auto& hunk : diff.hunks) {

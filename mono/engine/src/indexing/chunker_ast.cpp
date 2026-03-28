@@ -2,7 +2,7 @@
  * AI PR Reviewer - AST-based Chunker
  * 
  * Uses tree-sitter grammars for intelligent code chunking.
- * Falls back to text chunking if tree-sitter is not available.
+ * Falls back to regex-based chunking if tree-sitter is not available.
  */
 
 #include "indexer.h"
@@ -11,6 +11,24 @@
 #include <vector>
 #include <sstream>
 #include <regex>
+#include <functional>
+#include <cstring>
+
+#ifdef AIPR_HAS_TREE_SITTER
+#include <tree_sitter/api.h>
+
+// Tree-sitter language declarations (linked from grammars)
+extern "C" {
+    TSLanguage* tree_sitter_c();
+    TSLanguage* tree_sitter_cpp();
+    TSLanguage* tree_sitter_java();
+    TSLanguage* tree_sitter_python();
+    TSLanguage* tree_sitter_javascript();
+    TSLanguage* tree_sitter_typescript();
+    TSLanguage* tree_sitter_go();
+    TSLanguage* tree_sitter_rust();
+}
+#endif
 
 namespace aipr {
 
@@ -24,6 +42,7 @@ struct AstChunkerConfig {
     size_t overlap_lines = 3;           // Lines of overlap between chunks
     bool preserve_functions = true;     // Try to keep functions whole
     bool include_context = true;        // Include parent context
+    bool use_tree_sitter = true;        // Use tree-sitter when available
 };
 
 /**
@@ -60,15 +79,249 @@ std::string joinLines(const std::vector<std::string>& lines, size_t start, size_
 }
 
 /**
- * Find function/class boundaries (simple heuristic)
+ * Code block detected from AST or heuristics
  */
 struct CodeBlock {
     size_t start_line;
     size_t end_line;
-    std::string type;  // "function", "class", "block"
+    std::string type;  // "function", "class", "method", "block"
     std::string name;
     int indent_level;
+    size_t start_byte = 0;
+    size_t end_byte = 0;
+    std::string docstring;
+    std::vector<std::string> symbols;  // Symbols defined in this block
 };
+
+#ifdef AIPR_HAS_TREE_SITTER
+/**
+ * Tree-sitter based block extraction
+ */
+class TreeSitterExtractor {
+public:
+    TreeSitterExtractor() {
+        parser_ = ts_parser_new();
+    }
+    
+    ~TreeSitterExtractor() {
+        if (parser_) ts_parser_delete(parser_);
+        if (tree_) ts_tree_delete(tree_);
+    }
+    
+    bool setLanguage(const std::string& language) {
+        TSLanguage* lang = getLanguage(language);
+        if (!lang) return false;
+        
+        current_language_ = language;
+        return ts_parser_set_language(parser_, lang);
+    }
+    
+    bool parse(const std::string& content) {
+        if (tree_) {
+            ts_tree_delete(tree_);
+            tree_ = nullptr;
+        }
+        
+        content_ = content;
+        tree_ = ts_parser_parse_string(parser_, nullptr, content.c_str(), content.size());
+        return tree_ != nullptr;
+    }
+    
+    std::vector<CodeBlock> extractBlocks() {
+        std::vector<CodeBlock> blocks;
+        if (!tree_) return blocks;
+        
+        TSNode root = ts_tree_root_node(tree_);
+        extractBlocksRecursive(root, blocks, 0);
+        
+        return blocks;
+    }
+    
+    /**
+     * Extract symbol at a given position
+     */
+    std::string getSymbolAtLine(size_t line) {
+        if (!tree_) return "";
+        
+        TSNode root = ts_tree_root_node(tree_);
+        return findSymbolAtLine(root, line);
+    }
+    
+private:
+    TSLanguage* getLanguage(const std::string& language) {
+        if (language == "c") return tree_sitter_c();
+        if (language == "cpp" || language == "c++") return tree_sitter_cpp();
+        if (language == "java") return tree_sitter_java();
+        if (language == "python") return tree_sitter_python();
+        if (language == "javascript" || language == "js") return tree_sitter_javascript();
+        if (language == "typescript" || language == "ts") return tree_sitter_typescript();
+        if (language == "go") return tree_sitter_go();
+        if (language == "rust") return tree_sitter_rust();
+        return nullptr;
+    }
+    
+    void extractBlocksRecursive(TSNode node, std::vector<CodeBlock>& blocks, int depth) {
+        const char* type = ts_node_type(node);
+        
+        // Check if this is a block-level node
+        bool is_block = isBlockNode(type);
+        
+        if (is_block) {
+            CodeBlock block;
+            block.start_line = ts_node_start_point(node).row;
+            block.end_line = ts_node_end_point(node).row;
+            block.start_byte = ts_node_start_byte(node);
+            block.end_byte = ts_node_end_byte(node);
+            block.type = categorizeNode(type);
+            block.name = extractNodeName(node);
+            block.indent_level = depth;
+            
+            // Extract docstring if available
+            block.docstring = extractDocstring(node);
+            
+            blocks.push_back(block);
+        }
+        
+        // Recurse into children
+        uint32_t child_count = ts_node_child_count(node);
+        for (uint32_t i = 0; i < child_count; ++i) {
+            TSNode child = ts_node_child(node, i);
+            extractBlocksRecursive(child, blocks, depth + (is_block ? 1 : 0));
+        }
+    }
+    
+    bool isBlockNode(const char* type) {
+        static const std::vector<std::string> block_types = {
+            // Functions
+            "function_definition", "function_declaration", "method_definition",
+            "method_declaration", "arrow_function", "function_expression",
+            "function_item", "function",
+            // Classes/Types
+            "class_definition", "class_declaration", "class_specifier",
+            "struct_definition", "struct_specifier", "struct_item",
+            "enum_definition", "enum_specifier", "enum_item",
+            "interface_declaration", "trait_item", "impl_item",
+            // Other blocks
+            "module", "namespace_definition", "package_clause",
+        };
+        
+        std::string t(type);
+        for (const auto& bt : block_types) {
+            if (t == bt) return true;
+        }
+        return false;
+    }
+    
+    std::string categorizeNode(const char* type) {
+        std::string t(type);
+        
+        if (t.find("function") != std::string::npos || 
+            t.find("method") != std::string::npos) {
+            return "function";
+        }
+        if (t.find("class") != std::string::npos) {
+            return "class";
+        }
+        if (t.find("struct") != std::string::npos) {
+            return "struct";
+        }
+        if (t.find("enum") != std::string::npos) {
+            return "enum";
+        }
+        if (t.find("interface") != std::string::npos ||
+            t.find("trait") != std::string::npos) {
+            return "interface";
+        }
+        if (t.find("impl") != std::string::npos) {
+            return "impl";
+        }
+        if (t.find("module") != std::string::npos ||
+            t.find("namespace") != std::string::npos) {
+            return "module";
+        }
+        return "block";
+    }
+    
+    std::string extractNodeName(TSNode node) {
+        // Look for identifier child node
+        uint32_t child_count = ts_node_child_count(node);
+        for (uint32_t i = 0; i < child_count; ++i) {
+            TSNode child = ts_node_child(node, i);
+            const char* child_type = ts_node_type(child);
+            
+            if (strcmp(child_type, "identifier") == 0 ||
+                strcmp(child_type, "name") == 0 ||
+                strcmp(child_type, "type_identifier") == 0) {
+                
+                uint32_t start = ts_node_start_byte(child);
+                uint32_t end = ts_node_end_byte(child);
+                return content_.substr(start, end - start);
+            }
+        }
+        
+        // For named nodes, try field access
+        TSNode name_node = ts_node_child_by_field_name(node, "name", 4);
+        if (!ts_node_is_null(name_node)) {
+            uint32_t start = ts_node_start_byte(name_node);
+            uint32_t end = ts_node_end_byte(name_node);
+            return content_.substr(start, end - start);
+        }
+        
+        return "";
+    }
+    
+    std::string extractDocstring(TSNode node) {
+        // Look for comment immediately before this node
+        TSNode prev = ts_node_prev_sibling(node);
+        if (ts_node_is_null(prev)) return "";
+        
+        const char* prev_type = ts_node_type(prev);
+        if (strcmp(prev_type, "comment") == 0 ||
+            strcmp(prev_type, "string") == 0 ||   // Python docstrings
+            strcmp(prev_type, "expression_statement") == 0) {
+            
+            uint32_t start = ts_node_start_byte(prev);
+            uint32_t end = ts_node_end_byte(prev);
+            return content_.substr(start, end - start);
+        }
+        
+        return "";
+    }
+    
+    std::string findSymbolAtLine(TSNode node, size_t line) {
+        uint32_t start_line = ts_node_start_point(node).row;
+        uint32_t end_line = ts_node_end_point(node).row;
+        
+        if (line < start_line || line > end_line) {
+            return "";
+        }
+        
+        // Check if this node is a definition
+        const char* type = ts_node_type(node);
+        if (isBlockNode(type)) {
+            std::string name = extractNodeName(node);
+            if (!name.empty()) {
+                return name;
+            }
+        }
+        
+        // Check children
+        uint32_t child_count = ts_node_child_count(node);
+        for (uint32_t i = 0; i < child_count; ++i) {
+            TSNode child = ts_node_child(node, i);
+            std::string result = findSymbolAtLine(child, line);
+            if (!result.empty()) return result;
+        }
+        
+        return "";
+    }
+    
+    TSParser* parser_ = nullptr;
+    TSTree* tree_ = nullptr;
+    std::string content_;
+    std::string current_language_;
+};
+#endif // AIPR_HAS_TREE_SITTER
 
 std::vector<CodeBlock> findCodeBlocks(
     const std::vector<std::string>& lines,
@@ -182,8 +435,22 @@ public:
             return chunks;
         }
         
-        // Find code blocks
-        auto blocks = findCodeBlocks(lines, language);
+        // Try tree-sitter first if enabled and available
+        std::vector<CodeBlock> blocks;
+        
+#ifdef AIPR_HAS_TREE_SITTER
+        if (config_.use_tree_sitter) {
+            TreeSitterExtractor extractor;
+            if (extractor.setLanguage(language) && extractor.parse(content)) {
+                blocks = extractor.extractBlocks();
+            }
+        }
+#endif
+        
+        // Fall back to regex-based detection if tree-sitter unavailable
+        if (blocks.empty()) {
+            blocks = findCodeBlocks(lines, language);
+        }
         
         if (blocks.empty() || !config_.preserve_functions) {
             // Fall back to simple line-based chunking
@@ -221,7 +488,22 @@ public:
                 chunk.end_line = block.end_line + 1;
                 chunk.content = block_content;
                 chunk.language = language;
-                chunk.symbols.push_back(block.name);
+                
+                // Add symbols from this block
+                if (!block.name.empty()) {
+                    chunk.symbols.push_back(block.name);
+                }
+                for (const auto& sym : block.symbols) {
+                    if (std::find(chunk.symbols.begin(), chunk.symbols.end(), sym) == chunk.symbols.end()) {
+                        chunk.symbols.push_back(sym);
+                    }
+                }
+                
+                // Include docstring if available
+                if (!block.docstring.empty() && config_.include_context) {
+                    chunk.content = block.docstring + "\n" + chunk.content;
+                }
+                
                 chunks.push_back(chunk);
             } else {
                 // Block too large, split it
@@ -233,7 +515,7 @@ public:
                     file_path, block_lines, language, block.start_line, chunk_index
                 );
                 // Add symbol to first chunk
-                if (!sub_chunks.empty()) {
+                if (!sub_chunks.empty() && !block.name.empty()) {
                     sub_chunks[0].symbols.push_back(block.name);
                 }
                 chunks.insert(chunks.end(), sub_chunks.begin(), sub_chunks.end());

@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  =============================================================================
+  AIPR Engine - macOS launchd Daemon
+  =============================================================================
+  
+  Install:
+    sudo cp ai.auralith.aipr-engine.plist /Library/LaunchDaemons/
+    sudo launchctl load /Library/LaunchDaemons/ai.auralith.aipr-engine.plist
+  
+  Uninstall:
+    sudo launchctl unload /Library/LaunchDaemons/ai.auralith.aipr-engine.plist
+    sudo rm /Library/LaunchDaemons/ai.auralith.aipr-engine.plist
+  
+  View logs:
+    tail -f /usr/local/var/log/aipr/engine.log
+  
+  =============================================================================
+-->
+<plist version="1.0">
+<dict>
+    <!-- Service identifier -->
+    <key>Label</key>
+    <string>ai.auralith.aipr-engine</string>
+    
+    <!-- Program and arguments -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/opt/aipr/bin/aipr-engine</string>
+        <string>--host</string>
+        <string>0.0.0.0</string>
+        <string>--port</string>
+        <string>50051</string>
+        <string>--config</string>
+        <string>/usr/local/etc/aipr/engine.yml</string>
+    </array>
+    
+    <!-- Working directory -->
+    <key>WorkingDirectory</key>
+    <string>/usr/local/opt/aipr</string>
+    
+    <!-- Run as user -->
+    <key>UserName</key>
+    <string>_aipr</string>
+    <key>GroupName</key>
+    <string>_aipr</string>
+    
+    <!-- Start at boot -->
+    <key>RunAtLoad</key>
+    <true/>
+    
+    <!-- Keep alive (restart on failure) -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    
+    <!-- Throttle restarts -->
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>ENGINE_HOST</key>
+        <string>0.0.0.0</string>
+        <key>ENGINE_PORT</key>
+        <string>50051</string>
+        <key>ENGINE_TLS_ENABLED</key>
+        <string>false</string>
+    </dict>
+    
+    <!-- Logging -->
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/log/aipr/engine.log</string>
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/log/aipr/engine-error.log</string>
+    
+    <!-- Process limits -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>65536</integer>
+    </dict>
+    
+    <!-- Nice level (lower = higher priority) -->
+    <key>Nice</key>
+    <integer>-5</integer>
+</dict>
+</plist>
