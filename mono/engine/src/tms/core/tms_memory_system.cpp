@@ -1161,7 +1161,7 @@ void TMSMemorySystem::reconfigureEmbedding(
     embed_config.embedding_dimension = dims > 0 ? dims : config_.embedding_dimension;
     embed_config.cache_path = config_.storage_path + "/embedding_cache";
 
-    if (backend == "onnx") {
+    if (backend == "onnx" || backend == "local_onnx") {
         embed_config.backend = EmbeddingBackend::ONNX_RUNTIME;
         if (!model.empty()) {
             // Model name passed from Go server — resolve paths from it.
