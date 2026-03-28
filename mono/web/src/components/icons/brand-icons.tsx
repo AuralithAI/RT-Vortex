@@ -152,9 +152,24 @@ export function XIcon(props: IconProps) {
 export function GrokIcon(props: IconProps) {
   const p = defaults(props);
   return (
-    <svg viewBox="0 0 24 24" fill="none" {...p}>
-      <path d="M2.8 1.6v6.4L12 14.4l9.2-6.4V1.6L12 8 2.8 1.6Z" fill="currentColor" />
-      <path d="M21.2 22.4V16L12 9.6 2.8 16v6.4L12 16l9.2 6.4Z" fill="currentColor" />
+    <svg
+      viewBox="0 0 200 200"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      {...p}
+    >
+      <rect
+        width="200"
+        height="200"
+        rx="46"
+        fill="#000000"
+      />
+      <g transform="translate(37.5 37.5) scale(5.25)">
+        <path
+          d="m3 2 7.5 10.476L3 22h1.71l6.574-8.357L16.5 22H22l-7.875-11L21 2h-1.71l-6.198 7.881L8 2H3Zm2.46 1.384h2.7l10.38 17.232h-2.7L5.46 3.384Z"
+          fill="#FFFFFF"
+        />
+      </g>
     </svg>
   );
 }
