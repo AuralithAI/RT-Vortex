@@ -51,7 +51,7 @@ COMMIT       := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown"
 BUILD_DATE   := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 .PHONY: all engine server config models clean clean-all run run-engine run-server run-web \
-        test test-engine test-server db-create db-init db-drop db-status db-reset db-fix-owner db-install \
+        test test-engine test-server db-create db-init db-drop db-status db-reset db-fix-owner db-install db-migrate db-fix-migrate \
         cli sdk-python sdk-node sdk-java sdks \
         test-cli test-sdk-python test-sdk-node test-sdk-java test-sdks test-all \
         build-cli build-sdk-python build-sdk-node build-sdk-java build-sdks \
@@ -442,6 +442,24 @@ db-fix-owner: ## Transfer ownership of all DB objects to rtvortex
 		ALTER DATABASE rtvortex OWNER TO rtvortex;"
 
 db-install: all db-create db-init ## Full setup: build + create DB + init schema
+
+db-migrate: rt_home config ## Apply all pending migrations
+	@echo "Applying migrations from $(RT_HOME)/data/migrations/ ..."
+	@for f in $(RT_HOME)/data/migrations/*.up.sql; do \
+		echo "  → $$f"; \
+		psql -U rtvortex -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
+	done
+	@echo "Done."
+
+db-fix-migrate: ## Fix dirty schema_migrations and re-apply all migrations
+	@echo "Clearing dirty flag and re-applying all migrations ..."
+	psql -U postgres -d rtvortex -c "UPDATE schema_migrations SET dirty = false WHERE dirty = true;"
+	@for f in $(RT_HOME)/data/migrations/*.up.sql; do \
+		echo "  → $$f"; \
+		psql -U postgres -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
+	done
+	@echo "Final state:"
+	@psql -U rtvortex -d rtvortex -c "SELECT * FROM schema_migrations;"
 
 # ==============================================================================
 # Clean

@@ -21,7 +21,8 @@ PROTO_DIR   := ../proto
 PROTO_OUT   := ./internal/engine/pb
 
 .PHONY: all build run test lint clean proto deps docker help \
-        db-create db-init db-drop db-status db-reset db-fix-owner db-install
+        db-create db-init db-drop db-status db-reset db-fix-owner db-install \
+        db-migrate db-fix-migrate
 
 all: deps build ## Build everything
 
@@ -150,6 +151,35 @@ db-fix-owner: ## Transfer ownership of all DB objects to rtvortex
 		ALTER DATABASE rtvortex OWNER TO rtvortex;"
 
 db-install: db-create db-init ## Full database setup (create + init)
+
+db-migrate: ## Apply all pending migrations via golang-migrate
+	@echo "Applying migrations from db/migrations/ ..."
+	@for f in db/migrations/*.up.sql; do \
+		echo "  → $$f"; \
+		psql -U rtvortex -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
+	done
+	@echo "Done. Checking schema_migrations state:"
+	@psql -U rtvortex -d rtvortex -c "SELECT * FROM schema_migrations;" 2>/dev/null || true
+
+db-fix-migrate: ## Fix dirty schema_migrations state and re-apply all migrations
+	@echo "Fixing schema_migrations dirty flag ..."
+	psql -U postgres -d rtvortex -c " \
+		DELETE FROM schema_migrations; \
+		INSERT INTO schema_migrations (version, dirty) VALUES ( \
+			(SELECT max(cast(left(s, 6) as int)) FROM ( \
+				SELECT regexp_replace(f, '^0+', '') AS s FROM ( \
+					SELECT split_part(pg_ls_dir, '_', 1) AS f \
+					FROM pg_ls_dir('$(abspath db/migrations)') \
+					WHERE pg_ls_dir LIKE '%.up.sql' \
+				) sub \
+			) sub2), false);"
+	@echo "Re-applying all migrations ..."
+	@for f in db/migrations/*.up.sql; do \
+		echo "  → $$f"; \
+		psql -U postgres -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
+	done
+	@echo "Final state:"
+	@psql -U rtvortex -d rtvortex -c "SELECT * FROM schema_migrations;"
 
 # ── Clean ────────────────────────────────────────────────────────────────────
 
