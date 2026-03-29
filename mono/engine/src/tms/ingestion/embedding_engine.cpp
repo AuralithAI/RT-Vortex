@@ -973,12 +973,12 @@ EmbeddingEngine::EmbeddingEngine(const EmbeddingConfig& config)
         }
     }
 
-    // Only report MiniLM as ready when the ONNX backend actually loaded
-    // successfully (model file found, tokenizer parsed, session created).
+    // Report ONNX readiness when the backend actually loaded successfully
+    // (model file found, tokenizer parsed, session created).
     if (config.backend == EmbeddingBackend::ONNX_RUNTIME && ok) {
-        aipr::metrics::Registry::instance().setGauge(aipr::metrics::MINILM_READY, 1.0);
+        aipr::metrics::Registry::instance().setGauge(aipr::metrics::ONNX_READY, 1.0);
     } else if (config.backend == EmbeddingBackend::ONNX_RUNTIME && !ok) {
-        aipr::metrics::Registry::instance().setGauge(aipr::metrics::MINILM_READY, 0.0);
+        aipr::metrics::Registry::instance().setGauge(aipr::metrics::ONNX_READY, 0.0);
         std::cerr << "[EMBED] WARNING: ONNX backend failed to initialize, "
                      "embeddings will fall back to mock vectors" << std::endl;
     }

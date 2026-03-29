@@ -60,7 +60,7 @@ constexpr const char* CMA_SCORE             = "cma_score";
 constexpr const char* TMS_FORWARD_LATENCY_S = "tms_forward_latency_s";
 
 // Component health
-constexpr const char* MINILM_READY          = "minilm_ready";
+constexpr const char* ONNX_READY            = "onnx_ready";
 constexpr const char* FAISS_LOADED          = "faiss_loaded";
 
 // LLM avoided rate (heuristic-only reviews / total reviews)
