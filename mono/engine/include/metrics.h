@@ -112,6 +112,32 @@ constexpr const char* STM_SEARCH_LATENCY_S       = "aipr_stm_search_latency_s";
 // Cross-memory attention latency
 constexpr const char* CMA_LATENCY_S              = "aipr_cma_latency_s";
 
+// ── Phase 1: Intelligent Embeddings telemetry ──────────────────────
+
+// GraphRAG retrieval (hybrid graph + semantic)
+constexpr const char* GRAPH_TRAVERSAL_LATENCY_S  = "aipr_graph_traversal_latency_s";
+constexpr const char* GRAPH_EXPANDED_CHUNKS       = "aipr_graph_expanded_chunks";
+constexpr const char* GRAPH_HOP_DEPTH_AVG         = "aipr_graph_hop_depth_avg";
+
+// Confidence Gate v2 (cosine + KG path length)
+constexpr const char* CONFIDENCE_GATE_COSINE_SCORE = "aipr_confidence_gate_cosine_score";
+constexpr const char* CONFIDENCE_GATE_GRAPH_SCORE  = "aipr_confidence_gate_graph_score";
+constexpr const char* CONFIDENCE_GATE_COMBINED     = "aipr_confidence_gate_combined";
+
+// Merkle-based incremental reindex
+constexpr const char* MERKLE_FILES_SKIPPED        = "aipr_merkle_files_skipped";
+constexpr const char* MERKLE_FILES_REEMBEDDED     = "aipr_merkle_files_reembedded";
+constexpr const char* MERKLE_DEPENDENT_FILES      = "aipr_merkle_dependent_files";
+constexpr const char* MERKLE_CACHE_HIT_RATE       = "aipr_merkle_cache_hit_rate";
+
+// Multi-vector (Matryoshka dual-dim)
+constexpr const char* MULTIVEC_SEARCH_LATENCY_S   = "aipr_multivec_search_latency_s";
+constexpr const char* MULTIVEC_RRF_CANDIDATES     = "aipr_multivec_rrf_candidates";
+
+// Hot-swap model
+constexpr const char* MODEL_SWAPS_TOTAL           = "aipr_model_swaps_total";
+constexpr const char* ACTIVE_MODEL_DIM            = "aipr_active_model_dim";
+
 // ── Histogram snapshot ─────────────────────────────────────────────────────
 
 struct HistogramSnapshot {

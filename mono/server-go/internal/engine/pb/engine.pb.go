@@ -1305,14 +1305,16 @@ func (x *SearchConfig) GetLanguageFilters() []string {
 }
 
 type SearchResponse struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	Chunks            []*ContextChunk        `protobuf:"bytes,1,rep,name=chunks,proto3" json:"chunks,omitempty"`
-	Metrics           *SearchMetrics         `protobuf:"bytes,2,opt,name=metrics,proto3" json:"metrics,omitempty"`
-	RequiresLlm       bool                   `protobuf:"varint,3,opt,name=requires_llm,json=requiresLlm,proto3" json:"requires_llm,omitempty"`                      // False when confidence gate fires
-	MaxRetrievalScore float32                `protobuf:"fixed32,4,opt,name=max_retrieval_score,json=maxRetrievalScore,proto3" json:"max_retrieval_score,omitempty"` // Highest similarity score in results
-	LlmSkipReason     string                 `protobuf:"bytes,5,opt,name=llm_skip_reason,json=llmSkipReason,proto3" json:"llm_skip_reason,omitempty"`               // Human-readable gate reason (empty when requires_llm=true)
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	Chunks               []*ContextChunk        `protobuf:"bytes,1,rep,name=chunks,proto3" json:"chunks,omitempty"`
+	Metrics              *SearchMetrics         `protobuf:"bytes,2,opt,name=metrics,proto3" json:"metrics,omitempty"`
+	RequiresLlm          bool                   `protobuf:"varint,3,opt,name=requires_llm,json=requiresLlm,proto3" json:"requires_llm,omitempty"`                               // False when confidence gate fires
+	MaxRetrievalScore    float32                `protobuf:"fixed32,4,opt,name=max_retrieval_score,json=maxRetrievalScore,proto3" json:"max_retrieval_score,omitempty"`          // Highest similarity score in results
+	LlmSkipReason        string                 `protobuf:"bytes,5,opt,name=llm_skip_reason,json=llmSkipReason,proto3" json:"llm_skip_reason,omitempty"`                        // Human-readable gate reason (empty when requires_llm=true)
+	GraphConfidenceScore float32                `protobuf:"fixed32,6,opt,name=graph_confidence_score,json=graphConfidenceScore,proto3" json:"graph_confidence_score,omitempty"` // KG path-length confidence (0-1), used by gate v2
+	GraphExpandedCount   uint32                 `protobuf:"varint,7,opt,name=graph_expanded_count,json=graphExpandedCount,proto3" json:"graph_expanded_count,omitempty"`        // Number of chunks added by GraphRAG expansion
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SearchResponse) Reset() {
@@ -1378,6 +1380,20 @@ func (x *SearchResponse) GetLlmSkipReason() string {
 		return x.LlmSkipReason
 	}
 	return ""
+}
+
+func (x *SearchResponse) GetGraphConfidenceScore() float32 {
+	if x != nil {
+		return x.GraphConfidenceScore
+	}
+	return 0
+}
+
+func (x *SearchResponse) GetGraphExpandedCount() uint32 {
+	if x != nil {
+		return x.GraphExpandedCount
+	}
+	return 0
 }
 
 type ContextChunk struct {
@@ -3227,6 +3243,320 @@ func (x *EngineMetricsSnapshot) GetMigrationStatus() string {
 	return ""
 }
 
+type EmbedStatsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RepoId        string                 `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"` // Repository to get stats for (empty = global)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EmbedStatsRequest) Reset() {
+	*x = EmbedStatsRequest{}
+	mi := &file_engine_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmbedStatsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmbedStatsRequest) ProtoMessage() {}
+
+func (x *EmbedStatsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmbedStatsRequest.ProtoReflect.Descriptor instead.
+func (*EmbedStatsRequest) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *EmbedStatsRequest) GetRepoId() string {
+	if x != nil {
+		return x.RepoId
+	}
+	return ""
+}
+
+type EmbedStatsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Model information
+	ActiveModel        string `protobuf:"bytes,1,opt,name=active_model,json=activeModel,proto3" json:"active_model,omitempty"`
+	EmbeddingDimension uint32 `protobuf:"varint,2,opt,name=embedding_dimension,json=embeddingDimension,proto3" json:"embedding_dimension,omitempty"`
+	BackendType        string `protobuf:"bytes,3,opt,name=backend_type,json=backendType,proto3" json:"backend_type,omitempty"` // "onnx", "http", "mock"
+	// Index statistics
+	TotalChunks    uint64 `protobuf:"varint,4,opt,name=total_chunks,json=totalChunks,proto3" json:"total_chunks,omitempty"`
+	TotalVectors   uint64 `protobuf:"varint,5,opt,name=total_vectors,json=totalVectors,proto3" json:"total_vectors,omitempty"`
+	IndexSizeBytes uint64 `protobuf:"varint,6,opt,name=index_size_bytes,json=indexSizeBytes,proto3" json:"index_size_bytes,omitempty"`
+	// Knowledge graph statistics
+	KgNodes   uint64 `protobuf:"varint,7,opt,name=kg_nodes,json=kgNodes,proto3" json:"kg_nodes,omitempty"`
+	KgEdges   uint64 `protobuf:"varint,8,opt,name=kg_edges,json=kgEdges,proto3" json:"kg_edges,omitempty"`
+	KgEnabled bool   `protobuf:"varint,9,opt,name=kg_enabled,json=kgEnabled,proto3" json:"kg_enabled,omitempty"`
+	// Merkle cache statistics
+	MerkleCachedFiles  uint64  `protobuf:"varint,10,opt,name=merkle_cached_files,json=merkleCachedFiles,proto3" json:"merkle_cached_files,omitempty"`
+	MerkleCacheHitRate float64 `protobuf:"fixed64,11,opt,name=merkle_cache_hit_rate,json=merkleCacheHitRate,proto3" json:"merkle_cache_hit_rate,omitempty"`
+	// Performance metrics
+	AvgEmbedLatencyMs  float64 `protobuf:"fixed64,12,opt,name=avg_embed_latency_ms,json=avgEmbedLatencyMs,proto3" json:"avg_embed_latency_ms,omitempty"`
+	AvgSearchLatencyMs float64 `protobuf:"fixed64,13,opt,name=avg_search_latency_ms,json=avgSearchLatencyMs,proto3" json:"avg_search_latency_ms,omitempty"`
+	TotalQueries       uint64  `protobuf:"varint,14,opt,name=total_queries,json=totalQueries,proto3" json:"total_queries,omitempty"`
+	// Cache statistics
+	EmbedCacheSize    uint64  `protobuf:"varint,15,opt,name=embed_cache_size,json=embedCacheSize,proto3" json:"embed_cache_size,omitempty"`
+	EmbedCacheHitRate float64 `protobuf:"fixed64,16,opt,name=embed_cache_hit_rate,json=embedCacheHitRate,proto3" json:"embed_cache_hit_rate,omitempty"`
+	// Confidence gate statistics
+	LlmAvoidedRate     float64 `protobuf:"fixed64,17,opt,name=llm_avoided_rate,json=llmAvoidedRate,proto3" json:"llm_avoided_rate,omitempty"`
+	AvgConfidenceScore float64 `protobuf:"fixed64,18,opt,name=avg_confidence_score,json=avgConfidenceScore,proto3" json:"avg_confidence_score,omitempty"`
+	LlmAvoidedCount    uint64  `protobuf:"varint,19,opt,name=llm_avoided_count,json=llmAvoidedCount,proto3" json:"llm_avoided_count,omitempty"`
+	LlmUsedCount       uint64  `protobuf:"varint,20,opt,name=llm_used_count,json=llmUsedCount,proto3" json:"llm_used_count,omitempty"`
+	// GraphRAG statistics
+	AvgGraphExpansionMs    float64 `protobuf:"fixed64,21,opt,name=avg_graph_expansion_ms,json=avgGraphExpansionMs,proto3" json:"avg_graph_expansion_ms,omitempty"`
+	AvgGraphExpandedChunks float64 `protobuf:"fixed64,22,opt,name=avg_graph_expanded_chunks,json=avgGraphExpandedChunks,proto3" json:"avg_graph_expanded_chunks,omitempty"`
+	// Hot-swap model tracking
+	ModelSwapsTotal uint64 `protobuf:"varint,23,opt,name=model_swaps_total,json=modelSwapsTotal,proto3" json:"model_swaps_total,omitempty"`
+	// Multi-vector dual-resolution index
+	MultiVectorEnabled bool   `protobuf:"varint,24,opt,name=multi_vector_enabled,json=multiVectorEnabled,proto3" json:"multi_vector_enabled,omitempty"`
+	CoarseDimension    uint32 `protobuf:"varint,25,opt,name=coarse_dimension,json=coarseDimension,proto3" json:"coarse_dimension,omitempty"`
+	FineDimension      uint32 `protobuf:"varint,26,opt,name=fine_dimension,json=fineDimension,proto3" json:"fine_dimension,omitempty"`
+	CoarseIndexVectors uint64 `protobuf:"varint,27,opt,name=coarse_index_vectors,json=coarseIndexVectors,proto3" json:"coarse_index_vectors,omitempty"`
+	FineIndexVectors   uint64 `protobuf:"varint,28,opt,name=fine_index_vectors,json=fineIndexVectors,proto3" json:"fine_index_vectors,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *EmbedStatsResponse) Reset() {
+	*x = EmbedStatsResponse{}
+	mi := &file_engine_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EmbedStatsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EmbedStatsResponse) ProtoMessage() {}
+
+func (x *EmbedStatsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EmbedStatsResponse.ProtoReflect.Descriptor instead.
+func (*EmbedStatsResponse) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *EmbedStatsResponse) GetActiveModel() string {
+	if x != nil {
+		return x.ActiveModel
+	}
+	return ""
+}
+
+func (x *EmbedStatsResponse) GetEmbeddingDimension() uint32 {
+	if x != nil {
+		return x.EmbeddingDimension
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetBackendType() string {
+	if x != nil {
+		return x.BackendType
+	}
+	return ""
+}
+
+func (x *EmbedStatsResponse) GetTotalChunks() uint64 {
+	if x != nil {
+		return x.TotalChunks
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetTotalVectors() uint64 {
+	if x != nil {
+		return x.TotalVectors
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetIndexSizeBytes() uint64 {
+	if x != nil {
+		return x.IndexSizeBytes
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetKgNodes() uint64 {
+	if x != nil {
+		return x.KgNodes
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetKgEdges() uint64 {
+	if x != nil {
+		return x.KgEdges
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetKgEnabled() bool {
+	if x != nil {
+		return x.KgEnabled
+	}
+	return false
+}
+
+func (x *EmbedStatsResponse) GetMerkleCachedFiles() uint64 {
+	if x != nil {
+		return x.MerkleCachedFiles
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetMerkleCacheHitRate() float64 {
+	if x != nil {
+		return x.MerkleCacheHitRate
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetAvgEmbedLatencyMs() float64 {
+	if x != nil {
+		return x.AvgEmbedLatencyMs
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetAvgSearchLatencyMs() float64 {
+	if x != nil {
+		return x.AvgSearchLatencyMs
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetTotalQueries() uint64 {
+	if x != nil {
+		return x.TotalQueries
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetEmbedCacheSize() uint64 {
+	if x != nil {
+		return x.EmbedCacheSize
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetEmbedCacheHitRate() float64 {
+	if x != nil {
+		return x.EmbedCacheHitRate
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetLlmAvoidedRate() float64 {
+	if x != nil {
+		return x.LlmAvoidedRate
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetAvgConfidenceScore() float64 {
+	if x != nil {
+		return x.AvgConfidenceScore
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetLlmAvoidedCount() uint64 {
+	if x != nil {
+		return x.LlmAvoidedCount
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetLlmUsedCount() uint64 {
+	if x != nil {
+		return x.LlmUsedCount
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetAvgGraphExpansionMs() float64 {
+	if x != nil {
+		return x.AvgGraphExpansionMs
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetAvgGraphExpandedChunks() float64 {
+	if x != nil {
+		return x.AvgGraphExpandedChunks
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetModelSwapsTotal() uint64 {
+	if x != nil {
+		return x.ModelSwapsTotal
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetMultiVectorEnabled() bool {
+	if x != nil {
+		return x.MultiVectorEnabled
+	}
+	return false
+}
+
+func (x *EmbedStatsResponse) GetCoarseDimension() uint32 {
+	if x != nil {
+		return x.CoarseDimension
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetFineDimension() uint32 {
+	if x != nil {
+		return x.FineDimension
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetCoarseIndexVectors() uint64 {
+	if x != nil {
+		return x.CoarseIndexVectors
+	}
+	return 0
+}
+
+func (x *EmbedStatsResponse) GetFineIndexVectors() uint64 {
+	if x != nil {
+		return x.FineIndexVectors
+	}
+	return 0
+}
+
 type FileContentRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RepoId        string                 `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`       // Repository identifier
@@ -3238,7 +3568,7 @@ type FileContentRequest struct {
 
 func (x *FileContentRequest) Reset() {
 	*x = FileContentRequest{}
-	mi := &file_engine_proto_msgTypes[35]
+	mi := &file_engine_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3250,7 +3580,7 @@ func (x *FileContentRequest) String() string {
 func (*FileContentRequest) ProtoMessage() {}
 
 func (x *FileContentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[35]
+	mi := &file_engine_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3263,7 +3593,7 @@ func (x *FileContentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileContentRequest.ProtoReflect.Descriptor instead.
 func (*FileContentRequest) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{35}
+	return file_engine_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *FileContentRequest) GetRepoId() string {
@@ -3298,7 +3628,7 @@ type FileContentResponse struct {
 
 func (x *FileContentResponse) Reset() {
 	*x = FileContentResponse{}
-	mi := &file_engine_proto_msgTypes[36]
+	mi := &file_engine_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3310,7 +3640,7 @@ func (x *FileContentResponse) String() string {
 func (*FileContentResponse) ProtoMessage() {}
 
 func (x *FileContentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_engine_proto_msgTypes[36]
+	mi := &file_engine_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3323,7 +3653,7 @@ func (x *FileContentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileContentResponse.ProtoReflect.Descriptor instead.
 func (*FileContentResponse) Descriptor() ([]byte, []int) {
-	return file_engine_proto_rawDescGZIP(), []int{36}
+	return file_engine_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *FileContentResponse) GetContent() string {
@@ -3445,13 +3775,15 @@ const file_engine_proto_rawDesc = "" +
 	"\rvector_weight\x18\x03 \x01(\x02R\fvectorWeight\x12,\n" +
 	"\x12graph_expand_depth\x18\x04 \x01(\rR\x10graphExpandDepth\x12!\n" +
 	"\ffile_filters\x18\x05 \x03(\tR\vfileFilters\x12)\n" +
-	"\x10language_filters\x18\x06 \x03(\tR\x0flanguageFilters\"\xfa\x01\n" +
+	"\x10language_filters\x18\x06 \x03(\tR\x0flanguageFilters\"\xe2\x02\n" +
 	"\x0eSearchResponse\x124\n" +
 	"\x06chunks\x18\x01 \x03(\v2\x1c.aipr.engine.v1.ContextChunkR\x06chunks\x127\n" +
 	"\ametrics\x18\x02 \x01(\v2\x1d.aipr.engine.v1.SearchMetricsR\ametrics\x12!\n" +
 	"\frequires_llm\x18\x03 \x01(\bR\vrequiresLlm\x12.\n" +
 	"\x13max_retrieval_score\x18\x04 \x01(\x02R\x11maxRetrievalScore\x12&\n" +
-	"\x0fllm_skip_reason\x18\x05 \x01(\tR\rllmSkipReason\"\x8d\x02\n" +
+	"\x0fllm_skip_reason\x18\x05 \x01(\tR\rllmSkipReason\x124\n" +
+	"\x16graph_confidence_score\x18\x06 \x01(\x02R\x14graphConfidenceScore\x120\n" +
+	"\x14graph_expanded_count\x18\a \x01(\rR\x12graphExpandedCount\"\x8d\x02\n" +
 	"\fContextChunk\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tfile_path\x18\x02 \x01(\tR\bfilePath\x12\x1d\n" +
@@ -3646,7 +3978,40 @@ const file_engine_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2 .aipr.engine.v1.MetricValueProtoR\x05value:\x028\x01\x1aB\n" +
 	"\x14IndexSizesBytesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\"\\\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\",\n" +
+	"\x11EmbedStatsRequest\x12\x17\n" +
+	"\arepo_id\x18\x01 \x01(\tR\x06repoId\"\xc7\t\n" +
+	"\x12EmbedStatsResponse\x12!\n" +
+	"\factive_model\x18\x01 \x01(\tR\vactiveModel\x12/\n" +
+	"\x13embedding_dimension\x18\x02 \x01(\rR\x12embeddingDimension\x12!\n" +
+	"\fbackend_type\x18\x03 \x01(\tR\vbackendType\x12!\n" +
+	"\ftotal_chunks\x18\x04 \x01(\x04R\vtotalChunks\x12#\n" +
+	"\rtotal_vectors\x18\x05 \x01(\x04R\ftotalVectors\x12(\n" +
+	"\x10index_size_bytes\x18\x06 \x01(\x04R\x0eindexSizeBytes\x12\x19\n" +
+	"\bkg_nodes\x18\a \x01(\x04R\akgNodes\x12\x19\n" +
+	"\bkg_edges\x18\b \x01(\x04R\akgEdges\x12\x1d\n" +
+	"\n" +
+	"kg_enabled\x18\t \x01(\bR\tkgEnabled\x12.\n" +
+	"\x13merkle_cached_files\x18\n" +
+	" \x01(\x04R\x11merkleCachedFiles\x121\n" +
+	"\x15merkle_cache_hit_rate\x18\v \x01(\x01R\x12merkleCacheHitRate\x12/\n" +
+	"\x14avg_embed_latency_ms\x18\f \x01(\x01R\x11avgEmbedLatencyMs\x121\n" +
+	"\x15avg_search_latency_ms\x18\r \x01(\x01R\x12avgSearchLatencyMs\x12#\n" +
+	"\rtotal_queries\x18\x0e \x01(\x04R\ftotalQueries\x12(\n" +
+	"\x10embed_cache_size\x18\x0f \x01(\x04R\x0eembedCacheSize\x12/\n" +
+	"\x14embed_cache_hit_rate\x18\x10 \x01(\x01R\x11embedCacheHitRate\x12(\n" +
+	"\x10llm_avoided_rate\x18\x11 \x01(\x01R\x0ellmAvoidedRate\x120\n" +
+	"\x14avg_confidence_score\x18\x12 \x01(\x01R\x12avgConfidenceScore\x12*\n" +
+	"\x11llm_avoided_count\x18\x13 \x01(\x04R\x0fllmAvoidedCount\x12$\n" +
+	"\x0ellm_used_count\x18\x14 \x01(\x04R\fllmUsedCount\x123\n" +
+	"\x16avg_graph_expansion_ms\x18\x15 \x01(\x01R\x13avgGraphExpansionMs\x129\n" +
+	"\x19avg_graph_expanded_chunks\x18\x16 \x01(\x01R\x16avgGraphExpandedChunks\x12*\n" +
+	"\x11model_swaps_total\x18\x17 \x01(\x04R\x0fmodelSwapsTotal\x120\n" +
+	"\x14multi_vector_enabled\x18\x18 \x01(\bR\x12multiVectorEnabled\x12)\n" +
+	"\x10coarse_dimension\x18\x19 \x01(\rR\x0fcoarseDimension\x12%\n" +
+	"\x0efine_dimension\x18\x1a \x01(\rR\rfineDimension\x120\n" +
+	"\x14coarse_index_vectors\x18\x1b \x01(\x04R\x12coarseIndexVectors\x12,\n" +
+	"\x12fine_index_vectors\x18\x1c \x01(\x04R\x10fineIndexVectors\"\\\n" +
 	"\x12FileContentRequest\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12\x1b\n" +
 	"\tfile_path\x18\x02 \x01(\tR\bfilePath\x12\x10\n" +
@@ -3688,8 +4053,7 @@ const file_engine_proto_rawDesc = "" +
 	"\x16STORAGE_PROVIDER_AZURE\x10\x03\x12\x18\n" +
 	"\x14STORAGE_PROVIDER_OCI\x10\x04\x12\x1a\n" +
 	"\x16STORAGE_PROVIDER_MINIO\x10\x05\x12\x1b\n" +
-	"\x17STORAGE_PROVIDER_CUSTOM\x10\x062\xdc\n" +
-	"\n" +
+	"\x17STORAGE_PROVIDER_CUSTOM\x10\x062\xb4\v\n" +
 	"\rEngineService\x12N\n" +
 	"\x0fIndexRepository\x12\x1c.aipr.engine.v1.IndexRequest\x1a\x1d.aipr.engine.v1.IndexResponse\x12\\\n" +
 	"\x15IndexRepositoryStream\x12\x1c.aipr.engine.v1.IndexRequest\x1a#.aipr.engine.v1.IndexProgressUpdate0\x01\x12Z\n" +
@@ -3703,7 +4067,8 @@ const file_engine_proto_rawDesc = "" +
 	"\rRunHeuristics\x12!.aipr.engine.v1.HeuristicsRequest\x1a\".aipr.engine.v1.HeuristicsResponse\x12_\n" +
 	"\x10ConfigureStorage\x12$.aipr.engine.v1.StorageConfigRequest\x1a%.aipr.engine.v1.StorageConfigResponse\x12V\n" +
 	"\vHealthCheck\x12\".aipr.engine.v1.HealthCheckRequest\x1a#.aipr.engine.v1.HealthCheckResponse\x12Y\n" +
-	"\x0eGetDiagnostics\x12\".aipr.engine.v1.DiagnosticsRequest\x1a#.aipr.engine.v1.DiagnosticsResponse\x12Y\n" +
+	"\x0eGetDiagnostics\x12\".aipr.engine.v1.DiagnosticsRequest\x1a#.aipr.engine.v1.DiagnosticsResponse\x12V\n" +
+	"\rGetEmbedStats\x12!.aipr.engine.v1.EmbedStatsRequest\x1a\".aipr.engine.v1.EmbedStatsResponse\x12Y\n" +
 	"\x0eGetFileContent\x12\".aipr.engine.v1.FileContentRequest\x1a#.aipr.engine.v1.FileContentResponse\x12d\n" +
 	"\x13StreamEngineMetrics\x12$.aipr.engine.v1.EngineMetricsRequest\x1a%.aipr.engine.v1.EngineMetricsSnapshot0\x01B^\n" +
 	"\x13ai.aipr.engine.grpcB\vEngineProtoP\x01Z8github.com/AuralithAI/rtvortex-server/internal/engine/pbb\x06proto3"
@@ -3721,7 +4086,7 @@ func file_engine_proto_rawDescGZIP() []byte {
 }
 
 var file_engine_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
+var file_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 44)
 var file_engine_proto_goTypes = []any{
 	(Severity)(0),                    // 0: aipr.engine.v1.Severity
 	(CheckCategory)(0),               // 1: aipr.engine.v1.CheckCategory
@@ -3763,13 +4128,15 @@ var file_engine_proto_goTypes = []any{
 	(*MetricValueProto)(nil),         // 37: aipr.engine.v1.MetricValueProto
 	(*HistogramProto)(nil),           // 38: aipr.engine.v1.HistogramProto
 	(*EngineMetricsSnapshot)(nil),    // 39: aipr.engine.v1.EngineMetricsSnapshot
-	(*FileContentRequest)(nil),       // 40: aipr.engine.v1.FileContentRequest
-	(*FileContentResponse)(nil),      // 41: aipr.engine.v1.FileContentResponse
-	nil,                              // 42: aipr.engine.v1.IndexStats.FilesByLanguageEntry
-	nil,                              // 43: aipr.engine.v1.HealthCheckResponse.ComponentsEntry
-	nil,                              // 44: aipr.engine.v1.DiagnosticsResponse.ConfigEntry
-	nil,                              // 45: aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
-	nil,                              // 46: aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
+	(*EmbedStatsRequest)(nil),        // 40: aipr.engine.v1.EmbedStatsRequest
+	(*EmbedStatsResponse)(nil),       // 41: aipr.engine.v1.EmbedStatsResponse
+	(*FileContentRequest)(nil),       // 42: aipr.engine.v1.FileContentRequest
+	(*FileContentResponse)(nil),      // 43: aipr.engine.v1.FileContentResponse
+	nil,                              // 44: aipr.engine.v1.IndexStats.FilesByLanguageEntry
+	nil,                              // 45: aipr.engine.v1.HealthCheckResponse.ComponentsEntry
+	nil,                              // 46: aipr.engine.v1.DiagnosticsResponse.ConfigEntry
+	nil,                              // 47: aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
+	nil,                              // 48: aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
 }
 var file_engine_proto_depIdxs = []int32{
 	6,  // 0: aipr.engine.v1.IndexRequest.config:type_name -> aipr.engine.v1.IndexConfig
@@ -3777,7 +4144,7 @@ var file_engine_proto_depIdxs = []int32{
 	12, // 2: aipr.engine.v1.IndexResponse.stats:type_name -> aipr.engine.v1.IndexStats
 	12, // 3: aipr.engine.v1.IndexProgressUpdate.final_stats:type_name -> aipr.engine.v1.IndexStats
 	12, // 4: aipr.engine.v1.IndexStatsResponse.stats:type_name -> aipr.engine.v1.IndexStats
-	42, // 5: aipr.engine.v1.IndexStats.files_by_language:type_name -> aipr.engine.v1.IndexStats.FilesByLanguageEntry
+	44, // 5: aipr.engine.v1.IndexStats.files_by_language:type_name -> aipr.engine.v1.IndexStats.FilesByLanguageEntry
 	16, // 6: aipr.engine.v1.SearchRequest.config:type_name -> aipr.engine.v1.SearchConfig
 	18, // 7: aipr.engine.v1.SearchResponse.chunks:type_name -> aipr.engine.v1.ContextChunk
 	19, // 8: aipr.engine.v1.SearchResponse.metrics:type_name -> aipr.engine.v1.SearchMetrics
@@ -3788,15 +4155,15 @@ var file_engine_proto_depIdxs = []int32{
 	27, // 13: aipr.engine.v1.HeuristicsResponse.findings:type_name -> aipr.engine.v1.HeuristicFinding
 	1,  // 14: aipr.engine.v1.HeuristicFinding.category:type_name -> aipr.engine.v1.CheckCategory
 	0,  // 15: aipr.engine.v1.HeuristicFinding.severity:type_name -> aipr.engine.v1.Severity
-	43, // 16: aipr.engine.v1.HealthCheckResponse.components:type_name -> aipr.engine.v1.HealthCheckResponse.ComponentsEntry
+	45, // 16: aipr.engine.v1.HealthCheckResponse.components:type_name -> aipr.engine.v1.HealthCheckResponse.ComponentsEntry
 	32, // 17: aipr.engine.v1.DiagnosticsResponse.memory:type_name -> aipr.engine.v1.MemoryStats
 	33, // 18: aipr.engine.v1.DiagnosticsResponse.indices:type_name -> aipr.engine.v1.IndexInfo
-	44, // 19: aipr.engine.v1.DiagnosticsResponse.config:type_name -> aipr.engine.v1.DiagnosticsResponse.ConfigEntry
+	46, // 19: aipr.engine.v1.DiagnosticsResponse.config:type_name -> aipr.engine.v1.DiagnosticsResponse.ConfigEntry
 	3,  // 20: aipr.engine.v1.StorageConfigRequest.provider:type_name -> aipr.engine.v1.StorageProvider
 	4,  // 21: aipr.engine.v1.MetricValueProto.type:type_name -> aipr.engine.v1.MetricValueProto.MetricType
 	38, // 22: aipr.engine.v1.MetricValueProto.histogram:type_name -> aipr.engine.v1.HistogramProto
-	45, // 23: aipr.engine.v1.EngineMetricsSnapshot.metrics:type_name -> aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
-	46, // 24: aipr.engine.v1.EngineMetricsSnapshot.index_sizes_bytes:type_name -> aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
+	47, // 23: aipr.engine.v1.EngineMetricsSnapshot.metrics:type_name -> aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
+	48, // 24: aipr.engine.v1.EngineMetricsSnapshot.index_sizes_bytes:type_name -> aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
 	37, // 25: aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry.value:type_name -> aipr.engine.v1.MetricValueProto
 	5,  // 26: aipr.engine.v1.EngineService.IndexRepository:input_type -> aipr.engine.v1.IndexRequest
 	5,  // 27: aipr.engine.v1.EngineService.IndexRepositoryStream:input_type -> aipr.engine.v1.IndexRequest
@@ -3811,25 +4178,27 @@ var file_engine_proto_depIdxs = []int32{
 	34, // 36: aipr.engine.v1.EngineService.ConfigureStorage:input_type -> aipr.engine.v1.StorageConfigRequest
 	28, // 37: aipr.engine.v1.EngineService.HealthCheck:input_type -> aipr.engine.v1.HealthCheckRequest
 	30, // 38: aipr.engine.v1.EngineService.GetDiagnostics:input_type -> aipr.engine.v1.DiagnosticsRequest
-	40, // 39: aipr.engine.v1.EngineService.GetFileContent:input_type -> aipr.engine.v1.FileContentRequest
-	36, // 40: aipr.engine.v1.EngineService.StreamEngineMetrics:input_type -> aipr.engine.v1.EngineMetricsRequest
-	8,  // 41: aipr.engine.v1.EngineService.IndexRepository:output_type -> aipr.engine.v1.IndexResponse
-	9,  // 42: aipr.engine.v1.EngineService.IndexRepositoryStream:output_type -> aipr.engine.v1.IndexProgressUpdate
-	8,  // 43: aipr.engine.v1.EngineService.IncrementalIndex:output_type -> aipr.engine.v1.IndexResponse
-	11, // 44: aipr.engine.v1.EngineService.GetIndexStats:output_type -> aipr.engine.v1.IndexStatsResponse
-	14, // 45: aipr.engine.v1.EngineService.DeleteIndex:output_type -> aipr.engine.v1.DeleteIndexResponse
-	17, // 46: aipr.engine.v1.EngineService.Search:output_type -> aipr.engine.v1.SearchResponse
-	18, // 47: aipr.engine.v1.EngineService.SearchStream:output_type -> aipr.engine.v1.ContextChunk
-	21, // 48: aipr.engine.v1.EngineService.BuildReviewContext:output_type -> aipr.engine.v1.ReviewContextResponse
-	22, // 49: aipr.engine.v1.EngineService.BuildReviewContextStream:output_type -> aipr.engine.v1.PREmbedProgressUpdate
-	26, // 50: aipr.engine.v1.EngineService.RunHeuristics:output_type -> aipr.engine.v1.HeuristicsResponse
-	35, // 51: aipr.engine.v1.EngineService.ConfigureStorage:output_type -> aipr.engine.v1.StorageConfigResponse
-	29, // 52: aipr.engine.v1.EngineService.HealthCheck:output_type -> aipr.engine.v1.HealthCheckResponse
-	31, // 53: aipr.engine.v1.EngineService.GetDiagnostics:output_type -> aipr.engine.v1.DiagnosticsResponse
-	41, // 54: aipr.engine.v1.EngineService.GetFileContent:output_type -> aipr.engine.v1.FileContentResponse
-	39, // 55: aipr.engine.v1.EngineService.StreamEngineMetrics:output_type -> aipr.engine.v1.EngineMetricsSnapshot
-	41, // [41:56] is the sub-list for method output_type
-	26, // [26:41] is the sub-list for method input_type
+	40, // 39: aipr.engine.v1.EngineService.GetEmbedStats:input_type -> aipr.engine.v1.EmbedStatsRequest
+	42, // 40: aipr.engine.v1.EngineService.GetFileContent:input_type -> aipr.engine.v1.FileContentRequest
+	36, // 41: aipr.engine.v1.EngineService.StreamEngineMetrics:input_type -> aipr.engine.v1.EngineMetricsRequest
+	8,  // 42: aipr.engine.v1.EngineService.IndexRepository:output_type -> aipr.engine.v1.IndexResponse
+	9,  // 43: aipr.engine.v1.EngineService.IndexRepositoryStream:output_type -> aipr.engine.v1.IndexProgressUpdate
+	8,  // 44: aipr.engine.v1.EngineService.IncrementalIndex:output_type -> aipr.engine.v1.IndexResponse
+	11, // 45: aipr.engine.v1.EngineService.GetIndexStats:output_type -> aipr.engine.v1.IndexStatsResponse
+	14, // 46: aipr.engine.v1.EngineService.DeleteIndex:output_type -> aipr.engine.v1.DeleteIndexResponse
+	17, // 47: aipr.engine.v1.EngineService.Search:output_type -> aipr.engine.v1.SearchResponse
+	18, // 48: aipr.engine.v1.EngineService.SearchStream:output_type -> aipr.engine.v1.ContextChunk
+	21, // 49: aipr.engine.v1.EngineService.BuildReviewContext:output_type -> aipr.engine.v1.ReviewContextResponse
+	22, // 50: aipr.engine.v1.EngineService.BuildReviewContextStream:output_type -> aipr.engine.v1.PREmbedProgressUpdate
+	26, // 51: aipr.engine.v1.EngineService.RunHeuristics:output_type -> aipr.engine.v1.HeuristicsResponse
+	35, // 52: aipr.engine.v1.EngineService.ConfigureStorage:output_type -> aipr.engine.v1.StorageConfigResponse
+	29, // 53: aipr.engine.v1.EngineService.HealthCheck:output_type -> aipr.engine.v1.HealthCheckResponse
+	31, // 54: aipr.engine.v1.EngineService.GetDiagnostics:output_type -> aipr.engine.v1.DiagnosticsResponse
+	41, // 55: aipr.engine.v1.EngineService.GetEmbedStats:output_type -> aipr.engine.v1.EmbedStatsResponse
+	43, // 56: aipr.engine.v1.EngineService.GetFileContent:output_type -> aipr.engine.v1.FileContentResponse
+	39, // 57: aipr.engine.v1.EngineService.StreamEngineMetrics:output_type -> aipr.engine.v1.EngineMetricsSnapshot
+	42, // [42:58] is the sub-list for method output_type
+	26, // [26:42] is the sub-list for method input_type
 	26, // [26:26] is the sub-list for extension type_name
 	26, // [26:26] is the sub-list for extension extendee
 	0,  // [0:26] is the sub-list for field type_name
@@ -3846,7 +4215,7 @@ func file_engine_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_engine_proto_rawDesc), len(file_engine_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   42,
+			NumMessages:   44,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -133,6 +133,16 @@ public:
     ) override;
 
     //-------------------------------------------------------------------------
+    // Embedding Statistics
+    //-------------------------------------------------------------------------
+
+    grpc::Status GetEmbedStats(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::EmbedStatsRequest* request,
+        aipr::engine::v1::EmbedStatsResponse* response
+    ) override;
+
+    //-------------------------------------------------------------------------
     // File Content (Swarm)
     //-------------------------------------------------------------------------
 

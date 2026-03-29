@@ -31,6 +31,9 @@ set(TEST_SOURCES
     test_knowledge_graph.cpp
     test_memory_accounts.cpp
     test_repo_type.cpp
+    test_graph_rag.cpp
+    test_merkle_cache.cpp
+    test_multi_vector_index.cpp
 )
 
 # Create test executable

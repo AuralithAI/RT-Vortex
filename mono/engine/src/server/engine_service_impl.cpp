@@ -369,11 +369,12 @@ grpc::Status EngineServiceImpl::Search(
             top_k = request->config().top_k();
         }
 
-        std::vector<ContextChunk> chunks = engine_->search(
+        auto sr = engine_->searchWithMeta(
             request->repo_id(),
             request->query(),
             top_k
         );
+        const auto& chunks = sr.chunks;
 
         auto search_end = std::chrono::steady_clock::now();
         auto search_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -407,20 +408,15 @@ grpc::Status EngineServiceImpl::Search(
             toProto(chunk, response->add_chunks());
         }
 
-        // Set metrics (simplified - full metrics would come from engine)
+        // Set metrics
         auto* metrics = response->mutable_metrics();
         metrics->set_total_candidates(static_cast<uint32_t>(chunks.size()));
 
-        // Confidence gate fields (populated when TMS forward is wired)
-        // For now, propagate defaults — requires_llm=true.
-        response->set_requires_llm(true);
-        if (!chunks.empty()) {
-            float max_score = 0.0f;
-            for (const auto& c : chunks) {
-                max_score = std::max(max_score, c.relevance_score);
-            }
-            response->set_max_retrieval_score(max_score);
-        }
+        // Confidence gate + GraphRAG metadata from TMS forward
+        response->set_requires_llm(sr.requires_llm);
+        response->set_max_retrieval_score(sr.max_retrieval_score);
+        response->set_graph_confidence_score(sr.graph_confidence);
+        response->set_graph_expanded_count(sr.graph_expanded_chunks);
 
         return grpc::Status::OK;
 
@@ -771,6 +767,59 @@ grpc::Status EngineServiceImpl::GetDiagnostics(
         return grpc::Status::OK;
 
     } catch (const std::exception& e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
+//=============================================================================
+// Embedding Statistics
+//=============================================================================
+
+grpc::Status EngineServiceImpl::GetEmbedStats(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::EmbedStatsRequest* request,
+    aipr::engine::v1::EmbedStatsResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    try {
+        auto stats = engine_->getEmbedStats(request->repo_id());
+
+        response->set_active_model(stats.active_model);
+        response->set_embedding_dimension(static_cast<uint32_t>(stats.embedding_dimension));
+        response->set_backend_type(stats.backend_type);
+        response->set_total_chunks(stats.total_chunks);
+        response->set_total_vectors(stats.total_vectors);
+        response->set_index_size_bytes(stats.index_size_bytes);
+        response->set_kg_nodes(stats.kg_nodes);
+        response->set_kg_edges(stats.kg_edges);
+        response->set_kg_enabled(stats.kg_enabled);
+        response->set_merkle_cached_files(stats.merkle_cached_files);
+        response->set_merkle_cache_hit_rate(stats.merkle_cache_hit_rate);
+        response->set_avg_embed_latency_ms(stats.avg_embed_latency_ms);
+        response->set_avg_search_latency_ms(stats.avg_search_latency_ms);
+        response->set_total_queries(stats.total_queries);
+        response->set_embed_cache_size(stats.embed_cache_size);
+        response->set_embed_cache_hit_rate(stats.embed_cache_hit_rate);
+        response->set_llm_avoided_rate(stats.llm_avoided_rate);
+        response->set_avg_confidence_score(stats.avg_confidence_score);
+        response->set_llm_avoided_count(stats.llm_avoided_count);
+        response->set_llm_used_count(stats.llm_used_count);
+        response->set_avg_graph_expansion_ms(stats.avg_graph_expansion_ms);
+        response->set_avg_graph_expanded_chunks(stats.avg_graph_expanded_chunks);
+        response->set_model_swaps_total(stats.model_swaps_total);
+        response->set_multi_vector_enabled(stats.multi_vector_enabled);
+        response->set_coarse_dimension(stats.coarse_dimension);
+        response->set_fine_dimension(stats.fine_dimension);
+        response->set_coarse_index_vectors(stats.coarse_index_vectors);
+        response->set_fine_index_vectors(stats.fine_index_vectors);
+
+        return grpc::Status::OK;
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("GetEmbedStats failed: " + std::string(e.what()));
         return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
     }
 }

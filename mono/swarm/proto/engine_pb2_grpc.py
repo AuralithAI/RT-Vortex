@@ -100,6 +100,11 @@ class EngineServiceStub(object):
                 request_serializer=engine__pb2.DiagnosticsRequest.SerializeToString,
                 response_deserializer=engine__pb2.DiagnosticsResponse.FromString,
                 _registered_method=True)
+        self.GetEmbedStats = channel.unary_unary(
+                '/aipr.engine.v1.EngineService/GetEmbedStats',
+                request_serializer=engine__pb2.EmbedStatsRequest.SerializeToString,
+                response_deserializer=engine__pb2.EmbedStatsResponse.FromString,
+                _registered_method=True)
         self.GetFileContent = channel.unary_unary(
                 '/aipr.engine.v1.EngineService/GetFileContent',
                 request_serializer=engine__pb2.FileContentRequest.SerializeToString,
@@ -199,6 +204,13 @@ class EngineServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetEmbedStats(self, request, context):
+        """Embedding Statistics — per-repo embedding health and performance data
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def GetFileContent(self, request, context):
         """File Content — read a file from the engine's local clone for the swarm
         """
@@ -281,6 +293,11 @@ def add_EngineServiceServicer_to_server(servicer, server):
                     servicer.GetDiagnostics,
                     request_deserializer=engine__pb2.DiagnosticsRequest.FromString,
                     response_serializer=engine__pb2.DiagnosticsResponse.SerializeToString,
+            ),
+            'GetEmbedStats': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetEmbedStats,
+                    request_deserializer=engine__pb2.EmbedStatsRequest.FromString,
+                    response_serializer=engine__pb2.EmbedStatsResponse.SerializeToString,
             ),
             'GetFileContent': grpc.unary_unary_rpc_method_handler(
                     servicer.GetFileContent,
@@ -645,6 +662,33 @@ class EngineService(object):
             '/aipr.engine.v1.EngineService/GetDiagnostics',
             engine__pb2.DiagnosticsRequest.SerializeToString,
             engine__pb2.DiagnosticsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetEmbedStats(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aipr.engine.v1.EngineService/GetEmbedStats',
+            engine__pb2.EmbedStatsRequest.SerializeToString,
+            engine__pb2.EmbedStatsResponse.FromString,
             options,
             channel_credentials,
             insecure,

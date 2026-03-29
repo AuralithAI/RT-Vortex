@@ -35,6 +35,7 @@
 #include "mtm_graph.h"
 #include "cross_memory_attention.h"
 #include "compute_controller.h"
+#include "multi_vector_index.h"
 
 #include <memory>
 #include <thread>
@@ -308,6 +309,8 @@ public:
     CrossMemoryAttention& attention() { return *attention_; }
     ComputeController& controller() { return *controller_; }
     EmbeddingEngine& embeddingEngine() { return *embedding_engine_; }
+    MultiVectorIndex* multiVector() { return multi_vector_.get(); }
+    const TMSConfig& tmsConfig() const { return config_; }
     
     /**
      * Reconfigure the embedding engine at runtime.
@@ -335,6 +338,7 @@ private:
     
     // Memory subsystems
     std::unique_ptr<LTMFaiss> ltm_;
+    std::unique_ptr<MultiVectorIndex> multi_vector_;
     std::unique_ptr<STM> stm_;
     std::unique_ptr<MTMGraph> mtm_;
     std::unique_ptr<CrossMemoryAttention> attention_;
@@ -348,6 +352,10 @@ private:
     // Knowledge Graph (optional, gated by knowledge_graph_enabled)
     class KnowledgeGraphHandle;
     std::unique_ptr<KnowledgeGraphHandle> kg_handle_;
+
+    // Merkle cache (optional, for incremental reindex)
+    class MerkleCacheHandle;
+    std::unique_ptr<MerkleCacheHandle> merkle_handle_;
     
     // State
     std::atomic<bool> initialized_{false};

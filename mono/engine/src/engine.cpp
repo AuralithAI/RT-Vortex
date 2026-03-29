@@ -9,6 +9,7 @@
 #include "engine_api.h"
 #include "review_signals.h"
 #include "logging.h"
+#include "metrics.h"
 #include "version.h"
 #include "config_validator.h"
 #include "storage_migration.h"
@@ -677,6 +678,31 @@ public:
         return results;
     }
 
+    SearchResult searchWithMeta(
+        const std::string& repo_id,
+        const std::string& query,
+        size_t top_k) override
+    {
+        tms::TMSQuery tms_q;
+        tms_q.query_text  = query;
+        tms_q.repo_filter = repo_id;
+        tms_q.session_id  = "search_" + repo_id;
+
+        tms::TMSResponse resp = tms_->forward(tms_q);
+
+        SearchResult sr;
+        sr.graph_confidence = resp.graph_confidence;
+        sr.graph_expanded_chunks = resp.graph_expanded_chunks;
+        sr.requires_llm = resp.requires_llm;
+        sr.max_retrieval_score = resp.max_retrieval_score;
+
+        sr.chunks.reserve(std::min(top_k, resp.attention_output.fused_chunks.size()));
+        for (size_t i = 0; i < resp.attention_output.fused_chunks.size() && i < top_k; ++i) {
+            sr.chunks.push_back(toContextChunk(resp.attention_output.fused_chunks[i]));
+        }
+        return sr;
+    }
+
     // =========================================================================
     // Review
     // =========================================================================
@@ -868,6 +894,81 @@ public:
 
         result.healthy = result.checks_failed.empty();
         return result;
+    }
+
+    // =========================================================================
+    // Embedding Statistics
+    // =========================================================================
+
+    EmbedStats getEmbedStats(const std::string& repo_id) override {
+        EmbedStats stats;
+
+        // Model information
+        auto& emb = tms_->embeddingEngine();
+        stats.active_model = emb.activeModelName();
+        stats.embedding_dimension = emb.activeDimension();
+        auto emb_config = emb.getConfig();
+        switch (emb_config.backend) {
+            case tms::EmbeddingBackend::ONNX_RUNTIME: stats.backend_type = "onnx"; break;
+            case tms::EmbeddingBackend::HTTP_API:      stats.backend_type = "http"; break;
+            default:                                   stats.backend_type = "mock"; break;
+        }
+
+        // Index statistics
+        auto tms_stats = tms_->getStats();
+        auto ltm_stats = tms_->ltm().getStats();
+        stats.total_chunks = repo_id.empty() ? ltm_stats.total_chunks
+                                             : tms_->ltm().getRepoChunkCount(repo_id);
+        stats.total_vectors = ltm_stats.index_vectors;
+        stats.index_size_bytes = ltm_stats.memory_bytes;
+
+        // KG statistics
+        stats.kg_enabled = true; // config_.knowledge_graph_enabled would require TMS config access
+
+        // Performance from metrics registry
+        auto& reg = metrics::Registry::instance();
+        auto embed_hist = reg.getHistogram(metrics::EMBED_LATENCY_S);
+        stats.avg_embed_latency_ms = embed_hist.avg * 1000.0;
+
+        auto search_hist = reg.getHistogram(metrics::SEARCH_LATENCY_S);
+        stats.avg_search_latency_ms = search_hist.avg * 1000.0;
+
+        stats.total_queries = tms_stats.total_queries;
+
+        // Cache statistics
+        auto cache_stats = emb.getCacheStats();
+        stats.embed_cache_size = cache_stats.size;
+        stats.embed_cache_hit_rate = cache_stats.hit_rate;
+
+        // Confidence gate from metrics
+        stats.llm_avoided_rate = reg.getGauge(metrics::LLM_AVOIDED_RATE);
+        stats.avg_confidence_score = reg.getGauge(metrics::CONFIDENCE_GATE_COMBINED);
+        stats.llm_avoided_count = static_cast<size_t>(reg.getCounter(metrics::LLM_AVOIDED_TOTAL));
+        stats.llm_used_count = static_cast<size_t>(reg.getCounter(metrics::LLM_USED_TOTAL));
+
+        // GraphRAG from metrics
+        auto graph_hist = reg.getHistogram(metrics::GRAPH_TRAVERSAL_LATENCY_S);
+        stats.avg_graph_expansion_ms = graph_hist.avg * 1000.0;
+        stats.avg_graph_expanded_chunks = reg.getGauge(metrics::GRAPH_EXPANDED_CHUNKS);
+
+        // Hot-swap
+        stats.model_swaps_total = static_cast<size_t>(reg.getCounter(metrics::MODEL_SWAPS_TOTAL));
+
+        // Merkle cache
+        stats.merkle_cache_hit_rate = reg.getGauge(metrics::MERKLE_CACHE_HIT_RATE);
+        stats.merkle_cached_files = static_cast<size_t>(reg.getGauge(metrics::MERKLE_FILES_SKIPPED));
+
+        // Multi-vector dual-resolution index
+        if (auto* mv = tms_->multiVector()) {
+            auto mv_stats = mv->getStats();
+            stats.multi_vector_enabled = mv_stats.dual_index_active;
+            stats.coarse_dimension = mv_stats.coarse_dimension;
+            stats.fine_dimension = mv_stats.fine_dimension;
+            stats.coarse_index_vectors = mv_stats.coarse_index_vectors;
+            stats.fine_index_vectors = mv_stats.fine_index_vectors;
+        }
+
+        return stats;
     }
 
 private:

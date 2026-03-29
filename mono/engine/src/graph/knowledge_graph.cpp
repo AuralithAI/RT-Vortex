@@ -768,6 +768,74 @@ std::vector<KGNode> KnowledgeGraph::getNodes(const std::string& repo_id) const {
     return results;
 }
 
+std::vector<KGNode> KnowledgeGraph::nodesByFaissId(int64_t faiss_id,
+                                                    const std::string& repo_id) const {
+    if (!db_) return {};
+
+    const char* sql = "SELECT id, node_type, name, file_path, language, "
+                      "faiss_id, repo_id, metadata FROM kg_nodes "
+                      "WHERE faiss_id = ? AND repo_id = ?";
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) return {};
+
+    sqlite3_bind_int64(stmt, 1, faiss_id);
+    sqlite3_bind_text(stmt, 2, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    std::vector<KGNode> results;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        KGNode n;
+        n.id        = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        n.node_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        n.name      = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        auto fp     = sqlite3_column_text(stmt, 3);
+        n.file_path = fp ? reinterpret_cast<const char*>(fp) : "";
+        auto lang   = sqlite3_column_text(stmt, 4);
+        n.language  = lang ? reinterpret_cast<const char*>(lang) : "";
+        n.faiss_id  = sqlite3_column_int64(stmt, 5);
+        n.repo_id   = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+        auto meta   = sqlite3_column_text(stmt, 7);
+        n.metadata  = meta ? reinterpret_cast<const char*>(meta) : "";
+        results.push_back(n);
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
+std::vector<KGNode> KnowledgeGraph::nodesByFilePath(const std::string& file_path,
+                                                     const std::string& repo_id) const {
+    if (!db_) return {};
+
+    const char* sql = "SELECT id, node_type, name, file_path, language, "
+                      "faiss_id, repo_id, metadata FROM kg_nodes "
+                      "WHERE file_path = ? AND repo_id = ?";
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) return {};
+
+    sqlite3_bind_text(stmt, 1, file_path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    std::vector<KGNode> results;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        KGNode n;
+        n.id        = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        n.node_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        n.name      = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        auto fp     = sqlite3_column_text(stmt, 3);
+        n.file_path = fp ? reinterpret_cast<const char*>(fp) : "";
+        auto lang   = sqlite3_column_text(stmt, 4);
+        n.language  = lang ? reinterpret_cast<const char*>(lang) : "";
+        n.faiss_id  = sqlite3_column_int64(stmt, 5);
+        n.repo_id   = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+        auto meta   = sqlite3_column_text(stmt, 7);
+        n.metadata  = meta ? reinterpret_cast<const char*>(meta) : "";
+        results.push_back(n);
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
 // ── Statistics ─────────────────────────────────────────────────────────────
 
 size_t KnowledgeGraph::nodeCount(const std::string& repo_id) const {

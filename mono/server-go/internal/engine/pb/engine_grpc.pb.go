@@ -35,6 +35,7 @@ const (
 	EngineService_ConfigureStorage_FullMethodName         = "/aipr.engine.v1.EngineService/ConfigureStorage"
 	EngineService_HealthCheck_FullMethodName              = "/aipr.engine.v1.EngineService/HealthCheck"
 	EngineService_GetDiagnostics_FullMethodName           = "/aipr.engine.v1.EngineService/GetDiagnostics"
+	EngineService_GetEmbedStats_FullMethodName            = "/aipr.engine.v1.EngineService/GetEmbedStats"
 	EngineService_GetFileContent_FullMethodName           = "/aipr.engine.v1.EngineService/GetFileContent"
 	EngineService_StreamEngineMetrics_FullMethodName      = "/aipr.engine.v1.EngineService/StreamEngineMetrics"
 )
@@ -63,6 +64,8 @@ type EngineServiceClient interface {
 	// Health & Diagnostics
 	HealthCheck(ctx context.Context, in *HealthCheckRequest, opts ...grpc.CallOption) (*HealthCheckResponse, error)
 	GetDiagnostics(ctx context.Context, in *DiagnosticsRequest, opts ...grpc.CallOption) (*DiagnosticsResponse, error)
+	// Embedding Statistics — per-repo embedding health and performance data
+	GetEmbedStats(ctx context.Context, in *EmbedStatsRequest, opts ...grpc.CallOption) (*EmbedStatsResponse, error)
 	// File Content — read a file from the engine's local clone for the swarm
 	GetFileContent(ctx context.Context, in *FileContentRequest, opts ...grpc.CallOption) (*FileContentResponse, error)
 	// Metrics — server-streaming so the Go API server can relay to the dashboard.
@@ -235,6 +238,16 @@ func (c *engineServiceClient) GetDiagnostics(ctx context.Context, in *Diagnostic
 	return out, nil
 }
 
+func (c *engineServiceClient) GetEmbedStats(ctx context.Context, in *EmbedStatsRequest, opts ...grpc.CallOption) (*EmbedStatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EmbedStatsResponse)
+	err := c.cc.Invoke(ctx, EngineService_GetEmbedStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *engineServiceClient) GetFileContent(ctx context.Context, in *FileContentRequest, opts ...grpc.CallOption) (*FileContentResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(FileContentResponse)
@@ -288,6 +301,8 @@ type EngineServiceServer interface {
 	// Health & Diagnostics
 	HealthCheck(context.Context, *HealthCheckRequest) (*HealthCheckResponse, error)
 	GetDiagnostics(context.Context, *DiagnosticsRequest) (*DiagnosticsResponse, error)
+	// Embedding Statistics — per-repo embedding health and performance data
+	GetEmbedStats(context.Context, *EmbedStatsRequest) (*EmbedStatsResponse, error)
 	// File Content — read a file from the engine's local clone for the swarm
 	GetFileContent(context.Context, *FileContentRequest) (*FileContentResponse, error)
 	// Metrics — server-streaming so the Go API server can relay to the dashboard.
@@ -341,6 +356,9 @@ func (UnimplementedEngineServiceServer) HealthCheck(context.Context, *HealthChec
 }
 func (UnimplementedEngineServiceServer) GetDiagnostics(context.Context, *DiagnosticsRequest) (*DiagnosticsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetDiagnostics not implemented")
+}
+func (UnimplementedEngineServiceServer) GetEmbedStats(context.Context, *EmbedStatsRequest) (*EmbedStatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetEmbedStats not implemented")
 }
 func (UnimplementedEngineServiceServer) GetFileContent(context.Context, *FileContentRequest) (*FileContentResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetFileContent not implemented")
@@ -582,6 +600,24 @@ func _EngineService_GetDiagnostics_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngineService_GetEmbedStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EmbedStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngineServiceServer).GetEmbedStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngineService_GetEmbedStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngineServiceServer).GetEmbedStats(ctx, req.(*EmbedStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _EngineService_GetFileContent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(FileContentRequest)
 	if err := dec(in); err != nil {
@@ -657,6 +693,10 @@ var EngineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetDiagnostics",
 			Handler:    _EngineService_GetDiagnostics_Handler,
+		},
+		{
+			MethodName: "GetEmbedStats",
+			Handler:    _EngineService_GetEmbedStats_Handler,
 		},
 		{
 			MethodName: "GetFileContent",

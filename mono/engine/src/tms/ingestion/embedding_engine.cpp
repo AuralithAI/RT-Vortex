@@ -9,6 +9,7 @@
 #include "tms/repo_parser.h"
 #include "tms/ltm_faiss.h"
 #include "tms/mtm_graph.h"
+#include "logging.h"
 #include "metrics.h"
 #include <algorithm>
 #include <cmath>
@@ -1254,6 +1255,68 @@ EmbeddingEngine::CacheStats EmbeddingEngine::getCacheStats() const {
 
 void EmbeddingEngine::setApiKey(const std::string& key) { config_.api_key = key; }
 void EmbeddingEngine::setEndpoint(const std::string& endpoint) { config_.api_endpoint = endpoint; }
+
+// =============================================================================
+// Hot-Swap Model
+// =============================================================================
+
+bool EmbeddingEngine::hotSwapModel(
+    const std::string& model_name,
+    const std::string& onnx_model_path,
+    const std::string& tokenizer_path,
+    size_t new_dimension)
+{
+    std::lock_guard<std::mutex> swap_lock(swap_mutex_);
+
+    LOG_INFO("[EmbeddingEngine] hot-swap: " + config_.model_name + " → " + model_name +
+             " (dim=" + std::to_string(new_dimension) + ")");
+
+    try {
+        // Build a new config from the current one, overriding model paths
+        EmbeddingConfig new_config = config_;
+        new_config.model_name = model_name;
+        new_config.onnx_model_path = onnx_model_path;
+        new_config.tokenizer_path = tokenizer_path;
+        new_config.embedding_dimension = new_dimension;
+        new_config.backend = EmbeddingBackend::ONNX_RUNTIME;
+
+        // Create a new backend with the new model
+        auto new_backend = std::make_unique<BackendImpl>(new_config);
+        if (!new_backend->initialize()) {
+            LOG_ERROR("[EmbeddingEngine] hot-swap: primary backend failed to initialize");
+            return false;
+        }
+
+        // Build new worker pool
+        std::vector<std::unique_ptr<BackendImpl>> new_pool;
+        for (int i = 0; i < num_workers_; ++i) {
+            auto worker = std::make_unique<BackendImpl>(new_config);
+            if (!worker->initialize()) {
+                LOG_ERROR("[EmbeddingEngine] hot-swap: worker " + std::to_string(i) + " failed to initialize");
+                return false;
+            }
+            new_pool.push_back(std::move(worker));
+        }
+
+        // Atomically swap — the old backends are destroyed when they go out of scope
+        backend_ = std::move(new_backend);
+        worker_pool_ = std::move(new_pool);
+        config_ = new_config;
+
+        // Telemetry
+        metrics::Registry::instance().incCounter(metrics::MODEL_SWAPS_TOTAL);
+        metrics::Registry::instance().setGauge(
+            metrics::ACTIVE_MODEL_DIM, static_cast<double>(new_dimension));
+
+        LOG_INFO("[EmbeddingEngine] hot-swap complete: model=" + model_name +
+                 " dim=" + std::to_string(new_dimension));
+        return true;
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("[EmbeddingEngine] hot-swap failed: " + std::string(e.what()));
+        return false;
+    }
+}
 
 // =============================================================================
 // Statistics

@@ -871,3 +871,81 @@ func convertHeuristicFinding(f *pb.HeuristicFinding) HeuristicFinding {
 		RuleName:   f.RuleName,
 	}
 }
+
+// ── Embedding Statistics ────────────────────────────────────────────────────
+
+// EmbedStats holds embedding subsystem health and performance metrics.
+type EmbedStats struct {
+	ActiveModel          string  `json:"active_model"`
+	EmbeddingDimension   uint32  `json:"embedding_dimension"`
+	BackendType          string  `json:"backend_type"`
+	TotalChunks          uint64  `json:"total_chunks"`
+	TotalVectors         uint64  `json:"total_vectors"`
+	IndexSizeBytes       uint64  `json:"index_size_bytes"`
+	KGNodes              uint64  `json:"kg_nodes"`
+	KGEdges              uint64  `json:"kg_edges"`
+	KGEnabled            bool    `json:"kg_enabled"`
+	MerkleCachedFiles    uint64  `json:"merkle_cached_files"`
+	MerkleCacheHitRate   float64 `json:"merkle_cache_hit_rate"`
+	AvgEmbedLatencyMs    float64 `json:"avg_embed_latency_ms"`
+	AvgSearchLatencyMs   float64 `json:"avg_search_latency_ms"`
+	TotalQueries         uint64  `json:"total_queries"`
+	EmbedCacheSize       uint64  `json:"embed_cache_size"`
+	EmbedCacheHitRate    float64 `json:"embed_cache_hit_rate"`
+	LLMAvoidsRate        float64 `json:"llm_avoided_rate"`
+	AvgConfidenceScore   float64 `json:"avg_confidence_score"`
+	LLMAvoidsCount       uint64  `json:"llm_avoided_count"`
+	LLMUsedCount         uint64  `json:"llm_used_count"`
+	AvgGraphExpansionMs  float64 `json:"avg_graph_expansion_ms"`
+	AvgGraphExpandChunks float64 `json:"avg_graph_expanded_chunks"`
+	ModelSwapsTotal      uint64  `json:"model_swaps_total"`
+	MultiVectorEnabled   bool    `json:"multi_vector_enabled"`
+	CoarseDimension      uint32  `json:"coarse_dimension"`
+	FineDimension        uint32  `json:"fine_dimension"`
+	CoarseIndexVectors   uint64  `json:"coarse_index_vectors"`
+	FineIndexVectors     uint64  `json:"fine_index_vectors"`
+}
+
+// GetEmbedStats retrieves embedding statistics from the C++ engine.
+func (c *Client) GetEmbedStats(ctx context.Context, repoID string) (*EmbedStats, error) {
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+
+	resp, err := c.stub().GetEmbedStats(ctx, &pb.EmbedStatsRequest{
+		RepoId: repoID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get embed stats: %w", err)
+	}
+
+	return &EmbedStats{
+		ActiveModel:          resp.ActiveModel,
+		EmbeddingDimension:   resp.EmbeddingDimension,
+		BackendType:          resp.BackendType,
+		TotalChunks:          resp.TotalChunks,
+		TotalVectors:         resp.TotalVectors,
+		IndexSizeBytes:       resp.IndexSizeBytes,
+		KGNodes:              resp.KgNodes,
+		KGEdges:              resp.KgEdges,
+		KGEnabled:            resp.KgEnabled,
+		MerkleCachedFiles:    resp.MerkleCachedFiles,
+		MerkleCacheHitRate:   resp.MerkleCacheHitRate,
+		AvgEmbedLatencyMs:    resp.AvgEmbedLatencyMs,
+		AvgSearchLatencyMs:   resp.AvgSearchLatencyMs,
+		TotalQueries:         resp.TotalQueries,
+		EmbedCacheSize:       resp.EmbedCacheSize,
+		EmbedCacheHitRate:    resp.EmbedCacheHitRate,
+		LLMAvoidsRate:        resp.LlmAvoidedRate,
+		AvgConfidenceScore:   resp.AvgConfidenceScore,
+		LLMAvoidsCount:       resp.LlmAvoidedCount,
+		LLMUsedCount:         resp.LlmUsedCount,
+		AvgGraphExpansionMs:  resp.AvgGraphExpansionMs,
+		AvgGraphExpandChunks: resp.AvgGraphExpandedChunks,
+		ModelSwapsTotal:      resp.ModelSwapsTotal,
+		MultiVectorEnabled:   resp.MultiVectorEnabled,
+		CoarseDimension:      resp.CoarseDimension,
+		FineDimension:        resp.FineDimension,
+		CoarseIndexVectors:   resp.CoarseIndexVectors,
+		FineIndexVectors:     resp.FineIndexVectors,
+	}, nil
+}
