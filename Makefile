@@ -131,7 +131,11 @@ config: rt_home ## Copy configuration files to rt_home
 	@cp -n $(CONFIG_DIR)/certificates/* $(RT_HOME)/config/certificates/ 2>/dev/null || true
 	@mkdir -p $(RT_HOME)/config/model-providers
 	@cp -n $(CONFIG_DIR)/model-providers/* $(RT_HOME)/config/model-providers/ 2>/dev/null || true
+	@mkdir -p $(RT_HOME)/data/sql $(RT_HOME)/data/migrations
+	@cp -f $(SERVER_DIR)/db/sql/*.sql $(RT_HOME)/data/sql/ 2>/dev/null || true
+	@cp -f $(SERVER_DIR)/db/migrations/*.sql $(RT_HOME)/data/migrations/ 2>/dev/null || true
 	@echo "  rt_home/config/ updated (xml, yml, certificates, model-providers)"
+	@echo "  rt_home/data/sql/ synced (create_database.sql, initData.sql, migrations)"
 
 # ==============================================================================
 # Models (ONNX embeddings)
@@ -423,14 +427,14 @@ db-create: rt_home config ## Create PostgreSQL role and database
 	$(PSQL_SU) -f $(RT_HOME)/data/sql/create_database.sql
 
 db-init: rt_home config ## Initialize schema tables (run after db-create)
-	$(PSQL_SU) -U rtvortex -d rtvortex -f $(RT_HOME)/data/sql/initData.sql
+	$(PSQL_SU) -d rtvortex -f $(RT_HOME)/data/sql/initData.sql
 
 db-drop: ## Drop the rtvortex database (destructive!)
 	$(PSQL_SU) -c "DROP DATABASE IF EXISTS rtvortex;"
 
 db-status: ## Show current migration version
-	$(PSQL_SU) -U rtvortex -d rtvortex -c "SELECT * FROM schema_migrations ORDER BY version DESC LIMIT 5;" 2>/dev/null || \
-	$(PSQL_SU) -U rtvortex -d rtvortex -c "SELECT * FROM schema_info ORDER BY version;"
+	$(PSQL_SU) -d rtvortex -c "SELECT * FROM schema_migrations ORDER BY version DESC LIMIT 5;" 2>/dev/null || \
+	$(PSQL_SU) -d rtvortex -c "SELECT * FROM schema_info ORDER BY version;"
 
 db-reset: db-drop db-create db-init ## Drop, recreate, and re-init the database
 
@@ -451,7 +455,7 @@ db-migrate: rt_home config ## Apply all pending migrations
 	@echo "Applying migrations from $(RT_HOME)/data/migrations/ ..."
 	@for f in $(RT_HOME)/data/migrations/*.up.sql; do \
 		echo "  → $$f"; \
-		$(PSQL_SU) -U rtvortex -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
+		$(PSQL_SU) -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
 	done
 	@echo "Done."
 
@@ -463,7 +467,7 @@ db-fix-migrate: ## Fix dirty schema_migrations and re-apply all migrations
 		$(PSQL_SU) -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
 	done
 	@echo "Final state:"
-	@$(PSQL_SU) -U rtvortex -d rtvortex -c "SELECT * FROM schema_migrations;"
+	@$(PSQL_SU) -d rtvortex -c "SELECT * FROM schema_migrations;"
 
 # ==============================================================================
 # Clean
