@@ -146,6 +146,9 @@ db-fix-owner: ## Transfer ownership of all DB objects to rtvortex
 				FROM pg_tables WHERE schemaname = 'public' AND tableowner <> 'rtvortex'); \
 			EXECUTE (SELECT coalesce(string_agg('ALTER SEQUENCE public.' || quote_ident(sequencename) || ' OWNER TO rtvortex;', ' '), '') \
 				FROM pg_sequences WHERE schemaname = 'public' AND sequenceowner <> 'rtvortex'); \
+			EXECUTE (SELECT coalesce(string_agg('ALTER FUNCTION public.' || quote_ident(p.proname) || '(' || pg_get_function_identity_arguments(p.oid) || ') OWNER TO rtvortex;', ' '), '') \
+				FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid \
+				WHERE n.nspname = 'public' AND p.proowner <> 'rtvortex'::regrole); \
 		END \$$\$$; \
 		ALTER SCHEMA public OWNER TO rtvortex; \
 		ALTER DATABASE rtvortex OWNER TO rtvortex;"
