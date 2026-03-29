@@ -205,7 +205,7 @@ async def search_web(
     max_results: int = 5,
 ) -> str:
     """Search the web for documentation, API references, or error solutions."""
-    return await web_search_and_fetch(query=query, max_results=max_results)
+    return await web_search_and_fetch.fn(query=query, max_results=max_results)
 
 
 @tool()
