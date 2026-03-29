@@ -365,8 +365,8 @@ async def _run_full_pipeline(
         else:  # medium
             roles = ["senior_dev", "qa", "security"]
 
-        # Declare team size to Go.
-        await go_client.declare_team_size(task.id, len(roles) + 1)  # +1 for orchestrator
+        # Declare team size to Go (pass team_id so Go can auto-assign).
+        await go_client.declare_team_size(task.id, len(roles) + 1, team_id=team_id)
 
         # ── Step 4: Run implementation agents ───────────────────────────
         implementation_agents: list[Agent] = []

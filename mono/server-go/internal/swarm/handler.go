@@ -354,6 +354,7 @@ func (h *Handler) DeclareTeamSize(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		AdditionalAgents int      `json:"additional_agents"`
 		Roles            []string `json:"roles,omitempty"`
+		TeamID           string   `json:"team_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -367,19 +368,26 @@ func (h *Handler) DeclareTeamSize(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if task.AssignedTeamID == nil {
-		// Team not yet assigned — the agent that's calling knows its team.
-		// Auto-assign the task to the calling agent's team to resolve the
-		// race between the Python consumer (which creates teams on demand)
-		// and the Go assign loop.
-		claims, ok := swarmauth.AgentClaimsFromContext(r.Context())
-		if !ok || claims.TeamID == "" || claims.TeamID == uuid.Nil.String() {
+		// Task has no team yet. Resolve from (in priority order):
+		//   1. Explicit team_id in request body (Python consumer knows it)
+		//   2. team_id from the caller's JWT claims
+		var teamID uuid.UUID
+		if body.TeamID != "" {
+			teamID, err = uuid.Parse(body.TeamID)
+			if err != nil {
+				http.Error(w, `{"error":"invalid team_id in body"}`, http.StatusBadRequest)
+				return
+			}
+		}
+		if teamID == uuid.Nil {
+			claims, ok := swarmauth.AgentClaimsFromContext(r.Context())
+			if ok && claims.TeamID != "" {
+				teamID, _ = uuid.Parse(claims.TeamID)
+			}
+		}
+		if teamID == uuid.Nil {
 			w.Header().Set("Retry-After", "3")
 			http.Error(w, `{"error":"task has no assigned team yet, retry later"}`, http.StatusConflict)
-			return
-		}
-		teamID, err := uuid.Parse(claims.TeamID)
-		if err != nil {
-			http.Error(w, `{"error":"invalid team id in token"}`, http.StatusBadRequest)
 			return
 		}
 		if err := h.TaskMgr.AssignTaskToTeam(r.Context(), taskID, teamID); err != nil {

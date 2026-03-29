@@ -220,4 +220,4 @@ async def complete_task(task_id: str) -> str:
 
 # ── Collect all tools ────────────────────────────────────────────────────────
 
-TASK_TOOLS = [report_plan, report_diff, declare_team_size, complete_task]
+TASK_TOOLS = [report_plan, report_diff, complete_task]

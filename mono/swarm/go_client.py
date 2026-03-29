@@ -179,17 +179,20 @@ class GoClient:
             except Exception:
                 pass  # Best-effort — Go heartbeat timeout is the backstop.
 
-    async def declare_team_size(self, task_id: str, size: int) -> None:
+    async def declare_team_size(self, task_id: str, size: int, team_id: str = "") -> None:
         """Request a specific team size for *task_id*.
 
-        The orchestrator calls this after analysing complexity.  Go uses the
-        value to spin up or drain agents in the ``assignLoop``.
+        The consumer calls this after the orchestrator plan is approved.
+        Go uses the value to spin up or drain agents in the ``assignLoop``.
         """
+        payload: dict = {"additional_agents": size}
+        if team_id:
+            payload["team_id"] = team_id
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{self.base_url}/internal/swarm/tasks/{task_id}/declare-size",
                 headers=self._headers(),
-                json={"additional_agents": size},
+                json=payload,
             )
             resp.raise_for_status()
 

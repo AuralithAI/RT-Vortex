@@ -70,13 +70,7 @@ Based on your search results, determine:
 - What the estimated complexity is (small: 1-3 files, medium: 4-15 files, large: 16+ files)
 - What steps are needed to implement the changes
 
-### Step 3: Declare Team Size
-Use `declare_team_size` to request the right number of agents:
-- Small task: 2 agents (you + SeniorDev)
-- Medium task: 4 agents (you + SeniorDev + QA + Architect)
-- Large task: 6+ agents (full team)
-
-### Step 4: Submit Plan
+### Step 3: Submit Plan
 Use `report_plan` to submit a structured plan with:
 - A clear summary of what will be done
 - Step-by-step implementation plan (JSON array of step objects)
@@ -87,6 +81,9 @@ Use `report_plan` to submit a structured plan with:
   "qa", "security", "architect", "devops". Pick only the roles actually
   required — don't request a security agent for a typo fix.
   Example: ["senior_dev", "qa"] for a medium bug-fix that needs testing.
+  Small task: ["senior_dev"]
+  Medium task: ["senior_dev", "qa", "security"]
+  Large task: ["architect", "senior_dev", "junior_dev", "qa", "security", "docs"]
 
 ## Important Rules
 - Always search the codebase BEFORE writing a plan
