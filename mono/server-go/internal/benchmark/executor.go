@@ -240,12 +240,12 @@ func (e *PipelineExecutor) executeSyntheticReview(_ context.Context, task *Task)
 // heuristicRule describes a single pattern-based check run against inline
 // file content.  Each rule matches on a regex and produces a comment.
 type heuristicRule struct {
-	ID          string
-	Pattern     *regexp.Regexp
-	Severity    string // "critical" | "warning" | "info"
-	Category    string // "security" | "performance" | "error-handling" | "style"
-	Message     string
-	Languages   []string // empty = all languages
+	ID        string
+	Pattern   *regexp.Regexp
+	Severity  string // "critical" | "warning" | "info"
+	Category  string // "security" | "performance" | "error-handling" | "style"
+	Message   string
+	Languages []string // empty = all languages
 }
 
 // builtinRules is the set of heuristic checks applied during synthetic
