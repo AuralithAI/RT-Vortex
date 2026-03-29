@@ -65,7 +65,8 @@ struct EmbeddingConfig {
     
     // Parallel embedding workers (ONNX only)
     // Each worker owns its own ONNX session and runs on separate threads.
-    // 0 = auto-detect based on CPU cores (cores / 4, clamped to [1, 8]).
+    // 0 = auto-detect based on CPU cores (cores / 2, clamped to [1, 16]).
+    // Configurable in rtserverprops.xml: <engine onnx-workers="N"/>
     int num_parallel_workers = 0;
     
     // Batching

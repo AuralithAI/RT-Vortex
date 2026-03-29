@@ -84,6 +84,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Export compile commands for IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# =============================================================================
+# ccache — transparent compiler caching (3–10× faster rebuilds)
+# =============================================================================
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    message(STATUS "ccache enabled: ${CCACHE_PROGRAM}")
+else()
+    message(STATUS "ccache not found — builds will not be cached. Install with: sudo apt-get install ccache")
+endif()
+
 # Options
 option(AIPR_BUILD_TESTS "Build tests" ON)
 option(AIPR_BUILD_TOOLS "Build utility tools" ON)
@@ -715,6 +727,7 @@ set(TMS_SOURCES
 # Source files - Cache
 set(CACHE_SOURCES
     src/cache/merkle_cache.cpp
+    src/cache/redis_embed_cache.cpp
 )
 
 # Source files - Knowledge Graph

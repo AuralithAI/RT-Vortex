@@ -34,6 +34,12 @@ tags:
     description: Code review management and WebSocket streaming
   - name: LLM
     description: LLM provider configuration and testing
+  - name: Swarm
+    description: Agentic swarm task management, agent activity, diffs, teams, and real-time events
+  - name: SwarmMemory
+    description: Agent memory hierarchy (MTM, STM, LTM)
+  - name: SwarmHITL
+    description: Human-in-the-loop approval gates
   - name: Admin
     description: Administrative endpoints (admin role required)
   - name: Webhooks
@@ -419,6 +425,252 @@ components:
           type: object
           additionalProperties:
             type: boolean
+
+    # ── Swarm schemas  ──────────────────────────────────
+
+    SwarmTask:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        repo_id:
+          type: string
+          format: uuid
+        pr_number:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+          enum: [queued, assigned, planning, reviewing, completed, failed, cancelled]
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 10
+        created_by:
+          type: string
+          format: uuid
+        assigned_team_id:
+          type: string
+          format: uuid
+        plan:
+          $ref: "#/components/schemas/SwarmPlan"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    SwarmPlan:
+      type: object
+      properties:
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              agent_role:
+                type: string
+              action:
+                type: string
+              files:
+                type: array
+                items:
+                  type: string
+              status:
+                type: string
+                enum: [pending, in_progress, completed, skipped]
+
+    SwarmAgent:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        role:
+          type: string
+          enum: [orchestrator, senior_dev, junior_dev, architect, qa, security, docs, ops]
+        status:
+          type: string
+          enum: [idle, working, completed, failed]
+        elo_rating:
+          type: number
+          format: double
+        last_heartbeat:
+          type: string
+          format: date-time
+        current_task_id:
+          type: string
+          format: uuid
+        capabilities:
+          type: array
+          items:
+            type: string
+
+    SwarmTeam:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        agents:
+          type: array
+          items:
+            $ref: "#/components/schemas/SwarmAgent"
+        size:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    SwarmDiff:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        file_path:
+          type: string
+        diff_type:
+          type: string
+          enum: [add, modify, delete, rename]
+        content:
+          type: string
+          description: Unified diff content
+        agent_role:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        created_at:
+          type: string
+          format: date-time
+
+    SwarmDiffComment:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        diff_id:
+          type: string
+          format: uuid
+        line_number:
+          type: integer
+        body:
+          type: string
+        author:
+          type: string
+        author_type:
+          type: string
+          enum: [user, agent]
+        created_at:
+          type: string
+          format: date-time
+
+    SwarmOverview:
+      type: object
+      properties:
+        active_tasks:
+          type: integer
+        queued_tasks:
+          type: integer
+        active_agents:
+          type: integer
+        active_teams:
+          type: integer
+        tasks_completed_24h:
+          type: integer
+        avg_completion_seconds:
+          type: number
+
+    SwarmWsEvent:
+      type: object
+      description: WebSocket event streamed to clients for real-time progress
+      properties:
+        type:
+          type: string
+          enum: [swarm_task, swarm_agent, swarm_diff, swarm_plan]
+        task_id:
+          type: string
+          format: uuid
+        agent_id:
+          type: string
+          format: uuid
+        event:
+          type: string
+          description: |
+            Event name: reviewing_file, found_issues, generating_diff,
+            completed, thinking, tool_call, waiting_human, memory_recall,
+            self_critique, etc.
+        data:
+          type: object
+          additionalProperties: true
+          description: Event-specific payload
+        timestamp:
+          type: string
+          format: date-time
+
+    HITLRequest:
+      type: object
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        question:
+          type: string
+        context:
+          type: string
+        options:
+          type: array
+          items:
+            type: string
+        timeout_seconds:
+          type: integer
+          default: 300
+
+    HITLResponse:
+      type: object
+      properties:
+        task_id:
+          type: string
+          format: uuid
+        answer:
+          type: string
+        approved:
+          type: boolean
+
+    CreateSwarmTask:
+      type: object
+      required: [repo_id]
+      properties:
+        repo_id:
+          type: string
+          format: uuid
+        pr_number:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        priority:
+          type: integer
+          minimum: 0
+          maximum: 10
+          default: 5
 
   parameters:
     orgID:
@@ -1539,3 +1791,524 @@ paths:
                 $ref: "#/components/schemas/Error"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+
+  # ── Swarm (user-facing) ────────────────────────────────────────────────
+
+  /api/v1/swarm/tasks:
+    post:
+      tags: [Swarm]
+      summary: Create a swarm task
+      operationId: createSwarmTask
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSwarmTask"
+      responses:
+        "201":
+          description: Task created and queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SwarmTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    get:
+      tags: [Swarm]
+      summary: List swarm tasks for the current user
+      operationId: listSwarmTasks
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [queued, assigned, planning, reviewing, completed, failed, cancelled]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Paginated task list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SwarmTask"
+                  total:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/tasks/history:
+    get:
+      tags: [Swarm]
+      summary: Task history with completion stats
+      operationId: swarmTaskHistory
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 30
+      responses:
+        "200":
+          description: Historical task data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SwarmTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/tasks/{id}:
+    get:
+      tags: [Swarm]
+      summary: Get a single swarm task
+      operationId: getSwarmTask
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Task details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SwarmTask"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Swarm]
+      summary: Delete a swarm task
+      operationId: deleteSwarmTask
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Task deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/swarm/tasks/{id}/plan-action:
+    post:
+      tags: [Swarm]
+      summary: Approve or reject the swarm's proposed plan
+      operationId: swarmPlanAction
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [approve, reject, modify]
+                modifications:
+                  type: string
+                  description: Free-text modifications to the plan
+      responses:
+        "200":
+          description: Action applied
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/swarm/tasks/{id}/diffs:
+    get:
+      tags: [Swarm]
+      summary: List diffs produced by the swarm for a task
+      operationId: listSwarmDiffs
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Diff list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SwarmDiff"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/tasks/{id}/diffs/{diffId}/content:
+    get:
+      tags: [Swarm]
+      summary: Get the raw diff content
+      operationId: getSwarmDiffContent
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: diffId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Raw unified diff
+          content:
+            text/plain:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/swarm/tasks/{id}/diffs/{diffId}/comments:
+    post:
+      tags: [Swarm]
+      summary: Add a comment on a diff
+      operationId: addSwarmDiffComment
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: diffId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                line_number:
+                  type: integer
+                body:
+                  type: string
+      responses:
+        "201":
+          description: Comment added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SwarmDiffComment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/tasks/{id}/diff-action:
+    post:
+      tags: [Swarm]
+      summary: Approve or reject the produced diffs
+      operationId: swarmDiffAction
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [approve, reject, request_changes]
+                comment:
+                  type: string
+      responses:
+        "200":
+          description: Action applied
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/tasks/{id}/rate:
+    post:
+      tags: [Swarm]
+      summary: Rate a completed task (drives ELO auto-tier)
+      operationId: rateSwarmTask
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating:
+                  type: integer
+                  minimum: 1
+                  maximum: 5
+                feedback:
+                  type: string
+      responses:
+        "200":
+          description: Rating recorded
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/tasks/{id}/retry:
+    post:
+      tags: [Swarm]
+      summary: Retry a failed task
+      operationId: retrySwarmTask
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Task re-queued
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/swarm/tasks/{id}/cancel:
+    post:
+      tags: [Swarm]
+      summary: Cancel a running task
+      operationId: cancelSwarmTask
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Task cancelled
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/tasks/{id}/agents:
+    get:
+      tags: [Swarm]
+      summary: List agents assigned to a task
+      operationId: getSwarmTaskAgents
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Agent list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SwarmAgent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/agents:
+    get:
+      tags: [Swarm]
+      summary: List all registered agents
+      operationId: listSwarmAgents
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Agent list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SwarmAgent"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/teams:
+    get:
+      tags: [Swarm]
+      summary: List active teams
+      operationId: listSwarmTeams
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Team list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SwarmTeam"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/overview:
+    get:
+      tags: [Swarm]
+      summary: Swarm overview dashboard stats
+      operationId: swarmOverview
+      security:
+        - BearerAuth: []
+      responses:
+        "200":
+          description: Dashboard overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SwarmOverview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /api/v1/swarm/hitl/respond:
+    post:
+      tags: [SwarmHITL]
+      summary: Respond to a human-in-the-loop prompt
+      operationId: respondHITL
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HITLResponse"
+      responses:
+        "200":
+          description: Response recorded and forwarded to the waiting agent
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/swarm/tasks/{id}/ws:
+    get:
+      tags: [Swarm]
+      summary: WebSocket stream for a specific task
+      operationId: swarmTaskWS
+      description: |
+        Opens a WebSocket connection that streams `SwarmWsEvent` objects for the
+        specified task. Events include agent activity, diff submissions, plan
+        updates, and task status changes. Used by the real-time agent progress
+        feed in the UI.
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "101":
+          description: WebSocket upgrade successful
+
+  /api/v1/swarm/ws:
+    get:
+      tags: [Swarm]
+      summary: Global swarm WebSocket stream
+      operationId: swarmGlobalWS
+      description: |
+        Opens a WebSocket connection that streams all swarm events across all
+        tasks. Useful for the swarm overview dashboard.
+      security:
+        - BearerAuth: []
+      responses:
+        "101":
+          description: WebSocket upgrade successful

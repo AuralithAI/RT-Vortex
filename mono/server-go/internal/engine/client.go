@@ -173,6 +173,11 @@ type StorageConfig struct {
 	VerifySSL   bool
 	TimeoutMs   int32
 	MaxRetries  int32
+
+	// ServerCallbackURL is the Go API server's own base URL (e.g. "http://localhost:8080").
+	// The C++ engine uses this to call back into the Go server for Redis embed-cache
+	// proxy, webhook delivery, etc. Computed at startup from cfg.Server.
+	ServerCallbackURL string
 }
 
 // PushStorageConfig sends storage configuration to the C++ engine.
@@ -196,17 +201,18 @@ func (c *Client) PushStorageConfig(ctx context.Context, cfg StorageConfig) error
 	}
 
 	resp, err := c.stub().ConfigureStorage(ctx, &pb.StorageConfigRequest{
-		Provider:    provider,
-		BasePath:    cfg.BasePath,
-		Bucket:      cfg.Bucket,
-		Region:      cfg.Region,
-		EndpointUrl: cfg.EndpointURL,
-		AccessKey:   cfg.AccessKey,
-		SecretKey:   cfg.SecretKey,
-		UseSsl:      cfg.UseSSL,
-		VerifySsl:   cfg.VerifySSL,
-		TimeoutMs:   cfg.TimeoutMs,
-		MaxRetries:  cfg.MaxRetries,
+		Provider:          provider,
+		BasePath:          cfg.BasePath,
+		Bucket:            cfg.Bucket,
+		Region:            cfg.Region,
+		EndpointUrl:       cfg.EndpointURL,
+		AccessKey:         cfg.AccessKey,
+		SecretKey:         cfg.SecretKey,
+		UseSsl:            cfg.UseSSL,
+		VerifySsl:         cfg.VerifySSL,
+		TimeoutMs:         cfg.TimeoutMs,
+		MaxRetries:        cfg.MaxRetries,
+		ServerCallbackUrl: cfg.ServerCallbackURL,
 	})
 	if err != nil {
 		return fmt.Errorf("push storage config: %w", err)
@@ -214,7 +220,10 @@ func (c *Client) PushStorageConfig(ctx context.Context, cfg StorageConfig) error
 	if !resp.Success {
 		return fmt.Errorf("engine rejected storage config: %s", resp.Message)
 	}
-	slog.Info("storage config pushed to engine", "provider", resp.ActiveProvider)
+	slog.Info("storage config pushed to engine",
+		"provider", resp.ActiveProvider,
+		"server_callback_url", cfg.ServerCallbackURL,
+	)
 	return nil
 }
 

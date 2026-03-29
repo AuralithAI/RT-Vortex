@@ -14,6 +14,7 @@
 #include <vector>
 #include <memory>
 #include <functional>
+#include <map>
 
 // Platform-specific export macros
 #if defined(_WIN32) || defined(_WIN64)
@@ -369,6 +370,28 @@ public:
     virtual void setCloneToken(const std::string& token) {
         // Default no-op — overridden by EngineImpl.
         (void)token;
+    }
+
+    /**
+     * Embed and store an asset chunk (document, PDF, URL content).
+     *
+     * @param repo_id    Repository to associate the chunk with
+     * @param content    Pre-chunked text content (with metadata prefix)
+     * @param source     Source URL or identifier
+     * @param asset_type "document", "pdf", "url"
+     * @param metadata   Additional key-value metadata tags
+     * @return true if successfully embedded and stored
+     */
+    virtual bool embedAndStoreAssetChunk(
+        const std::string& repo_id,
+        const std::string& content,
+        const std::string& source,
+        const std::string& asset_type,
+        const std::map<std::string, std::string>& metadata)
+    {
+        (void)repo_id; (void)content; (void)source;
+        (void)asset_type; (void)metadata;
+        return false;
     }
 
 protected:

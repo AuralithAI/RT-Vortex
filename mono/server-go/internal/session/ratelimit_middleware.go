@@ -14,6 +14,9 @@ import (
 // RateLimitMiddleware returns a chi middleware that enforces rate limits using
 // the named limiter configuration. The key is derived from the authenticated
 // user ID (if present) or the client's IP address.
+//
+// When a user belongs to an organization, a second org-level limiter is also
+// checked (limiterName + ":org"). Both limits must pass.
 func RateLimitMiddleware(rl *RateLimiter, limiterName string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,9 +33,26 @@ func RateLimitMiddleware(rl *RateLimiter, limiterName string) func(http.Handler)
 
 			result, err := rl.Allow(r.Context(), limiterName, key)
 			if err != nil {
-				// Fail open — allow on errors (already logged inside Allow).
 				next.ServeHTTP(w, r)
 				return
+			}
+
+			// Per-org limit check (if user has an org in context).
+			if claims, ok := auth.ClaimsFromContext(r.Context()); ok && claims.OrgID.String() != "00000000-0000-0000-0000-000000000000" {
+				orgLimiter := limiterName + ":org"
+				orgResult, orgErr := rl.Allow(r.Context(), orgLimiter, claims.OrgID.String())
+				if orgErr == nil && !orgResult.Allowed {
+					metrics.RateLimitRejectionsTotal.WithLabelValues(orgLimiter).Inc()
+					retryAfter := time.Until(orgResult.ResetAt).Seconds()
+					if retryAfter < 1 {
+						retryAfter = 1
+					}
+					w.Header().Set("Retry-After", strconv.Itoa(int(retryAfter)))
+					w.Header().Set("X-RateLimit-Scope", "organization")
+					w.WriteHeader(http.StatusTooManyRequests)
+					fmt.Fprintf(w, `{"error":"organization rate limit exceeded","retry_after_seconds":%d}`, int(retryAfter))
+					return
+				}
 			}
 
 			// Set standard rate-limit response headers.

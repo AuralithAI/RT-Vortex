@@ -30,6 +30,13 @@ from rtvortex_sdk.models import (
     Review,
     ReviewComment,
     ReviewListResponse,
+    SwarmAgent,
+    SwarmDiff,
+    SwarmDiffComment,
+    SwarmOverview,
+    SwarmTask,
+    SwarmTaskListResponse,
+    SwarmTeam,
     User,
     UserUpdateRequest,
 )
@@ -298,6 +305,135 @@ class RTVortexClient:
         resp = self._request("GET", "/admin/stats")
         return AdminStats.model_validate(resp.json())
 
+    # ── Swarm ──
+
+    def create_swarm_task(
+        self,
+        *,
+        repo_id: str,
+        title: str = "",
+        description: str = "",
+        pr_number: int = 0,
+        priority: int = 5,
+    ) -> SwarmTask:
+        """Create a new swarm review task."""
+        payload: dict[str, Any] = {"repo_id": repo_id}
+        if title:
+            payload["title"] = title
+        if description:
+            payload["description"] = description
+        if pr_number:
+            payload["pr_number"] = pr_number
+        if priority != 5:
+            payload["priority"] = priority
+        resp = self._request("POST", "/swarm/tasks", json=payload)
+        return SwarmTask.model_validate(resp.json())
+
+    def list_swarm_tasks(
+        self,
+        *,
+        status: str = "",
+        pagination: PaginationOptions | None = None,
+    ) -> SwarmTaskListResponse:
+        """List swarm tasks with optional status filter."""
+        params = _pagination_params(pagination)
+        if status:
+            params["status"] = status  # type: ignore[assignment]
+        resp = self._request("GET", "/swarm/tasks", params=params)
+        return SwarmTaskListResponse.model_validate(resp.json())
+
+    def get_swarm_task(self, task_id: str) -> SwarmTask:
+        """Get a single swarm task."""
+        resp = self._request("GET", f"/swarm/tasks/{task_id}")
+        return SwarmTask.model_validate(resp.json())
+
+    def delete_swarm_task(self, task_id: str) -> None:
+        """Delete a swarm task."""
+        self._request("DELETE", f"/swarm/tasks/{task_id}")
+
+    def cancel_swarm_task(self, task_id: str) -> None:
+        """Cancel a running swarm task."""
+        self._request("POST", f"/swarm/tasks/{task_id}/cancel")
+
+    def retry_swarm_task(self, task_id: str) -> None:
+        """Retry a failed swarm task."""
+        self._request("POST", f"/swarm/tasks/{task_id}/retry")
+
+    def rate_swarm_task(
+        self, task_id: str, *, rating: int, feedback: str = ""
+    ) -> None:
+        """Rate a completed task (1-5). Drives ELO auto-tier scoring."""
+        payload: dict[str, Any] = {"rating": rating}
+        if feedback:
+            payload["feedback"] = feedback
+        self._request("POST", f"/swarm/tasks/{task_id}/rate", json=payload)
+
+    def swarm_plan_action(
+        self, task_id: str, *, action: str, modifications: str = ""
+    ) -> None:
+        """Approve, reject, or modify the swarm's proposed plan."""
+        payload: dict[str, Any] = {"action": action}
+        if modifications:
+            payload["modifications"] = modifications
+        self._request("POST", f"/swarm/tasks/{task_id}/plan-action", json=payload)
+
+    def swarm_diff_action(
+        self, task_id: str, *, action: str, comment: str = ""
+    ) -> None:
+        """Approve or reject produced diffs."""
+        payload: dict[str, Any] = {"action": action}
+        if comment:
+            payload["comment"] = comment
+        self._request("POST", f"/swarm/tasks/{task_id}/diff-action", json=payload)
+
+    def list_swarm_diffs(self, task_id: str) -> list[SwarmDiff]:
+        """List diffs produced by the swarm for a task."""
+        resp = self._request("GET", f"/swarm/tasks/{task_id}/diffs")
+        data = resp.json()
+        items = data if isinstance(data, list) else data.get("diffs", [])
+        return [SwarmDiff.model_validate(d) for d in items]
+
+    def add_swarm_diff_comment(
+        self, task_id: str, diff_id: str, *, body: str, line_number: int = 0
+    ) -> SwarmDiffComment:
+        """Add a comment on a swarm diff."""
+        payload: dict[str, Any] = {"body": body}
+        if line_number:
+            payload["line_number"] = line_number
+        resp = self._request(
+            "POST", f"/swarm/tasks/{task_id}/diffs/{diff_id}/comments", json=payload
+        )
+        return SwarmDiffComment.model_validate(resp.json())
+
+    def list_swarm_agents(self) -> list[SwarmAgent]:
+        """List all registered swarm agents."""
+        resp = self._request("GET", "/swarm/agents")
+        data = resp.json()
+        items = data if isinstance(data, list) else data.get("agents", [])
+        return [SwarmAgent.model_validate(a) for a in items]
+
+    def list_swarm_teams(self) -> list[SwarmTeam]:
+        """List active swarm teams."""
+        resp = self._request("GET", "/swarm/teams")
+        data = resp.json()
+        items = data if isinstance(data, list) else data.get("teams", [])
+        return [SwarmTeam.model_validate(t) for t in items]
+
+    def swarm_overview(self) -> SwarmOverview:
+        """Get swarm dashboard overview stats."""
+        resp = self._request("GET", "/swarm/overview")
+        return SwarmOverview.model_validate(resp.json())
+
+    def hitl_respond(
+        self, *, task_id: str, answer: str, approved: bool
+    ) -> None:
+        """Respond to a human-in-the-loop prompt."""
+        self._request(
+            "POST",
+            "/swarm/hitl/respond",
+            json={"task_id": task_id, "answer": answer, "approved": approved},
+        )
+
     def health(self) -> HealthStatus:
         resp = self._request("GET", "/health")
         return HealthStatus.model_validate(resp.json())
@@ -541,6 +677,128 @@ class AsyncRTVortexClient:
     async def get_stats(self) -> AdminStats:
         resp = await self._request("GET", "/admin/stats")
         return AdminStats.model_validate(resp.json())
+
+    # ── Swarm ──
+
+    async def create_swarm_task(
+        self,
+        *,
+        repo_id: str,
+        title: str = "",
+        description: str = "",
+        pr_number: int = 0,
+        priority: int = 5,
+    ) -> SwarmTask:
+        payload: dict[str, Any] = {"repo_id": repo_id}
+        if title:
+            payload["title"] = title
+        if description:
+            payload["description"] = description
+        if pr_number:
+            payload["pr_number"] = pr_number
+        if priority != 5:
+            payload["priority"] = priority
+        resp = await self._request("POST", "/swarm/tasks", json=payload)
+        return SwarmTask.model_validate(resp.json())
+
+    async def list_swarm_tasks(
+        self,
+        *,
+        status: str = "",
+        pagination: PaginationOptions | None = None,
+    ) -> SwarmTaskListResponse:
+        params = _pagination_params(pagination)
+        if status:
+            params["status"] = status  # type: ignore[assignment]
+        resp = await self._request("GET", "/swarm/tasks", params=params)
+        return SwarmTaskListResponse.model_validate(resp.json())
+
+    async def get_swarm_task(self, task_id: str) -> SwarmTask:
+        resp = await self._request("GET", f"/swarm/tasks/{task_id}")
+        return SwarmTask.model_validate(resp.json())
+
+    async def delete_swarm_task(self, task_id: str) -> None:
+        await self._request("DELETE", f"/swarm/tasks/{task_id}")
+
+    async def cancel_swarm_task(self, task_id: str) -> None:
+        await self._request("POST", f"/swarm/tasks/{task_id}/cancel")
+
+    async def retry_swarm_task(self, task_id: str) -> None:
+        await self._request("POST", f"/swarm/tasks/{task_id}/retry")
+
+    async def rate_swarm_task(
+        self, task_id: str, *, rating: int, feedback: str = ""
+    ) -> None:
+        payload: dict[str, Any] = {"rating": rating}
+        if feedback:
+            payload["feedback"] = feedback
+        await self._request(
+            "POST", f"/swarm/tasks/{task_id}/rate", json=payload
+        )
+
+    async def swarm_plan_action(
+        self, task_id: str, *, action: str, modifications: str = ""
+    ) -> None:
+        payload: dict[str, Any] = {"action": action}
+        if modifications:
+            payload["modifications"] = modifications
+        await self._request(
+            "POST", f"/swarm/tasks/{task_id}/plan-action", json=payload
+        )
+
+    async def swarm_diff_action(
+        self, task_id: str, *, action: str, comment: str = ""
+    ) -> None:
+        payload: dict[str, Any] = {"action": action}
+        if comment:
+            payload["comment"] = comment
+        await self._request(
+            "POST", f"/swarm/tasks/{task_id}/diff-action", json=payload
+        )
+
+    async def list_swarm_diffs(self, task_id: str) -> list[SwarmDiff]:
+        resp = await self._request("GET", f"/swarm/tasks/{task_id}/diffs")
+        data = resp.json()
+        items = data if isinstance(data, list) else data.get("diffs", [])
+        return [SwarmDiff.model_validate(d) for d in items]
+
+    async def add_swarm_diff_comment(
+        self, task_id: str, diff_id: str, *, body: str, line_number: int = 0
+    ) -> SwarmDiffComment:
+        payload: dict[str, Any] = {"body": body}
+        if line_number:
+            payload["line_number"] = line_number
+        resp = await self._request(
+            "POST",
+            f"/swarm/tasks/{task_id}/diffs/{diff_id}/comments",
+            json=payload,
+        )
+        return SwarmDiffComment.model_validate(resp.json())
+
+    async def list_swarm_agents(self) -> list[SwarmAgent]:
+        resp = await self._request("GET", "/swarm/agents")
+        data = resp.json()
+        items = data if isinstance(data, list) else data.get("agents", [])
+        return [SwarmAgent.model_validate(a) for a in items]
+
+    async def list_swarm_teams(self) -> list[SwarmTeam]:
+        resp = await self._request("GET", "/swarm/teams")
+        data = resp.json()
+        items = data if isinstance(data, list) else data.get("teams", [])
+        return [SwarmTeam.model_validate(t) for t in items]
+
+    async def swarm_overview(self) -> SwarmOverview:
+        resp = await self._request("GET", "/swarm/overview")
+        return SwarmOverview.model_validate(resp.json())
+
+    async def hitl_respond(
+        self, *, task_id: str, answer: str, approved: bool
+    ) -> None:
+        await self._request(
+            "POST",
+            "/swarm/hitl/respond",
+            json={"task_id": task_id, "answer": answer, "approved": approved},
+        )
 
     async def health(self) -> HealthStatus:
         resp = await self._request("GET", "/health")

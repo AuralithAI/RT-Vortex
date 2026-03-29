@@ -203,6 +203,29 @@ func main() {
 	// Engine gRPC client
 	engineClient := engine.NewClient(enginePool)
 
+	// Push storage configuration (and our callback URL) to the C++ engine.
+	// The engine starts first; the Go server tells it where to call back.
+	{
+		cbScheme := "http"
+		if cfg.Server.TLS.Enabled {
+			cbScheme = "https"
+		}
+		cbHost := cfg.Server.Host
+		if cbHost == "" || cbHost == "0.0.0.0" || cbHost == "::" {
+			cbHost = "localhost"
+		}
+		callbackURL := fmt.Sprintf("%s://%s:%d", cbScheme, cbHost, cfg.Server.Port)
+
+		if err := engineClient.PushStorageConfig(ctx, engine.StorageConfig{
+			Provider:          cfg.Storage.Type,
+			BasePath:          cfg.Storage.BasePath,
+			ServerCallbackURL: callbackURL,
+		}); err != nil {
+			slog.Warn("failed to push storage config to engine (will retry on next request)",
+				"error", err)
+		}
+	}
+
 	// JWT Manager
 	jwtSecret := cfg.Auth.JWTSecret
 	if jwtSecret == "" {
@@ -484,6 +507,10 @@ func main() {
 		MaxRequests: 100,
 		Window:      1 * time.Minute,
 	})
+	rateLimiter.Configure("api:org", session.RateLimitConfig{
+		MaxRequests: 500,
+		Window:      1 * time.Minute,
+	})
 	rateLimiter.Configure("auth", session.RateLimitConfig{
 		MaxRequests: 20,
 		Window:      1 * time.Minute,
@@ -493,7 +520,8 @@ func main() {
 		Window:      1 * time.Minute,
 	})
 	slog.Info("Rate limiter configured",
-		"api", "100/min",
+		"api_user", "100/min",
+		"api_org", "500/min",
 		"auth", "20/min",
 		"webhook", "60/min",
 	)

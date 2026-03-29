@@ -929,8 +929,8 @@ EmbeddingEngine::EmbeddingEngine(const EmbeddingConfig& config)
         if (config.num_parallel_workers > 0) {
             num_workers_ = config.num_parallel_workers;
         } else {
-            // Auto: cores / 4, clamped to [1, 8]
-            num_workers_ = std::max(1, std::min(hw_cores / 4, 8));
+            // Auto: cores / 2, clamped to [1, 16]
+            num_workers_ = std::max(1, std::min(hw_cores / 2, 16));
         }
 
         // Compute intra-op threads per worker so total ≈ hw_cores

@@ -2660,13 +2660,17 @@ type StorageConfigRequest struct {
 	OciKeyFile     string `protobuf:"bytes,19,opt,name=oci_key_file,json=ociKeyFile,proto3" json:"oci_key_file,omitempty"`
 	OciNamespace   string `protobuf:"bytes,20,opt,name=oci_namespace,json=ociNamespace,proto3" json:"oci_namespace,omitempty"`
 	// Connection settings
-	TimeoutMs     int32  `protobuf:"varint,21,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
-	MaxRetries    int32  `protobuf:"varint,22,opt,name=max_retries,json=maxRetries,proto3" json:"max_retries,omitempty"`
-	UseSsl        bool   `protobuf:"varint,23,opt,name=use_ssl,json=useSsl,proto3" json:"use_ssl,omitempty"`
-	VerifySsl     bool   `protobuf:"varint,24,opt,name=verify_ssl,json=verifySsl,proto3" json:"verify_ssl,omitempty"`
-	CaBundlePath  string `protobuf:"bytes,25,opt,name=ca_bundle_path,json=caBundlePath,proto3" json:"ca_bundle_path,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	TimeoutMs    int32  `protobuf:"varint,21,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
+	MaxRetries   int32  `protobuf:"varint,22,opt,name=max_retries,json=maxRetries,proto3" json:"max_retries,omitempty"`
+	UseSsl       bool   `protobuf:"varint,23,opt,name=use_ssl,json=useSsl,proto3" json:"use_ssl,omitempty"`
+	VerifySsl    bool   `protobuf:"varint,24,opt,name=verify_ssl,json=verifySsl,proto3" json:"verify_ssl,omitempty"`
+	CaBundlePath string `protobuf:"bytes,25,opt,name=ca_bundle_path,json=caBundlePath,proto3" json:"ca_bundle_path,omitempty"`
+	// API server callback URL — the Go server passes its own base URL so the
+	// engine can call back (e.g. Redis embed-cache proxy, webhook delivery).
+	// Example: "http://localhost:8080" or "https://api.rtvortex.example.com"
+	ServerCallbackUrl string `protobuf:"bytes,26,opt,name=server_callback_url,json=serverCallbackUrl,proto3" json:"server_callback_url,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *StorageConfigRequest) Reset() {
@@ -2870,6 +2874,13 @@ func (x *StorageConfigRequest) GetVerifySsl() bool {
 func (x *StorageConfigRequest) GetCaBundlePath() string {
 	if x != nil {
 		return x.CaBundlePath
+	}
+	return ""
+}
+
+func (x *StorageConfigRequest) GetServerCallbackUrl() string {
+	if x != nil {
+		return x.ServerCallbackUrl
 	}
 	return ""
 }
@@ -4031,7 +4042,7 @@ const file_engine_proto_rawDesc = "" +
 	"\n" +
 	"size_bytes\x18\x02 \x01(\x04R\tsizeBytes\x12!\n" +
 	"\flast_updated\x18\x03 \x01(\tR\vlastUpdated\x12\x1b\n" +
-	"\tis_loaded\x18\x04 \x01(\bR\bisLoaded\"\xfe\x06\n" +
+	"\tis_loaded\x18\x04 \x01(\bR\bisLoaded\"\xae\a\n" +
 	"\x14StorageConfigRequest\x12;\n" +
 	"\bprovider\x18\x01 \x01(\x0e2\x1f.aipr.engine.v1.StorageProviderR\bprovider\x12\x1b\n" +
 	"\tbase_path\x18\x02 \x01(\tR\bbasePath\x12\x16\n" +
@@ -4066,7 +4077,8 @@ const file_engine_proto_rawDesc = "" +
 	"\ause_ssl\x18\x17 \x01(\bR\x06useSsl\x12\x1d\n" +
 	"\n" +
 	"verify_ssl\x18\x18 \x01(\bR\tverifySsl\x12$\n" +
-	"\x0eca_bundle_path\x18\x19 \x01(\tR\fcaBundlePath\"t\n" +
+	"\x0eca_bundle_path\x18\x19 \x01(\tR\fcaBundlePath\x12.\n" +
+	"\x13server_callback_url\x18\x1a \x01(\tR\x11serverCallbackUrl\"t\n" +
 	"\x15StorageConfigResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12'\n" +

@@ -98,7 +98,9 @@
     <engine host="${ENGINE_HOST:localhost}"
             port="${ENGINE_PORT:50051}"
             timeout-ms="${ENGINE_TIMEOUT_MS:30000}"
-            negotiation-type="${ENGINE_NEGOTIATION:TLS}">
+            negotiation-type="${ENGINE_NEGOTIATION:TLS}"
+            onnx-workers="${ENGINE_ONNX_WORKERS:0}"
+            embed-cache-ttl-min="${ENGINE_EMBED_CACHE_TTL_MIN:45}">
 
         <!--
             Client certificates the Go server presents to the C++ engine.

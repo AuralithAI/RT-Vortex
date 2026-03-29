@@ -422,6 +422,11 @@ message StorageConfigRequest {
     bool use_ssl = 23;
     bool verify_ssl = 24;
     string ca_bundle_path = 25;
+
+    // API server callback URL — the Go server passes its own base URL so the
+    // engine can call back (e.g. Redis embed-cache proxy, webhook delivery).
+    // Example: "http://localhost:8080" or "https://api.rtvortex.example.com"
+    string server_callback_url = 26;
 }
 
 message StorageConfigResponse {

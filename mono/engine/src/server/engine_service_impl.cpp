@@ -9,6 +9,7 @@
 #include "logging.h"
 #include "metrics.h"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -1143,6 +1144,19 @@ grpc::Status EngineServiceImpl::ConfigureStorage(
         {
             std::lock_guard<std::mutex> lock(storage_mutex_);
             storage_ = std::move(storage);
+
+            // Store the Go server callback URL so components like
+            // RedisEmbedCache can reach the API server.
+            if (!request->server_callback_url().empty()) {
+                server_callback_url_ = request->server_callback_url();
+                // Also publish as an env-var so any lazily-constructed
+                // component (e.g. RedisEmbedCache) picks it up without
+                // needing a pointer back to this service.
+                ::setenv("ENGINE_GO_SERVER_URL",
+                         server_callback_url_.c_str(), /*overwrite=*/1);
+                LOG_INFO("[ConfigureStorage] server_callback_url set to "
+                         + server_callback_url_);
+            }
         }
 
         // Map provider to human-readable name
@@ -1267,6 +1281,87 @@ grpc::Status EngineServiceImpl::StreamEngineMetrics(
 
     cleanup();
     return grpc::Status::OK;
+}
+
+//=============================================================================
+// Asset Ingestion (PDFs, URLs, Documents → Embeddings)
+//=============================================================================
+
+grpc::Status EngineServiceImpl::IngestAsset(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::IngestAssetRequest* request,
+    aipr::engine::v1::IngestAssetResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    const std::string& repo_id = request->repo_id();
+    const std::string& content = request->content();
+    const std::string& asset_type = request->asset_type();
+
+    if (repo_id.empty() || content.empty()) {
+        response->set_status("error: repo_id and content are required");
+        response->set_chunks_created(0);
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "repo_id and content are required");
+    }
+
+    try {
+        // Chunk the content into embedding-sized pieces.
+        // For documents/PDFs, use paragraph-level splitting.
+        // For URLs, the Go server already extracted the text content.
+        std::vector<std::string> chunks;
+        const size_t max_chunk_chars = 1500;
+        const size_t overlap_chars = 200;
+
+        size_t pos = 0;
+        while (pos < content.size()) {
+            size_t end = std::min(pos + max_chunk_chars, content.size());
+            // Try to break at paragraph or sentence boundary
+            if (end < content.size()) {
+                size_t para = content.rfind("\n\n", end);
+                if (para != std::string::npos && para > pos + max_chunk_chars / 2) {
+                    end = para + 2;
+                } else {
+                    size_t sent = content.rfind(". ", end);
+                    if (sent != std::string::npos && sent > pos + max_chunk_chars / 2) {
+                        end = sent + 2;
+                    }
+                }
+            }
+            chunks.push_back(content.substr(pos, end - pos));
+            pos = (end > overlap_chars) ? end - overlap_chars : end;
+            if (pos >= content.size()) break;
+        }
+
+        // Build metadata prefix for each chunk
+        std::string source = request->source_url().empty() ? asset_type : request->source_url();
+        int embedded = 0;
+
+        for (size_t i = 0; i < chunks.size(); ++i) {
+            std::string prefixed = "[" + asset_type + "] " + source +
+                                   " (chunk " + std::to_string(i + 1) +
+                                   "/" + std::to_string(chunks.size()) + ")\n" +
+                                   chunks[i];
+            // Delegate to the engine's embedding + storage pipeline.
+            // engine_->embedAndStoreChunk handles FAISS insertion + KG update.
+            bool ok = engine_->embedAndStoreAssetChunk(
+                repo_id, prefixed, source, asset_type,
+                std::map<std::string, std::string>(
+                    request->metadata().begin(), request->metadata().end()));
+            if (ok) embedded++;
+        }
+
+        response->set_chunks_created(embedded);
+        response->set_status("ok");
+        return grpc::Status::OK;
+
+    } catch (const std::exception& e) {
+        response->set_chunks_created(0);
+        response->set_status(std::string("error: ") + e.what());
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
 }
 
 } // namespace server

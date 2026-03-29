@@ -81,7 +81,9 @@ func (h *Handler) HandleWebFetch(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("User-Agent", "RTVortex-Agent/1.0")
 	req.Header.Set("Accept", "text/html, application/pdf, text/plain, */*")
 
+	fetchStart := time.Now()
 	resp, err := http.DefaultClient.Do(req)
+	SwarmWebFetchDuration.Observe(time.Since(fetchStart).Seconds())
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":"fetch failed: %s"}`, err.Error()), http.StatusBadGateway)
 		return
@@ -197,6 +199,7 @@ func (h *Handler) HandleAgentBusPublish(w http.ResponseWriter, r *http.Request) 
 	// Ensure consumer group exists for downstream consumers.
 	_ = h.TaskMgr.redis.XGroupCreateMkStream(r.Context(), agentBusStream, agentBusGroup, "0").Err()
 
+	publishStart := time.Now()
 	_, err := h.TaskMgr.redis.XAdd(r.Context(), &redis.XAddArgs{
 		Stream: agentBusStream,
 		MaxLen: agentBusMaxLen,
@@ -205,6 +208,7 @@ func (h *Handler) HandleAgentBusPublish(w http.ResponseWriter, r *http.Request) 
 			"data": string(msgJSON),
 		},
 	}).Result()
+	SwarmAgentIntercommLatency.Observe(time.Since(publishStart).Seconds())
 	if err != nil {
 		slog.Error("agent-bus publish failed", "error", err)
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusInternalServerError)
