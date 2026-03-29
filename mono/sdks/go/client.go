@@ -40,8 +40,8 @@ type Client struct {
 	token      string
 
 	// Sub-clients for each API area.
-	Swarm  *SwarmClient
-	Repos  *RepoClient
+	Swarm   *SwarmClient
+	Repos   *RepoClient
 	Reviews *ReviewClient
 }
 
