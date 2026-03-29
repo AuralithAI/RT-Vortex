@@ -62,6 +62,10 @@ const streamPending = "swarm:tasks:pending"
 // Redis consumer group.
 const consumerGroup = "swarm-controller"
 
+// Redis stream for team-create events consumed by the Python swarm process.
+const streamTeamCreate = "swarm:events:team:create"
+const teamCreateConsumerGroup = "swarm-python"
+
 // ── Task ────────────────────────────────────────────────────────────────────
 
 // Task represents a swarm task from the database.
@@ -141,8 +145,9 @@ func (m *TaskManager) SetAuthService(svc *swarmauth.Service) {
 func (m *TaskManager) Start(ctx context.Context) {
 	ctx, m.cancel = context.WithCancel(ctx)
 
-	// Ensure consumer group exists.
+	// Ensure consumer groups exist.
 	_ = m.redis.XGroupCreateMkStream(ctx, streamPending, consumerGroup, "0").Err()
+	_ = m.redis.XGroupCreateMkStream(ctx, streamTeamCreate, teamCreateConsumerGroup, "0").Err()
 
 	// On startup, reconcile DB state with reality: any agent whose
 	// heartbeat key is missing from Redis (server was down, worker
@@ -807,7 +812,7 @@ func (m *TaskManager) handleStreamMessages(ctx context.Context, messages []redis
 		if m.tm.CanCreateTeam() {
 			// Publish creation event — Python will pick this up.
 			m.redis.XAdd(ctx, &redis.XAddArgs{
-				Stream: "swarm:events:team:create",
+				Stream: streamTeamCreate,
 				Values: map[string]interface{}{
 					"task_id": taskID.String(),
 				},

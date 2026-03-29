@@ -597,6 +597,24 @@ class RedisConsumer:
         self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
 
         # Ensure stream + consumer group exist.
+        await self._ensure_consumer_group()
+
+        self._running = True
+        logger.info("Redis consumer started on %s (consumer=%s)", _STREAM_KEY, _CONSUMER_NAME)
+
+        # Start warm pool — pre-register agents so the first task has no cold-start.
+        await self._start_warm_pool()
+
+    async def _ensure_consumer_group(self) -> None:
+        """Create the Redis stream and consumer group if they don't exist.
+
+        Safe to call multiple times — silently handles the BUSYGROUP error
+        when the group already exists.  Called both at startup and as a
+        recovery action when the consume loop encounters a NOGROUP error
+        (e.g. after Redis was restarted or flushed).
+        """
+        if not self._redis:
+            return
         try:
             await self._redis.xgroup_create(
                 name=_STREAM_KEY,
@@ -609,12 +627,6 @@ class RedisConsumer:
             if "BUSYGROUP" not in str(e):
                 raise
             logger.debug("Consumer group %s already exists", _GROUP_NAME)
-
-        self._running = True
-        logger.info("Redis consumer started on %s (consumer=%s)", _STREAM_KEY, _CONSUMER_NAME)
-
-        # Start warm pool — pre-register agents so the first task has no cold-start.
-        await self._start_warm_pool()
 
     async def _start_warm_pool(self) -> None:
         """Pre-register a small pool of agents that maintain heartbeats.
@@ -760,6 +772,16 @@ class RedisConsumer:
             except asyncio.CancelledError:
                 logger.info("Consumer loop cancelled")
                 break
+            except aioredis.ResponseError as e:
+                if "NOGROUP" in str(e):
+                    logger.warning(
+                        "Consumer group or stream disappeared — recreating %s/%s",
+                        _STREAM_KEY, _GROUP_NAME,
+                    )
+                    await self._ensure_consumer_group()
+                else:
+                    logger.error("Redis consumer error: %s", e, exc_info=True)
+                await asyncio.sleep(2)
             except Exception as e:
                 logger.error("Redis consumer error: %s", e, exc_info=True)
                 await asyncio.sleep(2)
