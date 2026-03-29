@@ -234,7 +234,10 @@ async def _run_full_pipeline(
 
     try:
         # ── Pre-check: verify the repository is indexed ─────────────────
-        if engine_client and task.repo_id:
+        # Benchmark tasks use a "benchmark:" prefix on repo_id and carry
+        # inline file content — skip the engine index check for them.
+        is_benchmark = task.repo_id and task.repo_id.startswith("benchmark:")
+        if engine_client and task.repo_id and not is_benchmark:
             try:
                 idx_status = await engine_client.get_index_status(task.repo_id)
                 if not idx_status.get("indexed"):
