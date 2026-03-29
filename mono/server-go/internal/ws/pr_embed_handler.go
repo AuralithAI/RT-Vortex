@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -41,8 +42,10 @@ func (ph *PREmbedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	client := ph.hub.SubscribePREmbed(conn, repoID)
 
+	wsCtx := context.WithoutCancel(r.Context())
+
 	// WritePump blocks until the client disconnects.
-	ph.hub.WritePump(r.Context(), client)
+	ph.hub.WritePump(wsCtx, client)
 
 	slog.Info("ws: pr-embed client disconnected", "repo_id", repoID, "remote", r.RemoteAddr)
 }

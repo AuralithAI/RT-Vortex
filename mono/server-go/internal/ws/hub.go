@@ -554,6 +554,10 @@ func (h *Hub) WritePump(ctx context.Context, c *Client) {
 		_ = c.conn.Close(websocket.StatusNormalClosure, "")
 	}()
 
+	// Ping every 30 seconds to keep the connection alive
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
+
 	for {
 		select {
 		case msg, ok := <-c.send:
@@ -566,6 +570,15 @@ func (h *Hub) WritePump(ctx context.Context, c *Client) {
 			cancel()
 			if err != nil {
 				slog.Debug("ws: write failed", "error", err, "review_id", c.reviewID)
+				return
+			}
+
+		case <-pingTicker.C:
+			pingCtx, cancel := context.WithTimeout(ctx, writeWait)
+			err := c.conn.Ping(pingCtx)
+			cancel()
+			if err != nil {
+				slog.Debug("ws: ping failed, closing", "error", err)
 				return
 			}
 

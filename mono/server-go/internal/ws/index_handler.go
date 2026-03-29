@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -41,8 +42,10 @@ func (ih *IndexHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	client := ih.hub.SubscribeIndex(conn, repoID)
 
+	wsCtx := context.WithoutCancel(r.Context())
+
 	// WritePump blocks until the client disconnects.
-	ih.hub.WritePump(r.Context(), client)
+	ih.hub.WritePump(wsCtx, client)
 
 	slog.Info("ws: index client disconnected", "repo_id", repoID, "remote", r.RemoteAddr)
 }
