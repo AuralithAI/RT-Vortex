@@ -37,6 +37,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
 	authproviders "github.com/AuralithAI/rtvortex-server/internal/auth/providers"
 	"github.com/AuralithAI/rtvortex-server/internal/background"
+	"github.com/AuralithAI/rtvortex-server/internal/benchmark"
 	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
@@ -571,6 +572,29 @@ func main() {
 		})
 	}
 
+	// ── Initialize Benchmark Runner ───────────────────────────
+	benchExecutor := benchmark.NewPipelineExecutor(
+		reviewPipeline, swarmTaskMgr, reviewRepo, repoRepo, db.Pool, slog.Default(),
+	)
+	benchRunner := benchmark.NewRunner(benchExecutor, slog.Default())
+
+	// Load benchmark dataset if available.
+	benchDataPaths := []string{
+		filepath.Join(env.Home, "evals", "datasets", "benchmark", "benchmark_suite.json"),
+		filepath.Join("mono", "evals", "datasets", "benchmark", "benchmark_suite.json"),
+	}
+	for _, p := range benchDataPaths {
+		data, err := os.ReadFile(p)
+		if err == nil {
+			if loadErr := benchRunner.LoadTasks(data); loadErr != nil {
+				slog.Warn("failed to load benchmark tasks", "path", p, "error", loadErr)
+			} else {
+				slog.Info("loaded benchmark tasks", "path", p, "count", len(benchRunner.ListTasks()))
+			}
+			break
+		}
+	}
+
 	deps := &server.Dependencies{
 		Config:     cfg,
 		DB:         db,
@@ -611,6 +635,8 @@ func main() {
 		SwarmLLMProxy: swarmLLMProxy,
 		SwarmELO:      swarmELO,
 		SwarmHandler:  swarmHandler,
+
+		BenchmarkRunner: benchRunner,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────

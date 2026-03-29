@@ -2,6 +2,7 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/api"
 	"github.com/AuralithAI/rtvortex-server/internal/audit"
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
+	"github.com/AuralithAI/rtvortex-server/internal/benchmark"
 	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
@@ -92,6 +94,9 @@ type Dependencies struct {
 	SwarmLLMProxy *swarm.LLMProxy
 	SwarmELO      *swarm.ELOService
 	SwarmHandler  *swarm.Handler
+
+	// Benchmark — A/B testing and benchmark harness
+	BenchmarkRunner *benchmark.Runner
 }
 
 // Server holds the HTTP server components.
@@ -337,6 +342,14 @@ func (s *Server) setupRouter() {
 				r.Get("/stats", h.GetSystemStats)
 				r.Get("/health/detailed", h.GetDetailedHealth)
 			})
+
+			// Benchmark — A/B testing & agent benchmarks
+			if s.deps.BenchmarkRunner != nil {
+				bh := benchmark.NewHandler(s.deps.BenchmarkRunner, slog.Default())
+				r.Route("/benchmark", func(r chi.Router) {
+					bh.RegisterRoutes(r)
+				})
+			}
 		})
 
 		// ── Webhooks (authenticated via platform-specific signatures) ─

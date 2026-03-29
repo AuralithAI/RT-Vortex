@@ -436,6 +436,57 @@ CREATE INDEX IF NOT EXISTS idx_agent_task_log_task  ON agent_task_log(task_id);
 CREATE INDEX IF NOT EXISTS idx_agent_task_log_agent ON agent_task_log(agent_id);
 
 -- ============================================================================
+-- BENCHMARK TABLES
+-- ============================================================================
+-- A/B testing harness: runs, per-task results, and ELO ratings.
+
+CREATE TABLE IF NOT EXISTS benchmark_runs (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name          TEXT NOT NULL,
+    mode          TEXT NOT NULL CHECK (mode IN ('swarm', 'single_agent', 'both')),
+    status        TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'completed', 'failed')),
+    started_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at      TIMESTAMPTZ,
+    summary_json  JSONB,
+    created_by    UUID REFERENCES users(id)
+);
+
+CREATE TABLE IF NOT EXISTS benchmark_results (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id        UUID NOT NULL REFERENCES benchmark_runs(id) ON DELETE CASCADE,
+    task_id       TEXT NOT NULL,
+    task_name     TEXT NOT NULL,
+    mode          TEXT NOT NULL,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    started_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    ended_at      TIMESTAMPTZ,
+    latency_ms    BIGINT DEFAULT 0,
+    llm_calls     INTEGER DEFAULT 0,
+    tokens_used   INTEGER DEFAULT 0,
+    comments_json JSONB,
+    score_json    JSONB,
+    trace_json    JSONB,
+    error_msg     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_benchmark_results_run ON benchmark_results(run_id);
+CREATE INDEX IF NOT EXISTS idx_benchmark_results_task ON benchmark_results(task_id);
+
+CREATE TABLE IF NOT EXISTS benchmark_elo_ratings (
+    mode          TEXT PRIMARY KEY,
+    rating        DOUBLE PRECISION NOT NULL DEFAULT 1500,
+    wins          INTEGER NOT NULL DEFAULT 0,
+    losses        INTEGER NOT NULL DEFAULT 0,
+    draws         INTEGER NOT NULL DEFAULT 0,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO benchmark_elo_ratings (mode, rating) VALUES
+    ('swarm', 1500),
+    ('single_agent', 1500)
+ON CONFLICT (mode) DO NOTHING;
+
+-- ============================================================================
 -- SCHEMA VERSION TRACKING
 -- ============================================================================
 -- Simple version tracking table (no migration runner needed).
@@ -469,6 +520,10 @@ WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 7);
 INSERT INTO schema_info (version, description)
 SELECT 8, 'Add retry_count, failure_reason columns + partial indexes for history, timeout, heartbeat'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 8);
+
+INSERT INTO schema_info (version, description)
+SELECT 10, 'Add benchmark tables — runs, results, ELO ratings for A/B testing harness'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 10);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
@@ -514,6 +569,11 @@ CREATE TRIGGER trg_user_vcs_platforms_updated_at
     BEFORE UPDATE ON user_vcs_platforms
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS trg_benchmark_elo_ratings_updated_at ON benchmark_elo_ratings;
+CREATE TRIGGER trg_benchmark_elo_ratings_updated_at
+    BEFORE UPDATE ON benchmark_elo_ratings
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
 -- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
@@ -543,6 +603,9 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE swarm_diff_comments TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE agent_feedback TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE agent_task_log TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE benchmark_runs TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE benchmark_results TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE benchmark_elo_ratings TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;
 END $$;

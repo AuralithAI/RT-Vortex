@@ -1,0 +1,458 @@
+[
+  {
+    "id": "real-001",
+    "name": "SQL Injection in User Search Endpoint",
+    "description": "PR adds a new user search endpoint that constructs SQL queries via string concatenation instead of parameterized queries",
+    "category": "real_pr",
+    "complexity": "simple",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["security", "sql-injection", "go"],
+    "files": [
+      {
+        "path": "internal/api/users.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package api\n\nimport (\n\t\"database/sql\"\n\t\"fmt\"\n\t\"net/http\"\n)\n\nfunc (h *Handler) SearchUsers(w http.ResponseWriter, r *http.Request) {\n\tquery := r.URL.Query().Get(\"q\")\n\tsqlQuery := fmt.Sprintf(\"SELECT id, name, email FROM users WHERE name LIKE '%%%s%%'\", query)\n\trows, err := h.db.Query(sqlQuery)\n\tif err != nil {\n\t\thttp.Error(w, \"internal error\", 500)\n\t\treturn\n\t}\n\tdefer rows.Close()\n\t// ... marshal and return\n}"
+      }
+    ],
+    "expected": {
+      "comments": [
+        {
+          "file": "internal/api/users.go",
+          "line": 11,
+          "severity": "critical",
+          "category": "security",
+          "pattern": "SQL injection|sql injection|parameterized|prepared statement",
+          "description": "String interpolation in SQL query is vulnerable to SQL injection"
+        }
+      ],
+      "min_score": 0.8
+    }
+  },
+  {
+    "id": "real-002",
+    "name": "Missing Error Handling in Payment Processing",
+    "description": "PR modifies the payment processing pipeline but fails to handle errors from the payment gateway, potentially causing silent failures",
+    "category": "real_pr",
+    "complexity": "medium",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["error-handling", "payments", "go"],
+    "files": [
+      {
+        "path": "internal/payments/processor.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package payments\n\nimport (\n\t\"context\"\n\t\"log\"\n)\n\ntype Processor struct {\n\tgateway Gateway\n\tdb      *DB\n}\n\nfunc (p *Processor) ChargeCustomer(ctx context.Context, customerID string, amount int64) error {\n\t// Create charge record\n\tcharge, err := p.db.CreateCharge(ctx, customerID, amount)\n\tif err != nil {\n\t\treturn err\n\t}\n\n\t// Process payment - ERROR NOT CHECKED\n\tresult, _ := p.gateway.Charge(ctx, charge.ID, amount)\n\n\t// Update charge status regardless of result\n\tp.db.UpdateChargeStatus(ctx, charge.ID, result.Status)\n\n\tlog.Printf(\"charge %s processed\", charge.ID)\n\treturn nil\n}\n\nfunc (p *Processor) RefundCustomer(ctx context.Context, chargeID string) error {\n\t// Refund - ERROR NOT CHECKED\n\tp.gateway.Refund(ctx, chargeID)\n\tp.db.UpdateChargeStatus(ctx, chargeID, \"refunded\")\n\treturn nil\n}"
+      }
+    ],
+    "expected": {
+      "comments": [
+        {
+          "file": "internal/payments/processor.go",
+          "line": 21,
+          "severity": "critical",
+          "category": "logic",
+          "pattern": "error.*not.*check|ignored.*error|unchecked.*error",
+          "description": "Payment gateway charge error is silently ignored"
+        },
+        {
+          "file": "internal/payments/processor.go",
+          "line": 24,
+          "severity": "warning",
+          "category": "logic",
+          "pattern": "error.*not.*check|ignored.*error|UpdateChargeStatus",
+          "description": "UpdateChargeStatus error is not checked"
+        },
+        {
+          "file": "internal/payments/processor.go",
+          "line": 31,
+          "severity": "critical",
+          "category": "logic",
+          "pattern": "error.*not.*check|refund.*error|ignored",
+          "description": "Refund error is silently ignored"
+        }
+      ],
+      "min_score": 0.7
+    }
+  },
+  {
+    "id": "real-003",
+    "name": "Race Condition in Cache Implementation",
+    "description": "PR adds an in-memory cache with concurrent access but without proper synchronization",
+    "category": "real_pr",
+    "complexity": "medium",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["concurrency", "race-condition", "go"],
+    "files": [
+      {
+        "path": "internal/cache/memory.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package cache\n\nimport (\n\t\"time\"\n)\n\ntype MemoryCache struct {\n\tdata    map[string]entry\n\tdefaultTTL time.Duration\n}\n\ntype entry struct {\n\tvalue     interface{}\n\texpiresAt time.Time\n}\n\nfunc NewMemoryCache(ttl time.Duration) *MemoryCache {\n\tc := &MemoryCache{\n\t\tdata:       make(map[string]entry),\n\t\tdefaultTTL: ttl,\n\t}\n\tgo c.cleanup()\n\treturn c\n}\n\nfunc (c *MemoryCache) Get(key string) (interface{}, bool) {\n\te, ok := c.data[key]\n\tif !ok || time.Now().After(e.expiresAt) {\n\t\treturn nil, false\n\t}\n\treturn e.value, true\n}\n\nfunc (c *MemoryCache) Set(key string, value interface{}) {\n\tc.data[key] = entry{\n\t\tvalue:     value,\n\t\texpiresAt: time.Now().Add(c.defaultTTL),\n\t}\n}\n\nfunc (c *MemoryCache) Delete(key string) {\n\tdelete(c.data, key)\n}\n\nfunc (c *MemoryCache) cleanup() {\n\tfor {\n\t\ttime.Sleep(c.defaultTTL)\n\t\tnow := time.Now()\n\t\tfor k, e := range c.data {\n\t\t\tif now.After(e.expiresAt) {\n\t\t\t\tdelete(c.data, k)\n\t\t\t}\n\t\t}\n\t}\n}"
+      }
+    ],
+    "expected": {
+      "comments": [
+        {
+          "file": "internal/cache/memory.go",
+          "severity": "critical",
+          "category": "concurrency",
+          "pattern": "race condition|concurrent.*map|sync\\.Mutex|sync\\.RWMutex|data race",
+          "description": "Map accessed concurrently from multiple goroutines without synchronization"
+        }
+      ],
+      "min_score": 0.8
+    }
+  },
+  {
+    "id": "real-004",
+    "name": "Hardcoded Secrets in Configuration",
+    "description": "PR adds OAuth integration with API keys hardcoded in source",
+    "category": "real_pr",
+    "complexity": "simple",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["security", "secrets", "python"],
+    "files": [
+      {
+        "path": "config/oauth.py",
+        "language": "python",
+        "is_changed": true,
+        "content": "# OAuth Configuration\n\nGITHUB_CLIENT_ID = \"Iv1.abc123def456\"\nGITHUB_CLIENT_SECRET = \"gho_secretkey1234567890abcdefghijklmnop\"\n\nSTRIPE_API_KEY = \"sk_live_4eC39HqLyjWDarjtT1zdp7dc\"\nSTRIPE_WEBHOOK_SECRET = \"whsec_test_secret_key_123\"\n\nDATABASE_URL = \"postgresql://admin:P@ssw0rd123@prod-db.internal:5432/myapp\"\n\nAWS_ACCESS_KEY = \"AKIAIOSFODNN7EXAMPLE\"\nAWS_SECRET_KEY = \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n\ndef get_github_config():\n    return {\n        \"client_id\": GITHUB_CLIENT_ID,\n        \"client_secret\": GITHUB_CLIENT_SECRET,\n    }"
+      }
+    ],
+    "expected": {
+      "comments": [
+        {
+          "file": "config/oauth.py",
+          "severity": "critical",
+          "category": "security",
+          "pattern": "hardcoded.*secret|secret.*hardcoded|credential|environment.*variable|API.*key.*source",
+          "description": "Multiple API keys and secrets hardcoded in source code"
+        },
+        {
+          "file": "config/oauth.py",
+          "line": 8,
+          "severity": "critical",
+          "category": "security",
+          "pattern": "password|DATABASE_URL|credential",
+          "description": "Database password exposed in source code"
+        }
+      ],
+      "min_score": 0.9
+    }
+  },
+  {
+    "id": "real-005",
+    "name": "N+1 Query in User Dashboard",
+    "description": "PR adds a dashboard endpoint that loads user data with N+1 queries in a loop",
+    "category": "real_pr",
+    "complexity": "medium",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["performance", "database", "go"],
+    "files": [
+      {
+        "path": "internal/dashboard/service.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package dashboard\n\nimport (\n\t\"context\"\n)\n\ntype Service struct {\n\tuserRepo  UserRepo\n\torderRepo OrderRepo\n\tstatsRepo StatsRepo\n}\n\ntype DashboardData struct {\n\tUsers []UserDashboard\n}\n\ntype UserDashboard struct {\n\tUser   User\n\tOrders []Order\n\tStats  UserStats\n}\n\nfunc (s *Service) GetDashboard(ctx context.Context, orgID string) (*DashboardData, error) {\n\tusers, err := s.userRepo.ListByOrg(ctx, orgID)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n\tvar result DashboardData\n\tfor _, user := range users {\n\t\t// N+1: separate query per user for orders\n\t\torders, err := s.orderRepo.GetByUserID(ctx, user.ID)\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\n\t\t// N+1: separate query per user for stats\n\t\tstats, err := s.statsRepo.GetByUserID(ctx, user.ID)\n\t\tif err != nil {\n\t\t\treturn nil, err\n\t\t}\n\n\t\tresult.Users = append(result.Users, UserDashboard{\n\t\t\tUser:   user,\n\t\t\tOrders: orders,\n\t\t\tStats:  stats,\n\t\t})\n\t}\n\n\treturn &result, nil\n}"
+      }
+    ],
+    "expected": {
+      "comments": [
+        {
+          "file": "internal/dashboard/service.go",
+          "severity": "warning",
+          "category": "performance",
+          "pattern": "N\\+1|n\\+1|batch.*query|join|preload|query.*loop",
+          "description": "N+1 query pattern: orders and stats queried per-user in a loop"
+        }
+      ],
+      "min_score": 0.7
+    }
+  },
+  {
+    "id": "real-006",
+    "name": "Unbounded Goroutine Spawning",
+    "description": "PR adds a webhook handler that spawns unbounded goroutines without a semaphore or worker pool",
+    "category": "real_pr",
+    "complexity": "medium",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["concurrency", "resource-leak", "go"],
+    "files": [
+      {
+        "path": "internal/webhooks/handler.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package webhooks\n\nimport (\n\t\"encoding/json\"\n\t\"net/http\"\n)\n\ntype Handler struct {\n\tprocessors map[string]Processor\n}\n\nfunc (h *Handler) HandleWebhook(w http.ResponseWriter, r *http.Request) {\n\tvar events []Event\n\tif err := json.NewDecoder(r.Body).Decode(&events); err != nil {\n\t\thttp.Error(w, \"bad request\", 400)\n\t\treturn\n\t}\n\n\t// Process each event in its own goroutine — UNBOUNDED\n\tfor _, event := range events {\n\t\tgo func(e Event) {\n\t\t\tproc, ok := h.processors[e.Type]\n\t\t\tif !ok {\n\t\t\t\treturn\n\t\t\t}\n\t\t\tproc.Process(e)\n\t\t}(event)\n\t}\n\n\tw.WriteHeader(http.StatusAccepted)\n}"
+      }
+    ],
+    "expected": {
+      "comments": [
+        {
+          "file": "internal/webhooks/handler.go",
+          "severity": "critical",
+          "category": "concurrency",
+          "pattern": "unbounded.*goroutine|goroutine.*leak|worker.*pool|semaphore|rate.*limit",
+          "description": "Unbounded goroutine spawning could exhaust memory under load"
+        }
+      ],
+      "min_score": 0.7
+    }
+  },
+  {
+    "id": "real-007",
+    "name": "Insecure JWT Validation",
+    "description": "PR adds JWT authentication that doesn't properly validate the algorithm, enabling algorithm confusion attacks",
+    "category": "real_pr",
+    "complexity": "complex",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["security", "authentication", "go"],
+    "files": [
+      {
+        "path": "internal/auth/jwt.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package auth\n\nimport (\n\t\"errors\"\n\t\"time\"\n\n\t\"github.com/golang-jwt/jwt/v5\"\n)\n\nvar jwtSecret = []byte(\"my-secret-key\")\n\nfunc ValidateToken(tokenString string) (*Claims, error) {\n\ttoken, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {\n\t\t// BUG: not validating signing algorithm — vulnerable to alg:none attack\n\t\treturn jwtSecret, nil\n\t})\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tclaims, ok := token.Claims.(*Claims)\n\tif !ok {\n\t\treturn nil, errors.New(\"invalid claims\")\n\t}\n\tif claims.ExpiresAt != nil && claims.ExpiresAt.Time.Before(time.Now()) {\n\t\treturn nil, errors.New(\"token expired\")\n\t}\n\treturn claims, nil\n}\n\ntype Claims struct {\n\tjwt.RegisteredClaims\n\tUserID string `json:\"user_id\"`\n\tRole   string `json:\"role\"`\n}"
+      }
+    ],
+    "expected": {
+      "comments": [
+        {
+          "file": "internal/auth/jwt.go",
+          "line": 10,
+          "severity": "critical",
+          "category": "security",
+          "pattern": "hardcoded.*secret|secret.*key.*source",
+          "description": "JWT signing secret hardcoded in source code"
+        },
+        {
+          "file": "internal/auth/jwt.go",
+          "line": 14,
+          "severity": "critical",
+          "category": "security",
+          "pattern": "algorithm.*validation|alg.*none|signing.*method|token\\.Method",
+          "description": "JWT algorithm not validated — vulnerable to algorithm confusion/none attack"
+        }
+      ],
+      "min_score": 0.8
+    }
+  },
+  {
+    "id": "real-008",
+    "name": "Missing Input Validation in REST API",
+    "description": "PR adds CRUD endpoints with no input validation, allowing arbitrary data sizes and invalid formats",
+    "category": "real_pr",
+    "complexity": "medium",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["security", "validation", "go"],
+    "files": [
+      {
+        "path": "internal/api/projects.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package api\n\nimport (\n\t\"encoding/json\"\n\t\"net/http\"\n)\n\ntype CreateProjectRequest struct {\n\tName        string `json:\"name\"`\n\tDescription string `json:\"description\"`\n\tOwnerEmail  string `json:\"owner_email\"`\n\tBudget      int    `json:\"budget\"`\n}\n\nfunc (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {\n\tvar req CreateProjectRequest\n\tif err := json.NewDecoder(r.Body).Decode(&req); err != nil {\n\t\thttp.Error(w, \"bad request\", 400)\n\t\treturn\n\t}\n\n\t// No validation at all — just insert\n\tproject, err := h.store.CreateProject(r.Context(), req.Name, req.Description, req.OwnerEmail, req.Budget)\n\tif err != nil {\n\t\thttp.Error(w, \"internal error\", 500)\n\t\treturn\n\t}\n\n\tjson.NewEncoder(w).Encode(project)\n}"
+      }
+    ],
+    "expected": {
+      "comments": [
+        {
+          "file": "internal/api/projects.go",
+          "severity": "warning",
+          "category": "security",
+          "pattern": "validation|validate|sanitiz|empty.*name|email.*format|max.*length|input.*check",
+          "description": "No input validation: name could be empty, email format not checked, budget could be negative, description unbounded"
+        }
+      ],
+      "min_score": 0.6
+    }
+  },
+  {
+    "id": "real-009",
+    "name": "Goroutine Leak in gRPC Streaming Client",
+    "description": "PR adds a gRPC streaming client that starts a goroutine for receiving but never properly cleans up on context cancellation",
+    "category": "real_pr",
+    "complexity": "complex",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["concurrency", "grpc", "resource-leak", "go"],
+    "files": [
+      {
+        "path": "internal/engine/stream.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package engine\n\nimport (\n\t\"context\"\n\t\"log\"\n\t\"time\"\n\n\tpb \"example.com/proto/engine\"\n\t\"google.golang.org/grpc\"\n)\n\ntype MetricsStream struct {\n\tconn    *grpc.ClientConn\n\tmetrics chan *pb.MetricSnapshot\n}\n\nfunc NewMetricsStream(addr string) (*MetricsStream, error) {\n\tconn, err := grpc.Dial(addr, grpc.WithInsecure())\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\n\ts := &MetricsStream{\n\t\tconn:    conn,\n\t\tmetrics: make(chan *pb.MetricSnapshot, 100),\n\t}\n\n\t// Start streaming — goroutine never cleaned up\n\tgo s.receiveLoop(context.Background())\n\n\treturn s, nil\n}\n\nfunc (s *MetricsStream) receiveLoop(ctx context.Context) {\n\tclient := pb.NewEngineClient(s.conn)\n\tfor {\n\t\tstream, err := client.StreamMetrics(ctx, &pb.MetricsRequest{})\n\t\tif err != nil {\n\t\t\tlog.Printf(\"stream error: %v\", err)\n\t\t\ttime.Sleep(5 * time.Second)\n\t\t\tcontinue\n\t\t}\n\t\tfor {\n\t\t\tmsg, err := stream.Recv()\n\t\t\tif err != nil {\n\t\t\t\tlog.Printf(\"recv error: %v\", err)\n\t\t\t\tbreak\n\t\t\t}\n\t\t\ts.metrics <- msg\n\t\t}\n\t}\n}\n\nfunc (s *MetricsStream) Close() {\n\ts.conn.Close()\n\t// BUG: receiveLoop goroutine still running with context.Background()\n}"
+      }
+    ],
+    "expected": {
+      "comments": [
+        {
+          "file": "internal/engine/stream.go",
+          "line": 29,
+          "severity": "critical",
+          "category": "concurrency",
+          "pattern": "goroutine.*leak|context\\.Background|cancel.*context|context.*cancel",
+          "description": "Goroutine started with context.Background() — never cancelled, will leak"
+        },
+        {
+          "file": "internal/engine/stream.go",
+          "line": 18,
+          "severity": "warning",
+          "category": "security",
+          "pattern": "WithInsecure|TLS|insecure",
+          "description": "gRPC connection uses WithInsecure — no TLS"
+        }
+      ],
+      "min_score": 0.7
+    }
+  },
+  {
+    "id": "real-010",
+    "name": "Cross-Service Transaction Inconsistency",
+    "description": "PR adds an order creation flow that writes to multiple services without proper saga/compensation pattern",
+    "category": "real_pr",
+    "complexity": "monolith",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["architecture", "distributed-systems", "go"],
+    "files": [
+      {
+        "path": "internal/orders/service.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package orders\n\nimport (\n\t\"context\"\n\t\"fmt\"\n)\n\ntype Service struct {\n\torderRepo    OrderRepo\n\tinventory    InventoryClient\n\tpayments     PaymentClient\n\tnotification NotificationClient\n}\n\nfunc (s *Service) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error) {\n\t// Step 1: Create order record\n\torder, err := s.orderRepo.Create(ctx, req)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"create order: %w\", err)\n\t}\n\n\t// Step 2: Reserve inventory\n\terr = s.inventory.Reserve(ctx, order.ID, req.Items)\n\tif err != nil {\n\t\t// BUG: order created but inventory not reserved — no rollback\n\t\treturn nil, fmt.Errorf(\"reserve inventory: %w\", err)\n\t}\n\n\t// Step 3: Charge payment\n\terr = s.payments.Charge(ctx, order.ID, req.Total)\n\tif err != nil {\n\t\t// BUG: inventory reserved but payment failed — no compensation\n\t\treturn nil, fmt.Errorf(\"charge payment: %w\", err)\n\t}\n\n\t// Step 4: Send notification (fire and forget)\n\ts.notification.Send(ctx, order.CustomerID, \"Order created: \"+order.ID)\n\n\treturn order, nil\n}"
+      }
+    ],
+    "expected": {
+      "comments": [
+        {
+          "file": "internal/orders/service.go",
+          "line": 25,
+          "severity": "critical",
+          "category": "logic",
+          "pattern": "rollback|compensat|saga|transaction|cleanup|partial.*failure",
+          "description": "No rollback of order record when inventory reservation fails"
+        },
+        {
+          "file": "internal/orders/service.go",
+          "line": 31,
+          "severity": "critical",
+          "category": "logic",
+          "pattern": "rollback|compensat|release.*inventory|saga",
+          "description": "No compensation for reserved inventory when payment fails"
+        },
+        {
+          "file": "internal/orders/service.go",
+          "line": 36,
+          "severity": "warning",
+          "category": "logic",
+          "pattern": "fire.*forget|notification.*error|async",
+          "description": "Notification error silently ignored — fire-and-forget without logging"
+        }
+      ],
+      "min_score": 0.6
+    }
+  },
+  {
+    "id": "synth-001",
+    "name": "Implement Rate Limiter Middleware",
+    "description": "Implement a token-bucket rate limiter middleware for the HTTP server that supports per-IP and per-user limits with Redis backing",
+    "category": "synthetic",
+    "complexity": "complex",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["implementation", "middleware", "rate-limiting"],
+    "files": [
+      {
+        "path": "internal/middleware/ratelimit.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package middleware\n\n// TODO: Implement token-bucket rate limiter\n// Requirements:\n// - Per-IP rate limiting (100 req/min default)\n// - Per-user rate limiting (1000 req/min default)\n// - Redis-backed for distributed deployments\n// - Configurable burst size\n// - X-RateLimit-* response headers\n// - 429 Too Many Requests with Retry-After header\n\nimport \"net/http\"\n\nfunc RateLimiter() func(http.Handler) http.Handler {\n\treturn func(next http.Handler) http.Handler {\n\t\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\t\tnext.ServeHTTP(w, r)\n\t\t})\n\t}\n}"
+      }
+    ],
+    "expected": {
+      "plan": "Token bucket with Redis EVALSHA for atomic decrement, per-IP extraction from X-Forwarded-For, per-user from JWT claims",
+      "min_score": 0.5
+    }
+  },
+  {
+    "id": "synth-002",
+    "name": "Add Prometheus Metrics to gRPC Server",
+    "description": "Add comprehensive Prometheus instrumentation to an existing gRPC server including request counts, latency histograms, and stream metrics",
+    "category": "synthetic",
+    "complexity": "medium",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["implementation", "observability", "grpc"],
+    "files": [
+      {
+        "path": "internal/server/grpc.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package server\n\nimport (\n\t\"net\"\n\t\"google.golang.org/grpc\"\n)\n\ntype GRPCServer struct {\n\tserver *grpc.Server\n}\n\nfunc NewGRPCServer() *GRPCServer {\n\t// TODO: Add Prometheus interceptors\n\ts := grpc.NewServer()\n\treturn &GRPCServer{server: s}\n}\n\nfunc (s *GRPCServer) Start(addr string) error {\n\tlis, err := net.Listen(\"tcp\", addr)\n\tif err != nil {\n\t\treturn err\n\t}\n\treturn s.server.Serve(lis)\n}"
+      }
+    ],
+    "expected": {
+      "plan": "Use grpc-ecosystem/go-grpc-prometheus for interceptors, register unary and stream server interceptors, expose /metrics endpoint",
+      "min_score": 0.5
+    }
+  },
+  {
+    "id": "synth-003",
+    "name": "Implement Distributed Lock with Redis",
+    "description": "Implement a distributed lock using Redis with proper TTL, retry logic, and lock extension for long-running operations",
+    "category": "synthetic",
+    "complexity": "complex",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["implementation", "distributed-systems", "redis"],
+    "files": [
+      {
+        "path": "internal/lock/redis.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package lock\n\nimport (\n\t\"context\"\n\t\"time\"\n\n\t\"github.com/redis/go-redis/v9\"\n)\n\n// TODO: Implement RedisLock\n// Requirements:\n// - Acquire with timeout and TTL\n// - Release only if still owner (compare-and-delete)\n// - Extend TTL for long-running operations\n// - Retry with exponential backoff\n// - Context cancellation support\n\ntype RedisLock struct {\n\tclient *redis.Client\n\tkey    string\n\tvalue  string\n\tttl    time.Duration\n}\n\nfunc (l *RedisLock) Acquire(ctx context.Context) error {\n\treturn nil // TODO\n}\n\nfunc (l *RedisLock) Release(ctx context.Context) error {\n\treturn nil // TODO\n}\n\nfunc (l *RedisLock) Extend(ctx context.Context, ttl time.Duration) error {\n\treturn nil // TODO\n}"
+      }
+    ],
+    "expected": {
+      "plan": "Use SET NX EX for acquire, Lua script for compare-and-delete release, PEXPIRE for extend, exponential backoff with jitter",
+      "min_score": 0.5
+    }
+  },
+  {
+    "id": "synth-004",
+    "name": "Refactor Monolith Service Layer to Use Repository Pattern",
+    "description": "Refactor a tightly-coupled service that directly calls database queries into a clean repository pattern with interfaces",
+    "category": "synthetic",
+    "complexity": "monolith",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["refactoring", "architecture", "patterns"],
+    "files": [
+      {
+        "path": "internal/users/service.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package users\n\nimport (\n\t\"context\"\n\t\"database/sql\"\n\t\"fmt\"\n\t\"time\"\n)\n\ntype Service struct {\n\tdb *sql.DB\n}\n\nfunc (s *Service) GetUser(ctx context.Context, id string) (*User, error) {\n\trow := s.db.QueryRowContext(ctx, \"SELECT id, name, email, created_at FROM users WHERE id = $1\", id)\n\tvar u User\n\terr := row.Scan(&u.ID, &u.Name, &u.Email, &u.CreatedAt)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"get user: %w\", err)\n\t}\n\treturn &u, nil\n}\n\nfunc (s *Service) CreateUser(ctx context.Context, name, email string) (*User, error) {\n\tvar u User\n\terr := s.db.QueryRowContext(ctx,\n\t\t\"INSERT INTO users (name, email, created_at) VALUES ($1, $2, $3) RETURNING id, name, email, created_at\",\n\t\tname, email, time.Now(),\n\t).Scan(&u.ID, &u.Name, &u.Email, &u.CreatedAt)\n\tif err != nil {\n\t\treturn nil, fmt.Errorf(\"create user: %w\", err)\n\t}\n\treturn &u, nil\n}\n\nfunc (s *Service) ListUsers(ctx context.Context, orgID string) ([]User, error) {\n\trows, err := s.db.QueryContext(ctx, \"SELECT id, name, email, created_at FROM users WHERE org_id = $1 ORDER BY created_at DESC\", orgID)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tdefer rows.Close()\n\tvar users []User\n\tfor rows.Next() {\n\t\tvar u User\n\t\tif err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.CreatedAt); err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\tusers = append(users, u)\n\t}\n\treturn users, nil\n}\n\ntype User struct {\n\tID        string\n\tName      string\n\tEmail     string\n\tCreatedAt time.Time\n}"
+      }
+    ],
+    "expected": {
+      "plan": "Extract UserRepository interface, move SQL queries to concrete implementation, inject interface into Service, enable mocking for tests",
+      "min_score": 0.4
+    }
+  },
+  {
+    "id": "synth-005",
+    "name": "Add Graceful Shutdown to HTTP + gRPC + Worker Server",
+    "description": "Add proper graceful shutdown handling to a server that runs HTTP, gRPC, and background worker goroutines simultaneously",
+    "category": "synthetic",
+    "complexity": "complex",
+    "repo_url": "https://github.com/example/monolith",
+    "tags": ["implementation", "lifecycle", "signals"],
+    "files": [
+      {
+        "path": "cmd/server/main.go",
+        "language": "go",
+        "is_changed": true,
+        "content": "package main\n\nimport (\n\t\"log\"\n\t\"net\"\n\t\"net/http\"\n\n\t\"google.golang.org/grpc\"\n)\n\nfunc main() {\n\t// HTTP server\n\thttpSrv := &http.Server{Addr: \":8080\"}\n\tgo func() {\n\t\tif err := httpSrv.ListenAndServe(); err != nil {\n\t\t\tlog.Fatal(err)\n\t\t}\n\t}()\n\n\t// gRPC server\n\tgrpcSrv := grpc.NewServer()\n\tlis, _ := net.Listen(\"tcp\", \":9090\")\n\tgo func() {\n\t\tif err := grpcSrv.Serve(lis); err != nil {\n\t\t\tlog.Fatal(err)\n\t\t}\n\t}()\n\n\t// Background worker\n\tgo func() {\n\t\tfor {\n\t\t\tprocessJobs()\n\t\t}\n\t}()\n\n\t// TODO: No signal handling, no graceful shutdown\n\tselect {}\n}\n\nfunc processJobs() {\n\t// simulate work\n}"
+      }
+    ],
+    "expected": {
+      "plan": "Use signal.NotifyContext for SIGTERM/SIGINT, context.WithCancel for workers, errgroup for coordinated shutdown with timeout, http.Server.Shutdown, grpcSrv.GracefulStop",
+      "min_score": 0.4
+    }
+  }
+]

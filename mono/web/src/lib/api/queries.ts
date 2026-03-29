@@ -295,3 +295,12 @@ export function useVCSTokenCapabilities(platform?: string) {
     queryFn: () => api.vcsPlatforms.tokenCapabilities(platform),
   });
 }
+
+// ── Benchmark ───────────────────────────────────────────────────────────────
+
+export const benchmarkKeys = {
+  summary: ["benchmark", "summary"] as const,
+  runs: ["benchmark", "runs"] as const,
+  run: (id: string) => ["benchmark", "runs", id] as const,
+  ratings: ["benchmark", "ratings"] as const,
+} as const;

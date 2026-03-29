@@ -605,6 +605,12 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
         query_embedding = std::move(result.embedding);
         auto embed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - embed_start).count();
+
+        // Telemetry: per-query embedding latency
+        metrics::Registry::instance().observeHistogram(
+            metrics::EMBED_LATENCY_S,
+            static_cast<double>(embed_ms) / 1000.0);
+
         LOG_DEBUG("[TMS] query embedding computed: dim=" +
                   std::to_string(query_embedding.size()) +
                   " embed_ms=" + std::to_string(embed_ms));
@@ -689,6 +695,30 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
             std::chrono::steady_clock::now() - ltm_start).count();
         response.reasoning_trace.push_back("LTM: Retrieved " + std::to_string(ltm_results.size()) + " chunks");
         response.ltm_items_scanned = ltm_results.size();
+
+        // ── Telemetry: LTM search metrics ──────────────────────
+        metrics::Registry::instance().setGauge(
+            metrics::SEARCH_CHUNKS_RETURNED,
+            static_cast<double>(ltm_results.size()));
+
+        // Approximate recall@10: ratio of top-10 results with similarity >= 0.5
+        // (proxy for relevance when ground-truth labels are unavailable).
+        {
+            int relevant = 0;
+            int k = std::min(static_cast<int>(ltm_results.size()), 10);
+            for (int i = 0; i < k; ++i) {
+                if (ltm_results[i].similarity_score >= 0.5f) ++relevant;
+            }
+            double recall_at_10 = (k > 0) ? static_cast<double>(relevant) / k : 0.0;
+            metrics::Registry::instance().observeHistogram(
+                metrics::FAISS_RECALL_AT_10, recall_at_10);
+        }
+
+        // Record LTM search wall-clock time as histogram for p50/p90/p99 tracking
+        metrics::Registry::instance().observeHistogram(
+            metrics::SEARCH_LATENCY_S,
+            static_cast<double>(ltm_ms) / 1000.0);
+
         LOG_DEBUG("[TMS] LTM search: retrieved=" + std::to_string(ltm_results.size()) +
                   " top_k=" + std::to_string(decision.ltm_top_k) +
                   " accounts_enabled=" + std::to_string(config_.memory_accounts_enabled) +
@@ -698,11 +728,21 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     // Step 4: Retrieve from STM
     std::vector<RetrievedChunk> stm_results;
     if (!query.session_id.empty() && decision.stm_top_k > 0 && !isTimedOut()) {
+        auto stm_start = std::chrono::steady_clock::now();
         stm_results = stm_->search(query.session_id, query_embedding, decision.stm_top_k);
+        auto stm_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - stm_start).count();
+
+        // Telemetry: STM search latency
+        metrics::Registry::instance().observeHistogram(
+            metrics::STM_SEARCH_LATENCY_S,
+            static_cast<double>(stm_ms) / 1000.0);
+
         response.reasoning_trace.push_back("STM: Retrieved " + std::to_string(stm_results.size()) + " items");
         response.stm_items_scanned = stm_results.size();
         LOG_DEBUG("[TMS] STM search: retrieved=" + std::to_string(stm_results.size()) +
-                  " session=" + query.session_id);
+                  " session=" + query.session_id +
+                  " stm_ms=" + std::to_string(stm_ms));
     }
 
     // Step 4b: Confidence Gate (Zero-LLM Engine)
@@ -790,6 +830,7 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     
     // Step 6: Cross-Memory Attention (if enabled)
     if (decision.enable_cross_attention && !isTimedOut()) {
+        auto cma_start = std::chrono::steady_clock::now();
         response.attention_output = runCrossMemoryAttention(
             query_embedding,
             ltm_results,
@@ -798,8 +839,17 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
             strategies,
             decision
         );
+        auto cma_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - cma_start).count();
+
+        // Telemetry: CMA latency
+        metrics::Registry::instance().observeHistogram(
+            metrics::CMA_LATENCY_S,
+            static_cast<double>(cma_ms) / 1000.0);
+
         response.reasoning_trace.push_back("Attention: Fused context with " 
-                                           + std::to_string(decision.attention_heads) + " heads");
+                                           + std::to_string(decision.attention_heads) + " heads"
+                                           + " cma_ms=" + std::to_string(cma_ms));
     } else {
         // Simple concatenation fallback
         CrossMemoryOutput simple_output;

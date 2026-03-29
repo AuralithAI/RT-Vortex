@@ -98,6 +98,20 @@ constexpr const char* QUERY_TIMEOUT_TOTAL   = "aipr_query_timeout_total";
 // Per-repo index sizes (populated by metrics stream scanner)
 constexpr const char* INDEX_SIZES_PREFIX    = "aipr_index_size_bytes:";
 
+// ── Benchmark telemetry ───────────────────────────────────────────
+
+// Benchmark run tracking
+constexpr const char* BENCHMARK_RUNS_TOTAL       = "aipr_benchmark_runs_total";
+constexpr const char* BENCHMARK_LAST_SCORE       = "aipr_benchmark_last_score";
+constexpr const char* BENCHMARK_AVG_LATENCY_S    = "aipr_benchmark_avg_latency_s";
+constexpr const char* BENCHMARK_LLM_CALLS_TOTAL  = "aipr_benchmark_llm_calls_total";
+
+// STM search latency (distinct from LTM)
+constexpr const char* STM_SEARCH_LATENCY_S       = "aipr_stm_search_latency_s";
+
+// Cross-memory attention latency
+constexpr const char* CMA_LATENCY_S              = "aipr_cma_latency_s";
+
 // ── Histogram snapshot ─────────────────────────────────────────────────────
 
 struct HistogramSnapshot {
