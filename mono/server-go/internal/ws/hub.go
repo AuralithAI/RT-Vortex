@@ -546,23 +546,20 @@ func (h *Hub) HasMetricsSubscribers() bool {
 	return len(h.metrics) > 0
 }
 
-// WritePump reads from the client's send channel and writes to the WebSocket.
-// It blocks until the client disconnects or the hub shuts down.
+// WritePump writes queued messages to the WebSocket until the client disconnects.
+// Callers must pass a context created with context.WithoutCancel.
 func (h *Hub) WritePump(ctx context.Context, c *Client) {
 	defer func() {
 		h.Unsubscribe(c)
 		_ = c.conn.Close(websocket.StatusNormalClosure, "")
 	}()
 
-	// Ping every 30 seconds to keep the connection alive
-	pingTicker := time.NewTicker(30 * time.Second)
-	defer pingTicker.Stop()
+	closeCtx := c.conn.CloseRead(ctx)
 
 	for {
 		select {
 		case msg, ok := <-c.send:
 			if !ok {
-				// Channel closed — hub is shutting down or we were unsubscribed.
 				return
 			}
 			writeCtx, cancel := context.WithTimeout(ctx, writeWait)
@@ -573,14 +570,8 @@ func (h *Hub) WritePump(ctx context.Context, c *Client) {
 				return
 			}
 
-		case <-pingTicker.C:
-			pingCtx, cancel := context.WithTimeout(ctx, writeWait)
-			err := c.conn.Ping(pingCtx)
-			cancel()
-			if err != nil {
-				slog.Debug("ws: ping failed, closing", "error", err)
-				return
-			}
+		case <-closeCtx.Done():
+			return
 
 		case <-ctx.Done():
 			return

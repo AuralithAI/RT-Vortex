@@ -338,6 +338,19 @@ void TMSMemorySystem::ingestRepository(
 
         // If everything is unchanged, we're done
         if (files_to_embed_set.empty() && merkle_diff.deleted_files.empty()) {
+            // KG edges may be missing if the initial index was done before
+            // edge inference was added.  Run finalizeEdges when nodes exist
+            // but edges are empty.
+            if (config_.knowledge_graph_enabled && kg_handle_ &&
+                kg_handle_->get().nodeCount(repo_id) > 0 &&
+                kg_handle_->get().edgeCount(repo_id) == 0) {
+                LOG_INFO("[TMS] Merkle skip: KG has nodes but 0 edges — running edge inference");
+                try {
+                    kg_handle_->get().finalizeEdges(repo_id);
+                } catch (const std::exception& e) {
+                    LOG_ERROR("[TMS] KG finalizeEdges failed during Merkle skip: " + std::string(e.what()));
+                }
+            }
             if (progress_callback) {
                 progress_callback(1.0f, "All files unchanged — skipping reindex");
             }
