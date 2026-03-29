@@ -32,7 +32,7 @@ def init_extended_tools(
     _redis_url = redis_url
 
 
-@tool
+@tool()
 async def run_tests(
     test_command: str = "",
     test_files: str = "",
@@ -54,7 +54,7 @@ async def run_tests(
         return f"Test execution failed: {e}"
 
 
-@tool
+@tool()
 async def run_build(
     build_command: str = "",
     timeout_seconds: int = 180,
@@ -75,7 +75,7 @@ async def run_build(
         return f"Build failed: {e}"
 
 
-@tool
+@tool()
 async def git_diff() -> str:
     """Get the current workspace diff as unified diff text."""
     from .workspace_tools import _get_workspace
@@ -97,7 +97,7 @@ async def git_diff() -> str:
     return "\n".join(diffs)
 
 
-@tool
+@tool()
 async def search_knowledge_graph(
     query: str,
     relationship_type: str = "",
@@ -130,7 +130,7 @@ async def search_knowledge_graph(
         return f"Knowledge graph search failed: {e}"
 
 
-@tool
+@tool()
 async def ask_human(
     question: str,
     context: str = "",
@@ -158,7 +158,7 @@ async def ask_human(
         return f"Failed to reach human: {e}. Proceeding with best judgment."
 
 
-@tool
+@tool()
 async def web_search_and_fetch(
     url: str = "",
     query: str = "",
@@ -199,7 +199,7 @@ async def web_search_and_fetch(
         return f"Web fetch failed: {e}"
 
 
-@tool
+@tool()
 async def search_web(
     query: str,
     max_results: int = 5,
@@ -208,7 +208,7 @@ async def search_web(
     return await web_search_and_fetch(query=query, max_results=max_results)
 
 
-@tool
+@tool()
 async def self_critique(
     work_summary: str,
     critique_focus: str = "correctness",
@@ -263,7 +263,7 @@ async def self_critique(
     )
 
 
-@tool
+@tool()
 async def recall_memory(
     query: str = "",
     memory_tier: str = "all",
@@ -296,7 +296,7 @@ async def recall_memory(
     return "\n\n".join(sections)
 
 
-@tool
+@tool()
 async def send_agent_message(
     target_role: str,
     message: str,
@@ -318,7 +318,7 @@ async def send_agent_message(
         return f"Agent message failed: {e}"
 
 
-@tool
+@tool()
 async def read_agent_messages(
     limit: int = 10,
 ) -> str:
