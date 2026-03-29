@@ -538,6 +538,9 @@ class RedisConsumer:
         self._go_client = go_client
         self._running = False
         self._active_teams: dict[str, asyncio.Task] = {}
+        # Maps task_id → team_id for deduplication so that duplicate
+        # team:create events for the same task don't spawn extra teams.
+        self._task_team_map: dict[str, str] = {}
         self._controller_id: str | None = None
         self._controller_hb_task: asyncio.Task | None = None
         self._controller_hb_stop = asyncio.Event()
@@ -739,6 +742,7 @@ class RedisConsumer:
             logger.info("Cancelled team %s", team_id)
 
         self._active_teams.clear()
+        self._task_team_map.clear()
 
         if self._redis:
             await self._redis.aclose()
@@ -897,24 +901,32 @@ class RedisConsumer:
             return
 
         # Skip if we're already running a team for this task.
-        for tid, t in self._active_teams.items():
-            if not t.done() and t.get_name().endswith(task_id[:8]):
-                logger.info("Skipping task %s — team already active", task_id)
+        if task_id in self._task_team_map:
+            existing_team = self._task_team_map[task_id]
+            existing_task = self._active_teams.get(existing_team)
+            if existing_task and not existing_task.done():
+                logger.info("Skipping task %s — team %s already active", task_id, existing_team[:8])
                 return
+            # Previous team finished/failed — allow retry.
+            del self._task_team_map[task_id]
 
         # Spin up a team for this task.
         team_id = str(uuid.uuid4())
+        self._task_team_map[task_id] = team_id
         team_task = asyncio.create_task(
             _run_full_pipeline(
                 team_id, task_data, self._engine, self._go_client,
                 warm_pool_cb=self._take_warm_agent,
             ),
-            name=f"team-{team_id[:8]}",
+            name=f"team-{team_id[:8]}-task-{task_id[:8]}",
         )
         self._active_teams[team_id] = team_task
 
         # Clean up when done.
-        team_task.add_done_callback(lambda _: self._active_teams.pop(team_id, None))
+        def _cleanup(_, tid=team_id, tsk=task_id):
+            self._active_teams.pop(tid, None)
+            self._task_team_map.pop(tsk, None)
+        team_task.add_done_callback(_cleanup)
 
         # Replenish warm pool in the background.
         asyncio.create_task(self._replenish_warm_pool(), name="replenish-pool")
