@@ -28,6 +28,7 @@ type Handler struct {
 	PRCreator   *PRCreator
 	VCSResolver *vcs.Resolver
 	DB          *pgxpool.Pool
+	MemorySvc   *MemoryService
 }
 
 // ── Agent Auth endpoints ────────────────────────────────────────────────────

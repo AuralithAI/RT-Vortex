@@ -409,6 +409,49 @@ CREATE TABLE IF NOT EXISTS swarm_diff_comments (
 
 CREATE INDEX IF NOT EXISTS idx_swarm_diff_comments_diff ON swarm_diff_comments(diff_id);
 
+-- ── Agent Memory (MTM) ──────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS swarm_agent_memory (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    repo_id     TEXT NOT NULL,
+    agent_role  TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    insight     TEXT NOT NULL,
+    confidence  DOUBLE PRECISION NOT NULL DEFAULT 0.8,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (repo_id, agent_role, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_swarm_memory_repo_role
+    ON swarm_agent_memory (repo_id, agent_role);
+CREATE INDEX IF NOT EXISTS idx_swarm_memory_updated
+    ON swarm_agent_memory (updated_at);
+
+-- ── Agent Tier (ELO auto-promotion) ─────────────────────────────────────────
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'swarm_agents' AND column_name = 'tier'
+    ) THEN
+        ALTER TABLE swarm_agents ADD COLUMN tier TEXT NOT NULL DEFAULT 'standard';
+    END IF;
+END $$;
+
+-- ── HITL Log ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS swarm_hitl_log (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id      TEXT NOT NULL,
+    agent_id     TEXT NOT NULL,
+    agent_role   TEXT NOT NULL DEFAULT '',
+    question     TEXT NOT NULL,
+    context      TEXT NOT NULL DEFAULT '',
+    urgency      TEXT NOT NULL DEFAULT 'normal',
+    response     TEXT,
+    asked_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    responded_at TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS agent_feedback (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     task_id       UUID REFERENCES swarm_tasks(id) ON DELETE CASCADE,
@@ -525,6 +568,10 @@ INSERT INTO schema_info (version, description)
 SELECT 10, 'Add benchmark tables — runs, results, ELO ratings for A/B testing harness'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 10);
 
+INSERT INTO schema_info (version, description)
+SELECT 11, 'Add swarm_agent_memory, swarm_hitl_log tables and tier column on swarm_agents'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 11);
+
 -- ============================================================================
 -- UPDATED_AT TRIGGER
 -- ============================================================================
@@ -603,6 +650,8 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE swarm_diff_comments TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE agent_feedback TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE agent_task_log TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_agent_memory TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_hitl_log TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE benchmark_runs TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE benchmark_results TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE benchmark_elo_ratings TO rtvortex;

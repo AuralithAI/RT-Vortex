@@ -393,6 +393,26 @@ func (s *Server) setupRouter() {
 				r.Post("/tasks/{id}/agent-message", sh.AgentMessage)
 				r.Post("/heartbeat/{id}", sh.Heartbeat)
 
+				// Memory hierarchy.
+				r.Post("/memory/mtm", sh.HandleMTMStore)
+				r.Get("/memory/mtm", sh.HandleMTMRecall)
+
+				// Human-in-the-loop.
+				r.Post("/hitl/ask", sh.HandleHITLAsk)
+
+				// CI proxy.
+				r.Post("/ci/run", sh.HandleCIRun)
+
+				// Web fetch proxy (URL fetching for agents).
+				r.Post("/web/fetch", sh.HandleWebFetch)
+
+				// Inter-agent communication bus.
+				r.Post("/agent-bus/publish", sh.HandleAgentBusPublish)
+				r.Get("/agent-bus/read", sh.HandleAgentBusRead)
+
+				// Asset ingestion (document/PDF/URL → engine embedding).
+				r.Post("/ingest-asset", sh.HandleIngestAsset)
+
 				// VCS proxy for agent workspace reads.
 				r.Post("/vcs/read-file", sh.VCSReadFile)
 				r.Post("/vcs/list-dir", sh.VCSListDir)
@@ -428,6 +448,9 @@ func (s *Server) setupRouter() {
 			r.Get("/agents", sh.ListAgentsUser)
 			r.Get("/teams", sh.ListTeamsUser)
 			r.Get("/overview", sh.SwarmOverview)
+
+			// Human-in-the-loop response (user JWT).
+			r.Post("/hitl/respond", sh.HandleHITLRespond)
 
 			// WebSocket: real-time swarm task events
 			if s.deps.WSHub != nil {

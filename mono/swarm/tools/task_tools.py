@@ -76,6 +76,7 @@ async def report_plan(
     steps: str,
     affected_files: str,
     estimated_complexity: str,
+    agents_needed: str = "[]",
 ) -> str:
     """Submit a plan for human review.
 
@@ -85,6 +86,8 @@ async def report_plan(
         steps: JSON array string of step objects, each with 'description' and 'files'.
         affected_files: JSON array string of file paths that will be modified.
         estimated_complexity: One of 'small', 'medium', 'large'.
+        agents_needed: JSON array string of role strings needed for the task,
+            e.g. '["senior_dev", "qa"]'. Optional — defaults to empty list.
 
     Returns:
         Confirmation string.
@@ -105,11 +108,17 @@ async def report_plan(
     except (json.JSONDecodeError, TypeError):
         files_list = [affected_files] if isinstance(affected_files, str) else []
 
+    try:
+        agents_list = json.loads(agents_needed) if isinstance(agents_needed, str) else agents_needed
+    except (json.JSONDecodeError, TypeError):
+        agents_list = []
+
     plan = {
         "summary": summary,
         "steps": steps_list,
         "affected_files": files_list,
         "estimated_complexity": estimated_complexity,
+        "agents_needed": agents_list,
     }
 
     await client.report_plan(task_id=task_id, plan=plan)

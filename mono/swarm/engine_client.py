@@ -234,3 +234,34 @@ class EngineClient:
                 "is_binary": False,
                 "error": f"GetFileContent not implemented yet: {e}",
             }
+
+    async def ingest_asset(
+        self,
+        repo_id: str,
+        source_url: str = "",
+        content: str = "",
+        asset_type: str = "document",
+        metadata: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        if not self._stub:
+            await self.connect()
+
+        try:
+            request = _pb2.IngestAssetRequest(
+                repo_id=repo_id,
+                source_url=source_url,
+                content=content,
+                asset_type=asset_type,
+                metadata=metadata or {},
+            )
+            response = await self._stub.IngestAsset(request)
+            return {
+                "chunks_created": response.chunks_created,
+                "status": response.status,
+            }
+        except (AttributeError, grpc.RpcError) as e:
+            logger.warning("IngestAsset RPC not available yet: %s", e)
+            return {
+                "chunks_created": 0,
+                "status": f"IngestAsset not implemented yet: {e}",
+            }

@@ -41,6 +41,9 @@ service EngineService {
     // File Content — read a file from the engine's local clone for the swarm
     rpc GetFileContent(FileContentRequest) returns (FileContentResponse);
 
+    // Asset Ingestion — embed documents, PDFs, and URL content into a repo index
+    rpc IngestAsset(IngestAssetRequest) returns (IngestAssetResponse);
+
     // Metrics — server-streaming so the Go API server can relay to the dashboard.
     // The engine pushes a snapshot every interval_ms (default 1000).
     rpc StreamEngineMetrics(EngineMetricsRequest) returns (stream EngineMetricsSnapshot);
@@ -546,4 +549,21 @@ message FileContentResponse {
     string content = 1;      // File content (UTF-8 text)
     string encoding = 2;     // "utf-8" or "base64" for binary files
     bool is_binary = 3;      // True if file was detected as binary
+}
+
+// ============================================================================
+// Asset Ingestion (Documents, PDFs, URLs)
+// ============================================================================
+
+message IngestAssetRequest {
+    string repo_id = 1;         // Repository to embed into
+    string source_url = 2;      // Original URL (for metadata)
+    string content = 3;         // Extracted text content to embed
+    string asset_type = 4;      // "document", "pdf", "url"
+    map<string, string> metadata = 5; // Additional metadata tags
+}
+
+message IngestAssetResponse {
+    int32 chunks_created = 1;   // Number of chunks created
+    string status = 2;          // "ok" or error description
 }

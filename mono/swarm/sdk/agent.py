@@ -9,6 +9,10 @@ JWT.  All subsequent LLM and task-management calls use that token.
 If a :class:`~mono.swarm.conversation.SharedConversation` is attached, all
 LLM responses and tool calls are broadcast to the shared conversation for
 live UI display.
+
+* **Memory hierarchy** — Every agent gets an :class:`AgentMemory` instance
+  with STM/MTM/LTM tiers.  Memory context is injected into the system prompt
+  and reflections run after each tool call.
 """
 
 from __future__ import annotations
@@ -26,6 +30,7 @@ from .tool import ToolDef
 
 if TYPE_CHECKING:
     from ..conversation import SharedConversation
+    from ..memory import AgentMemory
     from ..workspace import VirtualWorkspace
 
 logger = logging.getLogger(__name__)
@@ -84,6 +89,7 @@ class Agent:
         self.tools: list[ToolDef] = []
         self.conversation: SharedConversation | None = None
         self.workspace: VirtualWorkspace | None = None
+        self.memory: AgentMemory | None = None
 
     async def register(self) -> None:
         """Register with Go and obtain a short-lived agent JWT.
@@ -131,6 +137,9 @@ class Agent:
         with a summary of what other agents have said so far, and every LLM
         response / tool call is broadcast to the conversation.
 
+        If a :attr:`memory` is attached, memory context (STM scratchpad,
+        MTM insights, LTM search) is injected into the system prompt.
+
         Args:
             task: The task to execute, received from the Go server.
 
@@ -148,6 +157,20 @@ class Agent:
             if summary:
                 system_prompt += f"\n\n{summary}\n"
 
+        # Inject memory context (STM observations + MTM insights + LTM search).
+        if self.memory:
+            try:
+                mem_context = await self.memory.build_memory_context(
+                    task_description=task.description
+                )
+                if mem_context:
+                    system_prompt += (
+                        f"\n\n=== Memory Context ===\n{mem_context}\n"
+                    )
+            except Exception as e:
+                logger.warning("Agent %s: memory context build failed: %s",
+                               self.agent_id, e)
+
         initial_message = f"Task: {task.description}\nRepo: {task.repo_id}"
 
         messages = await agent_loop(
@@ -160,6 +183,7 @@ class Agent:
             agent_role=self.role,
             agent_id=self.agent_id,
             conversation=self.conversation,
+            memory=self.memory,
         )
 
         return self.parse_result(messages)

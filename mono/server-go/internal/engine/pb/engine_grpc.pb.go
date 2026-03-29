@@ -37,6 +37,7 @@ const (
 	EngineService_GetDiagnostics_FullMethodName           = "/aipr.engine.v1.EngineService/GetDiagnostics"
 	EngineService_GetEmbedStats_FullMethodName            = "/aipr.engine.v1.EngineService/GetEmbedStats"
 	EngineService_GetFileContent_FullMethodName           = "/aipr.engine.v1.EngineService/GetFileContent"
+	EngineService_IngestAsset_FullMethodName              = "/aipr.engine.v1.EngineService/IngestAsset"
 	EngineService_StreamEngineMetrics_FullMethodName      = "/aipr.engine.v1.EngineService/StreamEngineMetrics"
 )
 
@@ -68,6 +69,8 @@ type EngineServiceClient interface {
 	GetEmbedStats(ctx context.Context, in *EmbedStatsRequest, opts ...grpc.CallOption) (*EmbedStatsResponse, error)
 	// File Content — read a file from the engine's local clone for the swarm
 	GetFileContent(ctx context.Context, in *FileContentRequest, opts ...grpc.CallOption) (*FileContentResponse, error)
+	// Asset Ingestion — embed documents, PDFs, and URL content into a repo index
+	IngestAsset(ctx context.Context, in *IngestAssetRequest, opts ...grpc.CallOption) (*IngestAssetResponse, error)
 	// Metrics — server-streaming so the Go API server can relay to the dashboard.
 	// The engine pushes a snapshot every interval_ms (default 1000).
 	StreamEngineMetrics(ctx context.Context, in *EngineMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineMetricsSnapshot], error)
@@ -258,6 +261,16 @@ func (c *engineServiceClient) GetFileContent(ctx context.Context, in *FileConten
 	return out, nil
 }
 
+func (c *engineServiceClient) IngestAsset(ctx context.Context, in *IngestAssetRequest, opts ...grpc.CallOption) (*IngestAssetResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IngestAssetResponse)
+	err := c.cc.Invoke(ctx, EngineService_IngestAsset_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *engineServiceClient) StreamEngineMetrics(ctx context.Context, in *EngineMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineMetricsSnapshot], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &EngineService_ServiceDesc.Streams[3], EngineService_StreamEngineMetrics_FullMethodName, cOpts...)
@@ -305,6 +318,8 @@ type EngineServiceServer interface {
 	GetEmbedStats(context.Context, *EmbedStatsRequest) (*EmbedStatsResponse, error)
 	// File Content — read a file from the engine's local clone for the swarm
 	GetFileContent(context.Context, *FileContentRequest) (*FileContentResponse, error)
+	// Asset Ingestion — embed documents, PDFs, and URL content into a repo index
+	IngestAsset(context.Context, *IngestAssetRequest) (*IngestAssetResponse, error)
 	// Metrics — server-streaming so the Go API server can relay to the dashboard.
 	// The engine pushes a snapshot every interval_ms (default 1000).
 	StreamEngineMetrics(*EngineMetricsRequest, grpc.ServerStreamingServer[EngineMetricsSnapshot]) error
@@ -362,6 +377,9 @@ func (UnimplementedEngineServiceServer) GetEmbedStats(context.Context, *EmbedSta
 }
 func (UnimplementedEngineServiceServer) GetFileContent(context.Context, *FileContentRequest) (*FileContentResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetFileContent not implemented")
+}
+func (UnimplementedEngineServiceServer) IngestAsset(context.Context, *IngestAssetRequest) (*IngestAssetResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method IngestAsset not implemented")
 }
 func (UnimplementedEngineServiceServer) StreamEngineMetrics(*EngineMetricsRequest, grpc.ServerStreamingServer[EngineMetricsSnapshot]) error {
 	return status.Error(codes.Unimplemented, "method StreamEngineMetrics not implemented")
@@ -636,6 +654,24 @@ func _EngineService_GetFileContent_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngineService_IngestAsset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IngestAssetRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngineServiceServer).IngestAsset(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngineService_IngestAsset_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngineServiceServer).IngestAsset(ctx, req.(*IngestAssetRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _EngineService_StreamEngineMetrics_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(EngineMetricsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -701,6 +737,10 @@ var EngineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetFileContent",
 			Handler:    _EngineService_GetFileContent_Handler,
+		},
+		{
+			MethodName: "IngestAsset",
+			Handler:    _EngineService_IngestAsset_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

@@ -212,6 +212,16 @@ async def _run_full_pipeline(
     )
     init_workspace_tools(workspace)
 
+    # Initialise extended tools.
+    from .tools.extended_tools import init_extended_tools
+    from .memory import AgentMemory
+
+    init_extended_tools(
+        go_client=go_client,
+        engine_client=engine_client,
+        redis_url=get_config().redis_url,
+    )
+
     conversation = SharedConversation(
         task_id=task.id,
         go_client=go_client,
@@ -256,6 +266,20 @@ async def _run_full_pipeline(
         orchestrator = _make_agent("orchestrator", team_id, agent_config)
         orchestrator.conversation = conversation
         orchestrator.workspace = workspace
+
+        # Attach memory hierarchy.
+        orch_memory = AgentMemory(
+            agent_id=orchestrator.agent_id,
+            agent_role="orchestrator",
+            task_id=task.id,
+            repo_id=task.repo_id,
+            redis_url=get_config().redis_url,
+            go_client=go_client,
+            engine_client=engine_client,
+        )
+        await orch_memory.init()
+        orchestrator.memory = orch_memory
+
         # Reuse a warm-pool agent ID if available (skip cold registration).
         warm_id = warm_pool_cb() if warm_pool_cb else None
         if warm_id:
@@ -309,11 +333,31 @@ async def _run_full_pipeline(
         task.status = "implementing"
 
         # ── Step 3: Determine team composition from the plan ────────────
-        # The plan's estimated_complexity drives team size.
-        complexity = (orch_result.plan or {}).get("estimated_complexity", "medium")
-        if complexity == "small":
+        # The plan's estimated_complexity and agents_needed drive team size.
+        # Use a smarter team sizing algorithm that considers
+        # the plan's affected_files count, step count, and explicit agent request.
+        plan = orch_result.plan or {}
+        complexity = plan.get("estimated_complexity", "medium")
+        agents_needed = plan.get("agents_needed", 0)
+        affected_files = len(plan.get("affected_files", []))
+        step_count = len(plan.get("steps", []))
+
+        # Dynamic team sizing:
+        # 1. If the orchestrator explicitly requested a team size, respect it.
+        # 2. Otherwise, use heuristics based on complexity + file/step count.
+        if agents_needed and isinstance(agents_needed, int) and agents_needed > 0:
+            # Orchestrator requested specific team size — map to roles.
+            if agents_needed <= 1:
+                roles = ["senior_dev"]
+            elif agents_needed <= 3:
+                roles = ["senior_dev", "qa"]
+            elif agents_needed <= 5:
+                roles = ["architect", "senior_dev", "junior_dev", "qa", "security"]
+            else:
+                roles = ["architect", "senior_dev", "senior_dev", "junior_dev", "qa", "security", "docs"]
+        elif complexity == "small" or (affected_files <= 2 and step_count <= 3):
             roles = ["senior_dev"]
-        elif complexity == "large":
+        elif complexity == "large" or affected_files > 10 or step_count > 8:
             roles = ["architect", "senior_dev", "junior_dev", "qa", "security", "docs"]
         else:  # medium
             roles = ["senior_dev", "qa", "security"]
@@ -324,10 +368,44 @@ async def _run_full_pipeline(
         # ── Step 4: Run implementation agents ───────────────────────────
         implementation_agents: list[Agent] = []
 
+        # Import extended tool collections.
+        from .tools.extended_tools import CODE_TOOLS, RESEARCH_TOOLS, HITL_TOOLS, COMM_TOOLS
+
         for role in roles:
             agent = _make_agent(role, team_id, agent_config)
             agent.conversation = conversation
             agent.workspace = workspace
+
+            # Attach memory hierarchy.
+            agent_mem = AgentMemory(
+                agent_id=agent.agent_id,
+                agent_role=role,
+                task_id=task.id,
+                repo_id=task.repo_id,
+                redis_url=get_config().redis_url,
+                go_client=go_client,
+                engine_client=engine_client,
+            )
+            await agent_mem.init()
+            agent.memory = agent_mem
+
+            # Inject extended tools based on role.
+            if role in ("senior_dev", "architect", "junior_dev"):
+                agent.tools.extend(CODE_TOOLS)
+                agent.tools.extend(RESEARCH_TOOLS)
+            elif role in ("qa", "security"):
+                agent.tools.extend(RESEARCH_TOOLS)
+                agent.tools.extend([t for t in CODE_TOOLS if t.name in ("git_diff", "self_critique")])
+            elif role in ("docs", "ops"):
+                agent.tools.extend(RESEARCH_TOOLS)
+
+            # Inter-agent communication for all roles.
+            agent.tools.extend(COMM_TOOLS)
+
+            # HITL tools only for senior roles.
+            if role in ("senior_dev", "architect"):
+                agent.tools.extend(HITL_TOOLS)
+
             warm_id = warm_pool_cb() if warm_pool_cb else None
             if warm_id:
                 agent.agent_id = warm_id
@@ -414,6 +492,16 @@ async def _run_full_pipeline(
             try:
                 await heartbeat_task
             except (asyncio.CancelledError, Exception):
+                pass
+
+        # Clean up agent STM.
+        for aid in agent_ids:
+            try:
+                from .memory import ShortTermMemory
+                stm = ShortTermMemory(get_config().redis_url, task.id, aid)
+                await stm.init()
+                await stm.clear()
+            except Exception:
                 pass
 
         # Best-effort token revocation for all agents on this team.

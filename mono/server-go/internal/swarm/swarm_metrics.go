@@ -182,3 +182,65 @@ var (
 		Help:      "Number of tasks waiting in the pending queue.",
 	})
 )
+
+// ── Memory & HITL Metrics ───────────────────────────────────────────────────
+
+var (
+	// SwarmMTMStoreOps counts MTM store operations.
+	SwarmMTMStoreOps = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "mtm_store_ops_total",
+		Help:      "Total MTM (medium-term memory) store operations.",
+	})
+
+	// SwarmMTMRecallOps counts MTM recall operations.
+	SwarmMTMRecallOps = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "mtm_recall_ops_total",
+		Help:      "Total MTM (medium-term memory) recall operations.",
+	})
+
+	// SwarmHITLQuestionsTotal counts HITL questions asked by agents.
+	SwarmHITLQuestionsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "hitl_questions_total",
+		Help:      "Total human-in-the-loop questions asked by agents.",
+	})
+
+	// SwarmHITLResponseTime observes how long humans take to respond.
+	SwarmHITLResponseTime = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "hitl_response_seconds",
+		Help:      "Time for humans to respond to HITL questions.",
+		Buckets:   []float64{5, 15, 30, 60, 120, 300, 600},
+	})
+
+	// SwarmJanitorCycleDuration observes janitor cycle duration.
+	SwarmJanitorCycleDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "janitor_cycle_seconds",
+		Help:      "Duration of janitor cleanup cycles.",
+		Buckets:   []float64{0.01, 0.05, 0.1, 0.5, 1, 5},
+	})
+
+	// SwarmAgentTierDistribution tracks how many agents are in each tier.
+	SwarmAgentTierDistribution = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "agent_tier_distribution",
+		Help:      "Number of agents in each ELO-based tier (standard, expert, restricted).",
+	}, []string{"tier"})
+
+	// SwarmMemoryReflections counts memory reflection operations per agent role.
+	SwarmMemoryReflections = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "memory_reflections_total",
+		Help:      "Total memory reflection operations by agent role.",
+	}, []string{"role"})
+)

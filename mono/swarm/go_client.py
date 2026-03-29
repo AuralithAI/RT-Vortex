@@ -1,10 +1,4 @@
-"""HTTP client for the Go swarm management endpoints.
-
-All agent ↔ Go communication passes through :class:`GoClient`.  It handles
-bearer-token authentication, request serialisation, and timeout management.
-Endpoints correspond to the routes registered in ``internal/server/server.go``
-under ``/internal/swarm/``.
-"""
+"""HTTP client for the Go swarm management endpoints."""
 
 from __future__ import annotations
 
@@ -267,3 +261,180 @@ class GoClient:
                 resp.raise_for_status()
             except Exception:
                 pass  # Best-effort — don't fail the agent if WS broadcast fails.
+
+    # ── MTM (Medium-Term Memory) endpoints ───────────────────────────────
+
+    async def mtm_store(
+        self,
+        repo_id: str,
+        agent_role: str,
+        key: str,
+        insight: str,
+        confidence: float = 0.8,
+    ) -> None:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/memory/mtm",
+                headers=self._headers(),
+                json={
+                    "repo_id": repo_id,
+                    "agent_role": agent_role,
+                    "key": key,
+                    "insight": insight,
+                    "confidence": confidence,
+                },
+            )
+            resp.raise_for_status()
+
+    async def mtm_recall(
+        self,
+        repo_id: str,
+        agent_role: str,
+        limit: int = 10,
+    ) -> list[dict]:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/memory/mtm",
+                headers=self._headers(),
+                params={
+                    "repo_id": repo_id,
+                    "agent_role": agent_role,
+                    "limit": str(limit),
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("insights", [])
+
+    # ── HITL (Human-in-the-Loop) endpoints ───────────────────────────────
+
+    async def ask_human(
+        self,
+        question: str,
+        context: str = "",
+        urgency: str = "normal",
+        timeout: int = 300,
+    ) -> dict:
+        async with httpx.AsyncClient(timeout=float(timeout + 10)) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/hitl/ask",
+                headers=self._headers(),
+                json={
+                    "question": question,
+                    "context": context,
+                    "urgency": urgency,
+                    "timeout_seconds": timeout,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    # ── CI/CD proxy endpoints ────────────────────────────────────────────
+
+    async def run_ci_command(
+        self,
+        command_type: str,
+        command: str = "",
+        files: list[str] | None = None,
+        timeout: int = 120,
+    ) -> dict:
+        async with httpx.AsyncClient(timeout=float(timeout + 10)) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/ci/run",
+                headers=self._headers(),
+                json={
+                    "command_type": command_type,
+                    "command": command,
+                    "files": files or [],
+                    "timeout_seconds": timeout,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    # ── Web fetch proxy ──────────────────────────────────────────────────
+
+    async def web_fetch(
+        self,
+        url: str = "",
+        query: str = "",
+        max_results: int = 5,
+        extract_pdf: bool = False,
+    ) -> dict:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/web/fetch",
+                headers=self._headers(),
+                json={
+                    "url": url,
+                    "query": query,
+                    "max_results": max_results,
+                    "extract_pdf": extract_pdf,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    # ── Inter-agent communication bus ────────────────────────────────────
+
+    async def publish_agent_bus(
+        self,
+        target_role: str,
+        message: str,
+        include_embeddings_ref: bool = False,
+        confidence: float = 0.8,
+        task_id: str = "",
+        from_role: str = "",
+    ) -> dict:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/agent-bus/publish",
+                headers=self._headers(),
+                json={
+                    "target_role": target_role,
+                    "message": message,
+                    "include_embeddings_ref": include_embeddings_ref,
+                    "confidence": confidence,
+                    "task_id": task_id,
+                    "from_role": from_role,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def read_agent_bus(
+        self,
+        role: str = "",
+        limit: int = 10,
+    ) -> dict:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/agent-bus/read",
+                headers=self._headers(),
+                params={"role": role, "limit": str(limit)},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    # ── Asset ingestion ──────────────────────────────────────────────────
+
+    async def ingest_asset(
+        self,
+        repo_id: str,
+        source_url: str = "",
+        content: str = "",
+        asset_type: str = "document",
+    ) -> dict:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/ingest-asset",
+                headers=self._headers(),
+                json={
+                    "repo_id": repo_id,
+                    "source_url": source_url,
+                    "content": content,
+                    "asset_type": asset_type,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()

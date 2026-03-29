@@ -82,6 +82,11 @@ Use `report_plan` to submit a structured plan with:
 - Step-by-step implementation plan (JSON array of step objects)
 - List of affected files
 - Complexity estimate
+- **agents_needed**: A JSON array of role strings specifying exactly which
+  agent roles should be on the team. Choose from: "senior_dev", "junior_dev",
+  "qa", "security", "architect", "devops". Pick only the roles actually
+  required — don't request a security agent for a typo fix.
+  Example: ["senior_dev", "qa"] for a medium bug-fix that needs testing.
 
 ## Important Rules
 - Always search the codebase BEFORE writing a plan
@@ -89,6 +94,7 @@ Use `report_plan` to submit a structured plan with:
 - Include test files in your affected_files if the task requires test changes
 - Do NOT generate code — only produce the plan
 - Keep the plan concise but thorough
+- Choose **agents_needed** carefully — unnecessary agents waste resources
 """
 
     def parse_result(self, messages: list[dict]) -> AgentResult:
@@ -117,11 +123,13 @@ Use `report_plan` to submit a structured plan with:
                         args = json.loads(fn.get("arguments", "{}"))
                         steps = args.get("steps", "[]")
                         files = args.get("affected_files", "[]")
+                        agents = args.get("agents_needed", "[]")
                         plan = {
                             "summary": args.get("summary", ""),
                             "steps": json.loads(steps) if isinstance(steps, str) else steps,
                             "affected_files": json.loads(files) if isinstance(files, str) else files,
                             "estimated_complexity": args.get("estimated_complexity", "medium"),
+                            "agents_needed": json.loads(agents) if isinstance(agents, str) else agents,
                         }
                     except (json.JSONDecodeError, TypeError) as e:
                         logger.warning("Failed to parse plan from tool call: %s", e)
@@ -165,6 +173,7 @@ Use `report_plan` to submit a structured plan with:
                         "steps": candidate.get("steps", [{"description": text[:500]}]),
                         "affected_files": candidate.get("affected_files", []),
                         "estimated_complexity": candidate.get("estimated_complexity", "medium"),
+                        "agents_needed": candidate.get("agents_needed", []),
                     }
             except (json.JSONDecodeError, TypeError):
                 continue
@@ -177,4 +186,5 @@ Use `report_plan` to submit a structured plan with:
             "steps": [{"description": text}],
             "affected_files": [],
             "estimated_complexity": "medium",
+            "agents_needed": [],
         }

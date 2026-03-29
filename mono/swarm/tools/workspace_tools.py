@@ -37,6 +37,11 @@ def _get_ws() -> VirtualWorkspace:
     return _workspace
 
 
+def _get_workspace() -> VirtualWorkspace | None:
+    """Return the current workspace (or None). Used by extended_tools."""
+    return _workspace
+
+
 # ── Tools ────────────────────────────────────────────────────────────────────
 
 

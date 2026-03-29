@@ -110,6 +110,11 @@ class EngineServiceStub(object):
                 request_serializer=engine__pb2.FileContentRequest.SerializeToString,
                 response_deserializer=engine__pb2.FileContentResponse.FromString,
                 _registered_method=True)
+        self.IngestAsset = channel.unary_unary(
+                '/aipr.engine.v1.EngineService/IngestAsset',
+                request_serializer=engine__pb2.IngestAssetRequest.SerializeToString,
+                response_deserializer=engine__pb2.IngestAssetResponse.FromString,
+                _registered_method=True)
         self.StreamEngineMetrics = channel.unary_stream(
                 '/aipr.engine.v1.EngineService/StreamEngineMetrics',
                 request_serializer=engine__pb2.EngineMetricsRequest.SerializeToString,
@@ -218,6 +223,13 @@ class EngineServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def IngestAsset(self, request, context):
+        """Asset Ingestion — embed documents, PDFs, and URL content into a repo index
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def StreamEngineMetrics(self, request, context):
         """Metrics — server-streaming so the Go API server can relay to the dashboard.
         The engine pushes a snapshot every interval_ms (default 1000).
@@ -303,6 +315,11 @@ def add_EngineServiceServicer_to_server(servicer, server):
                     servicer.GetFileContent,
                     request_deserializer=engine__pb2.FileContentRequest.FromString,
                     response_serializer=engine__pb2.FileContentResponse.SerializeToString,
+            ),
+            'IngestAsset': grpc.unary_unary_rpc_method_handler(
+                    servicer.IngestAsset,
+                    request_deserializer=engine__pb2.IngestAssetRequest.FromString,
+                    response_serializer=engine__pb2.IngestAssetResponse.SerializeToString,
             ),
             'StreamEngineMetrics': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamEngineMetrics,
@@ -716,6 +733,33 @@ class EngineService(object):
             '/aipr.engine.v1.EngineService/GetFileContent',
             engine__pb2.FileContentRequest.SerializeToString,
             engine__pb2.FileContentResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def IngestAsset(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aipr.engine.v1.EngineService/IngestAsset',
+            engine__pb2.IngestAssetRequest.SerializeToString,
+            engine__pb2.IngestAssetResponse.FromString,
             options,
             channel_credentials,
             insecure,

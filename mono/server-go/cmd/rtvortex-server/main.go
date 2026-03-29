@@ -536,6 +536,7 @@ func main() {
 	swarmELO := swarm.NewELOService(db.Pool)
 	swarmWSHub := swarm.NewWSHub(wsHub)
 	swarmPRCreator := swarm.NewPRCreator(db.Pool, vcsResolver, swarmTaskMgr, swarmWSHub)
+	swarmMemorySvc := swarm.NewMemoryService(db.Pool)
 
 	swarmHandler := &swarm.Handler{
 		AuthSvc:     swarmAuthSvc,
@@ -547,11 +548,20 @@ func main() {
 		PRCreator:   swarmPRCreator,
 		VCSResolver: vcsResolver,
 		DB:          db.Pool,
+		MemorySvc:   swarmMemorySvc,
 	}
 
 	// Start the swarm task assignment loop.
 	swarmTaskMgr.Start(ctx)
 	defer swarmTaskMgr.Stop()
+
+	// Background janitor (cleanup idle teams, stale heartbeats, old MTM).
+	swarmJanitor := swarm.NewJanitor(db.Pool, redisClient.Client(), swarmMemorySvc)
+	go swarmJanitor.Start(ctx)
+
+	// ELO auto-promotion / demotion.
+	swarmAutoTier := swarm.NewELOAutoTierService(db.Pool)
+	go swarmAutoTier.Start(ctx)
 
 	slog.Info("Swarm agent infrastructure initialized")
 
