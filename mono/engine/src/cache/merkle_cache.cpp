@@ -158,27 +158,46 @@ MerkleDiffResult MerkleCache::computeDiff(
         }
     }
 
-    // Track which stored files are still present
-    std::unordered_set<std::string> current_files_set(all_files.begin(), all_files.end());
+    // Track which stored files are still present (using relative paths).
+    // We build this set incrementally in the loop below so that both absolute
+    // and relative inputs are normalised to relative keys.
+    std::unordered_set<std::string> current_files_set;
 
     // Compute new hashes and compare
     std::unordered_map<std::string, std::string> new_hashes;
 
     for (const auto& file_path : all_files) {
-        std::string full_path = repo_path + "/" + file_path;
+        // file_path may be absolute (from walkDirectory) or relative.
+        // If it already starts with repo_path, use it directly.
+        std::string full_path;
+        if (!file_path.empty() && file_path[0] == '/' ) {
+            full_path = file_path;
+        } else {
+            full_path = repo_path + "/" + file_path;
+        }
+
+        // Normalise the key stored in the cache to a relative path so that
+        // lookups are consistent regardless of the clone location.
+        std::string rel_path = file_path;
+        if (rel_path.size() > repo_path.size() + 1 &&
+            rel_path.compare(0, repo_path.size(), repo_path) == 0) {
+            rel_path = rel_path.substr(repo_path.size() + 1); // strip repo_path + "/"
+        }
+
         std::string current_hash = hashFile(full_path);
 
         if (current_hash.empty()) continue; // unreadable file
 
-        new_hashes[file_path] = current_hash;
+        new_hashes[rel_path] = current_hash;
+        current_files_set.insert(rel_path);
 
-        auto it = stored_hashes.find(file_path);
+        auto it = stored_hashes.find(rel_path);
         if (it == stored_hashes.end()) {
-            result.new_files.push_back(file_path);
+            result.new_files.push_back(rel_path);
         } else if (it->second != current_hash) {
-            result.changed_files.push_back(file_path);
+            result.changed_files.push_back(rel_path);
         } else {
-            result.unchanged_files.push_back(file_path);
+            result.unchanged_files.push_back(rel_path);
         }
     }
 

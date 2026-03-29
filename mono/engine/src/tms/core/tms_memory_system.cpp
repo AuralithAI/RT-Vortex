@@ -279,6 +279,17 @@ void TMSMemorySystem::ingestRepository(
     }
 
     auto all_files = repo_parser_->listFiles(repo_path);
+
+    // Normalise to relative paths.  walkDirectory() may return absolute
+    // paths; downstream code constructs full paths via repo_path + "/" + f,
+    // so the entries must be relative to repo_path.
+    for (auto& f : all_files) {
+        if (f.size() > repo_path.size() + 1 &&
+            f.compare(0, repo_path.size(), repo_path) == 0) {
+            f = f.substr(repo_path.size() + 1);
+        }
+    }
+
     const size_t total_files = all_files.size();
 
     std::cerr << "[TMS] ingestRepository: repo_path=" << repo_path
