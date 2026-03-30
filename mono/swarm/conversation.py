@@ -111,6 +111,14 @@ class SharedConversation:
             desc = f"Listing {tool_args.get('path', '/')}"
         elif tool_name == "workspace_grep":
             desc = f"Grep: {tool_args.get('pattern', '?')}"
+        elif tool_name == "mcp_call":
+            desc = f"MCP: {tool_args.get('provider', '?')}/{tool_args.get('action', '?')}"
+        elif tool_name == "mcp_list_tools":
+            desc = "Listing MCP providers"
+        elif tool_name == "mcp_list_connections":
+            desc = "Listing MCP connections"
+        elif tool_name == "mcp_describe_action":
+            desc = f"Describing {tool_args.get('provider', '?')}/{tool_args.get('action', '?')}"
         else:
             desc = f"Calling {tool_name}"
 
