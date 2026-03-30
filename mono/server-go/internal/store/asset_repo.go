@@ -90,6 +90,15 @@ func (r *AssetRepository) UpdateMeta(ctx context.Context, id uuid.UUID, fileName
 	return err
 }
 
+// UpdateMetadata stores arbitrary JSON metadata (e.g. image thumbnails) on an asset.
+func (r *AssetRepository) UpdateMetadata(ctx context.Context, id uuid.UUID, metadata string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE repo_assets SET metadata = $1, updated_at = NOW() WHERE id = $2`,
+		metadata, id,
+	)
+	return err
+}
+
 // ListByRepo returns all assets for a given repository.
 func (r *AssetRepository) ListByRepo(ctx context.Context, repoID uuid.UUID, limit int) ([]Asset, error) {
 	if limit <= 0 || limit > 500 {
@@ -99,7 +108,7 @@ func (r *AssetRepository) ListByRepo(ctx context.Context, repoID uuid.UUID, limi
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, repo_id, asset_type, COALESCE(source_url,''), COALESCE(file_name,''),
 		        COALESCE(mime_type,''), size_bytes, chunks_count, status,
-		        COALESCE(error_message,''), created_at
+		        COALESCE(error_message,''), COALESCE(metadata,''), created_at
 		 FROM repo_assets WHERE repo_id = $1 ORDER BY created_at DESC LIMIT $2`,
 		repoID, limit,
 	)
@@ -113,7 +122,7 @@ func (r *AssetRepository) ListByRepo(ctx context.Context, repoID uuid.UUID, limi
 		var a Asset
 		if err := rows.Scan(&a.ID, &a.RepoID, &a.AssetType, &a.SourceURL,
 			&a.FileName, &a.MIMEType, &a.SizeBytes, &a.ChunksCount,
-			&a.Status, &a.ErrorMessage, &a.CreatedAt); err != nil {
+			&a.Status, &a.ErrorMessage, &a.Metadata, &a.CreatedAt); err != nil {
 			continue
 		}
 		assets = append(assets, a)
@@ -127,12 +136,12 @@ func (r *AssetRepository) GetByID(ctx context.Context, id uuid.UUID) (*Asset, er
 	err := r.pool.QueryRow(ctx,
 		`SELECT id, repo_id, asset_type, COALESCE(source_url,''), COALESCE(file_name,''),
 		        COALESCE(mime_type,''), size_bytes, chunks_count, status,
-		        COALESCE(error_message,''), created_at
+		        COALESCE(error_message,''), COALESCE(metadata,''), created_at
 		 FROM repo_assets WHERE id = $1`,
 		id,
 	).Scan(&a.ID, &a.RepoID, &a.AssetType, &a.SourceURL,
 		&a.FileName, &a.MIMEType, &a.SizeBytes, &a.ChunksCount,
-		&a.Status, &a.ErrorMessage, &a.CreatedAt)
+		&a.Status, &a.ErrorMessage, &a.Metadata, &a.CreatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

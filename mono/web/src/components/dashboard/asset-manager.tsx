@@ -1,6 +1,7 @@
 // ─── Asset Manager ───────────────────────────────────────────────────────────
 // Compact card grid for uploading, listing, and deleting multimodal assets
 // (images, audio, PDFs, URLs) within a repository.  Paginated (12 per page).
+// Includes inline previews: image thumbnails, audio players, PDF embeds.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -23,9 +24,14 @@ import {
   ChevronLeft,
   ChevronRight,
   Plus,
+  X,
+  Eye,
+  Play,
+  ExternalLink,
 } from "lucide-react";
 import { useAssets } from "@/lib/api/queries";
 import { useUploadAsset, useIngestUrl, useDeleteAsset } from "@/lib/api/mutations";
+import { assets as assetsApi } from "@/lib/api/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -345,6 +351,7 @@ export function AssetManager({ repoId }: AssetManagerProps) {
                   <AssetCard
                     key={asset.id}
                     asset={asset}
+                    repoId={repoId}
                     onDelete={handleDelete}
                     deleting={deleteAsset.isPending}
                   />
@@ -394,15 +401,17 @@ export function AssetManager({ repoId }: AssetManagerProps) {
   );
 }
 
-// ── Single Asset Card ───────────────────────────────────────────────────────
+// ── Single Asset Card (with inline previews) ───────────────────────────────
 
 interface AssetCardProps {
   asset: Asset;
+  repoId: string;
   onDelete: (a: Asset) => void;
   deleting: boolean;
 }
 
-function AssetCard({ asset, onDelete, deleting }: AssetCardProps) {
+function AssetCard({ asset, repoId, onDelete, deleting }: AssetCardProps) {
+  const [showPreview, setShowPreview] = useState(false);
   const Icon = ASSET_ICONS[asset.asset_type] ?? File;
   const iconColor = ASSET_COLORS[asset.asset_type] ?? "text-zinc-500";
 
@@ -412,60 +421,325 @@ function AssetCard({ asset, onDelete, deleting }: AssetCardProps) {
       ? new URL(asset.source_url).hostname
       : asset.id.slice(0, 8));
 
+  const contentUrl = assetsApi.contentUrl(repoId, asset.id);
+
+  // Parse thumbnail from metadata JSON (stored at upload for images).
+  let thumbnail: string | undefined;
+  if (asset.metadata) {
+    try {
+      const meta = JSON.parse(asset.metadata);
+      thumbnail = meta.thumbnail;
+    } catch {
+      // ignore
+    }
+  }
+
+  return (
+    <>
+      <motion.div
+        layout
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        transition={{ duration: 0.15 }}
+        className="group relative flex flex-col rounded-lg border bg-background overflow-hidden hover:bg-muted/40 transition-colors cursor-pointer"
+        onClick={() => setShowPreview(true)}
+      >
+        {/* Preview thumbnail area */}
+        <div className="relative h-24 bg-muted/30 flex items-center justify-center overflow-hidden">
+          {asset.asset_type === "image" && thumbnail ? (
+            <img
+              src={thumbnail}
+              alt={displayName}
+              className="w-full h-full object-cover"
+              loading="lazy"
+            />
+          ) : asset.asset_type === "image" ? (
+            <img
+              src={contentUrl}
+              alt={displayName}
+              className="w-full h-full object-cover"
+              loading="lazy"
+              onError={(e) => {
+                // Fallback to icon if content endpoint isn't available
+                (e.target as HTMLImageElement).style.display = "none";
+              }}
+            />
+          ) : asset.asset_type === "audio" ? (
+            <div className="flex flex-col items-center gap-1">
+              <div className="w-10 h-10 rounded-full bg-amber-500/10 flex items-center justify-center">
+                <Play className="h-5 w-5 text-amber-500" />
+              </div>
+              <span className="text-[9px] text-muted-foreground">Audio</span>
+            </div>
+          ) : asset.asset_type === "webpage" ? (
+            <div className="flex flex-col items-center gap-1">
+              <Globe className="h-8 w-8 text-blue-400" />
+              {asset.source_url && (
+                <span className="text-[9px] text-muted-foreground truncate max-w-[90%]">
+                  {new URL(asset.source_url).hostname}
+                </span>
+              )}
+            </div>
+          ) : asset.asset_type === "pdf" ? (
+            <div className="flex flex-col items-center gap-1">
+              <FileText className="h-8 w-8 text-red-400" />
+              <span className="text-[9px] text-muted-foreground">PDF Document</span>
+            </div>
+          ) : (
+            <Icon className={`h-8 w-8 ${iconColor} opacity-60`} />
+          )}
+
+          {/* Hover overlay */}
+          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+            <Eye className="h-5 w-5 text-white opacity-0 group-hover:opacity-80 transition-opacity" />
+          </div>
+        </div>
+
+        {/* Info bar */}
+        <div className="p-2 flex items-center gap-2">
+          <div className={`shrink-0 ${iconColor}`}>
+            <Icon className="h-3.5 w-3.5" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p
+              className="text-[11px] font-medium truncate leading-tight"
+              title={displayName}
+            >
+              {displayName}
+            </p>
+            <div className="flex items-center gap-1 mt-0.5">
+              {asset.status === "ready" && (
+                <CheckCircle2 className="h-2.5 w-2.5 text-green-500 shrink-0" />
+              )}
+              {asset.status === "processing" && (
+                <Loader2 className="h-2.5 w-2.5 animate-spin text-amber-500 shrink-0" />
+              )}
+              {asset.status === "error" && (
+                <XCircle className="h-2.5 w-2.5 text-red-500 shrink-0" />
+              )}
+              <span className="text-[9px] text-muted-foreground truncate">
+                {formatBytes(asset.size_bytes)} · {timeAgo(asset.created_at)}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Delete button — shown on hover */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete(asset);
+          }}
+          disabled={deleting}
+          className="absolute top-1 right-1 p-1 rounded-md opacity-0 group-hover:opacity-100 bg-black/40 hover:bg-destructive/80 text-white transition-all z-10"
+          title="Delete asset"
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
+      </motion.div>
+
+      {/* Preview Dialog */}
+      <AnimatePresence>
+        {showPreview && (
+          <AssetPreviewDialog
+            asset={asset}
+            repoId={repoId}
+            contentUrl={contentUrl}
+            onClose={() => setShowPreview(false)}
+          />
+        )}
+      </AnimatePresence>
+    </>
+  );
+}
+
+// ── Asset Preview Dialog ────────────────────────────────────────────────────
+
+function AssetPreviewDialog({
+  asset,
+  repoId,
+  contentUrl,
+  onClose,
+}: {
+  asset: Asset;
+  repoId: string;
+  contentUrl: string;
+  onClose: () => void;
+}) {
+  const displayName =
+    asset.file_name ||
+    (asset.source_url ? new URL(asset.source_url).hostname : asset.id.slice(0, 8));
+
   return (
     <motion.div
-      layout
-      initial={{ opacity: 0, scale: 0.95 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.95 }}
-      transition={{ duration: 0.15 }}
-      className="group relative flex items-center gap-2.5 rounded-lg border bg-background p-2.5 hover:bg-muted/40 transition-colors"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+      onClick={onClose}
     >
-      {/* Icon */}
-      <div
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted/60 ${iconColor}`}
+      <motion.div
+        initial={{ scale: 0.95, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.95, opacity: 0 }}
+        transition={{ duration: 0.15 }}
+        className="bg-background border rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
       >
-        <Icon className="h-4 w-4" />
-      </div>
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b">
+          <div className="flex items-center gap-2 min-w-0">
+            <Badge variant="outline" className="text-[10px] shrink-0">
+              {asset.asset_type.toUpperCase()}
+            </Badge>
+            <span className="text-sm font-medium truncate">{displayName}</span>
+            <span className="text-xs text-muted-foreground shrink-0">
+              {formatBytes(asset.size_bytes)}
+            </span>
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            {asset.source_url && (
+              <a
+                href={asset.source_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="p-1.5 rounded-md hover:bg-muted transition-colors"
+              >
+                <ExternalLink className="h-4 w-4 text-muted-foreground" />
+              </a>
+            )}
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-md hover:bg-muted transition-colors"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
 
-      {/* Info */}
-      <div className="flex-1 min-w-0">
-        <p
-          className="text-xs font-medium truncate leading-tight"
-          title={displayName}
-        >
-          {displayName}
-        </p>
-        <div className="flex items-center gap-1.5 mt-0.5">
-          {asset.status === "ready" && (
-            <CheckCircle2 className="h-2.5 w-2.5 text-green-500 shrink-0" />
+        {/* Content area */}
+        <div className="flex-1 overflow-auto p-4 flex items-center justify-center min-h-[200px]">
+          {asset.asset_type === "image" && (
+            <img
+              src={contentUrl}
+              alt={displayName}
+              className="max-w-full max-h-[60vh] object-contain rounded-lg shadow-md"
+            />
           )}
-          {asset.status === "processing" && (
-            <Loader2 className="h-2.5 w-2.5 animate-spin text-amber-500 shrink-0" />
+
+          {asset.asset_type === "audio" && (
+            <div className="w-full space-y-4">
+              <div className="flex items-center justify-center">
+                <div className="w-20 h-20 rounded-full bg-amber-500/10 flex items-center justify-center">
+                  <Mic className="h-10 w-10 text-amber-500" />
+                </div>
+              </div>
+              <audio
+                controls
+                className="w-full"
+                src={contentUrl}
+                preload="metadata"
+              >
+                Your browser does not support the audio element.
+              </audio>
+              <p className="text-xs text-muted-foreground text-center">
+                {asset.mime_type} · {formatBytes(asset.size_bytes)}
+              </p>
+            </div>
           )}
-          {asset.status === "error" && (
-            <XCircle className="h-2.5 w-2.5 text-red-500 shrink-0" />
+
+          {asset.asset_type === "pdf" && (
+            <div className="w-full h-[60vh]">
+              <iframe
+                src={contentUrl}
+                className="w-full h-full rounded-lg border"
+                title={`PDF preview: ${displayName}`}
+              />
+            </div>
           )}
-          <span className="text-[10px] text-muted-foreground truncate">
-            {formatBytes(asset.size_bytes)}
-            {" · "}
+
+          {asset.asset_type === "webpage" && (
+            <div className="text-center space-y-4">
+              <Globe className="h-16 w-16 text-blue-400 mx-auto" />
+              <div>
+                <p className="text-sm font-medium">{displayName}</p>
+                {asset.source_url && (
+                  <a
+                    href={asset.source_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-500 hover:underline"
+                  >
+                    {asset.source_url}
+                  </a>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Content has been extracted and embedded for semantic search.
+              </p>
+            </div>
+          )}
+
+          {asset.asset_type === "video" && (
+            <video
+              controls
+              className="max-w-full max-h-[60vh] rounded-lg shadow-md"
+              src={contentUrl}
+              preload="metadata"
+            >
+              Your browser does not support the video element.
+            </video>
+          )}
+
+          {asset.asset_type === "document" && (
+            <div className="text-center space-y-4">
+              <File className="h-16 w-16 text-zinc-400 mx-auto" />
+              <div>
+                <p className="text-sm font-medium">{displayName}</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {asset.mime_type} · {formatBytes(asset.size_bytes)}
+                </p>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Content has been extracted and embedded for semantic search.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Footer with status + metadata */}
+        <div className="flex items-center justify-between px-4 py-2.5 border-t bg-muted/30">
+          <div className="flex items-center gap-2">
+            {asset.status === "ready" && (
+              <Badge className="bg-green-500/10 text-green-600 border-green-500/20 text-[10px]">
+                <CheckCircle2 className="h-3 w-3 mr-1" />
+                Embedded
+              </Badge>
+            )}
+            {asset.status === "processing" && (
+              <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/20 text-[10px]">
+                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                Processing
+              </Badge>
+            )}
+            {asset.status === "error" && (
+              <Badge className="bg-red-500/10 text-red-600 border-red-500/20 text-[10px]">
+                <XCircle className="h-3 w-3 mr-1" />
+                {asset.error_message || "Error"}
+              </Badge>
+            )}
+            {asset.chunks_count > 0 && (
+              <span className="text-[10px] text-muted-foreground">
+                {asset.chunks_count} chunks indexed
+              </span>
+            )}
+          </div>
+          <span className="text-[10px] text-muted-foreground">
             {timeAgo(asset.created_at)}
           </span>
         </div>
-      </div>
-
-      {/* Delete button — shown on hover */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete(asset);
-        }}
-        disabled={deleting}
-        className="absolute top-1 right-1 p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-destructive/10 hover:text-destructive transition-all"
-        title="Delete asset"
-      >
-        <Trash2 className="h-3 w-3" />
-      </button>
+      </motion.div>
     </motion.div>
   );
 }

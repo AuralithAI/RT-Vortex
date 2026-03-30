@@ -284,6 +284,7 @@ func (s *Server) setupRouter() {
 						r.Post("/upload", h.UploadAsset)
 						r.Post("/ingest-url", h.IngestURL)
 						r.Get("/", h.ListAssets)
+						r.Get("/{assetID}/content", h.ServeAssetContent)
 						r.Delete("/{assetID}", h.DeleteAsset)
 					})
 				})

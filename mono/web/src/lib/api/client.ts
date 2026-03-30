@@ -188,7 +188,6 @@ async function uploadRequest<T>(
   if (token) {
     headers["Authorization"] = `Bearer ${token}`;
   }
-  // NOTE: Do NOT set Content-Type — the browser adds multipart boundary.
 
   const res = await fetch(url, {
     method: "POST",
@@ -677,6 +676,9 @@ export const assets = {
     request<{ status: string; id: string }>(`/api/v1/repos/${repoId}/assets/${assetId}`, {
       method: "DELETE",
     }),
+
+  contentUrl: (repoId: string, assetId: string) =>
+    `${BASE}/api/v1/repos/${repoId}/assets/${assetId}/content`,
 };
 
 // ── Convenience export ──────────────────────────────────────────────────────

@@ -2,11 +2,18 @@ package api
 
 import (
 	"context"
+	"bytes"
+	"encoding/base64"
 	"fmt"
+	"image"
+	"image/jpeg"
+	_ "image/png"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -24,6 +31,72 @@ const maxUploadSize = 100 << 20
 // The C++ engine chunks each batch further (~1500 chars), so 50 KB ≈ 33 chunks
 // per RPC — well within safe memory bounds even with 3 ONNX models loaded.
 const maxBatchBytes = 50 * 1024
+
+// assetDataDir is the directory where uploaded asset binaries are persisted
+// so they can be served back for previews (thumbnails, audio players, etc.).
+var assetDataDir = filepath.Join(os.Getenv("RT_HOME"), "data", "assets")
+
+func init() {
+	if d := os.Getenv("RT_HOME"); d == "" {
+		assetDataDir = filepath.Join(".", "data", "assets")
+	}
+	_ = os.MkdirAll(assetDataDir, 0o755)
+}
+
+// saveAssetFile persists the raw binary to disk so it can be served later.
+func saveAssetFile(assetID uuid.UUID, data []byte) {
+	fp := filepath.Join(assetDataDir, assetID.String())
+	if err := os.WriteFile(fp, data, 0o644); err != nil {
+		slog.Warn("failed to persist asset file", "asset_id", assetID, "error", err)
+	}
+}
+
+// generateThumbnailDataURI creates a small JPEG data URI from image bytes.
+// Returns empty string on failure. Max 200×200 px.
+func generateThumbnailDataURI(data []byte) string {
+	src, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		return ""
+	}
+
+	// Compute thumbnail dimensions (max 200px, preserve aspect ratio).
+	bounds := src.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	maxDim := 200
+	if w <= maxDim && h <= maxDim {
+		// Already small enough — encode directly.
+		var buf bytes.Buffer
+		if err := jpeg.Encode(&buf, src, &jpeg.Options{Quality: 70}); err != nil {
+			return ""
+		}
+		return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+	}
+
+	if w >= h {
+		h = h * maxDim / w
+		w = maxDim
+	} else {
+		w = w * maxDim / h
+		h = maxDim
+	}
+
+	// Simple nearest-neighbor resize using SubImage sampling.
+	thumb := image.NewRGBA(image.Rect(0, 0, w, h))
+	srcW, srcH := bounds.Dx(), bounds.Dy()
+	for y := 0; y < h; y++ {
+		srcY := bounds.Min.Y + y*srcH/h
+		for x := 0; x < w; x++ {
+			srcX := bounds.Min.X + x*srcW/w
+			thumb.Set(x, y, src.At(srcX, srcY))
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := jpeg.Encode(&buf, thumb, &jpeg.Options{Quality: 70}); err != nil {
+		return ""
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(buf.Bytes())
+}
 
 // ── HTML text extraction ────────────────────────────────────────────────────
 
@@ -135,6 +208,19 @@ func (h *Handler) UploadAsset(w http.ResponseWriter, r *http.Request) {
 
 	go h.processAssetAsync(context.Background(), repoUUID, asset.ID, assetType, fileName, mimeType, data)
 
+	// Persist binary to disk so we can serve it for previews.
+	go saveAssetFile(asset.ID, data)
+
+	// For images, generate a base64 thumbnail and store in metadata.
+	var thumbnailURI string
+	if assetType == store.AssetTypeImage {
+		thumbnailURI = generateThumbnailDataURI(data)
+		if thumbnailURI != "" && h.AssetRepo != nil {
+			_ = h.AssetRepo.UpdateMetadata(context.Background(), asset.ID,
+				fmt.Sprintf(`{"thumbnail":"%s"}`, thumbnailURI))
+		}
+	}
+
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
 		"id":         asset.ID.String(),
 		"repo_id":    repoID,
@@ -143,6 +229,7 @@ func (h *Handler) UploadAsset(w http.ResponseWriter, r *http.Request) {
 		"mime_type":  mimeType,
 		"size_bytes": len(data),
 		"status":     "processing",
+		"thumbnail":  thumbnailURI,
 	})
 }
 
@@ -262,7 +349,10 @@ func (h *Handler) fetchAndProcessURL(ctx context.Context, repoID, assetID uuid.U
 		}
 	}
 
-	// ── 4. Forward to the engine for embedding ─────────────────────────────
+	// ── 4. Persist binary to disk for preview serving ──────────────────────
+	go saveAssetFile(assetID, data)
+
+	// ── 5. Forward to the engine for embedding ─────────────────────────────
 	h.processAssetAsync(ctx, repoID, assetID, assetType, fileName, mimeType, data)
 }
 
@@ -316,10 +406,52 @@ func (h *Handler) DeleteAsset(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Clean up the persisted file from disk.
+	go os.Remove(filepath.Join(assetDataDir, assetUUID.String()))
+
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status": "deleted",
 		"id":     assetID,
 	})
+}
+
+// ServeAssetContent serves the raw binary of a stored asset from disk,
+// allowing the UI to render image thumbnails, audio players, and PDF embeds.
+func (h *Handler) ServeAssetContent(w http.ResponseWriter, r *http.Request) {
+	assetID := chi.URLParam(r, "assetID")
+	assetUUID, err := uuid.Parse(assetID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid asset ID")
+		return
+	}
+
+	// Look up the asset to get MIME type for the Content-Type header.
+	var mimeType string
+	if h.AssetRepo != nil {
+		asset, err := h.AssetRepo.GetByID(r.Context(), assetUUID)
+		if err != nil || asset == nil {
+			writeError(w, http.StatusNotFound, "asset not found")
+			return
+		}
+		mimeType = asset.MIMEType
+	}
+
+	fp := filepath.Join(assetDataDir, assetUUID.String())
+	data, err := os.ReadFile(fp)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "asset content not available")
+		return
+	}
+
+	if mimeType == "" {
+		mimeType = http.DetectContentType(data)
+	}
+
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Cache-Control", "public, max-age=86400, immutable")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 // chunkText splits large text into batches of at most maxBatchBytes,

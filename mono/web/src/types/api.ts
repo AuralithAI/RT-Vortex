@@ -561,12 +561,13 @@ export interface ChatCitation {
 }
 
 export interface ChatAttachment {
-  type: "file" | "code_snippet" | "image";
+  type: "file" | "code_snippet" | "image" | "pdf" | "audio" | "url";
   filename: string;
   content: string;
   language?: string;
   mime_type?: string;
   size?: number;
+  data_uri?: string;
 }
 
 export interface ChatMessage {
