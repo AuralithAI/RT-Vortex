@@ -313,11 +313,18 @@ async def _run_full_pipeline(
 
         # If the orchestrator extracted the plan from text (i.e. the LLM
         # did NOT call the report_plan tool), the plan was never POSTed to
-        # Go and the task is still in "planning".  Submit it now so Go
-        # transitions the task to "plan_review".
+        # Go.  The task can be in "submitted" (team:create path doesn't call
+        # assignTask) or "planning" (assignTask was called but report_plan
+        # wasn't).  In either case, submit the plan now so Go transitions
+        # the task to "plan_review".
+        _PLAN_NOT_SUBMITTED = {"submitted", "planning", "assigning"}
         current_status = await go_client.get_task_status(task.id)
-        if current_status == "planning":
-            logger.info("Team %s: Plan extracted from text — submitting to Go explicitly", team_id[:8])
+        logger.info("Team %s: Post-orchestrator status=%s", team_id[:8], current_status)
+        if current_status in _PLAN_NOT_SUBMITTED:
+            logger.info(
+                "Team %s: Plan extracted from text (status=%s) — submitting to Go explicitly",
+                team_id[:8], current_status,
+            )
             try:
                 await go_client.report_plan(task.id, orch_result.plan)
             except Exception as e:
@@ -333,7 +340,7 @@ async def _run_full_pipeline(
                 go_client,
                 task.id,
                 target_statuses={"implementing"},
-                cancel_statuses={"cancelled", "failed", "timed_out"},
+                cancel_statuses={"cancelled", "failed", "timed_out", "completed"},
             )
         except asyncio.TimeoutError:
             logger.error("Team %s: Plan approval timed out for task %s", team_id[:8], task.id)
@@ -521,15 +528,11 @@ async def _run_full_pipeline(
             except Exception:
                 pass
 
-        # Best-effort token revocation for all agents on this team.
-        # Go already revokes in CompleteTask/FailTask, but if those calls
-        # failed (network error, pod crash), this ensures Python proactively
-        # cleans up. The revoke endpoint is idempotent.
-        for aid in agent_ids:
-            try:
-                await go_client.revoke_agent(aid)
-            except Exception:
-                pass
+        # Token revocation: Go already revokes team agent tokens in
+        # CompleteTask/FailTask via revokeTeamTokens. Calling the revoke
+        # endpoint from the shared controller GoClient would revoke the
+        # *controller's own token* (the endpoint identifies the caller by
+        # their JWT subject), causing 401s on the next task.  Skip it.
 
 
 class RedisConsumer:
