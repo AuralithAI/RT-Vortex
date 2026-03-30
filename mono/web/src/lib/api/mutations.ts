@@ -7,6 +7,41 @@ import api from "./client";
 import { queryKeys } from "./queries";
 import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute, MultimodalUpdateRequest } from "@/types/api";
 
+// ── Assets ──────────────────────────────────────────────────────────────────
+
+export function useUploadAsset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, file }: { repoId: string; file: File }) =>
+      api.assets.upload(repoId, file),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.assets(repoId) });
+    },
+  });
+}
+
+export function useIngestUrl() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, url }: { repoId: string; url: string }) =>
+      api.assets.ingestUrl(repoId, url),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.assets(repoId) });
+    },
+  });
+}
+
+export function useDeleteAsset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, assetId }: { repoId: string; assetId: string }) =>
+      api.assets.delete(repoId, assetId),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.assets(repoId) });
+    },
+  });
+}
+
 // ── User ────────────────────────────────────────────────────────────────────
 
 export function useUpdateMe() {

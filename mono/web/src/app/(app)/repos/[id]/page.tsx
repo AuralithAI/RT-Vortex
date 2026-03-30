@@ -29,6 +29,7 @@ import { useTriggerIndex, useDeleteRepo, useUpdateRepo } from "@/lib/api/mutatio
 import { useIndexProgress, formatETA } from "@/hooks/use-index-progress";
 import { PageHeader } from "@/components/layout/page-header";
 import { PullRequestList } from "@/components/dashboard/pull-request-list";
+import { AssetManager } from "@/components/dashboard/asset-manager";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -503,6 +504,9 @@ export default function RepoDetailPage({
           </Card>
         )}
       </div>
+
+      {/* Multimodal Assets */}
+      <AssetManager repoId={id} />
 
       {/* Recent Reviews for this repo */}
       <Card>

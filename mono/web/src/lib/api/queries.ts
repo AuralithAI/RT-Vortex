@@ -41,6 +41,8 @@ export const queryKeys = {
   vcsPlatforms: ["vcs", "platforms"] as const,
   branches: (repoId: string) =>
     ["repos", repoId, "branches"] as const,
+  assets: (repoId: string) =>
+    ["repos", repoId, "assets"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -130,6 +132,22 @@ export function useBranches(repoId: string, enabled = false) {
     queryFn: () => api.repos.branches(repoId),
     enabled: !!repoId && enabled,
     staleTime: 60 * 1000, // branches don't change that often
+  });
+}
+
+// ── Assets ──────────────────────────────────────────────────────────────────
+
+export function useAssets(repoId: string) {
+  return useQuery({
+    queryKey: queryKeys.assets(repoId),
+    queryFn: () => api.assets.list(repoId),
+    enabled: !!repoId,
+    // Auto-refresh while any asset is still processing
+    refetchInterval: (query: any) => {
+      const data = query.state.data as import("@/types/api").Asset[] | undefined;
+      if (data?.some((a) => a.status === "processing")) return 3000;
+      return false;
+    },
   });
 }
 

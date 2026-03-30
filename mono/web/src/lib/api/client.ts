@@ -8,6 +8,9 @@
 import { getApiBaseUrl } from "@/lib/utils";
 import type {
   AgentRoute,
+  Asset,
+  AssetIngestURLResult,
+  AssetUploadResult,
   AuthProvider,
   ChatMessage,
   ChatSession,
@@ -167,6 +170,49 @@ async function request<T>(
   }
 
   if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+/**
+ * Upload a file via multipart/form-data.
+ * The browser sets the Content-Type (with boundary) automatically.
+ */
+async function uploadRequest<T>(
+  path: string,
+  formData: FormData,
+): Promise<T> {
+  const url = `${BASE}${path}`;
+  const headers: Record<string, string> = {};
+
+  const token = getAccessToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+  // NOTE: Do NOT set Content-Type — the browser adds multipart boundary.
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+
+  if (res.status === 401) {
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      const newToken = getAccessToken();
+      const retryHeaders: Record<string, string> = {};
+      if (newToken) retryHeaders["Authorization"] = `Bearer ${newToken}`;
+      const retry = await fetch(url, { method: "POST", headers: retryHeaders, body: formData });
+      if (retry.ok) return retry.json() as Promise<T>;
+    }
+    throw new AuthError(await res.json().catch(() => null));
+  }
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(res.status, res.statusText, body);
+  }
+
   return res.json() as Promise<T>;
 }
 
@@ -606,7 +652,34 @@ export const vcsPlatforms = {
   },
 };
 
+// ── Assets ──────────────────────────────────────────────────────────────────
+
+export const assets = {
+  upload: (repoId: string, file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return uploadRequest<AssetUploadResult>(
+      `/api/v1/repos/${repoId}/assets/upload`,
+      formData,
+    );
+  },
+
+  ingestUrl: (repoId: string, url: string) =>
+    request<AssetIngestURLResult>(`/api/v1/repos/${repoId}/assets/ingest-url`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+
+  list: (repoId: string) =>
+    request<Asset[]>(`/api/v1/repos/${repoId}/assets`),
+
+  delete: (repoId: string, assetId: string) =>
+    request<{ status: string; id: string }>(`/api/v1/repos/${repoId}/assets/${assetId}`, {
+      method: "DELETE",
+    }),
+};
+
 // ── Convenience export ──────────────────────────────────────────────────────
 
-const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms };
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms, assets };
 export default api;

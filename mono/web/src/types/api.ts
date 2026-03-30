@@ -395,6 +395,45 @@ export interface MultimodalUpdateResult {
   status: string;
 }
 
+// ── Assets ──────────────────────────────────────────────────────────────────
+
+export type AssetType = "pdf" | "image" | "audio" | "video" | "webpage" | "document";
+export type AssetStatus = "processing" | "ready" | "error";
+
+export interface Asset {
+  id: string;
+  repo_id: string;
+  asset_type: AssetType;
+  source_url?: string;
+  file_name?: string;
+  mime_type?: string;
+  size_bytes: number;
+  chunks_count: number;
+  status: AssetStatus;
+  error_message?: string;
+  metadata?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssetUploadResult {
+  id: string;
+  repo_id: string;
+  asset_type: AssetType;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  status: string;
+}
+
+export interface AssetIngestURLResult {
+  id: string;
+  repo_id: string;
+  asset_type: string;
+  source_url: string;
+  status: string;
+}
+
 // ── Admin ───────────────────────────────────────────────────────────────────
 
 export interface SystemStats {

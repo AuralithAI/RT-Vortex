@@ -6,7 +6,10 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"path"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -14,8 +17,41 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/store"
 )
 
-// Maximum upload size: 100 MB.
+// Maximum upload / download size: 100 MB.
 const maxUploadSize = 100 << 20
+
+// Maximum text batch size sent in a single gRPC call (50 KB).
+// The C++ engine chunks each batch further (~1500 chars), so 50 KB ≈ 33 chunks
+// per RPC — well within safe memory bounds even with 3 ONNX models loaded.
+const maxBatchBytes = 50 * 1024
+
+// ── HTML text extraction ────────────────────────────────────────────────────
+
+var (
+	reHTMLTag     = regexp.MustCompile(`<[^>]*>`)
+	reHTMLComment = regexp.MustCompile(`<!--[\s\S]*?-->`)
+	reScript      = regexp.MustCompile(`(?is)<script[^>]*>.*?</script>`)
+	reStyle       = regexp.MustCompile(`(?is)<style[^>]*>.*?</style>`)
+	reWhitespace  = regexp.MustCompile(`\s{3,}`)
+)
+
+// stripHTML extracts readable text from HTML content by removing scripts,
+// styles, tags, and excess whitespace.  Good enough for indexing — we don't
+// need a full DOM parser.
+func stripHTML(html string) string {
+	s := reScript.ReplaceAllString(html, " ")
+	s = reStyle.ReplaceAllString(s, " ")
+	s = reHTMLComment.ReplaceAllString(s, " ")
+	s = reHTMLTag.ReplaceAllString(s, " ")
+	s = strings.ReplaceAll(s, "&nbsp;", " ")
+	s = strings.ReplaceAll(s, "&amp;", "&")
+	s = strings.ReplaceAll(s, "&lt;", "<")
+	s = strings.ReplaceAll(s, "&gt;", ">")
+	s = strings.ReplaceAll(s, "&quot;", "\"")
+	s = strings.ReplaceAll(s, "&#39;", "'")
+	s = reWhitespace.ReplaceAllString(s, "\n\n")
+	return strings.TrimSpace(s)
+}
 
 // assetTypeFromMIME detects the asset type from a MIME type string.
 func assetTypeFromMIME(mime string) store.AssetType {
@@ -143,6 +179,15 @@ func (h *Handler) IngestURL(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	slog.Info("url ingest queued",
+		"repo_id", repoID,
+		"asset_id", asset.ID.String(),
+		"url", req.URL,
+	)
+
+	// Fetch the URL content and process in the background.
+	go h.fetchAndProcessURL(context.Background(), repoUUID, asset.ID, req.URL)
+
 	writeJSON(w, http.StatusAccepted, map[string]interface{}{
 		"id":         asset.ID.String(),
 		"repo_id":    repoID,
@@ -150,6 +195,75 @@ func (h *Handler) IngestURL(w http.ResponseWriter, r *http.Request) {
 		"source_url": req.URL,
 		"status":     "processing",
 	})
+}
+
+// fetchAndProcessURL downloads content from a URL, detects its type, updates
+// the asset record with real metadata, and forwards it for embedding.
+func (h *Handler) fetchAndProcessURL(ctx context.Context, repoID, assetID uuid.UUID, rawURL string) {
+	// ── 1. HTTP GET with timeout ───────────────────────────────────────────
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		slog.Warn("url fetch failed", "url", rawURL, "error", err)
+		h.updateAssetStatus(ctx, assetID, "error", fmt.Sprintf("fetch failed: %v", err), 0)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		msg := fmt.Sprintf("HTTP %d from %s", resp.StatusCode, rawURL)
+		slog.Warn("url fetch non-200", "url", rawURL, "status", resp.StatusCode)
+		h.updateAssetStatus(ctx, assetID, "error", msg, 0)
+		return
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxUploadSize))
+	if err != nil {
+		slog.Warn("url read failed", "url", rawURL, "error", err)
+		h.updateAssetStatus(ctx, assetID, "error", fmt.Sprintf("read failed: %v", err), 0)
+		return
+	}
+
+	if len(data) == 0 {
+		h.updateAssetStatus(ctx, assetID, "error", "empty response from URL", 0)
+		return
+	}
+
+	// ── 2. Detect MIME type and derive asset type ──────────────────────────
+	mimeType := resp.Header.Get("Content-Type")
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		mimeType = http.DetectContentType(data)
+	}
+	// Strip charset / params: "text/html; charset=utf-8" → "text/html"
+	if idx := strings.Index(mimeType, ";"); idx > 0 {
+		mimeType = strings.TrimSpace(mimeType[:idx])
+	}
+
+	assetType := assetTypeFromMIME(mimeType)
+
+	// Derive a filename from the URL path
+	fileName := path.Base(rawURL)
+	if fileName == "" || fileName == "/" || fileName == "." {
+		fileName = "webpage"
+	}
+
+	slog.Info("url fetched",
+		"url", rawURL,
+		"asset_id", assetID.String(),
+		"mime_type", mimeType,
+		"asset_type", string(assetType),
+		"size_bytes", len(data),
+	)
+
+	// ── 3. Update DB record with real metadata ─────────────────────────────
+	if h.AssetRepo != nil {
+		if err := h.AssetRepo.UpdateMeta(ctx, assetID, fileName, mimeType, string(assetType), int64(len(data))); err != nil {
+			slog.Warn("failed to update asset meta", "asset_id", assetID, "error", err)
+		}
+	}
+
+	// ── 4. Forward to the engine for embedding ─────────────────────────────
+	h.processAssetAsync(ctx, repoID, assetID, assetType, fileName, mimeType, data)
 }
 
 // ListAssets handles GET /api/v1/repos/{repoID}/assets
@@ -208,11 +322,48 @@ func (h *Handler) DeleteAsset(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// chunkText splits large text into batches of at most maxBatchBytes,
+// breaking at paragraph ("\n\n") or sentence (". ") boundaries when possible.
+func chunkText(text string, maxBytes int) []string {
+	if len(text) <= maxBytes {
+		return []string{text}
+	}
+
+	var batches []string
+	for len(text) > 0 {
+		end := maxBytes
+		if end > len(text) {
+			end = len(text)
+		}
+
+		if end < len(text) {
+			// Try paragraph boundary
+			if idx := strings.LastIndex(text[:end], "\n\n"); idx > maxBytes/3 {
+				end = idx + 2
+			} else if idx := strings.LastIndex(text[:end], ". "); idx > maxBytes/3 {
+				// Try sentence boundary
+				end = idx + 2
+			} else if idx := strings.LastIndex(text[:end], "\n"); idx > maxBytes/3 {
+				// Try line boundary
+				end = idx + 1
+			}
+		}
+
+		batch := strings.TrimSpace(text[:end])
+		if batch != "" {
+			batches = append(batches, batch)
+		}
+		text = text[end:]
+	}
+	return batches
+}
+
 // processAssetAsync handles the actual embedding in a goroutine.
 func (h *Handler) processAssetAsync(ctx context.Context, repoID, assetID uuid.UUID,
 	assetType store.AssetType, fileName, mimeType string, data []byte) {
 
 	var textContent string
+	var binaryPayload []byte // only non-nil for image/audio
 	var chunksCreated int
 
 	switch assetType {
@@ -222,29 +373,98 @@ func (h *Handler) processAssetAsync(ctx context.Context, repoID, assetID uuid.UU
 			h.updateAssetStatus(ctx, assetID, "error", "Failed to extract text from PDF", 0)
 			return
 		}
+
 	case store.AssetTypeImage:
+		// Image: send as binary for ONNX inference, short text placeholder
 		textContent = fmt.Sprintf("[Image: %s, %d bytes, %s]", fileName, len(data), mimeType)
+		binaryPayload = data
+
 	case store.AssetTypeAudio:
+		// Audio: send as binary for ONNX inference, short text placeholder
 		textContent = fmt.Sprintf("[Audio: %s, %d bytes, %s]", fileName, len(data), mimeType)
+		binaryPayload = data
+
+	case store.AssetTypeWebpage:
+		// Webpage: strip HTML to clean text, don't send binary
+		raw := string(data)
+		if strings.Contains(mimeType, "html") || strings.Contains(raw[:min(512, len(raw))], "<html") {
+			textContent = stripHTML(raw)
+		} else {
+			textContent = raw
+		}
+		if textContent == "" {
+			h.updateAssetStatus(ctx, assetID, "error", "no readable text extracted from URL", 0)
+			return
+		}
+
 	default:
 		textContent = string(data)
 	}
 
-	if h.EngineClient != nil {
+	if h.EngineClient == nil {
+		h.updateAssetStatus(ctx, assetID, "error", "engine client not available", 0)
+		return
+	}
+
+	// ── Binary path (image/audio): single RPC, no batching needed ───────
+	if binaryPayload != nil {
 		result, err := h.ingestToEngine(ctx, repoID, assetID, string(assetType),
-			mimeType, textContent, data)
+			mimeType, textContent, binaryPayload)
 		if err != nil {
 			slog.Warn("engine ingest failed", "asset_id", assetID, "error", err)
 			h.updateAssetStatus(ctx, assetID, "error", err.Error(), 0)
 			return
 		}
 		chunksCreated = int(result)
+		h.updateAssetStatus(ctx, assetID, "ready", "", chunksCreated)
+		slog.Info("asset processed (binary)",
+			"asset_id", assetID,
+			"asset_type", string(assetType),
+			"chunks_created", chunksCreated,
+		)
+		return
+	}
+
+	// ── Text path: split into batches and send sequentially ─────────────
+	batches := chunkText(textContent, maxBatchBytes)
+
+	slog.Info("processing text asset in batches",
+		"asset_id", assetID,
+		"asset_type", string(assetType),
+		"total_text_len", len(textContent),
+		"batches", len(batches),
+	)
+
+	for i, batch := range batches {
+		result, err := h.ingestToEngine(ctx, repoID, assetID, string(assetType),
+			mimeType, batch, nil)
+		if err != nil {
+			slog.Warn("engine ingest failed for batch",
+				"asset_id", assetID,
+				"batch", fmt.Sprintf("%d/%d", i+1, len(batches)),
+				"error", err,
+			)
+			h.updateAssetStatus(ctx, assetID, "error",
+				fmt.Sprintf("batch %d/%d failed: %s", i+1, len(batches), err.Error()), chunksCreated)
+			return
+		}
+		chunksCreated += int(result)
+
+		slog.Debug("batch ingested",
+			"asset_id", assetID,
+			"batch", fmt.Sprintf("%d/%d", i+1, len(batches)),
+			"batch_len", len(batch),
+			"batch_chunks", result,
+			"total_chunks", chunksCreated,
+		)
 	}
 
 	h.updateAssetStatus(ctx, assetID, "ready", "", chunksCreated)
-	slog.Info("asset processed",
+	slog.Info("asset processed (text)",
 		"asset_id", assetID,
 		"asset_type", string(assetType),
+		"text_len", len(textContent),
+		"batches", len(batches),
 		"chunks_created", chunksCreated,
 	)
 }

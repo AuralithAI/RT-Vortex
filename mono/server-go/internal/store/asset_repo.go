@@ -79,6 +79,17 @@ func (r *AssetRepository) UpdateStatus(ctx context.Context, id uuid.UUID, status
 	return err
 }
 
+// UpdateMeta updates the file metadata after a URL fetch (file_name, mime_type,
+// size_bytes, asset_type) so the UI shows real values instead of 0 B / blank.
+func (r *AssetRepository) UpdateMeta(ctx context.Context, id uuid.UUID, fileName, mimeType, assetType string, sizeBytes int64) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE repo_assets SET file_name = $1, mime_type = $2, asset_type = $3, size_bytes = $4, updated_at = NOW()
+		 WHERE id = $5`,
+		fileName, mimeType, assetType, sizeBytes, id,
+	)
+	return err
+}
+
 // ListByRepo returns all assets for a given repository.
 func (r *AssetRepository) ListByRepo(ctx context.Context, repoID uuid.UUID, limit int) ([]Asset, error) {
 	if limit <= 0 || limit > 500 {
