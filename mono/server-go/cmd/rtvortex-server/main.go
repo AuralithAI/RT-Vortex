@@ -548,6 +548,9 @@ func main() {
 	// VCS platform config repo — per-user non-secret VCS settings (URLs, usernames)
 	vcsPlatformRepo := store.NewVCSPlatformRepo(db.Pool)
 
+	// Multimodal asset repo — tracks uploaded files (images, audio, PDFs, etc.)
+	assetRepo := store.NewAssetRepository(db.Pool)
+
 	// ── Initialize Swarm Agent infrastructure ───────────────────────────
 	// The swarm service secret is derived from the existing JWT secret,
 	// so there is no extra env var to manage. It authenticates the initial
@@ -663,6 +666,7 @@ func main() {
 		PRSyncWorker:     prSyncWorker,
 		ChatRepo:         chatRepo,
 		ChatService:      chatService,
+		AssetRepo:        assetRepo,
 		Vault:            fileVault,
 		VCSPlatformRepo:  vcsPlatformRepo,
 		MetricsCollector: metricsCollector,

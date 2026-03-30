@@ -492,6 +492,18 @@ static const std::vector<OnnxModelInfo>& getModelRegistry() {
             "onnx/model.onnx",
             {"tokenizer.json", "vocab.txt"}
         },
+        {
+            "siglip-base", 768,
+            "https://huggingface.co/google/siglip-base-patch16-224/resolve/main",
+            "onnx/model.onnx",
+            {"preprocessor_config.json", "tokenizer.json"}
+        },
+        {
+            "clap-general", 512,
+            "https://huggingface.co/laion/larger_clap_general/resolve/main",
+            "onnx/model.onnx",
+            {"config.json"}
+        },
     };
     return registry;
 }

@@ -23,6 +23,7 @@ export const queryKeys = {
   llmProviders: ["llm", "providers"] as const,
   llmRoutes: ["llm", "routes"] as const,
   embeddingsConfig: ["embeddings", "config"] as const,
+  multimodalConfig: ["embeddings", "multimodal"] as const,
   adminStats: ["admin", "stats"] as const,
   adminHealth: ["admin", "health"] as const,
   pullRequests: (repoId: string, p?: PaginationParams, f?: PRListFilter) =>
@@ -192,6 +193,13 @@ export function useEmbeddingsConfig() {
   return useQuery({
     queryKey: queryKeys.embeddingsConfig,
     queryFn: () => api.embeddings.config(),
+  });
+}
+
+export function useMultimodalConfig() {
+  return useQuery({
+    queryKey: queryKeys.multimodalConfig,
+    queryFn: () => api.embeddings.multimodal(),
   });
 }
 

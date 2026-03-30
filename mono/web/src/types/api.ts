@@ -359,6 +359,42 @@ export interface EmbeddingCreditsResult {
   message?: string;
 }
 
+// ── Multimodal Embeddings ───────────────────────────────────────────────────
+
+export interface ModalityInfo {
+  modality: "text" | "image" | "audio";
+  model_name: string;
+  enabled: boolean;
+  status: "ready" | "downloading" | "pending" | "error";
+  native_dimension: number;
+  projected_dimension: number;
+  description: string;
+  size_mb: number;
+  download_progress: number;
+}
+
+export interface MultimodalConfig {
+  modalities: ModalityInfo[];
+  unified_dimension: number;
+  image_enabled: boolean;
+  audio_enabled: boolean;
+}
+
+export interface MultimodalUpdateRequest {
+  image_enabled?: boolean;
+  audio_enabled?: boolean;
+  image_model?: string;
+  audio_model?: string;
+}
+
+export interface MultimodalUpdateResult {
+  image_enabled: boolean;
+  audio_enabled: boolean;
+  image_model: string;
+  audio_model: string;
+  status: string;
+}
+
 // ── Admin ───────────────────────────────────────────────────────────────────
 
 export interface SystemStats {

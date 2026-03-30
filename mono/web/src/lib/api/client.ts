@@ -24,6 +24,9 @@ import type {
   LLMConfigureResult,
   LLMProvider,
   LLMTestResult,
+  MultimodalConfig,
+  MultimodalUpdateRequest,
+  MultimodalUpdateResult,
   Org,
   OrgMember,
   PaginatedResponse,
@@ -421,6 +424,15 @@ export const embeddings = {
   credits: (data: { provider: string; endpoint?: string; api_key?: string }) =>
     request<EmbeddingCreditsResult>("/api/v1/embeddings/credits", {
       method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  multimodal: () =>
+    request<MultimodalConfig>("/api/v1/embeddings/multimodal"),
+
+  updateMultimodal: (data: MultimodalUpdateRequest) =>
+    request<MultimodalUpdateResult>("/api/v1/embeddings/multimodal", {
+      method: "PUT",
       body: JSON.stringify(data),
     }),
 };

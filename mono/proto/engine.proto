@@ -41,8 +41,13 @@ service EngineService {
     // File Content — read a file from the engine's local clone for the swarm
     rpc GetFileContent(FileContentRequest) returns (FileContentResponse);
 
-    // Asset Ingestion — embed documents, PDFs, and URL content into a repo index
+    // Asset Ingestion — embed documents, PDFs, images, audio, and URL content into a repo index
     rpc IngestAsset(IngestAssetRequest) returns (IngestAssetResponse);
+
+    // Multimodal Embedding Configuration
+    rpc GetMultimodalConfig(GetMultimodalConfigRequest) returns (GetMultimodalConfigResponse);
+    rpc ConfigureMultimodal(ConfigureMultimodalRequest) returns (ConfigureMultimodalResponse);
+    rpc DownloadModel(ConfigureMultimodalRequest) returns (stream ModelDownloadProgress);
 
     // Metrics — server-streaming so the Go API server can relay to the dashboard.
     // The engine pushes a snapshot every interval_ms (default 1000).
@@ -557,18 +562,87 @@ message FileContentResponse {
 }
 
 // ============================================================================
-// Asset Ingestion (Documents, PDFs, URLs)
+// Asset Ingestion (Documents, PDFs, Images, Audio, URLs)
 // ============================================================================
 
+// Asset modality for typed routing to the correct embedding model.
+enum AssetType {
+    ASSET_TYPE_UNKNOWN  = 0;
+    ASSET_TYPE_CODE     = 1;
+    ASSET_TYPE_PDF      = 2;
+    ASSET_TYPE_IMAGE    = 3;
+    ASSET_TYPE_AUDIO    = 4;
+    ASSET_TYPE_VIDEO    = 5;
+    ASSET_TYPE_WEBPAGE  = 6;
+    ASSET_TYPE_DOCUMENT = 7;
+}
+
 message IngestAssetRequest {
-    string repo_id = 1;         // Repository to embed into
-    string source_url = 2;      // Original URL (for metadata)
-    string content = 3;         // Extracted text content to embed
-    string asset_type = 4;      // "document", "pdf", "url"
-    map<string, string> metadata = 5; // Additional metadata tags
+    string repo_id = 1;                    // Repository to embed into
+    string source_url = 2;                 // Original URL (for metadata)
+    string content = 3;                    // Extracted text content to embed
+    string asset_type = 4;                 // Legacy string type ("document", "pdf", "url")
+    map<string, string> metadata = 5;      // Additional metadata tags
+    bytes binary_data = 6;                 // Raw binary data (image pixels, audio PCM)
+    string mime_type = 7;                  // MIME type ("image/png", "audio/wav", etc.)
+    AssetType typed_asset_type = 8;        // Typed enum (preferred over string field 4)
+    string file_name = 9;                  // Original file name
 }
 
 message IngestAssetResponse {
-    int32 chunks_created = 1;   // Number of chunks created
-    string status = 2;          // "ok" or error description
+    int32 chunks_created = 1;              // Number of chunks created
+    string status = 2;                     // "ok" or error description
+    AssetType detected_type = 3;           // Detected/used asset type
+    string asset_id = 4;                   // Unique asset identifier for future reference
+}
+
+// ============================================================================
+// Multimodal Embedding Configuration
+// ============================================================================
+
+// Per-modality model configuration.
+message ModalityModelConfig {
+    string modality = 1;                   // "text", "image", "audio"
+    string model_name = 2;                 // "bge-m3", "siglip-base", "clap-general"
+    string backend = 3;                    // "onnx", "http"
+    uint32 dimension = 4;                  // Native output dimension
+    uint32 projected_dimension = 5;        // Dimension after projection (unified space)
+    bool enabled = 6;                      // Whether this modality is active
+    string status = 7;                     // "ready", "downloading", "not_installed"
+    int32 download_progress = 8;           // 0-100 if downloading
+}
+
+// Request to get or configure multimodal embedding models.
+message GetMultimodalConfigRequest {}
+
+message GetMultimodalConfigResponse {
+    repeated ModalityModelConfig modalities = 1;
+    uint32 unified_dimension = 2;          // All modalities project to this dim
+    bool image_enabled = 3;
+    bool audio_enabled = 4;
+}
+
+message ConfigureMultimodalRequest {
+    bool enable_image = 1;                 // Enable/disable image embedding
+    bool enable_audio = 2;                 // Enable/disable audio embedding
+    string image_model = 3;               // Override image model (default: siglip-base)
+    string audio_model = 4;               // Override audio model (default: clap-general)
+}
+
+message ConfigureMultimodalResponse {
+    bool success = 1;
+    string message = 2;
+    repeated string loaded_models = 3;     // e.g. ["text:bge-m3", "image:siglip-base"]
+}
+
+// Model download progress (streamed during on-demand model downloads).
+message ModelDownloadProgress {
+    string model_name = 1;
+    int32 progress = 2;                    // 0-100
+    string phase = 3;                      // "downloading", "extracting", "loading", "ready"
+    uint64 bytes_downloaded = 4;
+    uint64 bytes_total = 5;
+    bool done = 6;
+    bool success = 7;
+    string error = 8;
 }

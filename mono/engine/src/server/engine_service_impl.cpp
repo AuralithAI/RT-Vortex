@@ -1364,5 +1364,123 @@ grpc::Status EngineServiceImpl::IngestAsset(
     }
 }
 
+//=============================================================================
+// Multimodal Embedding Operations
+//=============================================================================
+
+grpc::Status EngineServiceImpl::GetMultimodalConfig(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::GetMultimodalConfigRequest* /*request*/,
+    aipr::engine::v1::GetMultimodalConfigResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    try {
+        auto configs = engine_->getMultimodalConfig();
+        bool image_enabled = false;
+        bool audio_enabled = false;
+
+        for (const auto& cfg : configs) {
+            auto* mc = response->add_modalities();
+            mc->set_modality(cfg.modality);
+            mc->set_model_name(cfg.model_name);
+            mc->set_enabled(cfg.enabled);
+            mc->set_status(cfg.status);
+            mc->set_download_progress(cfg.download_progress);
+
+            if (cfg.modality == "image") image_enabled = cfg.enabled;
+            if (cfg.modality == "audio") audio_enabled = cfg.enabled;
+        }
+        response->set_unified_dimension(1024);
+        response->set_image_enabled(image_enabled);
+        response->set_audio_enabled(audio_enabled);
+        return grpc::Status::OK;
+    } catch (const std::exception& e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
+grpc::Status EngineServiceImpl::ConfigureMultimodal(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::ConfigureMultimodalRequest* request,
+    aipr::engine::v1::ConfigureMultimodalResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    try {
+        std::vector<std::string> loaded;
+
+        auto img = engine_->setModalityEnabled("image", request->enable_image());
+        if (img.enabled && img.status == "ready") {
+            loaded.push_back("image:" + img.model_name);
+        }
+
+        auto aud = engine_->setModalityEnabled("audio", request->enable_audio());
+        if (aud.enabled && aud.status == "ready") {
+            loaded.push_back("audio:" + aud.model_name);
+        }
+
+        response->set_success(true);
+        response->set_message("Multimodal configuration updated");
+        for (const auto& m : loaded) {
+            response->add_loaded_models(m);
+        }
+        return grpc::Status::OK;
+    } catch (const std::exception& e) {
+        response->set_success(false);
+        response->set_message(std::string("error: ") + e.what());
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
+grpc::Status EngineServiceImpl::DownloadModel(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::ConfigureMultimodalRequest* request,
+    grpc::ServerWriter<aipr::engine::v1::ModelDownloadProgress>* writer)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    try {
+        // Determine which modalities to enable/download
+        std::vector<std::pair<std::string, bool>> modalities;
+        modalities.push_back({"image", request->enable_image()});
+        modalities.push_back({"audio", request->enable_audio()});
+
+        for (const auto& [modality, enabled] : modalities) {
+            if (!enabled) continue;
+
+            // Send initial progress
+            aipr::engine::v1::ModelDownloadProgress progress;
+            std::string model_name = (modality == "image") ? "siglip-base" : "clap-general";
+            progress.set_model_name(model_name);
+            progress.set_phase("downloading");
+            progress.set_progress(0);
+            progress.set_done(false);
+            progress.set_success(false);
+            writer->Write(progress);
+
+            // Trigger download via enable
+            auto result = engine_->setModalityEnabled(modality, true);
+
+            // Send completion
+            progress.set_phase(result.status == "ready" ? "ready" : result.status);
+            progress.set_progress(result.status == "ready" ? 100 : result.download_progress);
+            progress.set_done(true);
+            progress.set_success(result.status == "ready");
+            writer->Write(progress);
+        }
+
+        return grpc::Status::OK;
+    } catch (const std::exception& e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
 } // namespace server
 } // namespace aipr

@@ -719,6 +719,7 @@ set(TMS_SOURCES
     src/tms/core/cross_memory_attention.cpp
     src/tms/core/memory_accounts.cpp
     src/tms/ingestion/embedding_engine.cpp
+    src/tms/ingestion/multimodal_embedder.cpp
     src/tms/ingestion/repo_parser.cpp
     src/tms/retrieval/graph_rag.cpp
     src/tms/retrieval/multi_vector_index.cpp
@@ -977,6 +978,10 @@ if(AIPR_BUILD_SERVER)
 
     # Create empty bge-m3 directory structure (model downloaded at runtime).
     file(MAKE_DIRECTORY "${_MODELS_SRC_DIR}/bge-m3")
+
+    # Create empty multimodal model directories (downloaded at runtime on first use).
+    file(MAKE_DIRECTORY "${_MODELS_SRC_DIR}/siglip-base")
+    file(MAKE_DIRECTORY "${_MODELS_SRC_DIR}/clap-general")
 
     # models/ → mono/engine/models  (symlink to avoid duplicating ~90 MB ONNX file)
     if(EXISTS "${_ENGINE_SRC_DIR}/models" AND NOT EXISTS "${CMAKE_BINARY_DIR}/models")

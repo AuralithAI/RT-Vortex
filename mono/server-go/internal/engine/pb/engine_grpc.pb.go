@@ -38,6 +38,9 @@ const (
 	EngineService_GetEmbedStats_FullMethodName            = "/aipr.engine.v1.EngineService/GetEmbedStats"
 	EngineService_GetFileContent_FullMethodName           = "/aipr.engine.v1.EngineService/GetFileContent"
 	EngineService_IngestAsset_FullMethodName              = "/aipr.engine.v1.EngineService/IngestAsset"
+	EngineService_GetMultimodalConfig_FullMethodName      = "/aipr.engine.v1.EngineService/GetMultimodalConfig"
+	EngineService_ConfigureMultimodal_FullMethodName      = "/aipr.engine.v1.EngineService/ConfigureMultimodal"
+	EngineService_DownloadModel_FullMethodName            = "/aipr.engine.v1.EngineService/DownloadModel"
 	EngineService_StreamEngineMetrics_FullMethodName      = "/aipr.engine.v1.EngineService/StreamEngineMetrics"
 )
 
@@ -69,8 +72,12 @@ type EngineServiceClient interface {
 	GetEmbedStats(ctx context.Context, in *EmbedStatsRequest, opts ...grpc.CallOption) (*EmbedStatsResponse, error)
 	// File Content — read a file from the engine's local clone for the swarm
 	GetFileContent(ctx context.Context, in *FileContentRequest, opts ...grpc.CallOption) (*FileContentResponse, error)
-	// Asset Ingestion — embed documents, PDFs, and URL content into a repo index
+	// Asset Ingestion — embed documents, PDFs, images, audio, and URL content into a repo index
 	IngestAsset(ctx context.Context, in *IngestAssetRequest, opts ...grpc.CallOption) (*IngestAssetResponse, error)
+	// Multimodal Embedding Configuration
+	GetMultimodalConfig(ctx context.Context, in *GetMultimodalConfigRequest, opts ...grpc.CallOption) (*GetMultimodalConfigResponse, error)
+	ConfigureMultimodal(ctx context.Context, in *ConfigureMultimodalRequest, opts ...grpc.CallOption) (*ConfigureMultimodalResponse, error)
+	DownloadModel(ctx context.Context, in *ConfigureMultimodalRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ModelDownloadProgress], error)
 	// Metrics — server-streaming so the Go API server can relay to the dashboard.
 	// The engine pushes a snapshot every interval_ms (default 1000).
 	StreamEngineMetrics(ctx context.Context, in *EngineMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineMetricsSnapshot], error)
@@ -271,9 +278,48 @@ func (c *engineServiceClient) IngestAsset(ctx context.Context, in *IngestAssetRe
 	return out, nil
 }
 
+func (c *engineServiceClient) GetMultimodalConfig(ctx context.Context, in *GetMultimodalConfigRequest, opts ...grpc.CallOption) (*GetMultimodalConfigResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetMultimodalConfigResponse)
+	err := c.cc.Invoke(ctx, EngineService_GetMultimodalConfig_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engineServiceClient) ConfigureMultimodal(ctx context.Context, in *ConfigureMultimodalRequest, opts ...grpc.CallOption) (*ConfigureMultimodalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigureMultimodalResponse)
+	err := c.cc.Invoke(ctx, EngineService_ConfigureMultimodal_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *engineServiceClient) DownloadModel(ctx context.Context, in *ConfigureMultimodalRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ModelDownloadProgress], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &EngineService_ServiceDesc.Streams[3], EngineService_DownloadModel_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ConfigureMultimodalRequest, ModelDownloadProgress]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngineService_DownloadModelClient = grpc.ServerStreamingClient[ModelDownloadProgress]
+
 func (c *engineServiceClient) StreamEngineMetrics(ctx context.Context, in *EngineMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineMetricsSnapshot], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &EngineService_ServiceDesc.Streams[3], EngineService_StreamEngineMetrics_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &EngineService_ServiceDesc.Streams[4], EngineService_StreamEngineMetrics_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -318,8 +364,12 @@ type EngineServiceServer interface {
 	GetEmbedStats(context.Context, *EmbedStatsRequest) (*EmbedStatsResponse, error)
 	// File Content — read a file from the engine's local clone for the swarm
 	GetFileContent(context.Context, *FileContentRequest) (*FileContentResponse, error)
-	// Asset Ingestion — embed documents, PDFs, and URL content into a repo index
+	// Asset Ingestion — embed documents, PDFs, images, audio, and URL content into a repo index
 	IngestAsset(context.Context, *IngestAssetRequest) (*IngestAssetResponse, error)
+	// Multimodal Embedding Configuration
+	GetMultimodalConfig(context.Context, *GetMultimodalConfigRequest) (*GetMultimodalConfigResponse, error)
+	ConfigureMultimodal(context.Context, *ConfigureMultimodalRequest) (*ConfigureMultimodalResponse, error)
+	DownloadModel(*ConfigureMultimodalRequest, grpc.ServerStreamingServer[ModelDownloadProgress]) error
 	// Metrics — server-streaming so the Go API server can relay to the dashboard.
 	// The engine pushes a snapshot every interval_ms (default 1000).
 	StreamEngineMetrics(*EngineMetricsRequest, grpc.ServerStreamingServer[EngineMetricsSnapshot]) error
@@ -380,6 +430,15 @@ func (UnimplementedEngineServiceServer) GetFileContent(context.Context, *FileCon
 }
 func (UnimplementedEngineServiceServer) IngestAsset(context.Context, *IngestAssetRequest) (*IngestAssetResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method IngestAsset not implemented")
+}
+func (UnimplementedEngineServiceServer) GetMultimodalConfig(context.Context, *GetMultimodalConfigRequest) (*GetMultimodalConfigResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMultimodalConfig not implemented")
+}
+func (UnimplementedEngineServiceServer) ConfigureMultimodal(context.Context, *ConfigureMultimodalRequest) (*ConfigureMultimodalResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfigureMultimodal not implemented")
+}
+func (UnimplementedEngineServiceServer) DownloadModel(*ConfigureMultimodalRequest, grpc.ServerStreamingServer[ModelDownloadProgress]) error {
+	return status.Error(codes.Unimplemented, "method DownloadModel not implemented")
 }
 func (UnimplementedEngineServiceServer) StreamEngineMetrics(*EngineMetricsRequest, grpc.ServerStreamingServer[EngineMetricsSnapshot]) error {
 	return status.Error(codes.Unimplemented, "method StreamEngineMetrics not implemented")
@@ -672,6 +731,53 @@ func _EngineService_IngestAsset_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _EngineService_GetMultimodalConfig_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMultimodalConfigRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngineServiceServer).GetMultimodalConfig(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngineService_GetMultimodalConfig_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngineServiceServer).GetMultimodalConfig(ctx, req.(*GetMultimodalConfigRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngineService_ConfigureMultimodal_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigureMultimodalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngineServiceServer).ConfigureMultimodal(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngineService_ConfigureMultimodal_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngineServiceServer).ConfigureMultimodal(ctx, req.(*ConfigureMultimodalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _EngineService_DownloadModel_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ConfigureMultimodalRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(EngineServiceServer).DownloadModel(m, &grpc.GenericServerStream[ConfigureMultimodalRequest, ModelDownloadProgress]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type EngineService_DownloadModelServer = grpc.ServerStreamingServer[ModelDownloadProgress]
+
 func _EngineService_StreamEngineMetrics_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(EngineMetricsRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -742,6 +848,14 @@ var EngineService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "IngestAsset",
 			Handler:    _EngineService_IngestAsset_Handler,
 		},
+		{
+			MethodName: "GetMultimodalConfig",
+			Handler:    _EngineService_GetMultimodalConfig_Handler,
+		},
+		{
+			MethodName: "ConfigureMultimodal",
+			Handler:    _EngineService_ConfigureMultimodal_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -757,6 +871,11 @@ var EngineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "BuildReviewContextStream",
 			Handler:       _EngineService_BuildReviewContextStream_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "DownloadModel",
+			Handler:       _EngineService_DownloadModel_Handler,
 			ServerStreams: true,
 		},
 		{

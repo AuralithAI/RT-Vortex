@@ -17,6 +17,7 @@
 #include "tms/tms_types.h"
 #include "tms/repo_parser.h"
 #include "tms/embedding_engine.h"
+#include "tms/multimodal_embedder.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <sstream>
@@ -971,10 +972,166 @@ public:
         return stats;
     }
 
+    // =========================================================================
+    // Multimodal Embedding
+    // =========================================================================
+
+    bool embedBinaryAsset(
+        const std::string& repo_id,
+        const std::vector<uint8_t>& data,
+        const std::string& mime_type,
+        const std::string& file_name,
+        const std::string& asset_id) override
+    {
+        ensureMultimodalEmbedder();
+        if (!mm_embedder_) return false;
+
+        auto at = tms::assetTypeFromString(mime_type);
+        auto modality = tms::modalityForAsset(at);
+        if (modality == tms::EmbeddingModality::TEXT) {
+            // Text assets go through the standard text pipeline
+            return false;
+        }
+
+        auto result = mm_embedder_->embed(at, "", data, mime_type);
+        if (!result.success || result.embedding.empty()) return false;
+
+        // Store in FAISS via TMS
+        tms::AssetChunk chunk;
+        chunk.repo_id = repo_id;
+        chunk.asset_id = asset_id;
+        chunk.file_name = file_name;
+        chunk.mime_type = mime_type;
+        chunk.modality = modality;
+        chunk.embedding = std::move(result.embedding);
+        chunk.chunk_index = 0;
+        chunk.total_chunks = 1;
+
+        return tms_->storeAssetChunk(chunk);
+    }
+
+    std::vector<ModalityConfig> getMultimodalConfig() override {
+        ensureMultimodalEmbedder();
+        std::vector<ModalityConfig> configs;
+
+        // Text modality (always enabled via the main embedding engine)
+        ModalityConfig text;
+        text.modality = "text";
+        text.model_name = tms_->embeddingEngine().activeModelName();
+        text.description = "Semantic search across code, documentation, and text files.";
+        text.status = "ready";
+        text.enabled = true;
+        text.size_mb = 0;
+        configs.push_back(text);
+
+        if (mm_embedder_) {
+            auto statuses = mm_embedder_->getStatus();
+
+            // Image modality
+            ModalityConfig img;
+            img.modality = "image";
+            img.model_name = "SigLIP Base";
+            img.description = "Search screenshots, diagrams, and visual assets alongside your code.";
+            img.size_mb = 350;
+            if (auto it = statuses.find(tms::EmbeddingModality::VISION); it != statuses.end()) {
+                img.enabled = it->second.enabled;
+                img.download_progress = it->second.download_progress;
+                if (it->second.ready)             img.status = "ready";
+                else if (it->second.downloading)  img.status = "downloading";
+                else if (!it->second.error.empty()) img.status = "error";
+                else                               img.status = "pending";
+            }
+            configs.push_back(img);
+
+            // Audio modality
+            ModalityConfig aud;
+            aud.modality = "audio";
+            aud.model_name = "CLAP General";
+            aud.description = "Find voice recordings, meeting notes, and audio assets.";
+            aud.size_mb = 650;
+            if (auto it = statuses.find(tms::EmbeddingModality::AUDIO); it != statuses.end()) {
+                aud.enabled = it->second.enabled;
+                aud.download_progress = it->second.download_progress;
+                if (it->second.ready)             aud.status = "ready";
+                else if (it->second.downloading)  aud.status = "downloading";
+                else if (!it->second.error.empty()) aud.status = "error";
+                else                               aud.status = "pending";
+            }
+            configs.push_back(aud);
+        }
+
+        return configs;
+    }
+
+    ModalityConfig setModalityEnabled(
+        const std::string& modality,
+        bool enabled) override
+    {
+        ensureMultimodalEmbedder();
+        if (!mm_embedder_) return {};
+
+        tms::EmbeddingModality mod;
+        if (modality == "image") mod = tms::EmbeddingModality::VISION;
+        else if (modality == "audio") mod = tms::EmbeddingModality::AUDIO;
+        else return {};
+
+        mm_embedder_->setModalityEnabled(mod, enabled);
+
+        auto statuses = mm_embedder_->getStatus();
+
+        ModalityConfig cfg;
+        cfg.modality = modality;
+        cfg.enabled = enabled;
+        if (auto it = statuses.find(mod); it != statuses.end()) {
+            cfg.download_progress = it->second.download_progress;
+            if (it->second.ready)             cfg.status = "ready";
+            else if (it->second.downloading)  cfg.status = "downloading";
+            else if (!it->second.error.empty()) cfg.status = "error";
+            else                               cfg.status = "pending";
+        }
+
+        if (modality == "image") {
+            cfg.model_name = "SigLIP Base";
+            cfg.description = "Search screenshots, diagrams, and visual assets alongside your code.";
+            cfg.size_mb = 350;
+        } else {
+            cfg.model_name = "CLAP General";
+            cfg.description = "Find voice recordings, meeting notes, and audio assets.";
+            cfg.size_mb = 650;
+        }
+
+        return cfg;
+    }
+
 private:
     EngineConfig config_;
     std::unique_ptr<tms::TMSMemorySystem> tms_;
     std::unique_ptr<ReviewSignals> review_signals_;
+
+    // Multimodal embedder (lazy-initialized)
+    std::unique_ptr<tms::MultiModalEmbedder> mm_embedder_;
+    std::once_flag mm_init_flag_;
+
+    void ensureMultimodalEmbedder() {
+        std::call_once(mm_init_flag_, [this]() {
+            try {
+                auto& emb = tms_->embeddingEngine();
+                tms::TMSConfig tms_cfg;
+                tms_cfg.image_embedding_enabled = true;
+                tms_cfg.audio_embedding_enabled = true;
+
+                // Resolve models directory relative to storage path
+                namespace fs = std::filesystem;
+                fs::path models_dir = fs::path(config_.storage_path).parent_path() / "models";
+
+                mm_embedder_ = std::make_unique<tms::MultiModalEmbedder>(emb, tms_cfg);
+                mm_embedder_->initialize(models_dir.string());
+            } catch (const std::exception& e) {
+                std::cerr << "[ENGINE] Failed to initialize multimodal embedder: "
+                          << e.what() << std::endl;
+            }
+        });
+    }
 
     // Transient clone token — set per-request, consumed once, then cleared.
     std::mutex clone_token_mu_;

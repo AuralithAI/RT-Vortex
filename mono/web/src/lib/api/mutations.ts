@@ -5,7 +5,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./client";
 import { queryKeys } from "./queries";
-import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute } from "@/types/api";
+import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute, MultimodalUpdateRequest } from "@/types/api";
 
 // ── User ────────────────────────────────────────────────────────────────────
 
@@ -208,6 +208,16 @@ export function useCheckEmbeddingCredits() {
   return useMutation({
     mutationFn: (data: { provider: string; endpoint?: string; api_key?: string }) =>
       api.embeddings.credits(data),
+  });
+}
+
+export function useUpdateMultimodal() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: MultimodalUpdateRequest) => api.embeddings.updateMultimodal(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.multimodalConfig });
+    },
   });
 }
 

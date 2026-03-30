@@ -78,6 +78,9 @@ type Dependencies struct {
 	ChatRepo    *store.ChatRepository
 	ChatService *chat.Service
 
+	// Multimodal assets
+	AssetRepo *store.AssetRepository
+
 	// File Vault — shared vault for per-user secret storage
 	Vault *vault.FileVault
 
@@ -168,6 +171,7 @@ func (s *Server) setupRouter() {
 		PRSyncWorker:    s.deps.PRSyncWorker,
 		ChatRepo:        s.deps.ChatRepo,
 		ChatService:     s.deps.ChatService,
+		AssetRepo:       s.deps.AssetRepo,
 		Vault:           s.deps.Vault,
 		VCSPlatformRepo: s.deps.VCSPlatformRepo,
 	}
@@ -274,6 +278,14 @@ func (s *Server) setupRouter() {
 							r.Post("/messages", h.SendChatMessage)
 						})
 					})
+
+					// Multimodal asset management
+					r.Route("/assets", func(r chi.Router) {
+						r.Post("/upload", h.UploadAsset)
+						r.Post("/ingest-url", h.IngestURL)
+						r.Get("/", h.ListAssets)
+						r.Delete("/{assetID}", h.DeleteAsset)
+					})
 				})
 			})
 
@@ -309,6 +321,8 @@ func (s *Server) setupRouter() {
 				r.Put("/config", h.UpdateEmbeddingsConfig)
 				r.Post("/test", h.TestEmbeddingProvider)
 				r.Post("/credits", h.CheckEmbeddingCredits)
+				r.Get("/multimodal", h.GetMultimodalConfig)
+				r.Put("/multimodal", h.UpdateMultimodalConfig)
 			})
 
 			// VCS Platform Settings (per-user credentials stored in vault)

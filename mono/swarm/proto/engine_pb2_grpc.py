@@ -115,6 +115,21 @@ class EngineServiceStub(object):
                 request_serializer=engine__pb2.IngestAssetRequest.SerializeToString,
                 response_deserializer=engine__pb2.IngestAssetResponse.FromString,
                 _registered_method=True)
+        self.GetMultimodalConfig = channel.unary_unary(
+                '/aipr.engine.v1.EngineService/GetMultimodalConfig',
+                request_serializer=engine__pb2.GetMultimodalConfigRequest.SerializeToString,
+                response_deserializer=engine__pb2.GetMultimodalConfigResponse.FromString,
+                _registered_method=True)
+        self.ConfigureMultimodal = channel.unary_unary(
+                '/aipr.engine.v1.EngineService/ConfigureMultimodal',
+                request_serializer=engine__pb2.ConfigureMultimodalRequest.SerializeToString,
+                response_deserializer=engine__pb2.ConfigureMultimodalResponse.FromString,
+                _registered_method=True)
+        self.DownloadModel = channel.unary_stream(
+                '/aipr.engine.v1.EngineService/DownloadModel',
+                request_serializer=engine__pb2.ConfigureMultimodalRequest.SerializeToString,
+                response_deserializer=engine__pb2.ModelDownloadProgress.FromString,
+                _registered_method=True)
         self.StreamEngineMetrics = channel.unary_stream(
                 '/aipr.engine.v1.EngineService/StreamEngineMetrics',
                 request_serializer=engine__pb2.EngineMetricsRequest.SerializeToString,
@@ -224,8 +239,27 @@ class EngineServiceServicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def IngestAsset(self, request, context):
-        """Asset Ingestion — embed documents, PDFs, and URL content into a repo index
+        """Asset Ingestion — embed documents, PDFs, images, audio, and URL content into a repo index
         """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetMultimodalConfig(self, request, context):
+        """Multimodal Embedding Configuration
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ConfigureMultimodal(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DownloadModel(self, request, context):
+        """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -320,6 +354,21 @@ def add_EngineServiceServicer_to_server(servicer, server):
                     servicer.IngestAsset,
                     request_deserializer=engine__pb2.IngestAssetRequest.FromString,
                     response_serializer=engine__pb2.IngestAssetResponse.SerializeToString,
+            ),
+            'GetMultimodalConfig': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetMultimodalConfig,
+                    request_deserializer=engine__pb2.GetMultimodalConfigRequest.FromString,
+                    response_serializer=engine__pb2.GetMultimodalConfigResponse.SerializeToString,
+            ),
+            'ConfigureMultimodal': grpc.unary_unary_rpc_method_handler(
+                    servicer.ConfigureMultimodal,
+                    request_deserializer=engine__pb2.ConfigureMultimodalRequest.FromString,
+                    response_serializer=engine__pb2.ConfigureMultimodalResponse.SerializeToString,
+            ),
+            'DownloadModel': grpc.unary_stream_rpc_method_handler(
+                    servicer.DownloadModel,
+                    request_deserializer=engine__pb2.ConfigureMultimodalRequest.FromString,
+                    response_serializer=engine__pb2.ModelDownloadProgress.SerializeToString,
             ),
             'StreamEngineMetrics': grpc.unary_stream_rpc_method_handler(
                     servicer.StreamEngineMetrics,
@@ -760,6 +809,87 @@ class EngineService(object):
             '/aipr.engine.v1.EngineService/IngestAsset',
             engine__pb2.IngestAssetRequest.SerializeToString,
             engine__pb2.IngestAssetResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetMultimodalConfig(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aipr.engine.v1.EngineService/GetMultimodalConfig',
+            engine__pb2.GetMultimodalConfigRequest.SerializeToString,
+            engine__pb2.GetMultimodalConfigResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ConfigureMultimodal(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aipr.engine.v1.EngineService/ConfigureMultimodal',
+            engine__pb2.ConfigureMultimodalRequest.SerializeToString,
+            engine__pb2.ConfigureMultimodalResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DownloadModel(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/aipr.engine.v1.EngineService/DownloadModel',
+            engine__pb2.ConfigureMultimodalRequest.SerializeToString,
+            engine__pb2.ModelDownloadProgress.FromString,
             options,
             channel_credentials,
             insecure,
