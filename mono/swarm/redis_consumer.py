@@ -311,6 +311,20 @@ async def _run_full_pipeline(
             await go_client.fail_task(task.id, "Orchestrator produced no plan")
             return
 
+        # If the orchestrator extracted the plan from text (i.e. the LLM
+        # did NOT call the report_plan tool), the plan was never POSTed to
+        # Go and the task is still in "planning".  Submit it now so Go
+        # transitions the task to "plan_review".
+        current_status = await go_client.get_task_status(task.id)
+        if current_status == "planning":
+            logger.info("Team %s: Plan extracted from text — submitting to Go explicitly", team_id[:8])
+            try:
+                await go_client.report_plan(task.id, orch_result.plan)
+            except Exception as e:
+                logger.error("Team %s: Failed to submit plan to Go: %s", team_id[:8], e)
+                await go_client.fail_task(task.id, f"Failed to submit plan: {e}")
+                return
+
         logger.info("Team %s: Plan submitted, waiting for human approval…", team_id[:8])
 
         # ── Step 2: Wait for human plan approval ────────────────────────
