@@ -1,8 +1,8 @@
 package api
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"image"
