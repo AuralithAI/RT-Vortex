@@ -30,6 +30,7 @@ from .agents.orchestrator import OrchestratorAgent
 from .agents.qa import QAAgent
 from .agents.security import SecurityAgent
 from .agents.senior_dev import SeniorDevAgent
+from .agents.ui_ux import UIUXAgent
 from .auth import register_agent
 from .conversation import SharedConversation
 from .engine_client import EngineClient
@@ -65,7 +66,7 @@ def _make_agent(role: str, team_id: str, agent_config: AgentConfig) -> Agent:
 
     Args:
         role: One of ``orchestrator``, ``senior_dev``, ``architect``, ``qa``,
-              ``security``, ``docs``, ``ops``, ``junior_dev``.
+              ``security``, ``docs``, ``ops``, ``junior_dev``, ``ui_ux``.
         team_id: Team UUID.
         agent_config: Shared agent runtime config.
 
@@ -85,6 +86,7 @@ def _make_agent(role: str, team_id: str, agent_config: AgentConfig) -> Agent:
         "docs": DocsAgent,
         "ops": OpsAgent,
         "junior_dev": JuniorDevAgent,
+        "ui_ux": UIUXAgent,
     }
     cls = role_map.get(role)
     if cls is None:
@@ -378,11 +380,11 @@ async def _run_full_pipeline(
             elif agents_needed <= 5:
                 roles = ["architect", "senior_dev", "junior_dev", "qa", "security"]
             else:
-                roles = ["architect", "senior_dev", "senior_dev", "junior_dev", "qa", "security", "docs"]
+                roles = ["architect", "senior_dev", "senior_dev", "junior_dev", "qa", "security", "docs", "ui_ux"]
         elif complexity == "small" or (affected_files <= 2 and step_count <= 3):
             roles = ["senior_dev"]
         elif complexity == "large" or affected_files > 10 or step_count > 8:
-            roles = ["architect", "senior_dev", "junior_dev", "qa", "security", "docs"]
+            roles = ["architect", "senior_dev", "junior_dev", "qa", "security", "docs", "ui_ux"]
         else:  # medium
             roles = ["senior_dev", "qa", "security"]
 
@@ -420,7 +422,7 @@ async def _run_full_pipeline(
             elif role in ("qa", "security"):
                 agent.tools.extend(RESEARCH_TOOLS)
                 agent.tools.extend([t for t in CODE_TOOLS if t.name in ("git_diff", "self_critique")])
-            elif role in ("docs", "ops"):
+            elif role in ("docs", "ops", "ui_ux"):
                 agent.tools.extend(RESEARCH_TOOLS)
 
             # Inter-agent communication for all roles.
@@ -440,7 +442,7 @@ async def _run_full_pipeline(
             implementation_agents.append(agent)
 
         # Run code-generating agents concurrently, review agents sequentially.
-        code_agents = [a for a in implementation_agents if a.role in ("senior_dev", "junior_dev", "architect", "docs", "ops")]
+        code_agents = [a for a in implementation_agents if a.role in ("senior_dev", "junior_dev", "architect", "docs", "ops", "ui_ux")]
         review_agents = [a for a in implementation_agents if a.role in ("qa", "security")]
 
         # Run code agents in parallel.

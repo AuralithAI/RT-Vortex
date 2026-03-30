@@ -263,6 +263,7 @@ export const AGENT_ROLES = [
   "security",
   "docs",
   "ops",
+  "ui_ux",
 ] as const;
 
 export type AgentRoleId = (typeof AGENT_ROLES)[number];
@@ -277,6 +278,7 @@ export const AGENT_ROLE_META: Record<AgentRoleId, { label: string; description: 
   security:     { label: "Security",     description: "Vulnerabilities, CVEs, OWASP checks", icon: "🔒" },
   docs:         { label: "Docs",         description: "Documentation quality, comments, READMEs", icon: "📝" },
   ops:          { label: "Ops",          description: "CI/CD, deployment, infrastructure", icon: "⚙️" },
+  ui_ux:        { label: "UI/UX",       description: "UI components, styling, accessibility, UX patterns", icon: "🎨" },
 };
 
 // ── Embeddings ──────────────────────────────────────────────────────────────

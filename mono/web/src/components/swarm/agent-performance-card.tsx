@@ -36,6 +36,7 @@ function roleColor(role: AgentRole): string {
     security: "bg-red-500/10 text-red-500 border-red-500/20",
     docs: "bg-cyan-500/10 text-cyan-500 border-cyan-500/20",
     ops: "bg-orange-500/10 text-orange-500 border-orange-500/20",
+    ui_ux: "bg-pink-500/10 text-pink-500 border-pink-500/20",
   };
   return colors[role] ?? "bg-muted text-muted-foreground border-border";
 }
@@ -58,6 +59,8 @@ function roleIcon(role: AgentRole) {
       return <FileText className={iconClass} />;
     case "ops":
       return <Settings className={iconClass} />;
+    case "ui_ux":
+      return <Zap className={iconClass} />;
     default:
       return <Bot className={iconClass} />;
   }
@@ -73,6 +76,7 @@ function roleLabel(role: AgentRole): string {
     security: "Security",
     docs: "Docs",
     ops: "Ops",
+    ui_ux: "UI/UX Designer",
   };
   return labels[role] ?? role;
 }

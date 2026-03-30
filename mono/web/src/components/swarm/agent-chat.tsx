@@ -89,6 +89,13 @@ const roleStyles: Record<
     bg: "bg-orange-50 dark:bg-orange-950/40",
     border: "border-orange-200 dark:border-orange-800",
   },
+  ui_ux: {
+    icon: Zap,
+    label: "UI/UX",
+    color: "text-pink-700 dark:text-pink-300",
+    bg: "bg-pink-50 dark:bg-pink-950/40",
+    border: "border-pink-200 dark:border-pink-800",
+  },
 };
 
 const defaultStyle = {

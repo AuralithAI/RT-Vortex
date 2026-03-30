@@ -17,6 +17,7 @@ import {
   Settings,
   Search,
   Loader2,
+  Palette,
 } from "lucide-react";
 import { AgentAvatar } from "@/components/swarm/agent-avatar";
 import type { AgentRole, AgentSnapshot } from "@/types/swarm";
@@ -72,6 +73,12 @@ const roleConfig: Record<
     label: "Ops",
     color: "text-orange-600 dark:text-orange-400",
     bgColor: "bg-orange-100 dark:bg-orange-900/40",
+  },
+  ui_ux: {
+    icon: Palette,
+    label: "UI/UX",
+    color: "text-pink-600 dark:text-pink-400",
+    bgColor: "bg-pink-100 dark:bg-pink-900/40",
   },
 };
 

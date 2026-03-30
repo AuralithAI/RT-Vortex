@@ -263,6 +263,50 @@ function OpsAvatar({ size, busy }: { size: number; busy: boolean }) {
   );
 }
 
+function UIUXAvatar({ size, busy }: { size: number; busy: boolean }) {
+  // Creative designer — painter with beret and palette
+  return (
+    <svg viewBox="0 0 32 32" width={size} height={size} className={busy ? "animate-float" : ""}>
+      {/* Beret */}
+      <ellipse cx="16" cy="9" rx="8" ry="3.5" fill="#ec4899" />
+      <circle cx="16" cy="6" r="2" fill="#ec4899" />
+      <circle cx="16" cy="5.5" r="1" fill="#f472b6" />
+      {/* Face */}
+      <rect x="11" y="11" width="10" height="8" fill="#fde68a" rx="3" />
+      {/* Eyes — creative sparkle */}
+      <circle cx="14" cy="14.5" r="1" fill="#831843" className="animate-blink" />
+      <circle cx="18" cy="14.5" r="1" fill="#831843" className="animate-blink" />
+      {/* Sparkle near eye */}
+      <polygon points="20,12 20.5,13 21.5,13 20.7,13.6 21,14.5 20,14 19,14.5 19.3,13.6 18.5,13 19.5,13" fill="#fbbf24" className="animate-twinkle" />
+      {/* Happy smile */}
+      <path d="M14 17 Q16 19 18 17" fill="none" stroke="#92400e" strokeWidth="0.7" />
+      {/* Body — colorful smock */}
+      <rect x="11" y="19" width="10" height="9" fill="#f472b6" rx="2" />
+      {/* Paint splotches on smock */}
+      <circle cx="13" cy="22" r="1.2" fill="#3b82f6" />
+      <circle cx="17" cy="24" r="1" fill="#22c55e" />
+      <circle cx="15" cy="21" r="0.8" fill="#f59e0b" />
+      {/* Palette in left hand */}
+      <ellipse cx="6" cy="22" rx="4" ry="3" fill="#fef3c7" stroke="#d97706" strokeWidth="0.4" />
+      <circle cx="5" cy="21" r="0.8" fill="#ef4444" />
+      <circle cx="7" cy="21" r="0.8" fill="#3b82f6" />
+      <circle cx="6" cy="23" r="0.8" fill="#22c55e" />
+      <circle cx="4.5" cy="23" r="0.8" fill="#f59e0b" />
+      {/* Paintbrush in right hand */}
+      <line x1="24" y1="14" x2="26" y2="22" stroke="#92400e" strokeWidth="0.8" strokeLinecap="round" />
+      <ellipse cx="24" cy="13.5" rx="1" ry="2" fill="#ec4899" className={busy ? "animate-write" : ""} />
+      {/* Floating color dots when busy */}
+      {busy && (
+        <>
+          <circle cx="27" cy="10" r="1" fill="#ef4444" className="animate-float" opacity="0.8" />
+          <circle cx="25" cy="8" r="0.8" fill="#3b82f6" className="animate-twinkle" opacity="0.8" />
+          <circle cx="29" cy="12" r="0.7" fill="#22c55e" className="animate-glow" opacity="0.8" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 function DefaultAgentAvatar({ size, busy }: { size: number; busy: boolean }) {
   // Generic bot
   return (
@@ -293,6 +337,7 @@ const avatarMap: Record<string, (props: { size: number; busy: boolean }) => Reac
   security: SecurityAvatar,
   docs: DocsAvatar,
   ops: OpsAvatar,
+  ui_ux: UIUXAvatar,
 };
 
 export function AgentAvatar({ role, size = "md", busy = false, className }: AgentAvatarProps) {

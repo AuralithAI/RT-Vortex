@@ -8,6 +8,7 @@ from .orchestrator import OrchestratorAgent
 from .qa import QAAgent
 from .security import SecurityAgent
 from .senior_dev import SeniorDevAgent
+from .ui_ux import UIUXAgent
 
 __all__ = [
     "ArchitectAgent",
@@ -18,4 +19,5 @@ __all__ = [
     "QAAgent",
     "SecurityAgent",
     "SeniorDevAgent",
+    "UIUXAgent",
 ]

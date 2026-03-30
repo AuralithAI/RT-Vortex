@@ -78,12 +78,12 @@ Use `report_plan` to submit a structured plan with:
 - Complexity estimate
 - **agents_needed**: A JSON array of role strings specifying exactly which
   agent roles should be on the team. Choose from: "senior_dev", "junior_dev",
-  "qa", "security", "architect", "devops". Pick only the roles actually
+  "qa", "security", "architect", "devops", "ui_ux". Pick only the roles actually
   required — don't request a security agent for a typo fix.
   Example: ["senior_dev", "qa"] for a medium bug-fix that needs testing.
   Small task: ["senior_dev"]
   Medium task: ["senior_dev", "qa", "security"]
-  Large task: ["architect", "senior_dev", "junior_dev", "qa", "security", "docs"]
+  Large task: ["architect", "senior_dev", "junior_dev", "qa", "security", "docs", "ui_ux"]
 
 ## Important Rules
 - Always search the codebase BEFORE writing a plan

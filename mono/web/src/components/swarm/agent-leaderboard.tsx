@@ -64,6 +64,7 @@ function roleLabel(role: AgentRole): string {
     security: "Security",
     docs: "Docs",
     ops: "Ops",
+    ui_ux: "UI/UX Designer",
   };
   return labels[role] ?? role;
 }
