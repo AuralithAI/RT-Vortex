@@ -363,6 +363,8 @@ func runHeuristicPatterns(f TaskFile) []GenComment {
 }
 
 // pollSwarmTask polls the swarm task until it reaches a terminal state.
+// For benchmark tasks, it auto-approves plan_review and diff_review gates
+// so the pipeline runs fully automated without human intervention.
 func (e *PipelineExecutor) pollSwarmTask(ctx context.Context, taskID uuid.UUID) (*swarm.Task, error) {
 	ticker := time.NewTicker(swarmPollInterval)
 	defer ticker.Stop()
@@ -380,6 +382,25 @@ func (e *PipelineExecutor) pollSwarmTask(ctx context.Context, taskID uuid.UUID) 
 			switch task.Status {
 			case swarm.StatusCompleted, swarm.StatusFailed, swarm.StatusTimedOut, swarm.StatusCancelled:
 				return task, nil
+
+			case swarm.StatusPlanReview:
+				// Auto-approve the plan for benchmark tasks — no human in the loop.
+				e.logger.Info("benchmark: auto-approving plan",
+					"task_id", taskID)
+				if approveErr := e.taskMgr.UpdateStatus(ctx, taskID, swarm.StatusImplementing); approveErr != nil {
+					e.logger.Error("benchmark: failed to auto-approve plan",
+						"task_id", taskID, "error", approveErr)
+				}
+
+			case swarm.StatusDiffReview:
+				// Auto-approve the diff for benchmark tasks — skip PR creation,
+				// go straight to completed since there's no real repo to push to.
+				e.logger.Info("benchmark: auto-approving diff",
+					"task_id", taskID)
+				if approveErr := e.taskMgr.UpdateStatus(ctx, taskID, swarm.StatusCompleted); approveErr != nil {
+					e.logger.Error("benchmark: failed to auto-approve diff",
+						"task_id", taskID, "error", approveErr)
+				}
 			}
 		}
 	}
