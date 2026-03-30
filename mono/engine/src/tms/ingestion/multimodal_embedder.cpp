@@ -16,6 +16,11 @@
 #include <filesystem>
 #include <numeric>
 #include <iostream>
+#include <cstring>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 #ifdef AIPR_HAS_ONNX
 #include <onnxruntime_cxx_api.h>
@@ -24,6 +29,20 @@
 #ifdef AIPR_HAS_CURL
 #include <curl/curl.h>
 #endif
+
+// stb_image for JPEG/PNG decoding (header-only)
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_GIF
+#define STBI_NO_PSD
+#define STBI_NO_PIC
+#define STBI_NO_PNM
+#define STBI_NO_HDR
+#define STBI_NO_TGA
+#include "stb_image.h"
+
+// stb_image_resize2 for bilinear resize
+#define STB_IMAGE_RESIZE_IMPLEMENTATION
+#include "stb_image_resize2.h"
 
 namespace fs = std::filesystem;
 
@@ -72,6 +91,286 @@ static const MultimodalModelInfo* findMultimodalModel(const std::string& name) {
         if (m.name == name) return &m;
     }
     return nullptr;
+}
+
+// =============================================================================
+// Image Preprocessing — decode + resize + normalize for SigLIP
+// =============================================================================
+
+// Preprocesses raw image bytes into SigLIP's expected input:
+//   pixel_values: [1, 3, 224, 224] float32
+//   rescale ×(1/255), normalize (mean=0.5, std=0.5) → range [-1, 1]
+static bool preprocessImage(const std::vector<uint8_t>& raw,
+                             std::vector<float>& out_tensor) {
+    constexpr int TARGET_W = 224;
+    constexpr int TARGET_H = 224;
+    constexpr int CHANNELS = 3;
+    constexpr float RESCALE = 1.0f / 255.0f;
+    constexpr float MEAN = 0.5f;
+    constexpr float STD  = 0.5f;
+
+    // Decode image using stb_image
+    int w = 0, h = 0, c = 0;
+    unsigned char* pixels = stbi_load_from_memory(
+        raw.data(), static_cast<int>(raw.size()), &w, &h, &c, CHANNELS);
+    if (!pixels) {
+        LOG_WARN("stb_image: failed to decode image (" +
+                 std::string(stbi_failure_reason()) + ")");
+        return false;
+    }
+
+    // Resize to 224×224 using bilinear interpolation (Lanczos3 / resample=3)
+    std::vector<unsigned char> resized(TARGET_W * TARGET_H * CHANNELS);
+    stbir_resize_uint8_linear(
+        pixels, w, h, w * CHANNELS,
+        resized.data(), TARGET_W, TARGET_H, TARGET_W * CHANNELS,
+        static_cast<stbir_pixel_layout>(CHANNELS));
+    stbi_image_free(pixels);
+
+    // Convert to CHW float32 with SigLIP normalization:
+    //   value = (pixel / 255.0 - 0.5) / 0.5
+    out_tensor.resize(1 * CHANNELS * TARGET_H * TARGET_W);
+    for (int ch = 0; ch < CHANNELS; ++ch) {
+        for (int y = 0; y < TARGET_H; ++y) {
+            for (int x = 0; x < TARGET_W; ++x) {
+                int src_idx = (y * TARGET_W + x) * CHANNELS + ch;
+                int dst_idx = ch * TARGET_H * TARGET_W + y * TARGET_W + x;
+                float val = static_cast<float>(resized[src_idx]) * RESCALE;
+                out_tensor[dst_idx] = (val - MEAN) / STD;
+            }
+        }
+    }
+    return true;
+}
+
+// =============================================================================
+// Audio Preprocessing — decode WAV + mel spectrogram for CLAP
+// =============================================================================
+
+// Minimal WAV parser: extracts raw PCM float samples from WAV/RIFF containers.
+// Supports 16-bit PCM and 32-bit float formats (mono or stereo → force mono).
+static bool decodeWAV(const std::vector<uint8_t>& raw,
+                       std::vector<float>& samples, int& sample_rate) {
+    if (raw.size() < 44) return false;
+
+    // Verify RIFF header
+    if (std::memcmp(raw.data(), "RIFF", 4) != 0 ||
+        std::memcmp(raw.data() + 8, "WAVE", 4) != 0) {
+        LOG_WARN("Audio: not a valid WAV file (missing RIFF/WAVE header)");
+        return false;
+    }
+
+    // Parse chunks
+    size_t pos = 12;
+    int num_channels = 0, bits_per_sample = 0;
+    int audio_format = 0;
+    const uint8_t* data_start = nullptr;
+    size_t data_size = 0;
+
+    while (pos + 8 <= raw.size()) {
+        char chunk_id[5] = {};
+        std::memcpy(chunk_id, raw.data() + pos, 4);
+        uint32_t chunk_size = 0;
+        std::memcpy(&chunk_size, raw.data() + pos + 4, 4);
+
+        if (std::strcmp(chunk_id, "fmt ") == 0 && pos + 8 + chunk_size <= raw.size()) {
+            const uint8_t* fmt = raw.data() + pos + 8;
+            std::memcpy(&audio_format, fmt, 2);
+            std::memcpy(&num_channels, fmt + 2, 2);
+            std::memcpy(&sample_rate, fmt + 4, 4);
+            std::memcpy(&bits_per_sample, fmt + 14, 2);
+        } else if (std::strcmp(chunk_id, "data") == 0) {
+            data_start = raw.data() + pos + 8;
+            data_size = std::min(static_cast<size_t>(chunk_size), raw.size() - pos - 8);
+        }
+
+        pos += 8 + ((chunk_size + 1) & ~1u); // chunks are 2-byte aligned
+    }
+
+    if (!data_start || data_size == 0 || num_channels == 0) {
+        LOG_WARN("Audio: WAV file has no data chunk or invalid format");
+        return false;
+    }
+
+    // Decode samples
+    size_t num_samples = 0;
+    if (audio_format == 1 && bits_per_sample == 16) {
+        // PCM 16-bit
+        num_samples = data_size / (2 * num_channels);
+        samples.resize(num_samples);
+        for (size_t i = 0; i < num_samples; ++i) {
+            float sum = 0.0f;
+            for (int ch = 0; ch < num_channels; ++ch) {
+                int16_t s = 0;
+                std::memcpy(&s, data_start + (i * num_channels + ch) * 2, 2);
+                sum += static_cast<float>(s) / 32768.0f;
+            }
+            samples[i] = sum / num_channels;
+        }
+    } else if (audio_format == 3 && bits_per_sample == 32) {
+        // IEEE float 32-bit
+        num_samples = data_size / (4 * num_channels);
+        samples.resize(num_samples);
+        for (size_t i = 0; i < num_samples; ++i) {
+            float sum = 0.0f;
+            for (int ch = 0; ch < num_channels; ++ch) {
+                float s = 0.0f;
+                std::memcpy(&s, data_start + (i * num_channels + ch) * 4, 4);
+                sum += s;
+            }
+            samples[i] = sum / num_channels;
+        }
+    } else if (audio_format == 1 && bits_per_sample == 24) {
+        // PCM 24-bit
+        num_samples = data_size / (3 * num_channels);
+        samples.resize(num_samples);
+        for (size_t i = 0; i < num_samples; ++i) {
+            float sum = 0.0f;
+            for (int ch = 0; ch < num_channels; ++ch) {
+                const uint8_t* p = data_start + (i * num_channels + ch) * 3;
+                int32_t s = (static_cast<int32_t>(p[2]) << 24) |
+                            (static_cast<int32_t>(p[1]) << 16) |
+                            (static_cast<int32_t>(p[0]) << 8);
+                s >>= 8; // sign-extend
+                sum += static_cast<float>(s) / 8388608.0f;
+            }
+            samples[i] = sum / num_channels;
+        }
+    } else {
+        LOG_WARN("Audio: unsupported WAV format (fmt=" + std::to_string(audio_format) +
+                 ", bits=" + std::to_string(bits_per_sample) + ")");
+        return false;
+    }
+
+    return !samples.empty();
+}
+
+// Simple linear resampler: converts between sample rates.
+static std::vector<float> resampleLinear(const std::vector<float>& input,
+                                          int from_rate, int to_rate) {
+    if (from_rate == to_rate) return input;
+    double ratio = static_cast<double>(to_rate) / from_rate;
+    size_t out_len = static_cast<size_t>(input.size() * ratio);
+    std::vector<float> output(out_len);
+    for (size_t i = 0; i < out_len; ++i) {
+        double src_idx = i / ratio;
+        size_t idx0 = static_cast<size_t>(src_idx);
+        double frac = src_idx - idx0;
+        size_t idx1 = std::min(idx0 + 1, input.size() - 1);
+        output[i] = static_cast<float>(input[idx0] * (1.0 - frac) + input[idx1] * frac);
+    }
+    return output;
+}
+
+// Compute a 64-bin mel spectrogram matching ClapFeatureExtractor config:
+//   sampling_rate: 48000, n_fft: 1024, hop_length: 480,
+//   feature_size: 64 mel bins, max_length_s: 10 → 1001 frames
+// Returns [1, 1, 1001, 64] tensor as flat vector.
+static bool computeMelSpectrogram(const std::vector<float>& audio_48k,
+                                   std::vector<float>& out_tensor) {
+    constexpr int SAMPLE_RATE = 48000;
+    constexpr int N_FFT = 1024;
+    constexpr int HOP_LENGTH = 480;
+    constexpr int N_MELS = 64;
+    constexpr int TARGET_FRAMES = 1001;
+    constexpr int MAX_SAMPLES = SAMPLE_RATE * 10;  // 10 seconds
+    constexpr float FREQ_MIN = 50.0f;
+    constexpr float FREQ_MAX = 14000.0f;
+
+    // Pad or truncate to 10 seconds (repeat-pad if shorter)
+    std::vector<float> audio(MAX_SAMPLES, 0.0f);
+    if (audio_48k.empty()) return false;
+
+    // Repeat-pad strategy: tile the audio to fill 10s
+    for (size_t i = 0; i < static_cast<size_t>(MAX_SAMPLES); ++i) {
+        audio[i] = audio_48k[i % audio_48k.size()];
+    }
+
+    // Precompute Hann window
+    std::vector<float> window(N_FFT);
+    for (int i = 0; i < N_FFT; ++i) {
+        window[i] = 0.5f * (1.0f - std::cos(2.0f * M_PI * i / N_FFT));
+    }
+
+    // Compute STFT magnitude squared
+    int n_freq = N_FFT / 2 + 1;  // 513 bins
+    int n_frames = (static_cast<int>(audio.size()) - N_FFT) / HOP_LENGTH + 1;
+    if (n_frames < TARGET_FRAMES) n_frames = TARGET_FRAMES;
+
+    std::vector<float> power_spec(n_frames * n_freq, 0.0f);
+
+    for (int frame = 0; frame < std::min(n_frames, static_cast<int>(audio.size() / HOP_LENGTH)); ++frame) {
+        int start = frame * HOP_LENGTH;
+
+        // Apply window and compute DFT via direct computation
+        // (FFT would be faster but adds dependency; 1001 frames × 513 bins is tractable)
+        for (int k = 0; k < n_freq; ++k) {
+            float re = 0.0f, im = 0.0f;
+            for (int n = 0; n < N_FFT; ++n) {
+                int sample_idx = start + n;
+                float val = (sample_idx < static_cast<int>(audio.size()))
+                            ? audio[sample_idx] * window[n] : 0.0f;
+                float angle = 2.0f * M_PI * k * n / N_FFT;
+                re += val * std::cos(angle);
+                im -= val * std::sin(angle);
+            }
+            power_spec[frame * n_freq + k] = re * re + im * im;
+        }
+    }
+
+    // Build mel filter bank (triangular filters, HTK-style)
+    auto hzToMel = [](float hz) { return 2595.0f * std::log10(1.0f + hz / 700.0f); };
+    auto melToHz = [](float mel) { return 700.0f * (std::pow(10.0f, mel / 2595.0f) - 1.0f); };
+
+    float mel_min = hzToMel(FREQ_MIN);
+    float mel_max = hzToMel(FREQ_MAX);
+    std::vector<float> mel_points(N_MELS + 2);
+    for (int i = 0; i < N_MELS + 2; ++i) {
+        float mel = mel_min + (mel_max - mel_min) * i / (N_MELS + 1);
+        mel_points[i] = melToHz(mel);
+    }
+
+    // Convert Hz to FFT bin indices
+    std::vector<float> fft_bins(N_MELS + 2);
+    for (int i = 0; i < N_MELS + 2; ++i) {
+        fft_bins[i] = mel_points[i] * N_FFT / SAMPLE_RATE;
+    }
+
+    // Apply mel filter bank: [N_MELS × n_freq] × [n_freq] → [N_MELS]
+    // Output: [n_frames, N_MELS]
+    out_tensor.resize(1 * 1 * TARGET_FRAMES * N_MELS, 0.0f);
+
+    for (int frame = 0; frame < TARGET_FRAMES && frame < n_frames; ++frame) {
+        for (int m = 0; m < N_MELS; ++m) {
+            float sum = 0.0f;
+            int f_start = static_cast<int>(std::floor(fft_bins[m]));
+            int f_center = static_cast<int>(std::floor(fft_bins[m + 1]));
+            int f_end = static_cast<int>(std::floor(fft_bins[m + 2]));
+
+            // Rising slope
+            for (int k = f_start; k <= f_center && k < n_freq; ++k) {
+                float weight = (fft_bins[m + 1] - fft_bins[m]) > 0
+                    ? (k - fft_bins[m]) / (fft_bins[m + 1] - fft_bins[m])
+                    : 0.0f;
+                weight = std::max(0.0f, weight);
+                sum += power_spec[frame * n_freq + k] * weight;
+            }
+            // Falling slope
+            for (int k = f_center + 1; k <= f_end && k < n_freq; ++k) {
+                float weight = (fft_bins[m + 2] - fft_bins[m + 1]) > 0
+                    ? (fft_bins[m + 2] - k) / (fft_bins[m + 2] - fft_bins[m + 1])
+                    : 0.0f;
+                weight = std::max(0.0f, weight);
+                sum += power_spec[frame * n_freq + k] * weight;
+            }
+
+            // Convert to log mel (dB scale with floor)
+            float log_mel = std::log10(std::max(sum, 1e-10f));
+            out_tensor[frame * N_MELS + m] = log_mel;
+        }
+    }
+
+    return true;
 }
 
 // =============================================================================
@@ -153,28 +452,111 @@ public:
     }
 
     std::vector<float> embed(const std::vector<uint8_t>& data,
-                              const std::string& /*mime_type*/) {
+                              const std::string& mime_type) {
         if (!ready_) {
+            LOG_WARN(modalityName() + ": session not ready");
             return std::vector<float>(unified_dim_, 0.0f);
         }
 
 #ifdef AIPR_HAS_ONNX
-        // TODO: Implement actual ONNX inference for image/audio
-        // For now, return a placeholder that will be filled in
-        // when we integrate the preprocessing pipelines.
-        //
-        // Image (SigLIP): decode → resize 224×224 → normalize → ONNX → 768d
-        // Audio (CLAP): decode → resample 48kHz → mel-spectrogram → ONNX → 512d
-        //
-        // The ONNX session is ready; preprocessing is the next implementation step.
-        (void)data;
+        try {
+            Ort::AllocatorWithDefaultOptions allocator;
 
-        // Return zero vector — correct dimension, indicates model is loaded but
-        // preprocessing pipeline is not yet connected.
-        std::vector<float> native(native_dim_, 0.0f);
-        return project(native);
+            if (modality_ == EmbeddingModality::VISION) {
+                // ── SigLIP inference ─────────────────────────────────
+                // Input:  pixel_values [1, 3, 224, 224] float32
+                // Output: pooler_output [1, 768] float32
+                std::vector<float> pixel_tensor;
+                if (!preprocessImage(data, pixel_tensor)) {
+                    LOG_WARN("Image preprocessing failed");
+                    return std::vector<float>(unified_dim_, 0.0f);
+                }
+
+                std::array<int64_t, 4> input_shape = {1, 3, 224, 224};
+                auto memory_info = Ort::MemoryInfo::CreateCpu(
+                    OrtAllocatorType::OrtArenaAllocator, OrtMemTypeDefault);
+                Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+                    memory_info, pixel_tensor.data(), pixel_tensor.size(),
+                    input_shape.data(), input_shape.size());
+
+                const char* input_names[] = {"pixel_values"};
+                const char* output_names[] = {"pooler_output"};
+
+                auto outputs = ort_session_->Run(
+                    Ort::RunOptions{nullptr},
+                    input_names, &input_tensor, 1,
+                    output_names, 1);
+
+                // Extract pooler_output [1, 768]
+                float* output_data = outputs[0].GetTensorMutableData<float>();
+                std::vector<float> native(output_data, output_data + native_dim_);
+
+                LOG_INFO("SigLIP inference OK — L2 norm: " +
+                         std::to_string(std::sqrt(std::inner_product(
+                             native.begin(), native.end(), native.begin(), 0.0f))));
+                return project(native);
+
+            } else if (modality_ == EmbeddingModality::AUDIO) {
+                // ── CLAP inference ───────────────────────────────────
+                // Input:  input_features [1, 1, 1001, 64] float32
+                // Output: audio_embeds [1, 512] float32
+                std::vector<float> samples;
+                int sample_rate = 0;
+
+                if (!decodeWAV(data, samples, sample_rate)) {
+                    LOG_WARN("Audio: WAV decode failed, mime=" + mime_type);
+                    return std::vector<float>(unified_dim_, 0.0f);
+                }
+
+                // Resample to 48kHz if needed
+                if (sample_rate != 48000 && sample_rate > 0) {
+                    LOG_INFO("Audio: resampling from " + std::to_string(sample_rate) +
+                             " Hz to 48000 Hz");
+                    samples = resampleLinear(samples, sample_rate, 48000);
+                }
+
+                // Compute 64-bin mel spectrogram → [1, 1, 1001, 64]
+                std::vector<float> mel_tensor;
+                if (!computeMelSpectrogram(samples, mel_tensor)) {
+                    LOG_WARN("Audio: mel spectrogram computation failed");
+                    return std::vector<float>(unified_dim_, 0.0f);
+                }
+
+                std::array<int64_t, 4> input_shape = {1, 1, 1001, 64};
+                auto memory_info = Ort::MemoryInfo::CreateCpu(
+                    OrtAllocatorType::OrtArenaAllocator, OrtMemTypeDefault);
+                Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+                    memory_info, mel_tensor.data(), mel_tensor.size(),
+                    input_shape.data(), input_shape.size());
+
+                const char* input_names[] = {"input_features"};
+                const char* output_names[] = {"audio_embeds"};
+
+                auto outputs = ort_session_->Run(
+                    Ort::RunOptions{nullptr},
+                    input_names, &input_tensor, 1,
+                    output_names, 1);
+
+                // Extract audio_embeds [1, 512]
+                float* output_data = outputs[0].GetTensorMutableData<float>();
+                std::vector<float> native(output_data, output_data + native_dim_);
+
+                LOG_INFO("CLAP inference OK — L2 norm: " +
+                         std::to_string(std::sqrt(std::inner_product(
+                             native.begin(), native.end(), native.begin(), 0.0f))));
+                return project(native);
+            }
+
+            // Unknown modality
+            return std::vector<float>(unified_dim_, 0.0f);
+
+        } catch (const std::exception& e) {
+            LOG_WARN(modalityName() + " ONNX inference failed: " + std::string(e.what()));
+            return std::vector<float>(unified_dim_, 0.0f);
+        }
 #else
         (void)data;
+        (void)mime_type;
         return std::vector<float>(unified_dim_, 0.0f);
 #endif
     }

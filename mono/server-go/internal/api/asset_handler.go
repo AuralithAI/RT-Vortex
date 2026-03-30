@@ -257,21 +257,29 @@ func (h *Handler) ingestToEngine(ctx context.Context, repoID, assetID uuid.UUID,
 		return 0, fmt.Errorf("engine client not available")
 	}
 
-	// TODO: Wire up the actual pb.IngestAssetRequest with binary_data field
-	// once proto is regenerated.
-	_ = binaryData
-	_ = mimeType
-	_ = assetType
+	result, err := h.EngineClient.IngestAsset(
+		ctx,
+		repoID.String(),
+		assetType,
+		mimeType,
+		assetID.String(), // fileName
+		"",               // sourceURL
+		textContent,
+		binaryData,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("engine IngestAsset RPC: %w", err)
+	}
 
-	slog.Info("would forward to engine",
+	slog.Info("engine ingest completed",
 		"repo_id", repoID.String(),
 		"asset_id", assetID.String(),
 		"asset_type", assetType,
-		"text_len", len(textContent),
-		"binary_len", len(binaryData),
+		"chunks_created", result.ChunksCreated,
+		"status", result.Status,
 	)
 
-	return 1, nil
+	return result.ChunksCreated, nil
 }
 
 // updateAssetStatus updates the processing status of an asset in the DB.
@@ -311,7 +319,65 @@ var defaultMultimodalConfig = multimodalConfig{
 
 // GetMultimodalConfig returns the multimodal embedding configuration.
 // GET /api/v1/embeddings/multimodal
+//
+// Queries the C++ engine for live model status; falls back to in-memory defaults
+// if the engine is unreachable.
 func (h *Handler) GetMultimodalConfig(w http.ResponseWriter, r *http.Request) {
+	// Try to get live status from the C++ engine
+	if h.EngineClient != nil {
+		cfg, err := h.EngineClient.GetMultimodalConfig(r.Context())
+		if err == nil {
+			// Enrich engine response with description and size metadata
+			type modalityInfo struct {
+				Modality           string `json:"modality"`
+				ModelName          string `json:"model_name"`
+				Enabled            bool   `json:"enabled"`
+				Status             string `json:"status"`
+				NativeDimension    uint32 `json:"native_dimension"`
+				ProjectedDimension uint32 `json:"projected_dimension"`
+				Description        string `json:"description"`
+				SizeMB             int    `json:"size_mb"`
+				DownloadProgress   int32  `json:"download_progress"`
+			}
+
+			descriptions := map[string]struct {
+				desc   string
+				sizeMB int
+			}{
+				"text":  {"Code and text semantic search — high-quality multilingual embeddings.", 2300},
+				"image": {"Understand screenshots, diagrams, and design mockups alongside your code.", 350},
+				"audio": {"Search voice recordings, meeting notes, and audio assets in your project.", 650},
+			}
+
+			var modalities []modalityInfo
+			for _, m := range cfg.Modalities {
+				info := descriptions[m.Modality]
+				modalities = append(modalities, modalityInfo{
+					Modality:           m.Modality,
+					ModelName:          m.ModelName,
+					Enabled:            m.Enabled,
+					Status:             m.Status,
+					NativeDimension:    m.Dimension,
+					ProjectedDimension: m.ProjectedDimension,
+					Description:        info.desc,
+					SizeMB:             info.sizeMB,
+					DownloadProgress:   m.DownloadProgress,
+				})
+			}
+
+			writeJSON(w, http.StatusOK, map[string]interface{}{
+				"modalities":        modalities,
+				"unified_dimension": cfg.UnifiedDimension,
+				"image_enabled":     cfg.ImageEnabled,
+				"audio_enabled":     cfg.AudioEnabled,
+				"source":            "engine",
+			})
+			return
+		}
+		slog.Warn("failed to get multimodal config from engine, using defaults", "error", err)
+	}
+
+	// Fallback: return in-memory defaults
 	cfg := defaultMultimodalConfig
 
 	type modalityInfo struct {
@@ -341,7 +407,7 @@ func (h *Handler) GetMultimodalConfig(w http.ResponseWriter, r *http.Request) {
 			Modality:           "image",
 			ModelName:          cfg.ImageModel,
 			Enabled:            cfg.ImageEnabled,
-			Status:             "ready",
+			Status:             "unknown",
 			NativeDimension:    768,
 			ProjectedDimension: 1024,
 			Description:        "Understand screenshots, diagrams, and design mockups alongside your code.",
@@ -351,7 +417,7 @@ func (h *Handler) GetMultimodalConfig(w http.ResponseWriter, r *http.Request) {
 			Modality:           "audio",
 			ModelName:          cfg.AudioModel,
 			Enabled:            cfg.AudioEnabled,
-			Status:             "ready",
+			Status:             "unknown",
 			NativeDimension:    512,
 			ProjectedDimension: 1024,
 			Description:        "Search voice recordings, meeting notes, and audio assets in your project.",
@@ -364,6 +430,7 @@ func (h *Handler) GetMultimodalConfig(w http.ResponseWriter, r *http.Request) {
 		"unified_dimension": 1024,
 		"image_enabled":     cfg.ImageEnabled,
 		"audio_enabled":     cfg.AudioEnabled,
+		"source":            "fallback",
 	})
 }
 
@@ -396,6 +463,19 @@ func (h *Handler) UpdateMultimodalConfig(w http.ResponseWriter, r *http.Request)
 	}
 
 	defaultMultimodalConfig = cfg
+
+	// Forward to C++ engine to enable/disable ONNX sessions
+	if h.EngineClient != nil {
+		result, err := h.EngineClient.ConfigureMultimodal(r.Context(), cfg.ImageEnabled, cfg.AudioEnabled)
+		if err != nil {
+			slog.Warn("engine ConfigureMultimodal failed", "error", err)
+		} else {
+			slog.Info("engine multimodal config updated",
+				"success", result.Success,
+				"loaded_models", result.LoadedModels,
+			)
+		}
+	}
 
 	slog.Info("multimodal config updated",
 		"image_enabled", cfg.ImageEnabled,

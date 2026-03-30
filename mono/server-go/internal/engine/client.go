@@ -958,3 +958,116 @@ func (c *Client) GetEmbedStats(ctx context.Context, repoID string) (*EmbedStats,
 		FineIndexVectors:     resp.FineIndexVectors,
 	}, nil
 }
+
+// ── Multimodal Embedding Operations ─────────────────────────────────────────
+
+// IngestAssetResult holds the response from IngestAsset RPC.
+type IngestAssetResult struct {
+	ChunksCreated int32  `json:"chunks_created"`
+	Status        string `json:"status"`
+	AssetID       string `json:"asset_id"`
+}
+
+// IngestAsset sends content or binary data to the C++ engine for embedding.
+// For text assets, the engine chunks and embeds the text.
+// For image/audio assets, the engine runs ONNX inference (SigLIP/CLAP).
+func (c *Client) IngestAsset(ctx context.Context, repoID, assetType, mimeType,
+	fileName, sourceURL, textContent string, binaryData []byte) (*IngestAssetResult, error) {
+
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+
+	resp, err := c.stub().IngestAsset(ctx, &pb.IngestAssetRequest{
+		RepoId:     repoID,
+		AssetType:  assetType,
+		MimeType:   mimeType,
+		FileName:   fileName,
+		SourceUrl:  sourceURL,
+		Content:    textContent,
+		BinaryData: binaryData,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ingest asset: %w", err)
+	}
+
+	return &IngestAssetResult{
+		ChunksCreated: resp.ChunksCreated,
+		Status:        resp.Status,
+		AssetID:       resp.AssetId,
+	}, nil
+}
+
+// MultimodalModalityConfig describes one modality slot from the C++ engine.
+type MultimodalModalityConfig struct {
+	Modality           string `json:"modality"`
+	ModelName          string `json:"model_name"`
+	Enabled            bool   `json:"enabled"`
+	Status             string `json:"status"`
+	Dimension          uint32 `json:"dimension"`
+	ProjectedDimension uint32 `json:"projected_dimension"`
+	DownloadProgress   int32  `json:"download_progress"`
+}
+
+// MultimodalConfigResult is the full multimodal config from the C++ engine.
+type MultimodalConfigResult struct {
+	Modalities       []MultimodalModalityConfig `json:"modalities"`
+	UnifiedDimension uint32                     `json:"unified_dimension"`
+	ImageEnabled     bool                       `json:"image_enabled"`
+	AudioEnabled     bool                       `json:"audio_enabled"`
+}
+
+// GetMultimodalConfig queries the C++ engine for live multimodal model status.
+func (c *Client) GetMultimodalConfig(ctx context.Context) (*MultimodalConfigResult, error) {
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+
+	resp, err := c.stub().GetMultimodalConfig(ctx, &pb.GetMultimodalConfigRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("get multimodal config: %w", err)
+	}
+
+	result := &MultimodalConfigResult{
+		UnifiedDimension: resp.UnifiedDimension,
+		ImageEnabled:     resp.ImageEnabled,
+		AudioEnabled:     resp.AudioEnabled,
+	}
+	for _, m := range resp.Modalities {
+		result.Modalities = append(result.Modalities, MultimodalModalityConfig{
+			Modality:           m.Modality,
+			ModelName:          m.ModelName,
+			Enabled:            m.Enabled,
+			Status:             m.Status,
+			Dimension:          m.Dimension,
+			ProjectedDimension: m.ProjectedDimension,
+			DownloadProgress:   m.DownloadProgress,
+		})
+	}
+	return result, nil
+}
+
+// ConfigureMultimodalResult is the response from ConfigureMultimodal RPC.
+type ConfigureMultimodalResult struct {
+	Success      bool     `json:"success"`
+	Message      string   `json:"message"`
+	LoadedModels []string `json:"loaded_models"`
+}
+
+// ConfigureMultimodal enables/disables image and audio modalities in the C++ engine.
+func (c *Client) ConfigureMultimodal(ctx context.Context, enableImage, enableAudio bool) (*ConfigureMultimodalResult, error) {
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+
+	resp, err := c.stub().ConfigureMultimodal(ctx, &pb.ConfigureMultimodalRequest{
+		EnableImage: enableImage,
+		EnableAudio: enableAudio,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("configure multimodal: %w", err)
+	}
+
+	return &ConfigureMultimodalResult{
+		Success:      resp.Success,
+		Message:      resp.Message,
+		LoadedModels: resp.LoadedModels,
+	}, nil
+}

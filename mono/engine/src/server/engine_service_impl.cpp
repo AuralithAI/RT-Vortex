@@ -1299,18 +1299,60 @@ grpc::Status EngineServiceImpl::IngestAsset(
     const std::string& repo_id = request->repo_id();
     const std::string& content = request->content();
     const std::string& asset_type = request->asset_type();
+    const std::string& mime_type = request->mime_type();
+    const std::string& file_name = request->file_name();
+    const auto& binary_data = request->binary_data();
 
-    if (repo_id.empty() || content.empty()) {
-        response->set_status("error: repo_id and content are required");
+    if (repo_id.empty()) {
+        response->set_status("error: repo_id is required");
         response->set_chunks_created(0);
         return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-                            "repo_id and content are required");
+                            "repo_id is required");
     }
 
     try {
+        // ── Binary asset path: image/audio via multimodal embedder ──
+        if (!binary_data.empty() &&
+            (asset_type == "image" || asset_type == "audio" ||
+             mime_type.find("image/") == 0 || mime_type.find("audio/") == 0)) {
+
+            std::vector<uint8_t> data(binary_data.begin(), binary_data.end());
+            std::string asset_id = request->file_name().empty()
+                ? ("asset_" + repo_id + "_" + std::to_string(
+                       std::chrono::system_clock::now().time_since_epoch().count()))
+                : file_name;
+
+            bool ok = engine_->embedBinaryAsset(
+                repo_id, data, mime_type, file_name, asset_id);
+
+            if (ok) {
+                response->set_chunks_created(1);
+                response->set_status("ok");
+                response->set_asset_id(asset_id);
+                // Detect type
+                if (mime_type.find("image/") == 0 || asset_type == "image") {
+                    response->set_detected_type(aipr::engine::v1::ASSET_TYPE_IMAGE);
+                } else {
+                    response->set_detected_type(aipr::engine::v1::ASSET_TYPE_AUDIO);
+                }
+            } else {
+                response->set_chunks_created(0);
+                response->set_status("error: multimodal embedding failed");
+                return grpc::Status(grpc::StatusCode::INTERNAL,
+                                    "multimodal embedding failed for " + asset_type);
+            }
+            return grpc::Status::OK;
+        }
+
+        // ── Text asset path: chunk + text embed ─────────────────────
+        if (content.empty()) {
+            response->set_status("error: content or binary_data is required");
+            response->set_chunks_created(0);
+            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                                "content or binary_data is required");
+        }
+
         // Chunk the content into embedding-sized pieces.
-        // For documents/PDFs, use paragraph-level splitting.
-        // For URLs, the Go server already extracted the text content.
         std::vector<std::string> chunks;
         const size_t max_chunk_chars = 1500;
         const size_t overlap_chars = 200;
@@ -1344,8 +1386,6 @@ grpc::Status EngineServiceImpl::IngestAsset(
                                    " (chunk " + std::to_string(i + 1) +
                                    "/" + std::to_string(chunks.size()) + ")\n" +
                                    chunks[i];
-            // Delegate to the engine's embedding + storage pipeline.
-            // engine_->embedAndStoreChunk handles FAISS insertion + KG update.
             bool ok = engine_->embedAndStoreAssetChunk(
                 repo_id, prefixed, source, asset_type,
                 std::map<std::string, std::string>(

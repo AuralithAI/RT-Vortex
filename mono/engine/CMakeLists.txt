@@ -155,6 +155,20 @@ FetchContent_MakeAvailable(nlohmann_json)
 message(STATUS "nlohmann/json downloaded")
 
 # =============================================================================
+# stb_image for image decoding in multimodal embedder (header-only)
+# =============================================================================
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG master
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(stb)
+add_library(stb_image INTERFACE)
+target_include_directories(stb_image INTERFACE ${stb_SOURCE_DIR})
+message(STATUS "stb downloaded for image decoding (header-only)")
+
+# =============================================================================
 # miniz for gzip compression of LTM chunks.bin (optional)
 # =============================================================================
 option(AIPR_USE_MINIZ "Use miniz for LTM index compression" ON)
@@ -770,6 +784,7 @@ target_link_libraries(aipr-engine PUBLIC
     Threads::Threads
     CURL::libcurl
     nlohmann_json::nlohmann_json
+    stb_image
 )
 
 # MerkleCache uses OpenSSL/BoringSSL SHA-256 (from gRPC's bundled BoringSSL)
