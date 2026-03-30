@@ -117,7 +117,7 @@
         "path": "config/oauth.py",
         "language": "python",
         "is_changed": true,
-        "content": "# OAuth Configuration\n\nGITHUB_CLIENT_ID = \"Iv1.abc123def456\"\nGITHUB_CLIENT_SECRET = \"gho_secretkey1234567890abcdefghijklmnop\"\n\nSTRIPE_API_KEY = \"sk_live_4eC39HqLyjWDarjtT1zdp7dc\"\nSTRIPE_WEBHOOK_SECRET = \"whsec_test_secret_key_123\"\n\nDATABASE_URL = \"postgresql://admin:P@ssw0rd123@prod-db.internal:5432/myapp\"\n\nAWS_ACCESS_KEY = \"AKIAIOSFODNN7EXAMPLE\"\nAWS_SECRET_KEY = \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n\ndef get_github_config():\n    return {\n        \"client_id\": GITHUB_CLIENT_ID,\n        \"client_secret\": GITHUB_CLIENT_SECRET,\n    }"
+        "content": "# OAuth Configuration\n\nGITHUB_CLIENT_ID = \"Iv1.abc123def456\"\nGITHUB_CLIENT_SECRET = \"gho_secretkey1234567890abcdefghijklmnop\"\n\nSTRIPE_API_KEY = \"sk_live_EXAMPLE_FAKE_KEY_FOR_TESTS\"\nSTRIPE_WEBHOOK_SECRET = \"whsec_test_secret_key_123\"\n\nDATABASE_URL = \"postgresql://admin:P@ssw0rd123@prod-db.internal:5432/myapp\"\n\nAWS_ACCESS_KEY = \"AKIAIOSFODNN7EXAMPLE\"\nAWS_SECRET_KEY = \"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"\n\ndef get_github_config():\n    return {\n        \"client_id\": GITHUB_CLIENT_ID,\n        \"client_secret\": GITHUB_CLIENT_SECRET,\n    }"
       }
     ],
     "expected": {
