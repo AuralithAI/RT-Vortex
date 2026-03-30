@@ -118,8 +118,8 @@ export function TaskPipelineBoard() {
   }
 
   return (
-    <div className="overflow-x-auto">
-      <div className="flex min-w-[1400px] gap-3 p-4">
+    <div className="overflow-x-auto rounded-lg border bg-card">
+      <div className="flex max-h-[calc(100vh-320px)] min-h-[400px] min-w-[1400px] gap-3 p-4">
         {COLUMNS.map((col) => {
           const columnTasks = tasksByStatus(col.key);
           return (
@@ -136,8 +136,8 @@ export function TaskPipelineBoard() {
                 </span>
               </div>
 
-              {/* Task cards */}
-              <div className="flex-1 space-y-2 overflow-y-auto p-2 pt-0">
+              {/* Task cards — scrollable within column */}
+              <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2 pt-0">
                 {columnTasks.map((task) => (
                   <TaskCard key={task.id} task={task} />
                 ))}

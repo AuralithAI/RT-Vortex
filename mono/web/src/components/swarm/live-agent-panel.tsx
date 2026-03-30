@@ -20,6 +20,7 @@ import {
   Loader2,
   Wifi,
 } from "lucide-react";
+import { AgentAvatar } from "@/components/swarm/agent-avatar";
 import type { AgentRole, AgentSnapshot } from "@/types/swarm";
 
 // ── Role config ──────────────────────────────────────────────────────────────
@@ -88,7 +89,6 @@ function AgentNode({
   isController: boolean;
 }) {
   const config = roleConfig[agent.role] ?? roleConfig.orchestrator;
-  const Icon = config.icon;
   const isBusy = agent.status === "busy";
 
   return (
@@ -106,10 +106,8 @@ function AgentNode({
         <span className="absolute -inset-px rounded-xl animate-pulse border border-amber-400/40" />
       )}
 
-      {/* Icon */}
-      <div className={`rounded-lg p-2 ${config.bg}`}>
-        <Icon className={`h-5 w-5 ${config.color}`} />
-      </div>
+      {/* Animated Avatar */}
+      <AgentAvatar role={agent.role} size="md" busy={isBusy} />
 
       {/* Label */}
       <span className="text-[11px] font-medium leading-none">

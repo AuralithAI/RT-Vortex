@@ -327,8 +327,9 @@ export default function SwarmDashboardPage() {
               <p>No tasks yet. Submit a task to get started.</p>
             </div>
           ) : (
+            <div className="max-h-[400px] overflow-y-auto">
             <table className="w-full text-sm">
-              <thead>
+              <thead className="sticky top-0 z-10 bg-card">
                 <tr className="border-b text-left text-muted-foreground">
                   <th className="px-6 py-3 font-medium">Title</th>
                   <th className="px-6 py-3 font-medium">Repo</th>
@@ -363,6 +364,7 @@ export default function SwarmDashboardPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </div>
 
