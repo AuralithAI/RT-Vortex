@@ -589,6 +589,55 @@ VALUES
 ON CONFLICT (model_name) DO NOTHING;
 
 -- ============================================================================
+-- MCP INTEGRATIONS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS mcp_connections (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    org_id            UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    is_org_level      BOOLEAN NOT NULL DEFAULT false,
+    provider          TEXT NOT NULL CHECK (provider IN ('slack', 'ms365', 'gmail', 'discord')),
+    status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'expired', 'revoked', 'error')),
+    vault_key         TEXT NOT NULL,
+    refresh_vault_key TEXT NOT NULL DEFAULT '',
+    scopes            TEXT[] NOT NULL DEFAULT '{}',
+    metadata          JSONB NOT NULL DEFAULT '{}',
+    last_used_at      TIMESTAMPTZ,
+    connected_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at        TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_connections_user_provider
+    ON mcp_connections(user_id, provider) WHERE NOT is_org_level;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_connections_org_provider
+    ON mcp_connections(org_id, provider) WHERE is_org_level;
+CREATE INDEX IF NOT EXISTS idx_mcp_connections_user     ON mcp_connections(user_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_connections_org      ON mcp_connections(org_id) WHERE org_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mcp_connections_provider ON mcp_connections(provider, status);
+CREATE INDEX IF NOT EXISTS idx_mcp_connections_expires  ON mcp_connections(expires_at) WHERE expires_at IS NOT NULL AND status = 'active';
+
+CREATE TABLE IF NOT EXISTS mcp_call_log (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    connection_id UUID NOT NULL REFERENCES mcp_connections(id) ON DELETE CASCADE,
+    agent_id      TEXT,
+    task_id       TEXT,
+    action        TEXT NOT NULL,
+    input_hash    TEXT NOT NULL DEFAULT '',
+    output_hash   TEXT NOT NULL DEFAULT '',
+    latency_ms    INT NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'error', 'rate_limited', 'consent_denied')),
+    error_message TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_call_log_conn    ON mcp_call_log(connection_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_call_log_task    ON mcp_call_log(task_id) WHERE task_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mcp_call_log_created ON mcp_call_log(created_at DESC);
+
+-- ============================================================================
 -- SCHEMA VERSION TRACKING
 -- ============================================================================
 -- Simple version tracking table (no migration runner needed).
@@ -634,6 +683,10 @@ WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 11);
 INSERT INTO schema_info (version, description)
 SELECT 12, 'Add multimodal asset tables — repo_assets, embedding_model_config, model_download_status'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 12);
+
+INSERT INTO schema_info (version, description)
+SELECT 13, 'Add MCP integration tables — mcp_connections, mcp_call_log'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 13);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
@@ -699,6 +752,11 @@ CREATE TRIGGER trg_model_download_status_updated_at
     BEFORE UPDATE ON model_download_status
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS trg_mcp_connections_updated_at ON mcp_connections;
+CREATE TRIGGER trg_mcp_connections_updated_at
+    BEFORE UPDATE ON mcp_connections
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
 -- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
@@ -736,6 +794,8 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE repo_assets TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE embedding_model_config TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE model_download_status TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE mcp_connections TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE mcp_call_log TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;

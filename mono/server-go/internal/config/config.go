@@ -37,6 +37,7 @@ type Config struct {
 	Review   ReviewConfig
 	Storage  StorageConfig
 	Log      LogConfig
+	MCP      MCPConfig
 }
 
 // ServerConfig holds HTTP server settings.
@@ -177,6 +178,20 @@ type LogConfig struct {
 	Format string // text, json
 }
 
+// MCPConfig holds MCP (Model Context Protocol) integration settings.
+type MCPConfig struct {
+	Enabled          bool
+	MaxCallsPerTask  int
+	AllowedProviders []string
+	CallTimeout      time.Duration
+	SlackBaseURL     string
+	MS365GraphURL    string
+	MS365TokenURL    string
+	GmailBaseURL     string
+	GmailTokenURL    string
+	DiscordBaseURL   string
+}
+
 // ---- XML intermediate types ----
 // These mirror the XML structure and are unmarshalled first, then converted.
 
@@ -195,6 +210,7 @@ type xmlServerProps struct {
 	Storage       xmlStorage       `xml:"storage"`
 	Repos         xmlRepositories  `xml:"repositories"`
 	Logging       xmlLogging       `xml:"logging"`
+	MCP           xmlMCP           `xml:"mcp"`
 }
 
 type xmlServer struct {
@@ -403,6 +419,19 @@ type xmlLogging struct {
 	AppLevel  string `xml:"app-level,attr"`
 }
 
+type xmlMCP struct {
+	Enabled          string `xml:"enabled,attr"`
+	MaxCallsPerTask  string `xml:"max-calls-per-task,attr"`
+	AllowedProviders string `xml:"allowed-providers,attr"`
+	CallTimeoutMs    string `xml:"call-timeout-ms,attr"`
+	SlackBaseURL     string `xml:"slack-base-url,attr"`
+	MS365GraphURL    string `xml:"ms365-graph-url,attr"`
+	MS365TokenURL    string `xml:"ms365-token-url,attr"`
+	GmailBaseURL     string `xml:"gmail-base-url,attr"`
+	GmailTokenURL    string `xml:"gmail-token-url,attr"`
+	DiscordBaseURL   string `xml:"discord-base-url,attr"`
+}
+
 // ---- VCS platforms XML types ----
 
 // ---- Environment variable expansion ----
@@ -519,6 +548,13 @@ func parseSec(s string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(sec) * time.Second
+}
+
+func parseString(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 // ---- Config file search ----
@@ -831,6 +867,27 @@ func loadServerProps(path string) (*Config, error) {
 	cfg.Log = LogConfig{
 		Level:  appLevel,
 		Format: "text",
+	}
+
+	// -- MCP Integrations --
+	cfg.MCP = MCPConfig{
+		Enabled:         parseBool(raw.MCP.Enabled, true),
+		MaxCallsPerTask: parseInt(raw.MCP.MaxCallsPerTask, 50),
+		CallTimeout:     parseMs(raw.MCP.CallTimeoutMs, 30*time.Second),
+		SlackBaseURL:    parseString(expand(raw.MCP.SlackBaseURL), "https://slack.com/api"),
+		MS365GraphURL:   parseString(expand(raw.MCP.MS365GraphURL), "https://graph.microsoft.com/v1.0"),
+		MS365TokenURL:   parseString(expand(raw.MCP.MS365TokenURL), "https://login.microsoftonline.com/common/oauth2/v2.0/token"),
+		GmailBaseURL:    parseString(expand(raw.MCP.GmailBaseURL), "https://gmail.googleapis.com/gmail/v1"),
+		GmailTokenURL:   parseString(expand(raw.MCP.GmailTokenURL), "https://oauth2.googleapis.com/token"),
+		DiscordBaseURL:  parseString(expand(raw.MCP.DiscordBaseURL), "https://discord.com/api/v10"),
+	}
+	if providers := expand(raw.MCP.AllowedProviders); providers != "" {
+		for _, p := range strings.Split(providers, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				cfg.MCP.AllowedProviders = append(cfg.MCP.AllowedProviders, p)
+			}
+		}
 	}
 
 	return cfg, nil

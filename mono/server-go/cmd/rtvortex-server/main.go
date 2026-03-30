@@ -44,6 +44,8 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
+	"github.com/AuralithAI/rtvortex-server/internal/mcp"
+	mcpproviders "github.com/AuralithAI/rtvortex-server/internal/mcp/providers"
 	"github.com/AuralithAI/rtvortex-server/internal/prsync"
 	"github.com/AuralithAI/rtvortex-server/internal/review"
 	"github.com/AuralithAI/rtvortex-server/internal/rtenv"
@@ -596,6 +598,21 @@ func main() {
 
 	slog.Info("Swarm agent infrastructure initialized")
 
+	// ── Initialize MCP Integrations ─────────────────────────────────────
+	mcpRepo := store.NewMCPRepository(db.Pool)
+	mcpRegistry := mcp.NewProviderRegistry(redisClient.Client())
+	mcpRegistry.Register(mcpproviders.NewSlackProvider(cfg.MCP.SlackBaseURL))
+	mcpRegistry.Register(mcpproviders.NewMS365Provider(cfg.MCP.MS365GraphURL, cfg.MCP.MS365TokenURL))
+	mcpRegistry.Register(mcpproviders.NewGmailProvider(cfg.MCP.GmailBaseURL, cfg.MCP.GmailTokenURL))
+	mcpRegistry.Register(mcpproviders.NewDiscordProvider(cfg.MCP.DiscordBaseURL))
+	mcpService := mcp.NewService(mcpRepo, mcpRegistry, fileVault, redisClient.Client(), cfg.MCP)
+	go mcpService.StartRefreshLoop(ctx)
+	swarmHandler.MCPSvc = mcpService
+	slog.Info("MCP integrations initialized",
+		"enabled", cfg.MCP.Enabled,
+		"providers", mcpRegistry.List(),
+	)
+
 	// Opens a gRPC streaming connection to the C++ engine to receive real-time metrics.
 	metricsCollector := engine.NewMetricsCollector(engineClient, 1000)
 	metricsCollector.Start(ctx)
@@ -679,6 +696,9 @@ func main() {
 		SwarmHandler:  swarmHandler,
 
 		BenchmarkRunner: benchRunner,
+
+		MCPService: mcpService,
+		MCPRepo:    mcpRepo,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────

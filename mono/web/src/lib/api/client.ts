@@ -47,6 +47,10 @@ import type {
   VCSTestResult,
   VCSTokenCapability,
   VCSCloneCheckResult,
+  MCPProviderInfo,
+  MCPConnection,
+  MCPCallLogEntry,
+  MCPTestResult,
 } from "@/types/api";
 
 // ── Error classes ───────────────────────────────────────────────────────────
@@ -681,7 +685,44 @@ export const assets = {
     `${BASE}/api/v1/repos/${repoId}/assets/${assetId}/content`,
 };
 
+// ── Integrations (MCP) ─────────────────────────────────────────────────────
+
+export const integrations = {
+  providers: () =>
+    request<MCPProviderInfo[]>("/api/v1/integrations/providers"),
+
+  connections: () =>
+    request<MCPConnection[]>("/api/v1/integrations/connections"),
+
+  connect: (body: {
+    provider: string;
+    access_token: string;
+    refresh_token?: string;
+    scopes?: string[];
+    is_org_level?: boolean;
+    expires_in?: number;
+    metadata?: string;
+  }) =>
+    request<MCPConnection>("/api/v1/integrations/connections", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  disconnect: (connectionId: string) =>
+    request<{ status: string; id: string }>(`/api/v1/integrations/connections/${connectionId}`, {
+      method: "DELETE",
+    }),
+
+  test: (connectionId: string) =>
+    request<MCPTestResult>(`/api/v1/integrations/connections/${connectionId}/test`, {
+      method: "POST",
+    }),
+
+  callLog: (connectionId: string) =>
+    request<MCPCallLogEntry[]>(`/api/v1/integrations/connections/${connectionId}/logs`),
+};
+
 // ── Convenience export ──────────────────────────────────────────────────────
 
-const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms, assets };
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms, assets, integrations };
 export default api;

@@ -441,3 +441,60 @@ class GoClient:
             )
             resp.raise_for_status()
             return resp.json()
+
+    # ── MCP integrations ─────────────────────────────────────────────────
+
+    async def mcp_call(
+        self,
+        provider: str,
+        action: str,
+        params: dict | None = None,
+        user_id: str = "",
+        org_id: str = "",
+        agent_id: str = "",
+        task_id: str = "",
+    ) -> dict:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/mcp/call",
+                headers=self._headers(),
+                json={
+                    "provider": provider,
+                    "action": action,
+                    "params": params or {},
+                    "user_id": user_id,
+                    "org_id": org_id,
+                    "agent_id": agent_id,
+                    "task_id": task_id,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def mcp_list_providers(self) -> list:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/mcp/providers",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def mcp_list_connections(self) -> list:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/api/v1/integrations/connections",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def mcp_describe_action(self, provider: str, action: str) -> dict:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/mcp/describe",
+                headers=self._headers(),
+                params={"provider": provider, "action": action},
+            )
+            resp.raise_for_status()
+            return resp.json()

@@ -695,3 +695,53 @@ export interface EngineHealthResponse {
   active_metric_streams: number;
   has_latest_snapshot: boolean;
 }
+
+// ── MCP Integrations ────────────────────────────────────────────────────────
+
+export interface MCPActionDef {
+  name: string;
+  description: string;
+  required_params?: string[];
+  optional_params?: string[];
+  consent_required: boolean;
+}
+
+export interface MCPProviderInfo {
+  name: string;
+  actions: MCPActionDef[];
+}
+
+export interface MCPConnection {
+  id: string;
+  user_id: string;
+  org_id?: string;
+  is_org_level: boolean;
+  provider: string;
+  status: "pending" | "active" | "expired" | "revoked" | "error";
+  scopes: string[];
+  metadata?: string;
+  last_used_at?: string;
+  connected_at: string;
+  expires_at?: string;
+  created_at: string;
+}
+
+export interface MCPCallLogEntry {
+  id: string;
+  connection_id: string;
+  agent_id: string;
+  task_id: string;
+  action: string;
+  input_hash: string;
+  output_hash: string;
+  latency_ms: number;
+  status: "ok" | "error" | "rate_limited" | "consent_denied";
+  error_message?: string;
+  created_at: string;
+}
+
+export interface MCPTestResult {
+  success: boolean;
+  data?: Record<string, unknown>;
+  error?: string;
+}

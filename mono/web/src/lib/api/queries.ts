@@ -43,6 +43,10 @@ export const queryKeys = {
     ["repos", repoId, "branches"] as const,
   assets: (repoId: string) =>
     ["repos", repoId, "assets"] as const,
+  integrations: ["integrations", "connections"] as const,
+  integrationProviders: ["integrations", "providers"] as const,
+  integrationCallLog: (connectionId: string) =>
+    ["integrations", "connections", connectionId, "logs"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -319,6 +323,30 @@ export function useVCSTokenCapabilities(platform?: string) {
   return useQuery({
     queryKey: ["vcs", "token-capabilities", platform ?? "all"] as const,
     queryFn: () => api.vcsPlatforms.tokenCapabilities(platform),
+  });
+}
+
+// ── Integrations (MCP) ─────────────────────────────────────────────────────
+
+export function useIntegrationProviders() {
+  return useQuery({
+    queryKey: queryKeys.integrationProviders,
+    queryFn: () => api.integrations.providers(),
+  });
+}
+
+export function useIntegrations() {
+  return useQuery({
+    queryKey: queryKeys.integrations,
+    queryFn: () => api.integrations.connections(),
+  });
+}
+
+export function useIntegrationCallLog(connectionId: string) {
+  return useQuery({
+    queryKey: queryKeys.integrationCallLog(connectionId),
+    queryFn: () => api.integrations.callLog(connectionId),
+    enabled: !!connectionId,
   });
 }
 

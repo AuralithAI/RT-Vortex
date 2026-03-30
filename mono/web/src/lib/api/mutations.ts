@@ -366,3 +366,39 @@ export function useCheckClonePermission() {
       api.vcsPlatforms.checkClone(platform, cloneUrl),
   });
 }
+
+// ── Integrations (MCP) ─────────────────────────────────────────────────────
+
+export function useConnectIntegration() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      provider: string;
+      access_token: string;
+      refresh_token?: string;
+      scopes?: string[];
+      is_org_level?: boolean;
+      expires_in?: number;
+      metadata?: string;
+    }) => api.integrations.connect(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.integrations });
+    },
+  });
+}
+
+export function useDisconnectIntegration() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (connectionId: string) => api.integrations.disconnect(connectionId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.integrations });
+    },
+  });
+}
+
+export function useTestIntegration() {
+  return useMutation({
+    mutationFn: (connectionId: string) => api.integrations.test(connectionId),
+  });
+}

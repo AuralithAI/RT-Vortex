@@ -44,6 +44,10 @@ const (
 	ActionChatCreate      = "chat.create"
 	ActionChatMessage     = "chat.message"
 	ActionChatDelete      = "chat.delete"
+	ActionMCPConnect      = "mcp.connect"
+	ActionMCPDisconnect   = "mcp.disconnect"
+	ActionMCPCall         = "mcp.call"
+	ActionMCPCallFailed   = "mcp.call_failed"
 )
 
 // ── Logger ──────────────────────────────────────────────────────────────────

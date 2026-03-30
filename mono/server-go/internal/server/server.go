@@ -22,6 +22,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
+	"github.com/AuralithAI/rtvortex-server/internal/mcp"
 	rtmetrics "github.com/AuralithAI/rtvortex-server/internal/metrics"
 	"github.com/AuralithAI/rtvortex-server/internal/prsync"
 	"github.com/AuralithAI/rtvortex-server/internal/quota"
@@ -100,6 +101,10 @@ type Dependencies struct {
 
 	// Benchmark — A/B testing and benchmark harness
 	BenchmarkRunner *benchmark.Runner
+
+	// MCP — external service integrations (Slack, MS365, Gmail, Discord)
+	MCPService *mcp.Service
+	MCPRepo    *store.MCPRepository
 }
 
 // Server holds the HTTP server components.
@@ -336,6 +341,19 @@ func (s *Server) setupRouter() {
 				r.Get("/token-capabilities", h.ListVCSTokenCapabilities)
 			})
 
+			// MCP Integrations (connected apps: Slack, MS365, Gmail, Discord)
+			if s.deps.MCPService != nil {
+				mh := &mcpHandler{svc: s.deps.MCPService, repo: s.deps.MCPRepo}
+				r.Route("/integrations", func(r chi.Router) {
+					r.Get("/providers", mh.ListProviders)
+					r.Get("/connections", mh.ListConnections)
+					r.Post("/connections", mh.CreateConnection)
+					r.Delete("/connections/{connectionID}", mh.DeleteConnection)
+					r.Post("/connections/{connectionID}/test", mh.TestConnection)
+					r.Get("/connections/{connectionID}/logs", mh.GetCallLog)
+				})
+			}
+
 			// Engine Metrics
 			r.Route("/engine", func(r chi.Router) {
 				r.Get("/metrics", h.GetEngineMetrics)
@@ -427,6 +445,11 @@ func (s *Server) setupRouter() {
 
 				// Asset ingestion (document/PDF/URL → engine embedding).
 				r.Post("/ingest-asset", sh.HandleIngestAsset)
+
+				// MCP integration call (agent → external services).
+				r.Post("/mcp/call", sh.HandleMCPCall)
+				r.Get("/mcp/providers", sh.HandleMCPListProviders)
+				r.Get("/mcp/describe", sh.HandleMCPDescribeAction)
 
 				// VCS proxy for agent workspace reads.
 				r.Post("/vcs/read-file", sh.VCSReadFile)
