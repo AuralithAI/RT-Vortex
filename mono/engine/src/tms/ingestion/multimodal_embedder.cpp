@@ -49,19 +49,19 @@ static const std::vector<MultimodalModelInfo>& getMultimodalRegistry() {
             "siglip-base",
             EmbeddingModality::VISION,
             768,
-            "https://huggingface.co/google/siglip-base-patch16-224/resolve/main",
-            "onnx/model.onnx",
+            "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main",
+            "onnx/vision_model.onnx",
             {"preprocessor_config.json", "tokenizer.json"},
-            "SigLIP base — image+text joint embedding (768d, ~350 MB)"
+            "SigLIP base — vision encoder ONNX (768d, ~372 MB)"
         },
         {
             "clap-general",
             EmbeddingModality::AUDIO,
             512,
-            "https://huggingface.co/laion/larger_clap_general/resolve/main",
-            "onnx/model.onnx",
-            {"config.json"},
-            "CLAP general — audio+text joint embedding (512d, ~650 MB)"
+            "https://huggingface.co/Xenova/larger_clap_general/resolve/main",
+            "onnx/audio_model.onnx",
+            {"config.json", "preprocessor_config.json"},
+            "CLAP general — audio encoder ONNX (512d, ~282 MB)"
         },
     };
     return registry;

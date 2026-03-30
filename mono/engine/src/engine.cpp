@@ -1117,15 +1117,19 @@ private:
             try {
                 auto& emb = tms_->embeddingEngine();
                 tms::TMSConfig tms_cfg;
-                tms_cfg.image_embedding_enabled = true;
-                tms_cfg.audio_embedding_enabled = true;
+                tms_cfg.image_embedding_enabled = config_.multimodal_image_enabled;
+                tms_cfg.audio_embedding_enabled = config_.multimodal_audio_enabled;
 
-                // Resolve models directory relative to storage path
+                // Use models_dir from EngineConfig (set by main.cpp from RTVORTEX_HOME/models).
+                // Fall back to storage_path/../models if models_dir wasn't set.
                 namespace fs = std::filesystem;
-                fs::path models_dir = fs::path(config_.storage_path).parent_path() / "models";
+                std::string models_dir = config_.models_dir;
+                if (models_dir.empty()) {
+                    models_dir = (fs::path(config_.storage_path).parent_path() / "models").string();
+                }
 
                 mm_embedder_ = std::make_unique<tms::MultiModalEmbedder>(emb, tms_cfg);
-                mm_embedder_->initialize(models_dir.string());
+                mm_embedder_->initialize(models_dir);
             } catch (const std::exception& e) {
                 std::cerr << "[ENGINE] Failed to initialize multimodal embedder: "
                           << e.what() << std::endl;

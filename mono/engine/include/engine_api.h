@@ -74,6 +74,14 @@ struct AIPR_API EngineConfig {
     std::string onnx_model_path = "models/bge-m3/model.onnx";
     std::string onnx_tokenizer_path = "models/bge-m3/tokenizer.json";
     
+    // Models directory (RTVORTEX_HOME/models) — set by server main.cpp
+    // Used by multimodal embedder to locate image/audio ONNX models.
+    std::string models_dir;
+
+    // Multimodal embedding — auto-download on startup when enabled
+    bool multimodal_image_enabled = true;
+    bool multimodal_audio_enabled = true;
+    
     // Load from YAML file
     static EngineConfig load(const std::string& config_path);
 };
