@@ -108,3 +108,103 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: hsl(var(--muted-foreground) / 0.5);
 }
+
+/* ─── Agent Avatar Animations ─────────────────────────────────────────────── */
+
+@keyframes blink {
+  0%, 90%, 100% { opacity: 1; }
+  95% { opacity: 0; }
+}
+@keyframes twinkle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+@keyframes glow {
+  0%, 100% { opacity: 0.8; filter: drop-shadow(0 0 2px #fbbf24); }
+  50% { opacity: 1; filter: drop-shadow(0 0 6px #fbbf24); }
+}
+@keyframes bounce-gentle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+@keyframes wobble {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-5deg); }
+  75% { transform: rotate(5deg); }
+}
+@keyframes float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  33% { transform: translateY(-2px) rotate(1deg); }
+  66% { transform: translateY(-4px) rotate(-1deg); }
+}
+@keyframes look-around {
+  0%, 80%, 100% { transform: translateX(0); }
+  85% { transform: translateX(1px); }
+  90% { transform: translateX(-1px); }
+  95% { transform: translateX(0.5px); }
+}
+@keyframes flap {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(-20deg); }
+}
+@keyframes flap-r {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(20deg); }
+}
+@keyframes screen-flicker {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+@keyframes scan {
+  0%, 100% { transform: translateX(0); opacity: 1; }
+  50% { transform: translateX(1px); opacity: 0.7; }
+}
+@keyframes vigilant {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-1px); }
+  75% { transform: translateX(1px); }
+}
+@keyframes write {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-2deg) translateY(-1px); }
+  75% { transform: rotate(2deg) translateY(1px); }
+}
+@keyframes check-draw {
+  0% { stroke-dashoffset: 10; stroke-dasharray: 10; }
+  100% { stroke-dashoffset: 0; stroke-dasharray: 10; }
+}
+@keyframes led {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes orchestrator-idle {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-2px) scale(1.02); }
+}
+@keyframes message-enter {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-blink { animation: blink 4s ease-in-out infinite; }
+.animate-twinkle { animation: twinkle 2s ease-in-out infinite; }
+.animate-glow { animation: glow 2s ease-in-out infinite; }
+.animate-bounce-gentle { animation: bounce-gentle 1.5s ease-in-out infinite; }
+.animate-wobble { animation: wobble 0.6s ease-in-out infinite; }
+.animate-float { animation: float 3s ease-in-out infinite; }
+.animate-look-around { animation: look-around 4s ease-in-out infinite; }
+.animate-flap { transform-origin: right center; animation: flap 0.3s ease-in-out infinite; }
+.animate-flap-r { transform-origin: left center; animation: flap-r 0.3s ease-in-out infinite; }
+.animate-screen-flicker { animation: screen-flicker 1.5s ease-in-out infinite; }
+.animate-scan { animation: scan 2s ease-in-out infinite; }
+.animate-vigilant { animation: vigilant 1s ease-in-out infinite; }
+.animate-write { animation: write 0.8s ease-in-out infinite; }
+.animate-check-draw { animation: check-draw 0.6s ease-out forwards; }
+.animate-led { animation: led 1.5s ease-in-out infinite; }
+.animate-spin-slow { animation: spin-slow 4s linear infinite; transform-origin: center; }
+.animate-orchestrator { animation: orchestrator-idle 2.5s ease-in-out infinite; }
+.animate-message-enter { animation: message-enter 0.3s ease-out forwards; }

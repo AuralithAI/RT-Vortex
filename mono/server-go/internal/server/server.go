@@ -2,6 +2,7 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/api"
 	"github.com/AuralithAI/rtvortex-server/internal/audit"
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
+	"github.com/AuralithAI/rtvortex-server/internal/benchmark"
 	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
@@ -92,6 +94,9 @@ type Dependencies struct {
 	SwarmLLMProxy *swarm.LLMProxy
 	SwarmELO      *swarm.ELOService
 	SwarmHandler  *swarm.Handler
+
+	// Benchmark — A/B testing and benchmark harness
+	BenchmarkRunner *benchmark.Runner
 }
 
 // Server holds the HTTP server components.
@@ -227,6 +232,7 @@ func (s *Server) setupRouter() {
 					r.Delete("/", h.DeleteRepo)
 					r.Post("/index", h.TriggerIndex)
 					r.Get("/index/status", h.GetIndexStatus)
+					r.Get("/embed-stats", h.GetEmbedStats)
 					r.Get("/branches", h.ListBranches)
 					r.Get("/members", h.ListRepoMembers)
 					r.Post("/members", h.AddRepoMember)
@@ -337,6 +343,14 @@ func (s *Server) setupRouter() {
 				r.Get("/stats", h.GetSystemStats)
 				r.Get("/health/detailed", h.GetDetailedHealth)
 			})
+
+			// Benchmark — A/B testing & agent benchmarks
+			if s.deps.BenchmarkRunner != nil {
+				bh := benchmark.NewHandler(s.deps.BenchmarkRunner, slog.Default())
+				r.Route("/benchmark", func(r chi.Router) {
+					bh.RegisterRoutes(r)
+				})
+			}
 		})
 
 		// ── Webhooks (authenticated via platform-specific signatures) ─
@@ -379,6 +393,26 @@ func (s *Server) setupRouter() {
 				r.Post("/tasks/{id}/agent-message", sh.AgentMessage)
 				r.Post("/heartbeat/{id}", sh.Heartbeat)
 
+				// Memory hierarchy.
+				r.Post("/memory/mtm", sh.HandleMTMStore)
+				r.Get("/memory/mtm", sh.HandleMTMRecall)
+
+				// Human-in-the-loop.
+				r.Post("/hitl/ask", sh.HandleHITLAsk)
+
+				// CI proxy.
+				r.Post("/ci/run", sh.HandleCIRun)
+
+				// Web fetch proxy (URL fetching for agents).
+				r.Post("/web/fetch", sh.HandleWebFetch)
+
+				// Inter-agent communication bus.
+				r.Post("/agent-bus/publish", sh.HandleAgentBusPublish)
+				r.Get("/agent-bus/read", sh.HandleAgentBusRead)
+
+				// Asset ingestion (document/PDF/URL → engine embedding).
+				r.Post("/ingest-asset", sh.HandleIngestAsset)
+
 				// VCS proxy for agent workspace reads.
 				r.Post("/vcs/read-file", sh.VCSReadFile)
 				r.Post("/vcs/list-dir", sh.VCSListDir)
@@ -414,6 +448,9 @@ func (s *Server) setupRouter() {
 			r.Get("/agents", sh.ListAgentsUser)
 			r.Get("/teams", sh.ListTeamsUser)
 			r.Get("/overview", sh.SwarmOverview)
+
+			// Human-in-the-loop response (user JWT).
+			r.Post("/hitl/respond", sh.HandleHITLRespond)
 
 			// WebSocket: real-time swarm task events
 			if s.deps.WSHub != nil {

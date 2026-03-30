@@ -141,6 +141,13 @@ public:
     /** All nodes for a repo. */
     std::vector<KGNode> getNodes(const std::string& repo_id) const;
 
+    /** Nodes linked to a specific FAISS vector ID within a repo. */
+    std::vector<KGNode> nodesByFaissId(int64_t faiss_id, const std::string& repo_id) const;
+
+    /** Nodes within a specific file path within a repo. */
+    std::vector<KGNode> nodesByFilePath(const std::string& file_path,
+                                        const std::string& repo_id) const;
+
     // ── Statistics ──────────────────────────────────────────────────────
 
     size_t nodeCount(const std::string& repo_id = "") const;

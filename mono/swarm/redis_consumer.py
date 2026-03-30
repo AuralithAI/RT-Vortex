@@ -30,6 +30,7 @@ from .agents.orchestrator import OrchestratorAgent
 from .agents.qa import QAAgent
 from .agents.security import SecurityAgent
 from .agents.senior_dev import SeniorDevAgent
+from .agents.ui_ux import UIUXAgent
 from .auth import register_agent
 from .conversation import SharedConversation
 from .engine_client import EngineClient
@@ -65,7 +66,7 @@ def _make_agent(role: str, team_id: str, agent_config: AgentConfig) -> Agent:
 
     Args:
         role: One of ``orchestrator``, ``senior_dev``, ``architect``, ``qa``,
-              ``security``, ``docs``, ``ops``, ``junior_dev``.
+              ``security``, ``docs``, ``ops``, ``junior_dev``, ``ui_ux``.
         team_id: Team UUID.
         agent_config: Shared agent runtime config.
 
@@ -85,6 +86,7 @@ def _make_agent(role: str, team_id: str, agent_config: AgentConfig) -> Agent:
         "docs": DocsAgent,
         "ops": OpsAgent,
         "junior_dev": JuniorDevAgent,
+        "ui_ux": UIUXAgent,
     }
     cls = role_map.get(role)
     if cls is None:
@@ -212,6 +214,16 @@ async def _run_full_pipeline(
     )
     init_workspace_tools(workspace)
 
+    # Initialise extended tools.
+    from .tools.extended_tools import init_extended_tools
+    from .memory import AgentMemory
+
+    init_extended_tools(
+        go_client=go_client,
+        engine_client=engine_client,
+        redis_url=get_config().redis_url,
+    )
+
     conversation = SharedConversation(
         task_id=task.id,
         go_client=go_client,
@@ -224,7 +236,10 @@ async def _run_full_pipeline(
 
     try:
         # ── Pre-check: verify the repository is indexed ─────────────────
-        if engine_client and task.repo_id:
+        # Benchmark tasks use a "benchmark:" prefix on repo_id and carry
+        # inline file content — skip the engine index check for them.
+        is_benchmark = task.repo_id and task.repo_id.startswith("benchmark:")
+        if engine_client and task.repo_id and not is_benchmark:
             try:
                 idx_status = await engine_client.get_index_status(task.repo_id)
                 if not idx_status.get("indexed"):
@@ -256,6 +271,20 @@ async def _run_full_pipeline(
         orchestrator = _make_agent("orchestrator", team_id, agent_config)
         orchestrator.conversation = conversation
         orchestrator.workspace = workspace
+
+        # Attach memory hierarchy.
+        orch_memory = AgentMemory(
+            agent_id=orchestrator.agent_id,
+            agent_role="orchestrator",
+            task_id=task.id,
+            repo_id=task.repo_id,
+            redis_url=get_config().redis_url,
+            go_client=go_client,
+            engine_client=engine_client,
+        )
+        await orch_memory.init()
+        orchestrator.memory = orch_memory
+
         # Reuse a warm-pool agent ID if available (skip cold registration).
         warm_id = warm_pool_cb() if warm_pool_cb else None
         if warm_id:
@@ -284,6 +313,27 @@ async def _run_full_pipeline(
             await go_client.fail_task(task.id, "Orchestrator produced no plan")
             return
 
+        # If the orchestrator extracted the plan from text (i.e. the LLM
+        # did NOT call the report_plan tool), the plan was never POSTed to
+        # Go.  The task can be in "submitted" (team:create path doesn't call
+        # assignTask) or "planning" (assignTask was called but report_plan
+        # wasn't).  In either case, submit the plan now so Go transitions
+        # the task to "plan_review".
+        _PLAN_NOT_SUBMITTED = {"submitted", "planning", "assigning"}
+        current_status = await go_client.get_task_status(task.id)
+        logger.info("Team %s: Post-orchestrator status=%s", team_id[:8], current_status)
+        if current_status in _PLAN_NOT_SUBMITTED:
+            logger.info(
+                "Team %s: Plan extracted from text (status=%s) — submitting to Go explicitly",
+                team_id[:8], current_status,
+            )
+            try:
+                await go_client.report_plan(task.id, orch_result.plan)
+            except Exception as e:
+                logger.error("Team %s: Failed to submit plan to Go: %s", team_id[:8], e)
+                await go_client.fail_task(task.id, f"Failed to submit plan: {e}")
+                return
+
         logger.info("Team %s: Plan submitted, waiting for human approval…", team_id[:8])
 
         # ── Step 2: Wait for human plan approval ────────────────────────
@@ -292,7 +342,7 @@ async def _run_full_pipeline(
                 go_client,
                 task.id,
                 target_statuses={"implementing"},
-                cancel_statuses={"cancelled", "failed", "timed_out"},
+                cancel_statuses={"cancelled", "failed", "timed_out", "completed"},
             )
         except asyncio.TimeoutError:
             logger.error("Team %s: Plan approval timed out for task %s", team_id[:8], task.id)
@@ -309,25 +359,79 @@ async def _run_full_pipeline(
         task.status = "implementing"
 
         # ── Step 3: Determine team composition from the plan ────────────
-        # The plan's estimated_complexity drives team size.
-        complexity = (orch_result.plan or {}).get("estimated_complexity", "medium")
-        if complexity == "small":
+        # The plan's estimated_complexity and agents_needed drive team size.
+        # Use a smarter team sizing algorithm that considers
+        # the plan's affected_files count, step count, and explicit agent request.
+        plan = orch_result.plan or {}
+        complexity = plan.get("estimated_complexity", "medium")
+        agents_needed = plan.get("agents_needed", 0)
+        affected_files = len(plan.get("affected_files", []))
+        step_count = len(plan.get("steps", []))
+
+        # Dynamic team sizing:
+        # 1. If the orchestrator explicitly requested a team size, respect it.
+        # 2. Otherwise, use heuristics based on complexity + file/step count.
+        if agents_needed and isinstance(agents_needed, int) and agents_needed > 0:
+            # Orchestrator requested specific team size — map to roles.
+            if agents_needed <= 1:
+                roles = ["senior_dev"]
+            elif agents_needed <= 3:
+                roles = ["senior_dev", "qa"]
+            elif agents_needed <= 5:
+                roles = ["architect", "senior_dev", "junior_dev", "qa", "security"]
+            else:
+                roles = ["architect", "senior_dev", "senior_dev", "junior_dev", "qa", "security", "docs", "ui_ux"]
+        elif complexity == "small" or (affected_files <= 2 and step_count <= 3):
             roles = ["senior_dev"]
-        elif complexity == "large":
-            roles = ["architect", "senior_dev", "junior_dev", "qa", "security", "docs"]
+        elif complexity == "large" or affected_files > 10 or step_count > 8:
+            roles = ["architect", "senior_dev", "junior_dev", "qa", "security", "docs", "ui_ux"]
         else:  # medium
             roles = ["senior_dev", "qa", "security"]
 
-        # Declare team size to Go.
-        await go_client.declare_team_size(task.id, len(roles) + 1)  # +1 for orchestrator
+        # Declare team size to Go (pass team_id so Go can auto-assign).
+        await go_client.declare_team_size(task.id, len(roles) + 1, team_id=team_id)
 
         # ── Step 4: Run implementation agents ───────────────────────────
         implementation_agents: list[Agent] = []
+
+        # Import extended tool collections.
+        from .tools.extended_tools import CODE_TOOLS, RESEARCH_TOOLS, HITL_TOOLS, COMM_TOOLS
 
         for role in roles:
             agent = _make_agent(role, team_id, agent_config)
             agent.conversation = conversation
             agent.workspace = workspace
+
+            # Attach memory hierarchy.
+            agent_mem = AgentMemory(
+                agent_id=agent.agent_id,
+                agent_role=role,
+                task_id=task.id,
+                repo_id=task.repo_id,
+                redis_url=get_config().redis_url,
+                go_client=go_client,
+                engine_client=engine_client,
+            )
+            await agent_mem.init()
+            agent.memory = agent_mem
+
+            # Inject extended tools based on role.
+            if role in ("senior_dev", "architect", "junior_dev"):
+                agent.tools.extend(CODE_TOOLS)
+                agent.tools.extend(RESEARCH_TOOLS)
+            elif role in ("qa", "security"):
+                agent.tools.extend(RESEARCH_TOOLS)
+                agent.tools.extend([t for t in CODE_TOOLS if t.name in ("git_diff", "self_critique")])
+            elif role in ("docs", "ops", "ui_ux"):
+                agent.tools.extend(RESEARCH_TOOLS)
+
+            # Inter-agent communication for all roles.
+            agent.tools.extend(COMM_TOOLS)
+
+            # HITL tools only for senior roles.
+            if role in ("senior_dev", "architect"):
+                agent.tools.extend(HITL_TOOLS)
+
             warm_id = warm_pool_cb() if warm_pool_cb else None
             if warm_id:
                 agent.agent_id = warm_id
@@ -338,7 +442,7 @@ async def _run_full_pipeline(
             implementation_agents.append(agent)
 
         # Run code-generating agents concurrently, review agents sequentially.
-        code_agents = [a for a in implementation_agents if a.role in ("senior_dev", "junior_dev", "architect", "docs", "ops")]
+        code_agents = [a for a in implementation_agents if a.role in ("senior_dev", "junior_dev", "architect", "docs", "ops", "ui_ux")]
         review_agents = [a for a in implementation_agents if a.role in ("qa", "security")]
 
         # Run code agents in parallel.
@@ -416,15 +520,21 @@ async def _run_full_pipeline(
             except (asyncio.CancelledError, Exception):
                 pass
 
-        # Best-effort token revocation for all agents on this team.
-        # Go already revokes in CompleteTask/FailTask, but if those calls
-        # failed (network error, pod crash), this ensures Python proactively
-        # cleans up. The revoke endpoint is idempotent.
+        # Clean up agent STM.
         for aid in agent_ids:
             try:
-                await go_client.revoke_agent(aid)
+                from .memory import ShortTermMemory
+                stm = ShortTermMemory(get_config().redis_url, task.id, aid)
+                await stm.init()
+                await stm.clear()
             except Exception:
                 pass
+
+        # Token revocation: Go already revokes team agent tokens in
+        # CompleteTask/FailTask via revokeTeamTokens. Calling the revoke
+        # endpoint from the shared controller GoClient would revoke the
+        # *controller's own token* (the endpoint identifies the caller by
+        # their JWT subject), causing 401s on the next task.  Skip it.
 
 
 class RedisConsumer:
@@ -447,6 +557,9 @@ class RedisConsumer:
         self._go_client = go_client
         self._running = False
         self._active_teams: dict[str, asyncio.Task] = {}
+        # Maps task_id → team_id for deduplication so that duplicate
+        # team:create events for the same task don't spawn extra teams.
+        self._task_team_map: dict[str, str] = {}
         self._controller_id: str | None = None
         self._controller_hb_task: asyncio.Task | None = None
         self._controller_hb_stop = asyncio.Event()
@@ -509,6 +622,24 @@ class RedisConsumer:
         self._redis = aioredis.from_url(self._redis_url, decode_responses=True)
 
         # Ensure stream + consumer group exist.
+        await self._ensure_consumer_group()
+
+        self._running = True
+        logger.info("Redis consumer started on %s (consumer=%s)", _STREAM_KEY, _CONSUMER_NAME)
+
+        # Start warm pool — pre-register agents so the first task has no cold-start.
+        await self._start_warm_pool()
+
+    async def _ensure_consumer_group(self) -> None:
+        """Create the Redis stream and consumer group if they don't exist.
+
+        Safe to call multiple times — silently handles the BUSYGROUP error
+        when the group already exists.  Called both at startup and as a
+        recovery action when the consume loop encounters a NOGROUP error
+        (e.g. after Redis was restarted or flushed).
+        """
+        if not self._redis:
+            return
         try:
             await self._redis.xgroup_create(
                 name=_STREAM_KEY,
@@ -521,12 +652,6 @@ class RedisConsumer:
             if "BUSYGROUP" not in str(e):
                 raise
             logger.debug("Consumer group %s already exists", _GROUP_NAME)
-
-        self._running = True
-        logger.info("Redis consumer started on %s (consumer=%s)", _STREAM_KEY, _CONSUMER_NAME)
-
-        # Start warm pool — pre-register agents so the first task has no cold-start.
-        await self._start_warm_pool()
 
     async def _start_warm_pool(self) -> None:
         """Pre-register a small pool of agents that maintain heartbeats.
@@ -636,6 +761,7 @@ class RedisConsumer:
             logger.info("Cancelled team %s", team_id)
 
         self._active_teams.clear()
+        self._task_team_map.clear()
 
         if self._redis:
             await self._redis.aclose()
@@ -672,6 +798,16 @@ class RedisConsumer:
             except asyncio.CancelledError:
                 logger.info("Consumer loop cancelled")
                 break
+            except aioredis.ResponseError as e:
+                if "NOGROUP" in str(e):
+                    logger.warning(
+                        "Consumer group or stream disappeared — recreating %s/%s",
+                        _STREAM_KEY, _GROUP_NAME,
+                    )
+                    await self._ensure_consumer_group()
+                else:
+                    logger.error("Redis consumer error: %s", e, exc_info=True)
+                await asyncio.sleep(2)
             except Exception as e:
                 logger.error("Redis consumer error: %s", e, exc_info=True)
                 await asyncio.sleep(2)
@@ -784,24 +920,32 @@ class RedisConsumer:
             return
 
         # Skip if we're already running a team for this task.
-        for tid, t in self._active_teams.items():
-            if not t.done() and t.get_name().endswith(task_id[:8]):
-                logger.info("Skipping task %s — team already active", task_id)
+        if task_id in self._task_team_map:
+            existing_team = self._task_team_map[task_id]
+            existing_task = self._active_teams.get(existing_team)
+            if existing_task and not existing_task.done():
+                logger.info("Skipping task %s — team %s already active", task_id, existing_team[:8])
                 return
+            # Previous team finished/failed — allow retry.
+            del self._task_team_map[task_id]
 
         # Spin up a team for this task.
         team_id = str(uuid.uuid4())
+        self._task_team_map[task_id] = team_id
         team_task = asyncio.create_task(
             _run_full_pipeline(
                 team_id, task_data, self._engine, self._go_client,
                 warm_pool_cb=self._take_warm_agent,
             ),
-            name=f"team-{team_id[:8]}",
+            name=f"team-{team_id[:8]}-task-{task_id[:8]}",
         )
         self._active_teams[team_id] = team_task
 
         # Clean up when done.
-        team_task.add_done_callback(lambda _: self._active_teams.pop(team_id, None))
+        def _cleanup(_, tid=team_id, tsk=task_id):
+            self._active_teams.pop(tid, None)
+            self._task_team_map.pop(tsk, None)
+        team_task.add_done_callback(_cleanup)
 
         # Replenish warm pool in the background.
         asyncio.create_task(self._replenish_warm_pool(), name="replenish-pool")

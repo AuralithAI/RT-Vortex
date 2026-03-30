@@ -17,7 +17,9 @@ import {
   Settings,
   Search,
   Loader2,
+  Palette,
 } from "lucide-react";
+import { AgentAvatar } from "@/components/swarm/agent-avatar";
 import type { AgentRole, AgentSnapshot } from "@/types/swarm";
 
 const roleConfig: Record<
@@ -71,6 +73,12 @@ const roleConfig: Record<
     label: "Ops",
     color: "text-orange-600 dark:text-orange-400",
     bgColor: "bg-orange-100 dark:bg-orange-900/40",
+  },
+  ui_ux: {
+    icon: Palette,
+    label: "UI/UX",
+    color: "text-pink-600 dark:text-pink-400",
+    bgColor: "bg-pink-100 dark:bg-pink-900/40",
   },
 };
 
@@ -135,7 +143,6 @@ export function TaskAgentList({ taskId }: TaskAgentListProps) {
       <div className="space-y-2">
         {agents.map((agent) => {
           const config = roleConfig[agent.role] ?? roleConfig.orchestrator;
-          const Icon = config.icon;
           const status = statusLabels[agent.status] ?? statusLabels.idle;
 
           return (
@@ -143,9 +150,7 @@ export function TaskAgentList({ taskId }: TaskAgentListProps) {
               key={agent.id}
               className="flex items-center gap-3 rounded-lg border bg-background p-3 transition-all"
             >
-              <div className={`rounded-md p-1.5 ${config.bgColor}`}>
-                <Icon className={`h-4 w-4 ${config.color}`} />
-              </div>
+              <AgentAvatar role={agent.role} size="sm" busy={agent.status === "busy"} />
 
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium">{config.label}</p>

@@ -176,3 +176,111 @@ class HealthStatus(BaseModel):
     status: str = "unknown"
     checks: Optional[dict[str, str]] = None
     time: str = ""
+
+
+# ── Swarm (Phase 2 / Phase 3) ───────────────────────────────────────────────
+
+
+class SwarmTask(BaseModel):
+    """A swarm review task."""
+
+    id: str
+    repo_id: str = ""
+    pr_number: int = 0
+    title: str = ""
+    description: str = ""
+    status: str = "queued"
+    priority: int = 5
+    created_by: str = ""
+    assigned_team_id: str = ""
+    plan: Optional["SwarmPlan"] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+
+class SwarmPlan(BaseModel):
+    """An agent-generated review plan."""
+
+    steps: list["SwarmPlanStep"] = Field(default_factory=list)
+
+
+class SwarmPlanStep(BaseModel):
+    agent_role: str = ""
+    action: str = ""
+    files: list[str] = Field(default_factory=list)
+    status: str = "pending"
+
+
+class SwarmAgent(BaseModel):
+    """A registered swarm agent."""
+
+    id: str
+    role: str = ""
+    status: str = "idle"
+    elo_rating: float = 1200.0
+    last_heartbeat: Optional[datetime] = None
+    current_task_id: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+
+
+class SwarmTeam(BaseModel):
+    """A team of agents assigned to a task."""
+
+    id: str
+    task_id: str = ""
+    agents: list[SwarmAgent] = Field(default_factory=list)
+    size: int = 0
+    created_at: Optional[datetime] = None
+
+
+class SwarmDiff(BaseModel):
+    """A diff produced by the swarm."""
+
+    id: str
+    task_id: str = ""
+    file_path: str = ""
+    diff_type: str = ""
+    content: str = ""
+    agent_role: str = ""
+    status: str = "pending"
+    created_at: Optional[datetime] = None
+
+
+class SwarmDiffComment(BaseModel):
+    """A comment on a swarm diff."""
+
+    id: str = ""
+    diff_id: str = ""
+    line_number: int = 0
+    body: str = ""
+    author: str = ""
+    author_type: str = "user"
+    created_at: Optional[datetime] = None
+
+
+class SwarmOverview(BaseModel):
+    """Dashboard summary for the swarm."""
+
+    active_tasks: int = 0
+    queued_tasks: int = 0
+    active_agents: int = 0
+    active_teams: int = 0
+    tasks_completed_24h: int = 0
+    avg_completion_seconds: float = 0.0
+
+
+class SwarmWsEvent(BaseModel):
+    """A real-time WebSocket event from the swarm."""
+
+    type: str = ""
+    task_id: str = ""
+    agent_id: str = ""
+    event: str = ""
+    data: Optional[dict[str, Any]] = None
+    timestamp: Optional[datetime] = None
+
+
+class SwarmTaskListResponse(PaginatedResponse["SwarmTask"]):
+    tasks: list[SwarmTask] = Field(default_factory=list)
+

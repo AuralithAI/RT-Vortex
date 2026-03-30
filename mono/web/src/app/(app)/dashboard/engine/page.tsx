@@ -24,6 +24,7 @@ import {
   getMetricHistogram,
   formatUptime,
 } from "@/hooks/use-engine-metrics";
+import { useEmbeddingsConfig } from "@/lib/api/queries";
 import { PageHeader } from "@/components/layout/page-header";
 import { StatsCard } from "@/components/dashboard/stats-card";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,7 +55,7 @@ const EMBED_CACHE_HIT_RATE = "embed_cache_hit_rate";
 const EMBED_TOTAL_CALLS = "embed_total_calls";
 const TMS_FORWARD_LATENCY_S = "tms_forward_latency_s";
 const CMA_SCORE = "cma_score";
-const MINILM_READY = "minilm_ready";
+const ONNX_READY = "onnx_ready";
 const FAISS_LOADED = "faiss_loaded";
 const LLM_AVOIDED_RATE = "llm_avoided_rate";
 const KG_NODES_TOTAL = "aipr_kg_nodes_total";
@@ -76,14 +77,20 @@ const QUERY_TIMEOUT_TOTAL = "aipr_query_timeout_total";
 
 const EMBED_BACKEND_LABELS: Record<number, string> = {
   0: "Mock",
-  1: "MiniLM (ONNX)",
+  1: "ONNX",
   2: "HTTP API",
+};
+
+const BUILTIN_MODEL_DISPLAY: Record<string, string> = {
+  "bge-m3": "BGE-M3 (ONNX)",
+  "minilm": "MiniLM (ONNX)",
 };
 
 export default function EnginePerformancePage() {
   const { connected, latest, history, error } = useEngineMetrics({
     historySize: 60,
   });
+  const { data: embeddingsConfig } = useEmbeddingsConfig();
 
   // ── Derived values ────────────────────────────────────────────────────
   const embedHist = getMetricHistogram(latest, EMBED_LATENCY_S);
@@ -94,7 +101,7 @@ export default function EnginePerformancePage() {
   const cacheHitRate = getMetricScalar(latest, EMBED_CACHE_HIT_RATE);
   const embedCalls = getMetricScalar(latest, EMBED_TOTAL_CALLS);
   const cmaScore = getMetricScalar(latest, CMA_SCORE);
-  const miniLMReady = getMetricScalar(latest, MINILM_READY) === 1;
+  const onnxReady = getMetricScalar(latest, ONNX_READY) === 1;
   const faissLoaded = getMetricScalar(latest, FAISS_LOADED) === 1;
   const llmAvoided = getMetricScalar(latest, LLM_AVOIDED_RATE);
   const uptime = latest?.uptime_s ?? 0;
@@ -104,7 +111,9 @@ export default function EnginePerformancePage() {
 
   // Embedding provider metrics
   const embedBackend = getMetricScalar(latest, EMBED_ACTIVE_BACKEND);
-  const embedBackendLabel = EMBED_BACKEND_LABELS[embedBackend] ?? "Unknown";
+  const embedBackendLabel = embedBackend === 1
+    ? (BUILTIN_MODEL_DISPLAY[embeddingsConfig?.active_builtin_model ?? ""] ?? "ONNX")
+    : (EMBED_BACKEND_LABELS[embedBackend] ?? "Unknown");
   const embedHttpRequests = getMetricScalar(latest, EMBED_HTTP_REQUESTS);
   const embedHttpErrors = getMetricScalar(latest, EMBED_HTTP_ERRORS);
   const embedHttpTokens = getMetricScalar(latest, EMBED_HTTP_TOKENS);
@@ -226,11 +235,11 @@ export default function EnginePerformancePage() {
             <StatsCard
               title="Components"
               value={
-                // ONNX backend: requires MiniLM ready + FAISS
+                // ONNX backend: requires ONNX model ready + FAISS
                 // HTTP backend: just FAISS (API connectivity checked elsewhere)
                 // Mock backend: always "ready" (no external deps)
                 embedBackend === 1
-                  ? miniLMReady && faissLoaded
+                  ? onnxReady && faissLoaded
                     ? "All Ready"
                     : "Degraded"
                   : faissLoaded

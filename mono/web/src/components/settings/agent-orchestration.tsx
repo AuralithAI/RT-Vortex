@@ -20,6 +20,7 @@ import { useSetLLMRoutes } from "@/lib/api/mutations";
 import type { AgentRoute, LLMProvider } from "@/types/api";
 import { AGENT_ROLES, AGENT_ROLE_META } from "@/types/api";
 import type { AgentRoleId } from "@/types/api";
+import { AgentAvatar } from "@/components/swarm/agent-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -158,7 +159,7 @@ export function AgentOrchestration() {
     const fastest = sorted.length > 1 ? sorted[sorted.length - 1] : sorted[0];
 
     const complexRoles: AgentRoleId[] = ["orchestrator", "architect", "senior_dev", "security"];
-    const simpleRoles: AgentRoleId[] = ["junior_dev", "qa", "docs", "ops"];
+    const simpleRoles: AgentRoleId[] = ["junior_dev", "qa", "docs", "ops", "ui_ux"];
 
     const auto: Record<string, { provider: string; model: string }> = {};
     for (const role of complexRoles) {
@@ -276,7 +277,7 @@ export function AgentOrchestration() {
                   >
                     {/* Role info */}
                     <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-lg shrink-0">{meta.icon}</span>
+                      <AgentAvatar role={role} size="sm" />
                       <div className="min-w-0">
                         <p className="text-sm font-medium truncate">{meta.label}</p>
                         <p className="text-xs text-muted-foreground truncate">

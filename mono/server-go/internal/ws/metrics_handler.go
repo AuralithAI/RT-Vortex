@@ -5,6 +5,7 @@
 package ws
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -34,6 +35,8 @@ func (h *MetricsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	client := h.hub.SubscribeMetrics(conn)
 	slog.Info("ws: engine metrics subscriber connected")
 
+	wsCtx := context.WithoutCancel(r.Context())
+
 	// WritePump blocks until the client disconnects.
-	h.hub.WritePump(r.Context(), client)
+	h.hub.WritePump(wsCtx, client)
 }

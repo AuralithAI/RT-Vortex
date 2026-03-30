@@ -1,10 +1,10 @@
-"""Provider-agnostic agentic loop.
+"""Provider-agnostic agentic loop with memory reflection.
 
 Implements the standard tool-use loop used by every agent role:
 
 1. Send the accumulated message history and tool schemas to the Go LLM proxy.
 2. If the response contains ``tool_calls``, execute each one via
-   *tool_executor*, append the results, and repeat.
+   *tool_executor*, append the results, **run memory reflection**, and repeat.
 3. If the response contains no ``tool_calls``, the LLM is finished — return
    the full message history.
 4. Bail out after *max_turns* round-trips to prevent runaway conversations.
@@ -13,9 +13,12 @@ The loop is provider-agnostic because the Go server normalises every LLM
 backend (OpenAI, Anthropic, Gemini, Ollama, …) into the OpenAI
 chat-completion wire format before returning the response.
 
-If a :class:`~mono.swarm.conversation.SharedConversation` is provided, each
-LLM response and tool call is also broadcast to the shared conversation so
-other agents and the browser UI can follow along in real time.
+Memory and reflection:
+* **Memory reflection** — After each tool call, the agent's
+  :class:`AgentMemory` records the observation in STM and optionally
+  promotes structural insights to MTM.
+* **Self-critique nudge** — On the penultimate turn, the loop injects a
+  self-critique prompt so the agent reviews its work before finishing.
 """
 
 from __future__ import annotations
@@ -29,6 +32,7 @@ from .tool import ToolDef
 
 if TYPE_CHECKING:
     from ..conversation import SharedConversation
+    from ..memory import AgentMemory
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +48,7 @@ async def agent_loop(
     agent_role: str = "",
     agent_id: str = "",
     conversation: SharedConversation | None = None,
+    memory: AgentMemory | None = None,
 ) -> list[dict]:
     """Run the provider-agnostic agentic loop.
 
@@ -58,6 +63,7 @@ async def agent_loop(
         agent_role: Agent role hint for smart model routing.
         agent_id: Agent identifier for conversation messages.
         conversation: Optional shared conversation for live UI broadcast.
+        memory: Optional AgentMemory for reflection after each tool call.
 
     Returns:
         Full message history.
@@ -163,10 +169,41 @@ async def agent_loop(
                 logger.error("agent_loop: tool %s raised %s", fn_name, e)
                 result = {"error": str(e)}
 
+            result_str = json.dumps(result) if not isinstance(result, str) else result
+
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
-                "content": json.dumps(result) if not isinstance(result, str) else result,
+                "content": result_str,
+            })
+
+            # Memory reflection — record observation and optionally
+            # promote structural insights to MTM.
+            if memory:
+                try:
+                    observation = result_str[:500] if len(result_str) > 500 else result_str
+                    was_error = isinstance(result, dict) and "error" in result
+                    await memory.reflect(
+                        tool_name=fn_name,
+                        tool_args=fn_args,
+                        observation=observation,
+                        was_error=was_error,
+                    )
+                except Exception as mem_err:
+                    logger.debug("agent_loop: memory reflect failed: %s", mem_err)
+
+        # Self-critique nudge — on the penultimate turn, inject a prompt
+        # asking the agent to review its work before it's forced to stop.
+        if turn == max_turns - 2:
+            messages.append({
+                "role": "user",
+                "content": (
+                    "You are approaching the maximum number of tool calls. "
+                    "Please review your work so far: have you addressed all "
+                    "parts of the task? Are there any issues with your changes? "
+                    "If everything looks good, call complete_task. If not, "
+                    "make the final necessary changes now."
+                ),
             })
 
     return messages

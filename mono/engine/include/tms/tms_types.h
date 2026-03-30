@@ -346,6 +346,18 @@ struct TMSConfig {
     float confidence_gate_threshold = 0.85f; // Min max-retrieval score to skip LLM
     int query_timeout_seconds = 5;          // Hard timeout for forward() queries
 
+    // GraphRAG (KG-augmented retrieval)
+    int graph_rag_max_hops = 2;             // BFS depth in KG expansion
+    int graph_rag_max_neighbors = 10;       // Max neighbor nodes per seed
+    float graph_rag_boost_factor = 0.3f;    // Score boost for graph-discovered chunks
+    float graph_rag_confidence_weight = 0.4f; // Weight of graph confidence in gate
+
+    // Matryoshka / Multi-Vector Dual-Index
+    bool multi_vector_enabled = false;      // Enable dual-resolution FAISS indexes
+    size_t multi_vector_coarse_dim = 384;   // Matryoshka truncation dimension
+    size_t multi_vector_fine_dim = 1024;    // Full model output dimension
+    int multi_vector_oversampling = 3;      // Coarse search oversampling factor
+
     // Config versioning
     uint32_t config_version = 1;            // Schema version for storage migration
     bool auto_migrate = false;              // Auto-migrate storage on version bump
@@ -398,6 +410,10 @@ struct TMSResponse {
     bool requires_llm = true;               // False when gate fires → caller may skip LLM
     float max_retrieval_score = 0.0f;        // Highest similarity in retrieval results
     std::string llm_skip_reason;             // Human-readable reason when requires_llm == false
+
+    // GraphRAG expansion results
+    float graph_confidence = 0.0f;          // KG-path-based confidence (0-1)
+    uint32_t graph_expanded_chunks = 0;     // Number of chunks added by GraphRAG
     
     // Explainability
     std::vector<std::string> reasoning_trace;

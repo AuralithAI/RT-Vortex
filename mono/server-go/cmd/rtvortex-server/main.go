@@ -37,6 +37,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
 	authproviders "github.com/AuralithAI/rtvortex-server/internal/auth/providers"
 	"github.com/AuralithAI/rtvortex-server/internal/background"
+	"github.com/AuralithAI/rtvortex-server/internal/benchmark"
 	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
@@ -201,6 +202,29 @@ func main() {
 
 	// Engine gRPC client
 	engineClient := engine.NewClient(enginePool)
+
+	// Push storage configuration (and our callback URL) to the C++ engine.
+	// The engine starts first; the Go server tells it where to call back.
+	{
+		cbScheme := "http"
+		if cfg.Server.TLS.Enabled {
+			cbScheme = "https"
+		}
+		cbHost := cfg.Server.Host
+		if cbHost == "" || cbHost == "0.0.0.0" || cbHost == "::" {
+			cbHost = "localhost"
+		}
+		callbackURL := fmt.Sprintf("%s://%s:%d", cbScheme, cbHost, cfg.Server.Port)
+
+		if err := engineClient.PushStorageConfig(ctx, engine.StorageConfig{
+			Provider:          cfg.Storage.Type,
+			BasePath:          cfg.Storage.BasePath,
+			ServerCallbackURL: callbackURL,
+		}); err != nil {
+			slog.Warn("failed to push storage config to engine (will retry on next request)",
+				"error", err)
+		}
+	}
 
 	// JWT Manager
 	jwtSecret := cfg.Auth.JWTSecret
@@ -483,6 +507,10 @@ func main() {
 		MaxRequests: 100,
 		Window:      1 * time.Minute,
 	})
+	rateLimiter.Configure("api:org", session.RateLimitConfig{
+		MaxRequests: 500,
+		Window:      1 * time.Minute,
+	})
 	rateLimiter.Configure("auth", session.RateLimitConfig{
 		MaxRequests: 20,
 		Window:      1 * time.Minute,
@@ -492,7 +520,8 @@ func main() {
 		Window:      1 * time.Minute,
 	})
 	slog.Info("Rate limiter configured",
-		"api", "100/min",
+		"api_user", "100/min",
+		"api_org", "500/min",
 		"auth", "20/min",
 		"webhook", "60/min",
 	)
@@ -535,6 +564,7 @@ func main() {
 	swarmELO := swarm.NewELOService(db.Pool)
 	swarmWSHub := swarm.NewWSHub(wsHub)
 	swarmPRCreator := swarm.NewPRCreator(db.Pool, vcsResolver, swarmTaskMgr, swarmWSHub)
+	swarmMemorySvc := swarm.NewMemoryService(db.Pool)
 
 	swarmHandler := &swarm.Handler{
 		AuthSvc:     swarmAuthSvc,
@@ -546,11 +576,20 @@ func main() {
 		PRCreator:   swarmPRCreator,
 		VCSResolver: vcsResolver,
 		DB:          db.Pool,
+		MemorySvc:   swarmMemorySvc,
 	}
 
 	// Start the swarm task assignment loop.
 	swarmTaskMgr.Start(ctx)
 	defer swarmTaskMgr.Stop()
+
+	// Background janitor (cleanup idle teams, stale heartbeats, old MTM).
+	swarmJanitor := swarm.NewJanitor(db.Pool, redisClient.Client(), swarmMemorySvc)
+	go swarmJanitor.Start(ctx)
+
+	// ELO auto-promotion / demotion.
+	swarmAutoTier := swarm.NewELOAutoTierService(db.Pool)
+	go swarmAutoTier.Start(ctx)
 
 	slog.Info("Swarm agent infrastructure initialized")
 
@@ -569,6 +608,29 @@ func main() {
 			}
 			wsHub.BroadcastMetrics(data)
 		})
+	}
+
+	// ── Initialize Benchmark Runner ───────────────────────────
+	benchExecutor := benchmark.NewPipelineExecutor(
+		reviewPipeline, swarmTaskMgr, reviewRepo, repoRepo, db.Pool, slog.Default(),
+	)
+	benchRunner := benchmark.NewRunner(benchExecutor, slog.Default())
+
+	// Load benchmark dataset if available.
+	benchDataPaths := []string{
+		filepath.Join(env.Home, "evals", "datasets", "benchmark", "benchmark_suite.json"),
+		filepath.Join("mono", "evals", "datasets", "benchmark", "benchmark_suite.json"),
+	}
+	for _, p := range benchDataPaths {
+		data, err := os.ReadFile(p)
+		if err == nil {
+			if loadErr := benchRunner.LoadTasks(data); loadErr != nil {
+				slog.Warn("failed to load benchmark tasks", "path", p, "error", loadErr)
+			} else {
+				slog.Info("loaded benchmark tasks", "path", p, "count", len(benchRunner.ListTasks()))
+			}
+			break
+		}
 	}
 
 	deps := &server.Dependencies{
@@ -611,6 +673,8 @@ func main() {
 		SwarmLLMProxy: swarmLLMProxy,
 		SwarmELO:      swarmELO,
 		SwarmHandler:  swarmHandler,
+
+		BenchmarkRunner: benchRunner,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────

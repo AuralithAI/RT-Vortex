@@ -1277,6 +1277,31 @@ func (h *Handler) GetIndexStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ─── Embedding Statistics endpoint ───────────────────────────────────────────
+
+// GetEmbedStats returns embedding health and performance metrics for a repository.
+// GET /api/v1/repos/{repoID}/embed-stats
+func (h *Handler) GetEmbedStats(w http.ResponseWriter, r *http.Request) {
+	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repo ID")
+		return
+	}
+
+	if h.EngineClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine not connected")
+		return
+	}
+
+	stats, err := h.EngineClient.GetEmbedStats(r.Context(), repoID.String())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get embed stats: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, stats)
+}
+
 // ─── Review endpoints ───────────────────────────────────────────────────────
 
 // ListReviews returns reviews for a repository, or all user-accessible reviews.

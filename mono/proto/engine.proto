@@ -35,8 +35,14 @@ service EngineService {
     rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
     rpc GetDiagnostics(DiagnosticsRequest) returns (DiagnosticsResponse);
 
+    // Embedding Statistics — per-repo embedding health and performance data
+    rpc GetEmbedStats(EmbedStatsRequest) returns (EmbedStatsResponse);
+
     // File Content — read a file from the engine's local clone for the swarm
     rpc GetFileContent(FileContentRequest) returns (FileContentResponse);
+
+    // Asset Ingestion — embed documents, PDFs, and URL content into a repo index
+    rpc IngestAsset(IngestAssetRequest) returns (IngestAssetResponse);
 
     // Metrics — server-streaming so the Go API server can relay to the dashboard.
     // The engine pushes a snapshot every interval_ms (default 1000).
@@ -217,6 +223,8 @@ message SearchResponse {
     bool requires_llm = 3;             // False when confidence gate fires
     float max_retrieval_score = 4;      // Highest similarity score in results
     string llm_skip_reason = 5;         // Human-readable gate reason (empty when requires_llm=true)
+    float graph_confidence_score = 6;   // KG path-length confidence (0-1), used by gate v2
+    uint32 graph_expanded_count = 7;    // Number of chunks added by GraphRAG expansion
 }
 
 message ContextChunk {
@@ -414,6 +422,11 @@ message StorageConfigRequest {
     bool use_ssl = 23;
     bool verify_ssl = 24;
     string ca_bundle_path = 25;
+
+    // API server callback URL — the Go server passes its own base URL so the
+    // engine can call back (e.g. Redis embed-cache proxy, webhook delivery).
+    // Example: "http://localhost:8080" or "https://api.rtvortex.example.com"
+    string server_callback_url = 26;
 }
 
 message StorageConfigResponse {
@@ -470,6 +483,64 @@ message EngineMetricsSnapshot {
 }
 
 // ============================================================================
+// Embedding Statistics
+// ============================================================================
+
+message EmbedStatsRequest {
+    string repo_id = 1;       // Repository to get stats for (empty = global)
+}
+
+message EmbedStatsResponse {
+    // Model information
+    string active_model = 1;
+    uint32 embedding_dimension = 2;
+    string backend_type = 3;          // "onnx", "http", "mock"
+
+    // Index statistics
+    uint64 total_chunks = 4;
+    uint64 total_vectors = 5;
+    uint64 index_size_bytes = 6;
+
+    // Knowledge graph statistics
+    uint64 kg_nodes = 7;
+    uint64 kg_edges = 8;
+    bool kg_enabled = 9;
+
+    // Merkle cache statistics
+    uint64 merkle_cached_files = 10;
+    double merkle_cache_hit_rate = 11;
+
+    // Performance metrics
+    double avg_embed_latency_ms = 12;
+    double avg_search_latency_ms = 13;
+    uint64 total_queries = 14;
+
+    // Cache statistics
+    uint64 embed_cache_size = 15;
+    double embed_cache_hit_rate = 16;
+
+    // Confidence gate statistics
+    double llm_avoided_rate = 17;
+    double avg_confidence_score = 18;
+    uint64 llm_avoided_count = 19;
+    uint64 llm_used_count = 20;
+
+    // GraphRAG statistics
+    double avg_graph_expansion_ms = 21;
+    double avg_graph_expanded_chunks = 22;
+
+    // Hot-swap model tracking
+    uint64 model_swaps_total = 23;
+
+    // Multi-vector dual-resolution index
+    bool multi_vector_enabled = 24;
+    uint32 coarse_dimension = 25;
+    uint32 fine_dimension = 26;
+    uint64 coarse_index_vectors = 27;
+    uint64 fine_index_vectors = 28;
+}
+
+// ============================================================================
 // File Content (Swarm)
 // ============================================================================
 
@@ -483,4 +554,21 @@ message FileContentResponse {
     string content = 1;      // File content (UTF-8 text)
     string encoding = 2;     // "utf-8" or "base64" for binary files
     bool is_binary = 3;      // True if file was detected as binary
+}
+
+// ============================================================================
+// Asset Ingestion (Documents, PDFs, URLs)
+// ============================================================================
+
+message IngestAssetRequest {
+    string repo_id = 1;         // Repository to embed into
+    string source_url = 2;      // Original URL (for metadata)
+    string content = 3;         // Extracted text content to embed
+    string asset_type = 4;      // "document", "pdf", "url"
+    map<string, string> metadata = 5; // Additional metadata tags
+}
+
+message IngestAssetResponse {
+    int32 chunks_created = 1;   // Number of chunks created
+    string status = 2;          // "ok" or error description
 }

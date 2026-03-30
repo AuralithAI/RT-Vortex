@@ -71,17 +71,37 @@ func NewPool(ctx context.Context, cfg config.EngineConfig) (*Pool, error) {
 	return p, nil
 }
 
-// GetConn returns a gRPC connection from the pool using round-robin.
+// GetConn returns a gRPC connection from the pool, preferring connections
+// in a Ready or Idle state.  Falls back to round-robin across all connections
+// if none are currently healthy (gRPC will queue the call until the channel
+// reconnects or the caller's context expires).
 func (p *Pool) GetConn() *grpc.ClientConn {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	if len(p.conns) == 0 {
+	n := len(p.conns)
+	if n == 0 {
 		return nil
 	}
 
-	idx := p.next.Add(1) % uint64(len(p.conns))
-	return p.conns[idx]
+	// Start from the round-robin index and scan all channels, preferring
+	// Ready/Idle ones.
+	start := p.next.Add(1) % uint64(n)
+	for i := 0; i < n; i++ {
+		idx := (start + uint64(i)) % uint64(n)
+		conn := p.conns[idx]
+		if conn == nil {
+			continue
+		}
+		state := conn.GetState()
+		if state == connectivity.Ready || state == connectivity.Idle {
+			return conn
+		}
+	}
+
+	// No healthy channel — fall back to plain round-robin so gRPC can
+	// attempt reconnection on the chosen channel.
+	return p.conns[start]
 }
 
 // Close closes all connections in the pool.

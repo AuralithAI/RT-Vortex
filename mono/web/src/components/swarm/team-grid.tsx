@@ -21,6 +21,7 @@ import {
   Settings,
   Zap,
   BrainCircuit,
+  Palette,
 } from "lucide-react";
 import type { SwarmAgent, SwarmTeam, AgentRole, AgentStatus } from "@/types/swarm";
 
@@ -43,6 +44,7 @@ const roleIcon: Record<AgentRole, typeof Bot> = {
   security: Shield,
   docs: FileText,
   ops: Settings,
+  ui_ux: Palette,
 };
 
 const roleLabel: Record<AgentRole, string> = {
@@ -54,6 +56,7 @@ const roleLabel: Record<AgentRole, string> = {
   security: "Security",
   docs: "Docs",
   ops: "Ops",
+  ui_ux: "UI/UX Designer",
 };
 
 const statusColor: Record<AgentStatus, string> = {

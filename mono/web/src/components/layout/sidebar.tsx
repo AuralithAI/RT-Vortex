@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Activity,
   Bot,
+  Trophy,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/lib/stores/ui";
@@ -33,6 +34,7 @@ const navItems = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/dashboard/engine", icon: Activity, label: "Engine Performance" },
   { href: "/dashboard/swarm", icon: Bot, label: "Agent Swarm" },
+  { href: "/dashboard/benchmarks", icon: Trophy, label: "Benchmarks" },
   { href: "/reviews", icon: GitPullRequest, label: "Reviews" },
   { href: "/repos", icon: FolderGit2, label: "Repositories" },
   { href: "/orgs", icon: Building2, label: "Organizations" },

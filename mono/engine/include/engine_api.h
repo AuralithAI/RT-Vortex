@@ -14,6 +14,7 @@
 #include <vector>
 #include <memory>
 #include <functional>
+#include <map>
 
 // Platform-specific export macros
 #if defined(_WIN32) || defined(_WIN64)
@@ -219,6 +220,31 @@ public:
         const std::string& query,
         size_t top_k = 20
     ) = 0;
+
+    /**
+     * Extended search result including retrieval metadata.
+     */
+    struct SearchResult {
+        std::vector<ContextChunk> chunks;
+        float graph_confidence = 0.0f;
+        uint32_t graph_expanded_chunks = 0;
+        bool requires_llm = true;
+        float max_retrieval_score = 0.0f;
+    };
+
+    /**
+     * Search with full metadata (graph confidence, LLM gate, etc.).
+     * Default implementation delegates to search().
+     */
+    virtual SearchResult searchWithMeta(
+        const std::string& repo_id,
+        const std::string& query,
+        size_t top_k = 20
+    ) {
+        SearchResult r;
+        r.chunks = search(repo_id, query, top_k);
+        return r;
+    }
     
     //-------------------------------------------------------------------------
     // Review Operations
@@ -269,6 +295,43 @@ public:
      * Run self-diagnostics
      */
     virtual DiagnosticResult runDiagnostics() = 0;
+
+    /**
+     * Get embedding statistics for a repository (or global if repo_id is empty).
+     */
+    struct EmbedStats {
+        std::string active_model;
+        size_t embedding_dimension = 0;
+        std::string backend_type;
+        size_t total_chunks = 0;
+        size_t total_vectors = 0;
+        size_t index_size_bytes = 0;
+        size_t kg_nodes = 0;
+        size_t kg_edges = 0;
+        bool kg_enabled = false;
+        size_t merkle_cached_files = 0;
+        double merkle_cache_hit_rate = 0.0;
+        double avg_embed_latency_ms = 0.0;
+        double avg_search_latency_ms = 0.0;
+        size_t total_queries = 0;
+        size_t embed_cache_size = 0;
+        double embed_cache_hit_rate = 0.0;
+        double llm_avoided_rate = 0.0;
+        double avg_confidence_score = 0.0;
+        size_t llm_avoided_count = 0;
+        size_t llm_used_count = 0;
+        double avg_graph_expansion_ms = 0.0;
+        double avg_graph_expanded_chunks = 0.0;
+        size_t model_swaps_total = 0;
+        bool multi_vector_enabled = false;
+        size_t coarse_dimension = 0;
+        size_t fine_dimension = 0;
+        size_t coarse_index_vectors = 0;
+        size_t fine_index_vectors = 0;
+    };
+    virtual EmbedStats getEmbedStats(const std::string& repo_id) {
+        return EmbedStats{};
+    }
     
     /**
      * Configure embedding provider at runtime (per-request override).
@@ -307,6 +370,28 @@ public:
     virtual void setCloneToken(const std::string& token) {
         // Default no-op — overridden by EngineImpl.
         (void)token;
+    }
+
+    /**
+     * Embed and store an asset chunk (document, PDF, URL content).
+     *
+     * @param repo_id    Repository to associate the chunk with
+     * @param content    Pre-chunked text content (with metadata prefix)
+     * @param source     Source URL or identifier
+     * @param asset_type "document", "pdf", "url"
+     * @param metadata   Additional key-value metadata tags
+     * @return true if successfully embedded and stored
+     */
+    virtual bool embedAndStoreAssetChunk(
+        const std::string& repo_id,
+        const std::string& content,
+        const std::string& source,
+        const std::string& asset_type,
+        const std::map<std::string, std::string>& metadata)
+    {
+        (void)repo_id; (void)content; (void)source;
+        (void)asset_type; (void)metadata;
+        return false;
     }
 
 protected:

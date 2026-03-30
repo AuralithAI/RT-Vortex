@@ -1,12 +1,12 @@
 // ─── Agent Chat ──────────────────────────────────────────────────────────────
 // Live conversation feed showing agents talking to each other in real time.
 // Displays agent thinking, tool calls, file edits, and errors as a chat-like
-// transcript — similar to Grok's expert mode.
+// transcript 
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef } from "react";
 import {
   Bot,
   BrainCircuit,
@@ -24,6 +24,7 @@ import {
   Terminal,
   AlertCircle,
 } from "lucide-react";
+import { AgentAvatar } from "@/components/swarm/agent-avatar";
 import type { SwarmWsEvent } from "@/hooks/use-swarm-events";
 
 // ── Role styling ────────────────────────────────────────────────────────────
@@ -87,6 +88,13 @@ const roleStyles: Record<
     color: "text-orange-700 dark:text-orange-300",
     bg: "bg-orange-50 dark:bg-orange-950/40",
     border: "border-orange-200 dark:border-orange-800",
+  },
+  ui_ux: {
+    icon: Zap,
+    label: "UI/UX",
+    color: "text-pink-700 dark:text-pink-300",
+    bg: "bg-pink-50 dark:bg-pink-950/40",
+    border: "border-pink-200 dark:border-pink-800",
   },
 };
 
@@ -191,12 +199,8 @@ export function AgentChat({ events, maxMessages = 200 }: AgentChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const messages = extractChatMessages(events).slice(-maxMessages);
 
-  // Auto-scroll to bottom on new messages.
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages.length]);
+  // Newest messages first (top-down approach).
+  const reversed = [...messages].reverse();
 
   if (messages.length === 0) {
     return (
@@ -212,8 +216,8 @@ export function AgentChat({ events, maxMessages = 200 }: AgentChatProps) {
     );
   }
 
-  // Group consecutive messages from the same agent.
-  const grouped = groupMessages(messages);
+  // Group consecutive messages from the same agent (on the reversed list).
+  const grouped = groupMessages(reversed);
 
   return (
     <div className="rounded-lg border bg-card">
@@ -221,20 +225,18 @@ export function AgentChat({ events, maxMessages = 200 }: AgentChatProps) {
         <h3 className="text-sm font-semibold">Agent Conversation</h3>
         <p className="text-xs text-muted-foreground">
           {messages.length} messages from {countUniqueAgents(messages)} agents
+          &nbsp;·&nbsp; newest first
         </p>
       </div>
       <div ref={scrollRef} className="max-h-[600px] overflow-y-auto p-3 space-y-3">
         {grouped.map((group, gi) => {
           const style = roleStyles[group.agentRole] ?? defaultStyle;
-          const Icon = style.icon;
 
           return (
-            <div key={gi} className={`rounded-lg border p-3 ${style.bg} ${style.border}`}>
-              {/* Agent header */}
+            <div key={gi} className={`animate-message-enter rounded-lg border p-3 ${style.bg} ${style.border}`}>
+              {/* Agent header with animated avatar */}
               <div className="mb-2 flex items-center gap-2">
-                <div className={`rounded-md bg-background p-1.5 ${style.color}`}>
-                  <Icon className="h-4 w-4" />
-                </div>
+                <AgentAvatar role={group.agentRole} size="sm" busy={false} />
                 <span className={`text-sm font-semibold ${style.color}`}>
                   {style.label}
                 </span>

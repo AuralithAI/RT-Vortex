@@ -62,6 +62,10 @@ const streamPending = "swarm:tasks:pending"
 // Redis consumer group.
 const consumerGroup = "swarm-controller"
 
+// Redis stream for team-create events consumed by the Python swarm process.
+const streamTeamCreate = "swarm:events:team:create"
+const teamCreateConsumerGroup = "swarm-python"
+
 // ── Task ────────────────────────────────────────────────────────────────────
 
 // Task represents a swarm task from the database.
@@ -141,8 +145,9 @@ func (m *TaskManager) SetAuthService(svc *swarmauth.Service) {
 func (m *TaskManager) Start(ctx context.Context) {
 	ctx, m.cancel = context.WithCancel(ctx)
 
-	// Ensure consumer group exists.
+	// Ensure consumer groups exist.
 	_ = m.redis.XGroupCreateMkStream(ctx, streamPending, consumerGroup, "0").Err()
+	_ = m.redis.XGroupCreateMkStream(ctx, streamTeamCreate, teamCreateConsumerGroup, "0").Err()
 
 	// On startup, reconcile DB state with reality: any agent whose
 	// heartbeat key is missing from Redis (server was down, worker
@@ -805,15 +810,30 @@ func (m *TaskManager) handleStreamMessages(ctx context.Context, messages []redis
 
 		// No idle team — request team creation if under max.
 		if m.tm.CanCreateTeam() {
-			// Publish creation event — Python will pick this up.
-			m.redis.XAdd(ctx, &redis.XAddArgs{
-				Stream: "swarm:events:team:create",
-				Values: map[string]interface{}{
-					"task_id": taskID.String(),
-				},
-			})
-			slog.Info("swarm assignLoop: requested new team for task", "task_id", taskID)
-			// Don't ACK — we'll retry on next iteration via pending.
+			// Guard: only publish team:create once per task.  Use a
+			// Redis key as a distributed lock so that repeated pending
+			// re-reads don't flood the Python consumer with duplicate
+			// events.  The key auto-expires after 5 minutes (safety net).
+			dedup := fmt.Sprintf("swarm:team-create-sent:%s", taskID)
+			set, err := m.redis.SetNX(ctx, dedup, "1", 5*time.Minute).Result()
+			if err != nil {
+				slog.Warn("swarm assignLoop: dedup SetNX failed", "task_id", taskID, "error", err)
+			}
+			if set {
+				// First time — publish creation event for Python.
+				m.redis.XAdd(ctx, &redis.XAddArgs{
+					Stream: streamTeamCreate,
+					Values: map[string]interface{}{
+						"task_id": taskID.String(),
+					},
+				})
+				slog.Info("swarm assignLoop: requested new team for task", "task_id", taskID)
+			} else {
+				slog.Debug("swarm assignLoop: team:create already sent for task, waiting", "task_id", taskID)
+			}
+			// ACK the pending message so we stop re-reading it.  The
+			// dedup key + Python consumer handle delivery from here.
+			m.redis.XAck(ctx, streamPending, consumerGroup, msg.ID)
 			continue
 		}
 

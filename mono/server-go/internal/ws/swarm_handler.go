@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -40,8 +41,10 @@ func (sh *SwarmHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	client := sh.hub.SubscribeSwarm(conn, taskID)
 
+	wsCtx := context.WithoutCancel(r.Context())
+
 	// WritePump blocks until the client disconnects.
-	sh.hub.WritePump(r.Context(), client)
+	sh.hub.WritePump(wsCtx, client)
 
 	slog.Info("ws swarm: client disconnected", "task_id", taskID, "remote", r.RemoteAddr)
 }

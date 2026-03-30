@@ -444,14 +444,24 @@ ParsedFile RepoParser::parseFile(
     const std::string& repo_root
 ) {
     ParsedFile result;
-    result.absolute_path = file_path;
-    result.path = repo_root.empty() ? file_path :
-        fs::relative(file_path, repo_root).string();
 
-    result.content = readFile(file_path);
+    // file_path may be relative (from ingestRepository) or absolute.
+    // Build the full path for I/O, keep a short relative path for display/IDs.
+    std::string full_path;
+    if (!repo_root.empty() && !file_path.empty() && file_path[0] != '/') {
+        full_path = repo_root + "/" + file_path;
+    } else {
+        full_path = file_path;
+    }
+
+    result.absolute_path = full_path;
+    result.path = repo_root.empty() ? file_path :
+        fs::relative(full_path, repo_root).string();
+
+    result.content = readFile(full_path);
     result.size_bytes = result.content.size();
     result.line_count = std::count(result.content.begin(), result.content.end(), '\n') + 1;
-    result.language = detectLanguage(file_path);
+    result.language = detectLanguage(full_path);
 
     // Tree-sitter parse if available
     if (config_.use_tree_sitter && tree_sitter_->hasLanguage(result.language.id)) {

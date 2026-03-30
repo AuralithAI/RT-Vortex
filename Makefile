@@ -131,7 +131,11 @@ config: rt_home ## Copy configuration files to rt_home
 	@cp -n $(CONFIG_DIR)/certificates/* $(RT_HOME)/config/certificates/ 2>/dev/null || true
 	@mkdir -p $(RT_HOME)/config/model-providers
 	@cp -n $(CONFIG_DIR)/model-providers/* $(RT_HOME)/config/model-providers/ 2>/dev/null || true
+	@mkdir -p $(RT_HOME)/data/sql $(RT_HOME)/data/migrations
+	@cp -f $(SERVER_DIR)/db/sql/*.sql $(RT_HOME)/data/sql/ 2>/dev/null || true
+	@cp -f $(SERVER_DIR)/db/migrations/*.sql $(RT_HOME)/data/migrations/ 2>/dev/null || true
 	@echo "  rt_home/config/ updated (xml, yml, certificates, model-providers)"
+	@echo "  rt_home/data/sql/ synced (create_database.sql, initData.sql, migrations)"
 
 # ==============================================================================
 # Models (ONNX embeddings)
@@ -415,28 +419,35 @@ test-server-unit: ## Run Go server unit tests (tests/ dir only)
 # Database
 # ==============================================================================
 
+# PostgreSQL peer auth requires the OS user to match the role.  Use sudo -u
+# postgres for superuser commands when not already running as the postgres user.
+PSQL_SU := sudo -u postgres psql
+
 db-create: rt_home config ## Create PostgreSQL role and database
-	psql -U postgres -f $(RT_HOME)/data/sql/create_database.sql
+	$(PSQL_SU) -f $(RT_HOME)/data/sql/create_database.sql
 
 db-init: rt_home config ## Initialize schema tables (run after db-create)
-	psql -U rtvortex -d rtvortex -f $(RT_HOME)/data/sql/initData.sql
+	$(PSQL_SU) -d rtvortex -f $(RT_HOME)/data/sql/initData.sql
 
 db-drop: ## Drop the rtvortex database (destructive!)
-	psql -U postgres -c "DROP DATABASE IF EXISTS rtvortex;"
+	$(PSQL_SU) -c "DROP DATABASE IF EXISTS rtvortex;"
 
 db-status: ## Show current migration version
-	psql -U rtvortex -d rtvortex -c "SELECT * FROM schema_migrations ORDER BY version DESC LIMIT 5;" 2>/dev/null || \
-	psql -U rtvortex -d rtvortex -c "SELECT * FROM schema_info ORDER BY version;"
+	$(PSQL_SU) -d rtvortex -c "SELECT * FROM schema_migrations ORDER BY version DESC LIMIT 5;" 2>/dev/null || \
+	$(PSQL_SU) -d rtvortex -c "SELECT * FROM schema_info ORDER BY version;"
 
 db-reset: db-drop db-create db-init ## Drop, recreate, and re-init the database
 
 db-fix-owner: ## Transfer ownership of all DB objects to rtvortex
-	psql -U postgres -d rtvortex -c " \
+	$(PSQL_SU) -d rtvortex -c " \
 		DO \$$\$$ BEGIN \
 			EXECUTE (SELECT string_agg('ALTER TABLE public.' || quote_ident(tablename) || ' OWNER TO rtvortex;', ' ') \
 				FROM pg_tables WHERE schemaname = 'public' AND tableowner <> 'rtvortex'); \
 			EXECUTE (SELECT coalesce(string_agg('ALTER SEQUENCE public.' || quote_ident(sequencename) || ' OWNER TO rtvortex;', ' '), '') \
 				FROM pg_sequences WHERE schemaname = 'public' AND sequenceowner <> 'rtvortex'); \
+			EXECUTE (SELECT coalesce(string_agg('ALTER FUNCTION public.' || quote_ident(p.proname) || '(' || pg_get_function_identity_arguments(p.oid) || ') OWNER TO rtvortex;', ' '), '') \
+				FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid \
+				WHERE n.nspname = 'public' AND p.proowner <> 'rtvortex'::regrole); \
 		END \$$\$$; \
 		ALTER SCHEMA public OWNER TO rtvortex; \
 		ALTER DATABASE rtvortex OWNER TO rtvortex;"
@@ -447,19 +458,19 @@ db-migrate: rt_home config ## Apply all pending migrations
 	@echo "Applying migrations from $(RT_HOME)/data/migrations/ ..."
 	@for f in $(RT_HOME)/data/migrations/*.up.sql; do \
 		echo "  → $$f"; \
-		psql -U rtvortex -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
+		$(PSQL_SU) -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
 	done
 	@echo "Done."
 
 db-fix-migrate: ## Fix dirty schema_migrations and re-apply all migrations
 	@echo "Clearing dirty flag and re-applying all migrations ..."
-	psql -U postgres -d rtvortex -c "UPDATE schema_migrations SET dirty = false WHERE dirty = true;"
+	$(PSQL_SU) -d rtvortex -c "UPDATE schema_migrations SET dirty = false WHERE dirty = true;"
 	@for f in $(RT_HOME)/data/migrations/*.up.sql; do \
 		echo "  → $$f"; \
-		psql -U postgres -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
+		$(PSQL_SU) -d rtvortex -f "$$f" 2>&1 | grep -v 'already exists' || true; \
 	done
 	@echo "Final state:"
-	@psql -U rtvortex -d rtvortex -c "SELECT * FROM schema_migrations;"
+	@$(PSQL_SU) -d rtvortex -c "SELECT * FROM schema_migrations;"
 
 # ==============================================================================
 # Clean

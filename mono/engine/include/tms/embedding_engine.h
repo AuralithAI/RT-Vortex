@@ -65,7 +65,8 @@ struct EmbeddingConfig {
     
     // Parallel embedding workers (ONNX only)
     // Each worker owns its own ONNX session and runs on separate threads.
-    // 0 = auto-detect based on CPU cores (cores / 4, clamped to [1, 8]).
+    // 0 = auto-detect based on CPU cores (cores / 2, clamped to [1, 16]).
+    // Configurable in rtserverprops.xml: <engine onnx-workers="N"/>
     int num_parallel_workers = 0;
     
     // Batching
@@ -228,6 +229,41 @@ public:
     Stats getStats() const;
     void resetStats();
 
+    // =========================================================================
+    // Hot-Swap Model Support
+    // =========================================================================
+
+    /**
+     * Hot-swap the ONNX model at runtime without restarting the engine.
+     *
+     * Atomically replaces the backend ONNX session with a new model.
+     * The caller is responsible for ensuring the new model files exist.
+     * During the swap, in-flight embeddings complete on the old model;
+     * new requests block briefly until the new model is ready.
+     *
+     * @param model_name      Model identifier (e.g. "bge-m3", "minilm")
+     * @param onnx_model_path Path to the new model.onnx file
+     * @param tokenizer_path  Path to the new tokenizer.json file
+     * @param new_dimension   Embedding dimension of the new model
+     * @return true if swap succeeded
+     */
+    bool hotSwapModel(
+        const std::string& model_name,
+        const std::string& onnx_model_path,
+        const std::string& tokenizer_path,
+        size_t new_dimension
+    );
+
+    /**
+     * Get the currently active model name.
+     */
+    std::string activeModelName() const { return config_.model_name; }
+
+    /**
+     * Get the currently active embedding dimension.
+     */
+    size_t activeDimension() const { return config_.embedding_dimension; }
+
 private:
     EmbeddingConfig config_;
     
@@ -250,6 +286,9 @@ private:
     // Statistics
     mutable Stats stats_;
     mutable std::mutex stats_mutex_;
+    
+    // Hot-swap serialization
+    mutable std::mutex swap_mutex_;
     
     // Helpers
     std::string prepareCodeInput(const CodeChunk& chunk);

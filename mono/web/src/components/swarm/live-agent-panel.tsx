@@ -19,7 +19,9 @@ import {
   Search,
   Loader2,
   Wifi,
+  Palette,
 } from "lucide-react";
+import { AgentAvatar } from "@/components/swarm/agent-avatar";
 import type { AgentRole, AgentSnapshot } from "@/types/swarm";
 
 // ── Role config ──────────────────────────────────────────────────────────────
@@ -76,6 +78,12 @@ const roleConfig: Record<
     color: "text-orange-600 dark:text-orange-400",
     bg: "bg-orange-100 dark:bg-orange-900/40",
   },
+  ui_ux: {
+    icon: Palette,
+    label: "UI/UX",
+    color: "text-pink-600 dark:text-pink-400",
+    bg: "bg-pink-100 dark:bg-pink-900/40",
+  },
 };
 
 // ── Agent Node ───────────────────────────────────────────────────────────────
@@ -88,7 +96,6 @@ function AgentNode({
   isController: boolean;
 }) {
   const config = roleConfig[agent.role] ?? roleConfig.orchestrator;
-  const Icon = config.icon;
   const isBusy = agent.status === "busy";
 
   return (
@@ -106,10 +113,8 @@ function AgentNode({
         <span className="absolute -inset-px rounded-xl animate-pulse border border-amber-400/40" />
       )}
 
-      {/* Icon */}
-      <div className={`rounded-lg p-2 ${config.bg}`}>
-        <Icon className={`h-5 w-5 ${config.color}`} />
-      </div>
+      {/* Animated Avatar */}
+      <AgentAvatar role={agent.role} size="md" busy={isBusy} />
 
       {/* Label */}
       <span className="text-[11px] font-medium leading-none">

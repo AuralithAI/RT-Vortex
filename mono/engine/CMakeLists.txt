@@ -84,6 +84,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Export compile commands for IDE support
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# =============================================================================
+# ccache — transparent compiler caching (3–10× faster rebuilds)
+# =============================================================================
+find_program(CCACHE_PROGRAM ccache)
+if(CCACHE_PROGRAM)
+    set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    message(STATUS "ccache enabled: ${CCACHE_PROGRAM}")
+else()
+    message(STATUS "ccache not found — builds will not be cached. Install with: sudo apt-get install ccache")
+endif()
+
 # Options
 option(AIPR_BUILD_TESTS "Build tests" ON)
 option(AIPR_BUILD_TOOLS "Build utility tools" ON)
@@ -708,6 +720,14 @@ set(TMS_SOURCES
     src/tms/core/memory_accounts.cpp
     src/tms/ingestion/embedding_engine.cpp
     src/tms/ingestion/repo_parser.cpp
+    src/tms/retrieval/graph_rag.cpp
+    src/tms/retrieval/multi_vector_index.cpp
+)
+
+# Source files - Cache
+set(CACHE_SOURCES
+    src/cache/merkle_cache.cpp
+    src/cache/redis_embed_cache.cpp
 )
 
 # Source files - Knowledge Graph
@@ -735,6 +755,7 @@ add_library(aipr-engine STATIC
     ${MEMORY_SOURCES}
     ${TMS_SOURCES}
     ${GRAPH_SOURCES}
+    ${CACHE_SOURCES}
     ${UTIL_SOURCES}
 )
 
@@ -749,6 +770,16 @@ target_link_libraries(aipr-engine PUBLIC
     CURL::libcurl
     nlohmann_json::nlohmann_json
 )
+
+# MerkleCache uses OpenSSL/BoringSSL SHA-256 (from gRPC's bundled BoringSSL)
+if(TARGET crypto)
+    target_link_libraries(aipr-engine PUBLIC crypto)
+else()
+    find_package(OpenSSL QUIET)
+    if(OpenSSL_FOUND)
+        target_link_libraries(aipr-engine PUBLIC OpenSSL::Crypto)
+    endif()
+endif()
 
 if(AIPR_USE_MINIZ)
     target_link_libraries(aipr-engine PUBLIC miniz)

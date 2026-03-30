@@ -133,6 +133,16 @@ public:
     ) override;
 
     //-------------------------------------------------------------------------
+    // Embedding Statistics
+    //-------------------------------------------------------------------------
+
+    grpc::Status GetEmbedStats(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::EmbedStatsRequest* request,
+        aipr::engine::v1::EmbedStatsResponse* response
+    ) override;
+
+    //-------------------------------------------------------------------------
     // File Content (Swarm)
     //-------------------------------------------------------------------------
 
@@ -140,6 +150,16 @@ public:
         grpc::ServerContext* context,
         const aipr::engine::v1::FileContentRequest* request,
         aipr::engine::v1::FileContentResponse* response
+    ) override;
+
+    //-------------------------------------------------------------------------
+    // Asset Ingestion (Swarm — PDFs, URLs, Documents → Embeddings)
+    //-------------------------------------------------------------------------
+
+    grpc::Status IngestAsset(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::IngestAssetRequest* request,
+        aipr::engine::v1::IngestAssetResponse* response
     ) override;
 
     //-------------------------------------------------------------------------
@@ -167,6 +187,15 @@ public:
      */
     StorageBackend* getStorage() const { return storage_.get(); }
 
+    /**
+     * Get the Go server callback URL received via ConfigureStorage.
+     * Empty until the Go server pushes its config at startup.
+     */
+    std::string getServerCallbackUrl() const {
+        std::lock_guard<std::mutex> lock(storage_mutex_);
+        return server_callback_url_;
+    }
+
     //-------------------------------------------------------------------------
     // Utility
     //-------------------------------------------------------------------------
@@ -185,9 +214,13 @@ private:
     std::unique_ptr<Engine> engine_;
     std::chrono::steady_clock::time_point start_time_;
 
-    // Storage backend — configured via gRPC ConfigureStorage from Java server
+    // Storage backend — configured via gRPC ConfigureStorage from Go server
     std::unique_ptr<StorageBackend> storage_;
     mutable std::mutex storage_mutex_;
+
+    // Go API server callback URL — set by ConfigureStorage, used by Redis embed
+    // cache and any component that needs to call back into the Go server.
+    std::string server_callback_url_;
 
     // Active metrics stream subscribers
     std::atomic<uint32_t> active_metric_streams_{0};

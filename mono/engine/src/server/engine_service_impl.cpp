@@ -9,6 +9,7 @@
 #include "logging.h"
 #include "metrics.h"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -369,11 +370,12 @@ grpc::Status EngineServiceImpl::Search(
             top_k = request->config().top_k();
         }
 
-        std::vector<ContextChunk> chunks = engine_->search(
+        auto sr = engine_->searchWithMeta(
             request->repo_id(),
             request->query(),
             top_k
         );
+        const auto& chunks = sr.chunks;
 
         auto search_end = std::chrono::steady_clock::now();
         auto search_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -407,20 +409,15 @@ grpc::Status EngineServiceImpl::Search(
             toProto(chunk, response->add_chunks());
         }
 
-        // Set metrics (simplified - full metrics would come from engine)
+        // Set metrics
         auto* metrics = response->mutable_metrics();
         metrics->set_total_candidates(static_cast<uint32_t>(chunks.size()));
 
-        // Confidence gate fields (populated when TMS forward is wired)
-        // For now, propagate defaults — requires_llm=true.
-        response->set_requires_llm(true);
-        if (!chunks.empty()) {
-            float max_score = 0.0f;
-            for (const auto& c : chunks) {
-                max_score = std::max(max_score, c.relevance_score);
-            }
-            response->set_max_retrieval_score(max_score);
-        }
+        // Confidence gate + GraphRAG metadata from TMS forward
+        response->set_requires_llm(sr.requires_llm);
+        response->set_max_retrieval_score(sr.max_retrieval_score);
+        response->set_graph_confidence_score(sr.graph_confidence);
+        response->set_graph_expanded_count(sr.graph_expanded_chunks);
 
         return grpc::Status::OK;
 
@@ -776,6 +773,59 @@ grpc::Status EngineServiceImpl::GetDiagnostics(
 }
 
 //=============================================================================
+// Embedding Statistics
+//=============================================================================
+
+grpc::Status EngineServiceImpl::GetEmbedStats(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::EmbedStatsRequest* request,
+    aipr::engine::v1::EmbedStatsResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    try {
+        auto stats = engine_->getEmbedStats(request->repo_id());
+
+        response->set_active_model(stats.active_model);
+        response->set_embedding_dimension(static_cast<uint32_t>(stats.embedding_dimension));
+        response->set_backend_type(stats.backend_type);
+        response->set_total_chunks(stats.total_chunks);
+        response->set_total_vectors(stats.total_vectors);
+        response->set_index_size_bytes(stats.index_size_bytes);
+        response->set_kg_nodes(stats.kg_nodes);
+        response->set_kg_edges(stats.kg_edges);
+        response->set_kg_enabled(stats.kg_enabled);
+        response->set_merkle_cached_files(stats.merkle_cached_files);
+        response->set_merkle_cache_hit_rate(stats.merkle_cache_hit_rate);
+        response->set_avg_embed_latency_ms(stats.avg_embed_latency_ms);
+        response->set_avg_search_latency_ms(stats.avg_search_latency_ms);
+        response->set_total_queries(stats.total_queries);
+        response->set_embed_cache_size(stats.embed_cache_size);
+        response->set_embed_cache_hit_rate(stats.embed_cache_hit_rate);
+        response->set_llm_avoided_rate(stats.llm_avoided_rate);
+        response->set_avg_confidence_score(stats.avg_confidence_score);
+        response->set_llm_avoided_count(stats.llm_avoided_count);
+        response->set_llm_used_count(stats.llm_used_count);
+        response->set_avg_graph_expansion_ms(stats.avg_graph_expansion_ms);
+        response->set_avg_graph_expanded_chunks(stats.avg_graph_expanded_chunks);
+        response->set_model_swaps_total(stats.model_swaps_total);
+        response->set_multi_vector_enabled(stats.multi_vector_enabled);
+        response->set_coarse_dimension(stats.coarse_dimension);
+        response->set_fine_dimension(stats.fine_dimension);
+        response->set_coarse_index_vectors(stats.coarse_index_vectors);
+        response->set_fine_index_vectors(stats.fine_index_vectors);
+
+        return grpc::Status::OK;
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("GetEmbedStats failed: " + std::string(e.what()));
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
+//=============================================================================
 // Proto Mapping Helpers
 //=============================================================================
 
@@ -1094,6 +1144,19 @@ grpc::Status EngineServiceImpl::ConfigureStorage(
         {
             std::lock_guard<std::mutex> lock(storage_mutex_);
             storage_ = std::move(storage);
+
+            // Store the Go server callback URL so components like
+            // RedisEmbedCache can reach the API server.
+            if (!request->server_callback_url().empty()) {
+                server_callback_url_ = request->server_callback_url();
+                // Also publish as an env-var so any lazily-constructed
+                // component (e.g. RedisEmbedCache) picks it up without
+                // needing a pointer back to this service.
+                ::setenv("ENGINE_GO_SERVER_URL",
+                         server_callback_url_.c_str(), /*overwrite=*/1);
+                LOG_INFO("[ConfigureStorage] server_callback_url set to "
+                         + server_callback_url_);
+            }
         }
 
         // Map provider to human-readable name
@@ -1218,6 +1281,87 @@ grpc::Status EngineServiceImpl::StreamEngineMetrics(
 
     cleanup();
     return grpc::Status::OK;
+}
+
+//=============================================================================
+// Asset Ingestion (PDFs, URLs, Documents → Embeddings)
+//=============================================================================
+
+grpc::Status EngineServiceImpl::IngestAsset(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::IngestAssetRequest* request,
+    aipr::engine::v1::IngestAssetResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    const std::string& repo_id = request->repo_id();
+    const std::string& content = request->content();
+    const std::string& asset_type = request->asset_type();
+
+    if (repo_id.empty() || content.empty()) {
+        response->set_status("error: repo_id and content are required");
+        response->set_chunks_created(0);
+        return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                            "repo_id and content are required");
+    }
+
+    try {
+        // Chunk the content into embedding-sized pieces.
+        // For documents/PDFs, use paragraph-level splitting.
+        // For URLs, the Go server already extracted the text content.
+        std::vector<std::string> chunks;
+        const size_t max_chunk_chars = 1500;
+        const size_t overlap_chars = 200;
+
+        size_t pos = 0;
+        while (pos < content.size()) {
+            size_t end = std::min(pos + max_chunk_chars, content.size());
+            // Try to break at paragraph or sentence boundary
+            if (end < content.size()) {
+                size_t para = content.rfind("\n\n", end);
+                if (para != std::string::npos && para > pos + max_chunk_chars / 2) {
+                    end = para + 2;
+                } else {
+                    size_t sent = content.rfind(". ", end);
+                    if (sent != std::string::npos && sent > pos + max_chunk_chars / 2) {
+                        end = sent + 2;
+                    }
+                }
+            }
+            chunks.push_back(content.substr(pos, end - pos));
+            pos = (end > overlap_chars) ? end - overlap_chars : end;
+            if (pos >= content.size()) break;
+        }
+
+        // Build metadata prefix for each chunk
+        std::string source = request->source_url().empty() ? asset_type : request->source_url();
+        int embedded = 0;
+
+        for (size_t i = 0; i < chunks.size(); ++i) {
+            std::string prefixed = "[" + asset_type + "] " + source +
+                                   " (chunk " + std::to_string(i + 1) +
+                                   "/" + std::to_string(chunks.size()) + ")\n" +
+                                   chunks[i];
+            // Delegate to the engine's embedding + storage pipeline.
+            // engine_->embedAndStoreChunk handles FAISS insertion + KG update.
+            bool ok = engine_->embedAndStoreAssetChunk(
+                repo_id, prefixed, source, asset_type,
+                std::map<std::string, std::string>(
+                    request->metadata().begin(), request->metadata().end()));
+            if (ok) embedded++;
+        }
+
+        response->set_chunks_created(embedded);
+        response->set_status("ok");
+        return grpc::Status::OK;
+
+    } catch (const std::exception& e) {
+        response->set_chunks_created(0);
+        response->set_status(std::string("error: ") + e.what());
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
 }
 
 } // namespace server

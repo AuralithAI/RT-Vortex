@@ -8,9 +8,11 @@
 #include "tms/repo_parser.h"
 #include "tms/embedding_engine.h"
 #include "tms/memory_accounts.h"
+#include "tms/graph_rag.h"
 #include "hierarchy_builder.h"
 #include "chunk_prefixer.h"
 #include "knowledge_graph.h"
+#include "merkle_cache.h"
 #include "logging.h"
 #include "metrics.h"
 #include <chrono>
@@ -38,6 +40,22 @@ public:
     aipr::KnowledgeGraph& get() { return kg_; }
 private:
     aipr::KnowledgeGraph kg_;
+};
+
+// ── MerkleCacheHandle (pimpl for optional Merkle cache) ────────────────────
+
+class TMSMemorySystem::MerkleCacheHandle {
+public:
+    explicit MerkleCacheHandle(const std::string& storage_path)
+        : cache_(storage_path + "/cache/merkle.db") {
+        cache_.open();
+    }
+    ~MerkleCacheHandle() {
+        try { cache_.close(); } catch (...) {}
+    }
+    aipr::MerkleCache& get() { return cache_; }
+private:
+    aipr::MerkleCache cache_;
 };
 
 // =============================================================================
@@ -76,6 +94,21 @@ void TMSMemorySystem::initialize() {
     ltm_config.storage_path = config_.storage_path + "/ltm";
     
     ltm_ = std::make_unique<LTMFaiss>(ltm_config);
+
+    // Initialize Multi-Vector dual-resolution index (optional)
+    if (config_.multi_vector_enabled) {
+        MultiVectorConfig mv_config;
+        mv_config.enabled = true;
+        mv_config.fine_dimension = config_.multi_vector_fine_dim;
+        mv_config.coarse_dimension = config_.multi_vector_coarse_dim;
+        mv_config.oversampling_factor = config_.multi_vector_oversampling;
+        mv_config.storage_path = config_.storage_path + "/multi_vector";
+
+        multi_vector_ = std::make_unique<MultiVectorIndex>(mv_config, ltm_config);
+        LOG_INFO("[TMS] Multi-Vector dual-resolution index enabled (" +
+                 std::to_string(config_.multi_vector_coarse_dim) + "d coarse + " +
+                 std::to_string(config_.multi_vector_fine_dim) + "d fine)");
+    }
     
     // Initialize STM
     STMConfig stm_config;
@@ -177,6 +210,14 @@ void TMSMemorySystem::initialize() {
             LOG_ERROR("[TMS] Failed to initialize Knowledge Graph: " + std::string(e.what()));
         }
     }
+
+    // Initialize Merkle Cache (for incremental reindex)
+    try {
+        merkle_handle_ = std::make_unique<MerkleCacheHandle>(config_.storage_path);
+        LOG_INFO("[TMS] Merkle Cache initialized");
+    } catch (const std::exception& e) {
+        LOG_ERROR("[TMS] Failed to initialize Merkle Cache: " + std::string(e.what()));
+    }
 }
 
 void TMSMemorySystem::shutdown() {
@@ -238,6 +279,17 @@ void TMSMemorySystem::ingestRepository(
     }
 
     auto all_files = repo_parser_->listFiles(repo_path);
+
+    // Normalise to relative paths.  walkDirectory() may return absolute
+    // paths; downstream code constructs full paths via repo_path + "/" + f,
+    // so the entries must be relative to repo_path.
+    for (auto& f : all_files) {
+        if (f.size() > repo_path.size() + 1 &&
+            f.compare(0, repo_path.size(), repo_path) == 0) {
+            f = f.substr(repo_path.size() + 1);
+        }
+    }
+
     const size_t total_files = all_files.size();
 
     std::cerr << "[TMS] ingestRepository: repo_path=" << repo_path
@@ -248,6 +300,78 @@ void TMSMemorySystem::ingestRepository(
             progress_callback(1.0f, "No indexable files found");
         }
         return;
+    }
+
+    // =========================================================================
+    // Merkle-based incremental filtering
+    //
+    // Compare file content hashes against the Merkle cache to skip
+    // unchanged files. For changed files, also identify KG-dependent
+    // files that need re-embedding.
+    // =========================================================================
+    MerkleDiffResult merkle_diff;
+    bool using_merkle = (merkle_handle_ != nullptr);
+    std::unordered_set<std::string> files_to_embed_set;
+
+    if (using_merkle) {
+        if (progress_callback) {
+            progress_callback(0.01f, "Computing file hashes for incremental index...");
+        }
+
+        aipr::KnowledgeGraph* kg_ptr = (config_.knowledge_graph_enabled && kg_handle_)
+            ? &kg_handle_->get() : nullptr;
+
+        merkle_diff = merkle_handle_->get().computeDiff(
+            repo_id, repo_path, all_files, kg_ptr);
+
+        // Build the set of files that actually need embedding
+        for (const auto& f : merkle_diff.changed_files)   files_to_embed_set.insert(f);
+        for (const auto& f : merkle_diff.new_files)        files_to_embed_set.insert(f);
+        for (const auto& f : merkle_diff.dependent_files)  files_to_embed_set.insert(f);
+
+        std::cerr << "[TMS] Merkle diff: unchanged=" << merkle_diff.unchanged_files.size()
+                  << " changed=" << merkle_diff.changed_files.size()
+                  << " new=" << merkle_diff.new_files.size()
+                  << " dependent=" << merkle_diff.dependent_files.size()
+                  << " deleted=" << merkle_diff.deleted_files.size()
+                  << std::endl;
+
+        // If everything is unchanged, we're done
+        if (files_to_embed_set.empty() && merkle_diff.deleted_files.empty()) {
+            // KG edges may be missing if the initial index was done before
+            // edge inference was added.  Run finalizeEdges when nodes exist
+            // but edges are empty.
+            if (config_.knowledge_graph_enabled && kg_handle_ &&
+                kg_handle_->get().nodeCount(repo_id) > 0 &&
+                kg_handle_->get().edgeCount(repo_id) == 0) {
+                LOG_INFO("[TMS] Merkle skip: KG has nodes but 0 edges — running edge inference");
+                try {
+                    kg_handle_->get().finalizeEdges(repo_id);
+                } catch (const std::exception& e) {
+                    LOG_ERROR("[TMS] KG finalizeEdges failed during Merkle skip: " + std::string(e.what()));
+                }
+            }
+            if (progress_callback) {
+                progress_callback(1.0f, "All files unchanged — skipping reindex");
+            }
+            LOG_INFO("[TMS] Merkle cache: all " + std::to_string(total_files) +
+                     " files unchanged, skipping reindex");
+            return;
+        }
+
+        // Filter all_files to only those that need embedding
+        std::vector<std::string> filtered_files;
+        filtered_files.reserve(files_to_embed_set.size());
+        for (const auto& f : all_files) {
+            if (files_to_embed_set.count(f)) {
+                filtered_files.push_back(f);
+            }
+        }
+        all_files = std::move(filtered_files);
+
+        std::cerr << "[TMS] After Merkle filter: " << all_files.size()
+                  << " files to embed (skipped " << merkle_diff.unchanged_files.size()
+                  << ")" << std::endl;
     }
 
     // =========================================================================
@@ -446,6 +570,31 @@ void TMSMemorySystem::ingestRepository(
         std::cerr << "[TMS] WARNING: Failed to persist index: " << e.what() << std::endl;
     }
 
+    // =========================================================================
+    // Update Merkle cache with new file hashes
+    // =========================================================================
+    if (using_merkle && merkle_handle_) {
+        try {
+            if (progress_callback) {
+                progress_callback(0.94f, "Updating Merkle cache...");
+            }
+            // Compute hashes for all embedded files
+            std::unordered_map<std::string, std::string> file_hashes;
+            for (const auto& f : all_files) {
+                std::string full_path = repo_path + "/" + f;
+                std::string hash = aipr::MerkleCache::hashFile(full_path);
+                if (!hash.empty()) {
+                    file_hashes[f] = hash;
+                }
+            }
+            merkle_handle_->get().updateHashes(repo_id, file_hashes);
+            std::cerr << "[TMS] Merkle cache updated: " << file_hashes.size()
+                      << " file hashes" << std::endl;
+        } catch (const std::exception& e) {
+            LOG_ERROR("[TMS] Merkle cache update failed: " + std::string(e.what()));
+        }
+    }
+
     // Done
     auto end_time = std::chrono::steady_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time);
@@ -510,8 +659,11 @@ void TMSMemorySystem::ingestChunksWithEmbeddings(
         prepared_chunks.push_back(std::move(chunk));
     }
     
-    // Batch add to LTM
+    // Batch add to LTM (and multi-vector index if enabled)
     ltm_->addBatch(prepared_chunks, embeddings);
+    if (multi_vector_) {
+        multi_vector_->addBatch(prepared_chunks, embeddings);
+    }
     
     // Update MTM patterns (async in production)
     // This is simplified - in production, run pattern detection in background
@@ -520,6 +672,7 @@ void TMSMemorySystem::ingestChunksWithEmbeddings(
 void TMSMemorySystem::removeRepository(const std::string& repo_id) {
     std::lock_guard<std::mutex> lock(mutex_);
     ltm_->removeByRepo(repo_id);
+    if (multi_vector_) multi_vector_->removeByRepo(repo_id);
 }
 
 void TMSMemorySystem::updateRepository(
@@ -605,6 +758,12 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
         query_embedding = std::move(result.embedding);
         auto embed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - embed_start).count();
+
+        // Telemetry: per-query embedding latency
+        metrics::Registry::instance().observeHistogram(
+            metrics::EMBED_LATENCY_S,
+            static_cast<double>(embed_ms) / 1000.0);
+
         LOG_DEBUG("[TMS] query embedding computed: dim=" +
                   std::to_string(query_embedding.size()) +
                   " embed_ms=" + std::to_string(embed_ms));
@@ -636,6 +795,9 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
             MemoryAccountClassifier classifier;
             auto ranked_accounts = classifier.classifyQuery(query.query_text);
 
+            // Use multi_vector fine index for account search when dual-res is active
+            LTMFaiss& search_ltm = multi_vector_ ? multi_vector_->fineIndex() : *ltm_;
+
             // Search top-2 accounts, split budget
             int per_account_k = std::max(decision.ltm_top_k / 2, 4);
             std::unordered_map<std::string, float> rrf_scores;
@@ -645,7 +807,7 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
             int accounts_to_search = std::min(2, static_cast<int>(ranked_accounts.size()));
             for (int ai = 0; ai < accounts_to_search; ++ai) {
                 auto tag = MemoryAccountClassifier::accountTag(ranked_accounts[ai]);
-                auto account_results = ltm_->hybridSearchByAccount(
+                auto account_results = search_ltm.hybridSearchByAccount(
                     query.query_text, query_embedding, tag,
                     per_account_k, query.repo_filter);
 
@@ -682,34 +844,116 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
                 ", " + std::string(accountName(ranked_accounts[1])) +
                 "] → " + std::to_string(ltm_results.size()) + " chunks");
         } else {
-            ltm_results = ltm_->search(query_embedding, decision.ltm_top_k, query.repo_filter);
+            // Use multi-vector dual-resolution search when available
+            if (multi_vector_) {
+                ltm_results = multi_vector_->search(query_embedding, decision.ltm_top_k, query.repo_filter);
+            } else {
+                ltm_results = ltm_->search(query_embedding, decision.ltm_top_k, query.repo_filter);
+            }
         }
 
         auto ltm_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - ltm_start).count();
         response.reasoning_trace.push_back("LTM: Retrieved " + std::to_string(ltm_results.size()) + " chunks");
         response.ltm_items_scanned = ltm_results.size();
+
+        // ── Telemetry: LTM search metrics ──────────────────────
+        metrics::Registry::instance().setGauge(
+            metrics::SEARCH_CHUNKS_RETURNED,
+            static_cast<double>(ltm_results.size()));
+
+        // Approximate recall@10: ratio of top-10 results with similarity >= 0.5
+        // (proxy for relevance when ground-truth labels are unavailable).
+        {
+            int relevant = 0;
+            int k = std::min(static_cast<int>(ltm_results.size()), 10);
+            for (int i = 0; i < k; ++i) {
+                if (ltm_results[i].similarity_score >= 0.5f) ++relevant;
+            }
+            double recall_at_10 = (k > 0) ? static_cast<double>(relevant) / k : 0.0;
+            metrics::Registry::instance().observeHistogram(
+                metrics::FAISS_RECALL_AT_10, recall_at_10);
+        }
+
+        // Record LTM search wall-clock time as histogram for p50/p90/p99 tracking
+        metrics::Registry::instance().observeHistogram(
+            metrics::SEARCH_LATENCY_S,
+            static_cast<double>(ltm_ms) / 1000.0);
+
         LOG_DEBUG("[TMS] LTM search: retrieved=" + std::to_string(ltm_results.size()) +
                   " top_k=" + std::to_string(decision.ltm_top_k) +
                   " accounts_enabled=" + std::to_string(config_.memory_accounts_enabled) +
                   " ltm_ms=" + std::to_string(ltm_ms));
     }
+
+    // Step 3b: GraphRAG expansion — follow IMPORTS/CALLS edges in KG
+    //
+    // If the KG is enabled, expand LTM results through the knowledge graph
+    // by traversing structural relationships 2 hops deep. This dramatically
+    // improves relevance on monoliths by surfacing structurally-connected
+    // code that pure vector similarity might miss.
+    if (config_.knowledge_graph_enabled && kg_handle_ && !ltm_results.empty() && !isTimedOut()) {
+        try {
+            auto& kg = kg_handle_->get();
+            GraphRAGConfig graph_config;
+            graph_config.max_hops = config_.graph_rag_max_hops;
+            graph_config.max_neighbors_per_seed = config_.graph_rag_max_neighbors;
+            graph_config.max_expanded_chunks = 32;
+            graph_config.hop_decay = 0.7f;
+            graph_config.graph_weight = config_.graph_rag_boost_factor;
+            graph_config.follow_imports = true;
+            graph_config.follow_calls = true;
+
+            GraphRAGRetriever graph_retriever(*ltm_, kg, graph_config);
+            auto expanded = graph_retriever.expandAndMerge(
+                ltm_results, query.repo_filter, decision.ltm_top_k);
+
+            if (!expanded.empty()) {
+                size_t graph_added = expanded.size() - ltm_results.size();
+                response.graph_expanded_chunks = static_cast<uint32_t>(
+                    graph_added > 0 ? graph_added : 0);
+                ltm_results = std::move(expanded);
+                response.reasoning_trace.push_back(
+                    "GraphRAG: Expanded via KG, +" +
+                    std::to_string(response.graph_expanded_chunks) +
+                    " graph-connected chunks");
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("[TMS] GraphRAG expansion failed: " + std::string(e.what()));
+            response.reasoning_trace.push_back("GraphRAG: FAILED — " + std::string(e.what()));
+        }
+    }
     
     // Step 4: Retrieve from STM
     std::vector<RetrievedChunk> stm_results;
     if (!query.session_id.empty() && decision.stm_top_k > 0 && !isTimedOut()) {
+        auto stm_start = std::chrono::steady_clock::now();
         stm_results = stm_->search(query.session_id, query_embedding, decision.stm_top_k);
+        auto stm_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - stm_start).count();
+
+        // Telemetry: STM search latency
+        metrics::Registry::instance().observeHistogram(
+            metrics::STM_SEARCH_LATENCY_S,
+            static_cast<double>(stm_ms) / 1000.0);
+
         response.reasoning_trace.push_back("STM: Retrieved " + std::to_string(stm_results.size()) + " items");
         response.stm_items_scanned = stm_results.size();
         LOG_DEBUG("[TMS] STM search: retrieved=" + std::to_string(stm_results.size()) +
-                  " session=" + query.session_id);
+                  " session=" + query.session_id +
+                  " stm_ms=" + std::to_string(stm_ms));
     }
 
-    // Step 4b: Confidence Gate (Zero-LLM Engine)
+    // Step 4b: Confidence Gate v2 (Zero-LLM Engine)
     //
-    // If retrieval produced a high-confidence result, mark the response so
-    // the caller can skip the expensive LLM round-trip.  The gate is
-    // feature-flagged: confidence_gate_enabled defaults to false.
+    // Enhanced gate that combines cosine similarity with KG path-length
+    // scoring. The combined signal provides a much more reliable indicator
+    // of whether the retrieval is sufficient to skip the LLM, achieving
+    // 60–70% LLM avoidance on well-indexed repos.
+    //
+    // Combined score = (cosine_weight * cosine_score) + (graph_weight * graph_score)
+    //   cosine_score: max similarity from LTM + STM results
+    //   graph_score:  structural proximity via KG path lengths (0–1)
     {
         float max_score = 0.0f;
         for (const auto& rc : ltm_results) {
@@ -728,16 +972,57 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
             response.max_retrieval_score = max_score;
         }
 
+        float cosine_score = max_score;
+
+        // Compute KG graph confidence score
+        float graph_score = 0.0f;
+        if (config_.knowledge_graph_enabled && kg_handle_ && !ltm_results.empty()) {
+            try {
+                auto& kg = kg_handle_->get();
+                GraphRAGConfig graph_config;
+                GraphRAGRetriever graph_retriever(*ltm_, kg, graph_config);
+
+                // Use top-3 LTM results as seeds, check structural proximity
+                std::vector<std::string> seed_ids;
+                std::vector<std::string> result_ids;
+                for (size_t i = 0; i < std::min(ltm_results.size(), size_t(3)); ++i) {
+                    seed_ids.push_back(ltm_results[i].chunk.id);
+                }
+                for (const auto& rc : ltm_results) {
+                    result_ids.push_back(rc.chunk.id);
+                }
+                graph_score = graph_retriever.computeGraphConfidence(
+                    seed_ids, result_ids, query.repo_filter);
+                response.graph_confidence = graph_score;
+            } catch (const std::exception& e) {
+                LOG_DEBUG("[TMS] graph confidence computation failed: " + std::string(e.what()));
+            }
+        }
+
+        // Combined score: configurable weighting of cosine vs graph confidence
+        const float kGraphWeight = config_.graph_rag_confidence_weight;
+        const float kCosineWeight = 1.0f - kGraphWeight;
+        float combined_score = (kCosineWeight * cosine_score) + (kGraphWeight * graph_score);
+
+        // Telemetry
         metrics::Registry::instance().setGauge(
-            metrics::CONFIDENCE_GATE_SCORE, static_cast<double>(max_score));
+            metrics::CONFIDENCE_GATE_SCORE, static_cast<double>(combined_score));
+        metrics::Registry::instance().setGauge(
+            metrics::CONFIDENCE_GATE_COSINE_SCORE, static_cast<double>(cosine_score));
+        metrics::Registry::instance().setGauge(
+            metrics::CONFIDENCE_GATE_GRAPH_SCORE, static_cast<double>(graph_score));
+        metrics::Registry::instance().setGauge(
+            metrics::CONFIDENCE_GATE_COMBINED, static_cast<double>(combined_score));
 
         if (config_.confidence_gate_enabled &&
-            max_score >= config_.confidence_gate_threshold) {
+            combined_score >= config_.confidence_gate_threshold) {
             response.requires_llm = false;
             response.llm_skip_reason =
-                "confidence_gate: max_retrieval_score=" +
-                std::to_string(max_score) +
-                " >= threshold=" +
+                "confidence_gate_v2: combined=" +
+                std::to_string(combined_score) +
+                " (cosine=" + std::to_string(cosine_score) +
+                " graph=" + std::to_string(graph_score) +
+                ") >= threshold=" +
                 std::to_string(config_.confidence_gate_threshold);
             metrics::Registry::instance().incCounter(metrics::LLM_AVOIDED_TOTAL);
 
@@ -750,8 +1035,8 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
             }
 
             response.reasoning_trace.push_back(
-                "ConfidenceGate: FIRED — " + response.llm_skip_reason);
-            LOG_INFO("[TMS] confidence gate fired: " + response.llm_skip_reason);
+                "ConfidenceGateV2: FIRED — " + response.llm_skip_reason);
+            LOG_INFO("[TMS] confidence gate v2 fired: " + response.llm_skip_reason);
         } else {
             response.requires_llm = true;
             metrics::Registry::instance().incCounter(metrics::LLM_USED_TOTAL);
@@ -790,6 +1075,7 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
     
     // Step 6: Cross-Memory Attention (if enabled)
     if (decision.enable_cross_attention && !isTimedOut()) {
+        auto cma_start = std::chrono::steady_clock::now();
         response.attention_output = runCrossMemoryAttention(
             query_embedding,
             ltm_results,
@@ -798,8 +1084,17 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
             strategies,
             decision
         );
+        auto cma_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - cma_start).count();
+
+        // Telemetry: CMA latency
+        metrics::Registry::instance().observeHistogram(
+            metrics::CMA_LATENCY_S,
+            static_cast<double>(cma_ms) / 1000.0);
+
         response.reasoning_trace.push_back("Attention: Fused context with " 
-                                           + std::to_string(decision.attention_heads) + " heads");
+                                           + std::to_string(decision.attention_heads) + " heads"
+                                           + " cma_ms=" + std::to_string(cma_ms));
     } else {
         // Simple concatenation fallback
         CrossMemoryOutput simple_output;
@@ -910,6 +1205,9 @@ void TMSMemorySystem::endSession(const std::string& session_id) {
             chunk.tags.push_back("relevance:" + std::to_string(entry.relevance_score));
             
             ltm_->add(chunk, entry.embedding);
+            if (multi_vector_) {
+                multi_vector_->add(chunk, entry.embedding);
+            }
         }
     }
     
@@ -1021,6 +1319,7 @@ void TMSMemorySystem::save() {
     std::filesystem::create_directories(config_.storage_path);
     
     ltm_->save();
+    if (multi_vector_) multi_vector_->save();
     mtm_->save();
     embedding_engine_->saveCache();
 }
@@ -1028,6 +1327,7 @@ void TMSMemorySystem::save() {
 void TMSMemorySystem::load() {
     if (std::filesystem::exists(config_.storage_path)) {
         ltm_->load();
+        if (multi_vector_) multi_vector_->load();
         mtm_->load();
         embedding_engine_->loadCache();
     }

@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 
@@ -44,8 +45,10 @@ func (wh *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	client := wh.hub.Subscribe(conn, reviewID)
 
+	wsCtx := context.WithoutCancel(r.Context())
+
 	// WritePump blocks until the client disconnects.
-	wh.hub.WritePump(r.Context(), client)
+	wh.hub.WritePump(wsCtx, client)
 
 	slog.Info("ws: client disconnected", "review_id", reviewID, "remote", r.RemoteAddr)
 }
