@@ -510,7 +510,7 @@ function ServiceRow({
         {/* Icon */}
         <span
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-all ${
-            isConnected ? "bg-background shadow-sm" : "bg-muted/60 grayscale opacity-50 group-hover:grayscale-0 group-hover:opacity-100"
+            isConnected ? "bg-background shadow-sm" : "bg-muted/60 opacity-70 group-hover:opacity-100"
           }`}
         >
           {Icon ? <Icon size={20} /> : <Plug className="h-4 w-4 text-muted-foreground" />}
@@ -698,7 +698,7 @@ function PlatformCard({
             className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-all ${
               isAnyConnected
                 ? "bg-background shadow-sm"
-                : "bg-muted/60 grayscale opacity-50"
+                : "bg-muted/60 opacity-70"
             }`}
           >
             <PlatformIcon size={28} />
@@ -740,7 +740,7 @@ function PlatformCard({
                           className={`relative flex h-7 w-7 items-center justify-center rounded-md border transition-all ${
                             connected
                               ? "bg-background border-emerald-200 dark:border-emerald-800"
-                              : "bg-muted/40 border-transparent opacity-40"
+                              : "bg-muted/40 border-transparent opacity-60"
                           }`}
                         >
                           {SIcon ? <SIcon size={16} /> : <Plug className="h-3.5 w-3.5 text-muted-foreground" />}
@@ -904,7 +904,7 @@ function StandaloneProviderCard({
         {/* Icon */}
         <span
           className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all ${
-            isConnected ? "bg-background shadow-sm" : "bg-muted/60 grayscale opacity-50"
+            isConnected ? "bg-background shadow-sm" : "bg-muted/60 opacity-70"
           }`}
         >
           {Icon ? <Icon size={24} /> : <Plug className="h-5 w-5 text-muted-foreground" />}
