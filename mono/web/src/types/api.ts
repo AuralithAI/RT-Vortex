@@ -359,6 +359,81 @@ export interface EmbeddingCreditsResult {
   message?: string;
 }
 
+// ── Multimodal Embeddings ───────────────────────────────────────────────────
+
+export interface ModalityInfo {
+  modality: "text" | "image" | "audio";
+  model_name: string;
+  enabled: boolean;
+  status: "ready" | "downloading" | "pending" | "error";
+  native_dimension: number;
+  projected_dimension: number;
+  description: string;
+  size_mb: number;
+  download_progress: number;
+}
+
+export interface MultimodalConfig {
+  modalities: ModalityInfo[];
+  unified_dimension: number;
+  image_enabled: boolean;
+  audio_enabled: boolean;
+}
+
+export interface MultimodalUpdateRequest {
+  image_enabled?: boolean;
+  audio_enabled?: boolean;
+  image_model?: string;
+  audio_model?: string;
+}
+
+export interface MultimodalUpdateResult {
+  image_enabled: boolean;
+  audio_enabled: boolean;
+  image_model: string;
+  audio_model: string;
+  status: string;
+}
+
+// ── Assets ──────────────────────────────────────────────────────────────────
+
+export type AssetType = "pdf" | "image" | "audio" | "video" | "webpage" | "document";
+export type AssetStatus = "processing" | "ready" | "error";
+
+export interface Asset {
+  id: string;
+  repo_id: string;
+  asset_type: AssetType;
+  source_url?: string;
+  file_name?: string;
+  mime_type?: string;
+  size_bytes: number;
+  chunks_count: number;
+  status: AssetStatus;
+  error_message?: string;
+  metadata?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AssetUploadResult {
+  id: string;
+  repo_id: string;
+  asset_type: AssetType;
+  file_name: string;
+  mime_type: string;
+  size_bytes: number;
+  status: string;
+}
+
+export interface AssetIngestURLResult {
+  id: string;
+  repo_id: string;
+  asset_type: string;
+  source_url: string;
+  status: string;
+}
+
 // ── Admin ───────────────────────────────────────────────────────────────────
 
 export interface SystemStats {
@@ -486,12 +561,13 @@ export interface ChatCitation {
 }
 
 export interface ChatAttachment {
-  type: "file" | "code_snippet" | "image";
+  type: "file" | "code_snippet" | "image" | "pdf" | "audio" | "url";
   filename: string;
   content: string;
   language?: string;
   mime_type?: string;
   size?: number;
+  data_uri?: string;
 }
 
 export interface ChatMessage {
@@ -618,4 +694,100 @@ export interface EngineHealthResponse {
   metrics_enabled: boolean;
   active_metric_streams: number;
   has_latest_snapshot: boolean;
+}
+
+// ── MCP Integrations ────────────────────────────────────────────────────────
+
+export interface MCPActionDef {
+  name: string;
+  description: string;
+  required_params?: string[];
+  optional_params?: string[];
+  consent_required: boolean;
+}
+
+export interface MCPProviderInfo {
+  name: string;
+  category: string;
+  description: string;
+  actions: MCPActionDef[];
+}
+
+export interface MCPConnection {
+  id: string;
+  user_id: string;
+  org_id?: string;
+  is_org_level: boolean;
+  provider: string;
+  status: "pending" | "active" | "expired" | "revoked" | "error";
+  scopes: string[];
+  metadata?: string;
+  last_used_at?: string;
+  connected_at: string;
+  expires_at?: string;
+  created_at: string;
+}
+
+export interface MCPCallLogEntry {
+  id: string;
+  connection_id: string;
+  agent_id: string;
+  task_id: string;
+  action: string;
+  input_hash: string;
+  output_hash: string;
+  latency_ms: number;
+  status: "ok" | "error" | "rate_limited" | "consent_denied";
+  error_message?: string;
+  created_at: string;
+}
+
+export interface MCPTestResult {
+  success: boolean;
+  data?: Record<string, unknown>;
+  error?: string;
+}
+
+// ── Custom MCP Templates ────────────────────────────────────────────────────
+
+export interface CustomMCPActionDef {
+  name: string;
+  description: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  required_params?: string[];
+  optional_params?: string[];
+  body_template?: string;
+  consent_required: boolean;
+}
+
+export interface CustomMCPTemplate {
+  id: string;
+  name: string;
+  label: string;
+  category: string;
+  description: string;
+  base_url: string;
+  auth_type: "bearer" | "basic" | "header" | "query";
+  auth_header?: string;
+  actions: CustomMCPActionDef[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MCPValidationError {
+  field: string;
+  message: string;
+}
+
+export interface MCPValidationResult {
+  valid: boolean;
+  validation_errors?: MCPValidationError[];
+}
+
+export interface MCPSimulateResult {
+  success: boolean;
+  data?: Record<string, unknown>;
+  error?: string;
 }

@@ -44,6 +44,8 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
+	"github.com/AuralithAI/rtvortex-server/internal/mcp"
+	mcpproviders "github.com/AuralithAI/rtvortex-server/internal/mcp/providers"
 	"github.com/AuralithAI/rtvortex-server/internal/prsync"
 	"github.com/AuralithAI/rtvortex-server/internal/review"
 	"github.com/AuralithAI/rtvortex-server/internal/rtenv"
@@ -548,6 +550,9 @@ func main() {
 	// VCS platform config repo — per-user non-secret VCS settings (URLs, usernames)
 	vcsPlatformRepo := store.NewVCSPlatformRepo(db.Pool)
 
+	// Multimodal asset repo — tracks uploaded files (images, audio, PDFs, etc.)
+	assetRepo := store.NewAssetRepository(db.Pool)
+
 	// ── Initialize Swarm Agent infrastructure ───────────────────────────
 	// The swarm service secret is derived from the existing JWT secret,
 	// so there is no extra env var to manage. It authenticates the initial
@@ -592,6 +597,39 @@ func main() {
 	go swarmAutoTier.Start(ctx)
 
 	slog.Info("Swarm agent infrastructure initialized")
+
+	// ── Initialize MCP Integrations ─────────────────────────────────────
+	mcpRepo := store.NewMCPRepository(db.Pool)
+	mcpRegistry := mcp.NewProviderRegistry(redisClient.Client())
+	mcpRegistry.Register(mcpproviders.NewSlackProvider(cfg.MCP.SlackBaseURL))
+	mcpRegistry.Register(mcpproviders.NewMS365Provider(cfg.MCP.MS365GraphURL, cfg.MCP.MS365TokenURL))
+	mcpRegistry.Register(mcpproviders.NewGmailProvider(cfg.MCP.GmailBaseURL, cfg.MCP.GmailTokenURL))
+	mcpRegistry.Register(mcpproviders.NewDiscordProvider(cfg.MCP.DiscordBaseURL))
+	mcpRegistry.Register(mcpproviders.NewGoogleCalendarProvider(cfg.MCP.GmailTokenURL))
+	mcpRegistry.Register(mcpproviders.NewGoogleDriveProvider(cfg.MCP.GmailTokenURL))
+	mcpRegistry.Register(mcpproviders.NewGitHubMCPProvider())
+	mcpRegistry.Register(mcpproviders.NewJiraProvider())
+	mcpRegistry.Register(mcpproviders.NewNotionProvider())
+	mcpRegistry.Register(mcpproviders.NewGitLabProvider(cfg.MCP.GitLabBaseURL))
+	mcpRegistry.Register(mcpproviders.NewConfluenceProvider())
+	mcpRegistry.Register(mcpproviders.NewLinearProvider())
+	mcpRegistry.Register(mcpproviders.NewAsanaProvider())
+	mcpRegistry.Register(mcpproviders.NewTrelloProvider())
+	mcpRegistry.Register(mcpproviders.NewFigmaProvider())
+	mcpRegistry.Register(mcpproviders.NewZendeskProvider())
+	mcpRegistry.Register(mcpproviders.NewPagerDutyProvider())
+	mcpRegistry.Register(mcpproviders.NewDatadogProvider())
+	mcpRegistry.Register(mcpproviders.NewStripeProvider())
+	mcpRegistry.Register(mcpproviders.NewHubSpotProvider())
+	mcpRegistry.Register(mcpproviders.NewSalesforceProvider())
+	mcpRegistry.Register(mcpproviders.NewTwilioProvider())
+	mcpService := mcp.NewService(mcpRepo, mcpRegistry, fileVault, redisClient.Client(), cfg.MCP)
+	go mcpService.StartRefreshLoop(ctx)
+	swarmHandler.MCPSvc = mcpService
+	slog.Info("MCP integrations initialized",
+		"enabled", cfg.MCP.Enabled,
+		"providers", mcpRegistry.List(),
+	)
 
 	// Opens a gRPC streaming connection to the C++ engine to receive real-time metrics.
 	metricsCollector := engine.NewMetricsCollector(engineClient, 1000)
@@ -663,6 +701,7 @@ func main() {
 		PRSyncWorker:     prSyncWorker,
 		ChatRepo:         chatRepo,
 		ChatService:      chatService,
+		AssetRepo:        assetRepo,
 		Vault:            fileVault,
 		VCSPlatformRepo:  vcsPlatformRepo,
 		MetricsCollector: metricsCollector,
@@ -675,6 +714,11 @@ func main() {
 		SwarmHandler:  swarmHandler,
 
 		BenchmarkRunner: benchRunner,
+
+		MCPService: mcpService,
+		MCPRepo:    mcpRepo,
+
+		ServerBase: serverBase,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────

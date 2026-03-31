@@ -94,6 +94,85 @@ struct CodeChunk {
 };
 
 // =============================================================================
+// Asset / Modality Types (Multimodal Embedding)
+// =============================================================================
+
+/**
+ * AssetType — identifies the modality of an indexed asset.
+ *
+ * Each type is routed to its own ONNX embedding model:
+ *   CODE / PDF / WEBPAGE / DOCUMENT → text model (bge-m3)
+ *   IMAGE                           → vision model (SigLIP)
+ *   AUDIO                           → audio model (CLAP)
+ */
+enum class AssetType {
+    CODE,       // Source code (default, existing)
+    PDF,        // PDF documents (text extracted server-side)
+    IMAGE,      // Image files (PNG, JPG, SVG, etc.)
+    AUDIO,      // Audio files (WAV, MP3, FLAC, etc.)
+    VIDEO,      // Video files (future)
+    WEBPAGE,    // Web pages (HTML cleaned server-side)
+    DOCUMENT    // Generic documents (Markdown, text, etc.)
+};
+
+inline const char* assetTypeToString(AssetType t) {
+    switch (t) {
+        case AssetType::CODE:     return "code";
+        case AssetType::PDF:      return "pdf";
+        case AssetType::IMAGE:    return "image";
+        case AssetType::AUDIO:    return "audio";
+        case AssetType::VIDEO:    return "video";
+        case AssetType::WEBPAGE:  return "webpage";
+        case AssetType::DOCUMENT: return "document";
+        default:                  return "unknown";
+    }
+}
+
+inline AssetType assetTypeFromString(const std::string& s) {
+    if (s == "code")     return AssetType::CODE;
+    if (s == "pdf")      return AssetType::PDF;
+    if (s == "image")    return AssetType::IMAGE;
+    if (s == "audio")    return AssetType::AUDIO;
+    if (s == "video")    return AssetType::VIDEO;
+    if (s == "webpage")  return AssetType::WEBPAGE;
+    if (s == "document") return AssetType::DOCUMENT;
+    return AssetType::DOCUMENT;
+}
+
+/**
+ * Embedding modality — maps to which ONNX session to use.
+ */
+enum class EmbeddingModality {
+    TEXT,    // bge-m3 / MiniLM (code, PDF text, webpage text, documents)
+    VISION,  // SigLIP (images)
+    AUDIO    // CLAP (audio)
+};
+
+inline EmbeddingModality modalityForAsset(AssetType t) {
+    switch (t) {
+        case AssetType::IMAGE:  return EmbeddingModality::VISION;
+        case AssetType::AUDIO:  return EmbeddingModality::AUDIO;
+        default:                return EmbeddingModality::TEXT;
+    }
+}
+
+/**
+ * AssetChunk — extends CodeChunk with multimodal metadata.
+ */
+struct AssetChunk : public CodeChunk {
+    AssetType asset_type = AssetType::CODE;
+    EmbeddingModality modality = EmbeddingModality::TEXT;
+    std::string mime_type;          // "application/pdf", "image/png", "audio/wav"
+    std::string source_url;         // Original URL or file path
+    std::string asset_id;           // Unique asset identifier (for deletion)
+    std::string repo_id;            // Repository this asset belongs to
+    std::string file_name;          // Original filename
+    std::vector<float> embedding;   // Pre-computed embedding vector
+    int chunk_index = 0;            // Index within multi-chunk assets
+    int total_chunks = 1;           // Total chunks for this asset
+};
+
+// =============================================================================
 // Chunking Strategy Configuration
 // =============================================================================
 
@@ -357,6 +436,19 @@ struct TMSConfig {
     size_t multi_vector_coarse_dim = 384;   // Matryoshka truncation dimension
     size_t multi_vector_fine_dim = 1024;    // Full model output dimension
     int multi_vector_oversampling = 3;      // Coarse search oversampling factor
+
+    // Multimodal Embedding Models
+    bool image_embedding_enabled = true;    // Enable image embedding (SigLIP)
+    bool audio_embedding_enabled = true;    // Enable audio embedding (CLAP)
+    std::string image_model_name = "siglip-base";   // Image model identifier
+    std::string audio_model_name = "clap-general";   // Audio model identifier
+    std::string image_onnx_path;            // Path to SigLIP ONNX model
+    std::string audio_onnx_path;            // Path to CLAP ONNX model
+    size_t image_native_dim = 768;          // SigLIP output dimension
+    size_t audio_native_dim = 512;          // CLAP output dimension
+    size_t unified_dimension = 1024;        // All modalities project to this dim
+    std::string image_projection_path;      // Learned linear projection weights
+    std::string audio_projection_path;      // Learned linear projection weights
 
     // Config versioning
     uint32_t config_version = 1;            // Schema version for storage migration

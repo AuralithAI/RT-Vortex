@@ -332,5 +332,117 @@
     <!-- ===================================================================== -->
     <logging root-level="${LOG_LEVEL_ROOT:INFO}" app-level="${LOG_LEVEL_APP:DEBUG}"/>
 
+    <!-- ===================================================================== -->
+    <!-- MCP Integrations — OAuth-based connect for all providers             -->
+    <!-- ===================================================================== -->
+    <!--
+        Platforms that share a single OAuth application (Google, Atlassian)
+        are configured with ONE client-id / client-secret pair.
+        Individual products under that platform only differ by scopes.
+
+        Google Workspace — one Google Cloud Console OAuth 2.0 client:
+          Gmail, Google Calendar, Google Drive, etc. all use the same
+          google-client-id / google-client-secret.  Each product sends
+          only its own scopes during the OAuth authorize redirect.
+
+        Atlassian — one Atlassian Developer Console OAuth 2.0 (3LO) app:
+          Jira and Confluence share atlassian-client-id / atlassian-client-secret.
+          Scopes are per-product.
+
+        Only providers whose client-id AND client-secret are non-empty
+        will be registered. Empty = gracefully disabled (UI shows
+        "not configured" instead of a connect button).
+    -->
+    <mcp enabled="${MCP_ENABLED:true}"
+         max-calls-per-task="${MCP_MAX_CALLS_PER_TASK:50}"
+         allowed-providers="${MCP_ALLOWED_PROVIDERS:}"
+         call-timeout-ms="${MCP_CALL_TIMEOUT_MS:30000}"
+         slack-base-url="${MCP_SLACK_BASE_URL:https://slack.com/api}"
+         ms365-graph-url="${MCP_MS365_GRAPH_URL:https://graph.microsoft.com/v1.0}"
+         ms365-token-url="${MCP_MS365_TOKEN_URL:https://login.microsoftonline.com/common/oauth2/v2.0/token}"
+         gmail-base-url="${MCP_GMAIL_BASE_URL:https://gmail.googleapis.com/gmail/v1}"
+         gmail-token-url="${MCP_GMAIL_TOKEN_URL:https://oauth2.googleapis.com/token}"
+         discord-base-url="${MCP_DISCORD_BASE_URL:https://discord.com/api/v10}"
+         gitlab-base-url="${MCP_GITLAB_BASE_URL:https://gitlab.com/api/v4}"
+
+         google-client-id="${MCP_GOOGLE_CLIENT_ID:}"
+         google-client-secret="${MCP_GOOGLE_CLIENT_SECRET:}"
+         gmail-oauth-scopes="${MCP_GMAIL_OAUTH_SCOPES:https://www.googleapis.com/auth/gmail.modify}"
+         google-calendar-oauth-scopes="${MCP_GOOGLE_CALENDAR_OAUTH_SCOPES:https://www.googleapis.com/auth/calendar}"
+         google-drive-oauth-scopes="${MCP_GOOGLE_DRIVE_OAUTH_SCOPES:https://www.googleapis.com/auth/drive.readonly}"
+
+         ms365-client-id="${MCP_MS365_CLIENT_ID:}"
+         ms365-client-secret="${MCP_MS365_CLIENT_SECRET:}"
+         ms365-oauth-scopes="${MCP_MS365_OAUTH_SCOPES:Mail.ReadWrite,Calendars.ReadWrite,Files.Read.All,offline_access}"
+
+         slack-client-id="${MCP_SLACK_CLIENT_ID:}"
+         slack-client-secret="${MCP_SLACK_CLIENT_SECRET:}"
+         slack-oauth-scopes="${MCP_SLACK_OAUTH_SCOPES:channels:read,chat:write,users:read}"
+
+         discord-client-id="${MCP_DISCORD_CLIENT_ID:}"
+         discord-client-secret="${MCP_DISCORD_CLIENT_SECRET:}"
+         discord-oauth-scopes="${MCP_DISCORD_OAUTH_SCOPES:identify,guilds,bot}"
+
+         github-client-id="${MCP_GITHUB_CLIENT_ID:}"
+         github-client-secret="${MCP_GITHUB_CLIENT_SECRET:}"
+         github-oauth-scopes="${MCP_GITHUB_OAUTH_SCOPES:repo,read:org,read:user}"
+
+         atlassian-client-id="${MCP_ATLASSIAN_CLIENT_ID:}"
+         atlassian-client-secret="${MCP_ATLASSIAN_CLIENT_SECRET:}"
+         jira-oauth-scopes="${MCP_JIRA_OAUTH_SCOPES:read:jira-work,write:jira-work,read:jira-user,offline_access}"
+         confluence-oauth-scopes="${MCP_CONFLUENCE_OAUTH_SCOPES:read:confluence-content.all,write:confluence-content,offline_access}"
+
+         notion-client-id="${MCP_NOTION_CLIENT_ID:}"
+         notion-client-secret="${MCP_NOTION_CLIENT_SECRET:}"
+         notion-oauth-scopes="${MCP_NOTION_OAUTH_SCOPES:}"
+
+         gitlab-client-id="${MCP_GITLAB_CLIENT_ID:}"
+         gitlab-client-secret="${MCP_GITLAB_CLIENT_SECRET:}"
+         gitlab-oauth-scopes="${MCP_GITLAB_OAUTH_SCOPES:api,read_user}"
+
+         linear-client-id="${MCP_LINEAR_CLIENT_ID:}"
+         linear-client-secret="${MCP_LINEAR_CLIENT_SECRET:}"
+         linear-oauth-scopes="${MCP_LINEAR_OAUTH_SCOPES:read,write}"
+
+         asana-client-id="${MCP_ASANA_CLIENT_ID:}"
+         asana-client-secret="${MCP_ASANA_CLIENT_SECRET:}"
+         asana-oauth-scopes="${MCP_ASANA_OAUTH_SCOPES:default}"
+
+         trello-client-id="${MCP_TRELLO_CLIENT_ID:}"
+         trello-client-secret="${MCP_TRELLO_CLIENT_SECRET:}"
+         trello-oauth-scopes="${MCP_TRELLO_OAUTH_SCOPES:read,write}"
+
+         figma-client-id="${MCP_FIGMA_CLIENT_ID:}"
+         figma-client-secret="${MCP_FIGMA_CLIENT_SECRET:}"
+         figma-oauth-scopes="${MCP_FIGMA_OAUTH_SCOPES:file_read}"
+
+         zendesk-client-id="${MCP_ZENDESK_CLIENT_ID:}"
+         zendesk-client-secret="${MCP_ZENDESK_CLIENT_SECRET:}"
+         zendesk-oauth-scopes="${MCP_ZENDESK_OAUTH_SCOPES:read,write}"
+
+         pagerduty-client-id="${MCP_PAGERDUTY_CLIENT_ID:}"
+         pagerduty-client-secret="${MCP_PAGERDUTY_CLIENT_SECRET:}"
+         pagerduty-oauth-scopes="${MCP_PAGERDUTY_OAUTH_SCOPES:read,write}"
+
+         datadog-client-id="${MCP_DATADOG_CLIENT_ID:}"
+         datadog-client-secret="${MCP_DATADOG_CLIENT_SECRET:}"
+         datadog-oauth-scopes="${MCP_DATADOG_OAUTH_SCOPES:}"
+
+         stripe-client-id="${MCP_STRIPE_CLIENT_ID:}"
+         stripe-client-secret="${MCP_STRIPE_CLIENT_SECRET:}"
+         stripe-oauth-scopes="${MCP_STRIPE_OAUTH_SCOPES:read_write}"
+
+         hubspot-client-id="${MCP_HUBSPOT_CLIENT_ID:}"
+         hubspot-client-secret="${MCP_HUBSPOT_CLIENT_SECRET:}"
+         hubspot-oauth-scopes="${MCP_HUBSPOT_OAUTH_SCOPES:crm.objects.contacts.read,crm.objects.contacts.write,crm.objects.deals.read}"
+
+         salesforce-client-id="${MCP_SALESFORCE_CLIENT_ID:}"
+         salesforce-client-secret="${MCP_SALESFORCE_CLIENT_SECRET:}"
+         salesforce-oauth-scopes="${MCP_SALESFORCE_OAUTH_SCOPES:api,refresh_token,offline_access}"
+
+         twilio-client-id="${MCP_TWILIO_CLIENT_ID:}"
+         twilio-client-secret="${MCP_TWILIO_CLIENT_SECRET:}"
+         twilio-oauth-scopes="${MCP_TWILIO_OAUTH_SCOPES:}"/>
+
 </serverproperties>
 

@@ -163,6 +163,28 @@ public:
     ) override;
 
     //-------------------------------------------------------------------------
+    // Multimodal Embedding Operations
+    //-------------------------------------------------------------------------
+
+    grpc::Status GetMultimodalConfig(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::GetMultimodalConfigRequest* request,
+        aipr::engine::v1::GetMultimodalConfigResponse* response
+    ) override;
+
+    grpc::Status ConfigureMultimodal(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::ConfigureMultimodalRequest* request,
+        aipr::engine::v1::ConfigureMultimodalResponse* response
+    ) override;
+
+    grpc::Status DownloadModel(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::ConfigureMultimodalRequest* request,
+        grpc::ServerWriter<aipr::engine::v1::ModelDownloadProgress>* writer
+    ) override;
+
+    //-------------------------------------------------------------------------
     // Configuration
     //-------------------------------------------------------------------------
 

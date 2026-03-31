@@ -155,6 +155,20 @@ FetchContent_MakeAvailable(nlohmann_json)
 message(STATUS "nlohmann/json downloaded")
 
 # =============================================================================
+# stb_image for image decoding in multimodal embedder (header-only)
+# =============================================================================
+FetchContent_Declare(
+    stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG master
+    GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(stb)
+add_library(stb_image INTERFACE)
+target_include_directories(stb_image INTERFACE ${stb_SOURCE_DIR})
+message(STATUS "stb downloaded for image decoding (header-only)")
+
+# =============================================================================
 # miniz for gzip compression of LTM chunks.bin (optional)
 # =============================================================================
 option(AIPR_USE_MINIZ "Use miniz for LTM index compression" ON)
@@ -719,6 +733,7 @@ set(TMS_SOURCES
     src/tms/core/cross_memory_attention.cpp
     src/tms/core/memory_accounts.cpp
     src/tms/ingestion/embedding_engine.cpp
+    src/tms/ingestion/multimodal_embedder.cpp
     src/tms/ingestion/repo_parser.cpp
     src/tms/retrieval/graph_rag.cpp
     src/tms/retrieval/multi_vector_index.cpp
@@ -769,6 +784,7 @@ target_link_libraries(aipr-engine PUBLIC
     Threads::Threads
     CURL::libcurl
     nlohmann_json::nlohmann_json
+    stb_image
 )
 
 # MerkleCache uses OpenSSL/BoringSSL SHA-256 (from gRPC's bundled BoringSSL)
@@ -977,6 +993,10 @@ if(AIPR_BUILD_SERVER)
 
     # Create empty bge-m3 directory structure (model downloaded at runtime).
     file(MAKE_DIRECTORY "${_MODELS_SRC_DIR}/bge-m3")
+
+    # Create empty multimodal model directories (downloaded at runtime on first use).
+    file(MAKE_DIRECTORY "${_MODELS_SRC_DIR}/siglip-base")
+    file(MAKE_DIRECTORY "${_MODELS_SRC_DIR}/clap-general")
 
     # models/ → mono/engine/models  (symlink to avoid duplicating ~90 MB ONNX file)
     if(EXISTS "${_ENGINE_SRC_DIR}/models" AND NOT EXISTS "${CMAKE_BINARY_DIR}/models")

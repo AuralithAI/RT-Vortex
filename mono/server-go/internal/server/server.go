@@ -22,6 +22,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
+	"github.com/AuralithAI/rtvortex-server/internal/mcp"
 	rtmetrics "github.com/AuralithAI/rtvortex-server/internal/metrics"
 	"github.com/AuralithAI/rtvortex-server/internal/prsync"
 	"github.com/AuralithAI/rtvortex-server/internal/quota"
@@ -78,6 +79,9 @@ type Dependencies struct {
 	ChatRepo    *store.ChatRepository
 	ChatService *chat.Service
 
+	// Multimodal assets
+	AssetRepo *store.AssetRepository
+
 	// File Vault — shared vault for per-user secret storage
 	Vault *vault.FileVault
 
@@ -97,6 +101,13 @@ type Dependencies struct {
 
 	// Benchmark — A/B testing and benchmark harness
 	BenchmarkRunner *benchmark.Runner
+
+	// MCP — external service integrations (Slack, MS365, Gmail, Discord)
+	MCPService *mcp.Service
+	MCPRepo    *store.MCPRepository
+
+	// ServerBase — canonical server URL for constructing OAuth callback URLs.
+	ServerBase string
 }
 
 // Server holds the HTTP server components.
@@ -168,6 +179,7 @@ func (s *Server) setupRouter() {
 		PRSyncWorker:    s.deps.PRSyncWorker,
 		ChatRepo:        s.deps.ChatRepo,
 		ChatService:     s.deps.ChatService,
+		AssetRepo:       s.deps.AssetRepo,
 		Vault:           s.deps.Vault,
 		VCSPlatformRepo: s.deps.VCSPlatformRepo,
 	}
@@ -197,6 +209,18 @@ func (s *Server) setupRouter() {
 			r.Post("/refresh", h.RefreshToken)
 			r.Post("/logout", h.Logout)
 		})
+
+		// ── MCP OAuth callback (public — Google/MS/etc. redirect here) ──
+		if s.deps.MCPService != nil {
+			mh := &mcpHandler{
+				svc:        s.deps.MCPService,
+				repo:       s.deps.MCPRepo,
+				sessionMgr: s.deps.SessionMgr,
+				mcpCfg:     s.deps.Config.MCP,
+				serverBase: s.deps.ServerBase,
+			}
+			r.Get("/integrations/oauth/{provider}/callback", mh.OAuthCallback)
+		}
 
 		// ── Protected routes (require JWT) ──────────────────────────
 		r.Group(func(r chi.Router) {
@@ -274,6 +298,15 @@ func (s *Server) setupRouter() {
 							r.Post("/messages", h.SendChatMessage)
 						})
 					})
+
+					// Multimodal asset management
+					r.Route("/assets", func(r chi.Router) {
+						r.Post("/upload", h.UploadAsset)
+						r.Post("/ingest-url", h.IngestURL)
+						r.Get("/", h.ListAssets)
+						r.Get("/{assetID}/content", h.ServeAssetContent)
+						r.Delete("/{assetID}", h.DeleteAsset)
+					})
 				})
 			})
 
@@ -309,6 +342,8 @@ func (s *Server) setupRouter() {
 				r.Put("/config", h.UpdateEmbeddingsConfig)
 				r.Post("/test", h.TestEmbeddingProvider)
 				r.Post("/credits", h.CheckEmbeddingCredits)
+				r.Get("/multimodal", h.GetMultimodalConfig)
+				r.Put("/multimodal", h.UpdateMultimodalConfig)
 			})
 
 			// VCS Platform Settings (per-user credentials stored in vault)
@@ -321,7 +356,33 @@ func (s *Server) setupRouter() {
 				r.Get("/token-capabilities", h.ListVCSTokenCapabilities)
 			})
 
-			// Engine Metrics
+			// MCP Integrations (connected apps: Slack, MS365, Gmail, Discord)
+			if s.deps.MCPService != nil {
+				mh := &mcpHandler{
+					svc:        s.deps.MCPService,
+					repo:       s.deps.MCPRepo,
+					sessionMgr: s.deps.SessionMgr,
+					mcpCfg:     s.deps.Config.MCP,
+					serverBase: s.deps.ServerBase,
+				}
+				r.Route("/integrations", func(r chi.Router) {
+					r.Get("/providers", mh.ListProviders)
+					r.Get("/connections", mh.ListConnections)
+					r.Post("/connections", mh.CreateConnection)
+					r.Delete("/connections/{connectionID}", mh.DeleteConnection)
+					r.Post("/connections/{connectionID}/test", mh.TestConnection)
+					r.Get("/connections/{connectionID}/logs", mh.GetCallLog)
+					r.Get("/oauth/status", mh.OAuthStatus)
+					r.Get("/oauth/{provider}/authorize", mh.InitiateOAuth)
+
+					// Custom MCP templates
+					r.Get("/custom-templates", mh.ListCustomTemplates)
+					r.Post("/custom-templates", mh.CreateCustomTemplate)
+					r.Delete("/custom-templates/{templateID}", mh.DeleteCustomTemplate)
+					r.Post("/custom-templates/validate", mh.ValidateCustomTemplate)
+					r.Post("/custom-templates/simulate", mh.SimulateCustomConnection)
+				})
+			} // Engine Metrics
 			r.Route("/engine", func(r chi.Router) {
 				r.Get("/metrics", h.GetEngineMetrics)
 				r.Get("/health", h.GetEngineHealth)
@@ -412,6 +473,14 @@ func (s *Server) setupRouter() {
 
 				// Asset ingestion (document/PDF/URL → engine embedding).
 				r.Post("/ingest-asset", sh.HandleIngestAsset)
+
+				// MCP integration call (agent → external services).
+				r.Post("/mcp/call", sh.HandleMCPCall)
+				r.Post("/mcp/batch", sh.HandleMCPBatchCall)
+				r.Get("/mcp/providers", sh.HandleMCPListProviders)
+				r.Get("/mcp/describe", sh.HandleMCPDescribeAction)
+				r.Get("/mcp/tools", sh.HandleMCPListTools)
+				r.Get("/mcp/connections", sh.HandleMCPCheckConnections)
 
 				// VCS proxy for agent workspace reads.
 				r.Post("/vcs/read-file", sh.VCSReadFile)

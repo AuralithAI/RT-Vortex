@@ -74,6 +74,14 @@ struct AIPR_API EngineConfig {
     std::string onnx_model_path = "models/bge-m3/model.onnx";
     std::string onnx_tokenizer_path = "models/bge-m3/tokenizer.json";
     
+    // Models directory (RTVORTEX_HOME/models) — set by server main.cpp
+    // Used by multimodal embedder to locate image/audio ONNX models.
+    std::string models_dir;
+
+    // Multimodal embedding — auto-download on startup when enabled
+    bool multimodal_image_enabled = true;
+    bool multimodal_audio_enabled = true;
+    
     // Load from YAML file
     static EngineConfig load(const std::string& config_path);
 };
@@ -392,6 +400,67 @@ public:
         (void)repo_id; (void)content; (void)source;
         (void)asset_type; (void)metadata;
         return false;
+    }
+
+    //-------------------------------------------------------------------------
+    // Multimodal Embedding Operations
+    //-------------------------------------------------------------------------
+
+    /**
+     * Embed binary asset data (image or audio) and store in the FAISS index.
+     *
+     * @param repo_id     Repository to associate the embedding with
+     * @param data        Raw binary data (image bytes, audio samples)
+     * @param mime_type   MIME type (e.g. "image/png", "audio/wav")
+     * @param file_name   Original file name for metadata
+     * @param asset_id    UUID for tracking in the asset table
+     * @return true if successfully embedded and stored
+     */
+    virtual bool embedBinaryAsset(
+        const std::string& repo_id,
+        const std::vector<uint8_t>& data,
+        const std::string& mime_type,
+        const std::string& file_name,
+        const std::string& asset_id)
+    {
+        (void)repo_id; (void)data; (void)mime_type;
+        (void)file_name; (void)asset_id;
+        return false;
+    }
+
+    /**
+     * Multimodal model configuration per modality.
+     */
+    struct ModalityConfig {
+        std::string modality;           // "text", "image", "audio"
+        std::string model_name;         // Display name of the model
+        std::string description;        // User-facing description
+        std::string status;             // "ready", "downloading", "pending", "error"
+        int         size_mb = 0;        // Approximate model size
+        int         download_progress = 0; // 0-100
+        bool        enabled = true;
+    };
+
+    /**
+     * Get the current multimodal configuration for all modalities.
+     */
+    virtual std::vector<ModalityConfig> getMultimodalConfig() {
+        return {};
+    }
+
+    /**
+     * Enable or disable a modality (triggers model download if needed).
+     *
+     * @param modality  "image" or "audio"
+     * @param enabled   Whether to enable this modality
+     * @return Updated configuration for the modality
+     */
+    virtual ModalityConfig setModalityEnabled(
+        const std::string& modality,
+        bool enabled)
+    {
+        (void)modality; (void)enabled;
+        return {};
     }
 
 protected:

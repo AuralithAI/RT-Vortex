@@ -8,6 +8,9 @@
 import { getApiBaseUrl } from "@/lib/utils";
 import type {
   AgentRoute,
+  Asset,
+  AssetIngestURLResult,
+  AssetUploadResult,
   AuthProvider,
   ChatMessage,
   ChatSession,
@@ -24,6 +27,9 @@ import type {
   LLMConfigureResult,
   LLMProvider,
   LLMTestResult,
+  MultimodalConfig,
+  MultimodalUpdateRequest,
+  MultimodalUpdateResult,
   Org,
   OrgMember,
   PaginatedResponse,
@@ -41,6 +47,14 @@ import type {
   VCSTestResult,
   VCSTokenCapability,
   VCSCloneCheckResult,
+  MCPProviderInfo,
+  MCPConnection,
+  MCPCallLogEntry,
+  MCPTestResult,
+  CustomMCPTemplate,
+  MCPValidationError,
+  MCPValidationResult,
+  MCPSimulateResult,
 } from "@/types/api";
 
 // ── Error classes ───────────────────────────────────────────────────────────
@@ -164,6 +178,48 @@ async function request<T>(
   }
 
   if (res.status === 204) return undefined as T;
+  return res.json() as Promise<T>;
+}
+
+/**
+ * Upload a file via multipart/form-data.
+ * The browser sets the Content-Type (with boundary) automatically.
+ */
+async function uploadRequest<T>(
+  path: string,
+  formData: FormData,
+): Promise<T> {
+  const url = `${BASE}${path}`;
+  const headers: Record<string, string> = {};
+
+  const token = getAccessToken();
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: formData,
+  });
+
+  if (res.status === 401) {
+    const refreshed = await tryRefreshToken();
+    if (refreshed) {
+      const newToken = getAccessToken();
+      const retryHeaders: Record<string, string> = {};
+      if (newToken) retryHeaders["Authorization"] = `Bearer ${newToken}`;
+      const retry = await fetch(url, { method: "POST", headers: retryHeaders, body: formData });
+      if (retry.ok) return retry.json() as Promise<T>;
+    }
+    throw new AuthError(await res.json().catch(() => null));
+  }
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new ApiError(res.status, res.statusText, body);
+  }
+
   return res.json() as Promise<T>;
 }
 
@@ -423,6 +479,15 @@ export const embeddings = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+
+  multimodal: () =>
+    request<MultimodalConfig>("/api/v1/embeddings/multimodal"),
+
+  updateMultimodal: (data: MultimodalUpdateRequest) =>
+    request<MultimodalUpdateResult>("/api/v1/embeddings/multimodal", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
 };
 
 // ── Admin ───────────────────────────────────────────────────────────────────
@@ -594,7 +659,109 @@ export const vcsPlatforms = {
   },
 };
 
+// ── Assets ──────────────────────────────────────────────────────────────────
+
+export const assets = {
+  upload: (repoId: string, file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return uploadRequest<AssetUploadResult>(
+      `/api/v1/repos/${repoId}/assets/upload`,
+      formData,
+    );
+  },
+
+  ingestUrl: (repoId: string, url: string) =>
+    request<AssetIngestURLResult>(`/api/v1/repos/${repoId}/assets/ingest-url`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+
+  list: (repoId: string) =>
+    request<Asset[]>(`/api/v1/repos/${repoId}/assets`),
+
+  delete: (repoId: string, assetId: string) =>
+    request<{ status: string; id: string }>(`/api/v1/repos/${repoId}/assets/${assetId}`, {
+      method: "DELETE",
+    }),
+
+  contentUrl: (repoId: string, assetId: string) =>
+    `${BASE}/api/v1/repos/${repoId}/assets/${assetId}/content`,
+};
+
+// ── Integrations (MCP) ─────────────────────────────────────────────────────
+
+export const integrations = {
+  providers: () =>
+    request<MCPProviderInfo[]>("/api/v1/integrations/providers"),
+
+  connections: () =>
+    request<MCPConnection[]>("/api/v1/integrations/connections"),
+
+  /** Initiates OAuth flow — returns the URL the browser should navigate to. */
+  oauthUrl: (provider: string, redirectUrl?: string) => {
+    const base = `${BASE}/api/v1/integrations/oauth/${provider}/authorize`;
+    // Always pass the frontend origin so the Go server redirects back here
+    // (not to the API server which doesn't serve the SPA).
+    const target = redirectUrl
+      ?? (typeof window !== "undefined"
+        ? `${window.location.origin}/settings?tab=mcp&connected=${provider}`
+        : `/settings?tab=mcp&connected=${provider}`);
+    return `${base}?redirect_url=${encodeURIComponent(target)}`;
+  },
+
+  disconnect: (connectionId: string) =>
+    request<{ status: string; id: string }>(`/api/v1/integrations/connections/${connectionId}`, {
+      method: "DELETE",
+    }),
+
+  test: (connectionId: string) =>
+    request<MCPTestResult>(`/api/v1/integrations/connections/${connectionId}/test`, {
+      method: "POST",
+    }),
+
+  callLog: (connectionId: string) =>
+    request<MCPCallLogEntry[]>(`/api/v1/integrations/connections/${connectionId}/logs`),
+
+  /** Returns which providers have server-side OAuth configured. */
+  oauthStatus: () =>
+    request<{ oauth_enabled: Record<string, boolean> }>("/api/v1/integrations/oauth/status"),
+
+  // ── Custom MCP Templates ──────────────────────────────────────────────────
+
+  /** List custom templates visible to the current user. */
+  customTemplates: () =>
+    request<CustomMCPTemplate[]>("/api/v1/integrations/custom-templates"),
+
+  /** Create a new custom MCP template. */
+  createCustomTemplate: (body: Omit<CustomMCPTemplate, "id" | "created_by" | "created_at" | "updated_at">) =>
+    request<CustomMCPTemplate | { validation_errors: MCPValidationError[] }>("/api/v1/integrations/custom-templates", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** Delete a custom template. */
+  deleteCustomTemplate: (templateId: string) =>
+    request<{ status: string; id: string }>(`/api/v1/integrations/custom-templates/${templateId}`, {
+      method: "DELETE",
+    }),
+
+  /** Validate a template without saving. */
+  validateCustomTemplate: (body: Omit<CustomMCPTemplate, "id" | "created_by" | "created_at" | "updated_at">) =>
+    request<MCPValidationResult>("/api/v1/integrations/custom-templates/validate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** Simulate connectivity to a custom template's base URL. */
+  simulateCustomConnection: (body: { base_url: string; token: string; auth_type: string; auth_header?: string }) =>
+    request<MCPSimulateResult>("/api/v1/integrations/custom-templates/simulate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+};
+
 // ── Convenience export ──────────────────────────────────────────────────────
 
-const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms };
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms, assets, integrations };
 export default api;

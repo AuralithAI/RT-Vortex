@@ -492,6 +492,18 @@ static const std::vector<OnnxModelInfo>& getModelRegistry() {
             "onnx/model.onnx",
             {"tokenizer.json", "vocab.txt"}
         },
+        {
+            "siglip-base", 768,
+            "https://huggingface.co/Xenova/siglip-base-patch16-224/resolve/main",
+            "onnx/vision_model.onnx",
+            {"preprocessor_config.json", "tokenizer.json"}
+        },
+        {
+            "clap-general", 512,
+            "https://huggingface.co/Xenova/larger_clap_general/resolve/main",
+            "onnx/audio_model.onnx",
+            {"config.json", "preprocessor_config.json"}
+        },
     };
     return registry;
 }
@@ -1070,6 +1082,60 @@ void runServer(const ServerConfig& config) {
         LOG_INFO("Tokenizer:  " + engine_config.onnx_tokenizer_path);
     }
     
+    // ── Auto-download multimodal embedding models (SigLIP, CLAP) ───────
+    // Same pattern as the text model above: check if model.onnx exists
+    // in RTVORTEX_HOME/models/<name>/ and download from HuggingFace if not.
+    {
+        LOG_INFO("  ───────────────────────────────────");
+        LOG_INFO("Checking multimodal embedding models...");
+
+        struct MultimodalModelDef {
+            const char* name;           // Model registry name (matches getModelRegistry())
+            const char* label;          // Display label
+            bool* enabled_flag;         // Pointer to EngineConfig flag
+        };
+
+        // Note: these names must match entries in getModelRegistry() above
+        MultimodalModelDef mm_models[] = {
+            {"siglip-base", "Image (SigLIP)",  &engine_config.multimodal_image_enabled},
+            {"clap-general", "Audio (CLAP)",   &engine_config.multimodal_audio_enabled},
+        };
+
+        for (auto& mm : mm_models) {
+            const auto* mm_info = findModel(mm.name);
+            if (!mm_info) {
+                LOG_WARN("Multimodal model not in registry: " + std::string(mm.name));
+                *mm.enabled_flag = false;
+                continue;
+            }
+
+            std::string mm_dir = (fs::path(g_env.models_dir) / mm_info->name).string();
+            std::string mm_path = (fs::path(mm_dir) / "model.onnx").string();
+
+            if (fileExists(mm_path)) {
+                LOG_INFO("  " + std::string(mm.label) + ": " + mm_info->name +
+                         " (" + std::to_string(mm_info->dimensions) + "d) — ready");
+            } else {
+                LOG_INFO("  " + std::string(mm.label) + ": downloading " +
+                         mm_info->name + "...");
+                LOG_INFO("  This may take a few minutes on first run.");
+                if (ensureModelFiles(mm_dir, mm_info->hf_base_url,
+                                     mm_info->onnx_subpath, mm_info->extra_files)) {
+                    LOG_INFO("  " + std::string(mm.label) + ": " + mm_info->name +
+                             " (" + std::to_string(mm_info->dimensions) + "d) — downloaded");
+                } else {
+                    LOG_WARN("  " + std::string(mm.label) + ": download failed — "
+                             "modality will be unavailable until model is present");
+                    *mm.enabled_flag = false;
+                }
+            }
+        }
+    }
+
+    // Pass models directory to engine config so the multimodal embedder
+    // can locate image/audio models without guessing from storage_path.
+    engine_config.models_dir = g_env.models_dir;
+
     // Point storage_path into RTVORTEX_HOME/data so the engine writes
     // index/TMS data inside the managed directory tree, not a relative ".rtvortex/" folder.
     engine_config.storage_path = (fs::path(g_env.data_dir) / "index").string();

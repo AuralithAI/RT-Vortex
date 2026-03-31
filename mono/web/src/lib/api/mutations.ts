@@ -5,7 +5,42 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./client";
 import { queryKeys } from "./queries";
-import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute } from "@/types/api";
+import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute, MultimodalUpdateRequest } from "@/types/api";
+
+// ── Assets ──────────────────────────────────────────────────────────────────
+
+export function useUploadAsset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, file }: { repoId: string; file: File }) =>
+      api.assets.upload(repoId, file),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.assets(repoId) });
+    },
+  });
+}
+
+export function useIngestUrl() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, url }: { repoId: string; url: string }) =>
+      api.assets.ingestUrl(repoId, url),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.assets(repoId) });
+    },
+  });
+}
+
+export function useDeleteAsset() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, assetId }: { repoId: string; assetId: string }) =>
+      api.assets.delete(repoId, assetId),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.assets(repoId) });
+    },
+  });
+}
 
 // ── User ────────────────────────────────────────────────────────────────────
 
@@ -211,6 +246,16 @@ export function useCheckEmbeddingCredits() {
   });
 }
 
+export function useUpdateMultimodal() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: MultimodalUpdateRequest) => api.embeddings.updateMultimodal(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.multimodalConfig });
+    },
+  });
+}
+
 // ── Auth ────────────────────────────────────────────────────────────────────
 
 export function useLogout() {
@@ -319,5 +364,65 @@ export function useCheckClonePermission() {
   return useMutation({
     mutationFn: ({ platform, cloneUrl }: { platform: string; cloneUrl: string }) =>
       api.vcsPlatforms.checkClone(platform, cloneUrl),
+  });
+}
+
+// ── Integrations (MCP) ─────────────────────────────────────────────────────
+// Manual connect (useConnectIntegration) has been removed — all integrations
+// now use the server-side OAuth redirect flow.  The frontend simply navigates
+// to integrations.oauthUrl(provider) which triggers the full OAuth dance.
+
+export function useDisconnectIntegration() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (connectionId: string) => api.integrations.disconnect(connectionId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.integrations });
+    },
+  });
+}
+
+export function useTestIntegration() {
+  return useMutation({
+    mutationFn: (connectionId: string) => api.integrations.test(connectionId),
+  });
+}
+
+// ── Custom MCP Templates ────────────────────────────────────────────────────
+
+export function useCreateCustomTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Parameters<typeof api.integrations.createCustomTemplate>[0]) =>
+      api.integrations.createCustomTemplate(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.customTemplates });
+      qc.invalidateQueries({ queryKey: queryKeys.integrationProviders });
+    },
+  });
+}
+
+export function useDeleteCustomTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (templateId: string) => api.integrations.deleteCustomTemplate(templateId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.customTemplates });
+      qc.invalidateQueries({ queryKey: queryKeys.integrationProviders });
+    },
+  });
+}
+
+export function useValidateCustomTemplate() {
+  return useMutation({
+    mutationFn: (body: Parameters<typeof api.integrations.validateCustomTemplate>[0]) =>
+      api.integrations.validateCustomTemplate(body),
+  });
+}
+
+export function useSimulateCustomConnection() {
+  return useMutation({
+    mutationFn: (body: Parameters<typeof api.integrations.simulateCustomConnection>[0]) =>
+      api.integrations.simulateCustomConnection(body),
   });
 }

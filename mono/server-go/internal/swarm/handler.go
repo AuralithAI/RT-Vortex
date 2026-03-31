@@ -29,6 +29,7 @@ type Handler struct {
 	VCSResolver *vcs.Resolver
 	DB          *pgxpool.Pool
 	MemorySvc   *MemoryService
+	MCPSvc      MCPCaller
 }
 
 // ── Agent Auth endpoints ────────────────────────────────────────────────────

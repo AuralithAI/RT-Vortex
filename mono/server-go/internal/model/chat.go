@@ -48,12 +48,13 @@ type ChatCitation struct {
 
 // ChatAttachment is a file or code snippet attached to a user message.
 type ChatAttachment struct {
-	Type     string `json:"type"`     // "file", "code_snippet", "image"
+	Type     string `json:"type"`     // "file", "code_snippet", "image", "pdf", "audio", "url"
 	Filename string `json:"filename"` // original filename or label
-	Content  string `json:"content"`  // file content or code text
+	Content  string `json:"content"`  // file content, code text, or URL string
 	Language string `json:"language,omitempty"`
 	MimeType string `json:"mime_type,omitempty"`
-	Size     int    `json:"size,omitempty"` // bytes
+	Size     int    `json:"size,omitempty"`    // bytes
+	DataURI  string `json:"data_uri,omitempty"` // base64 data URI (image thumbnails)
 }
 
 // ChatMessage is a single message in a chat session.

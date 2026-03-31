@@ -36,6 +36,10 @@ import {
   Check,
   Loader2,
   PenLine,
+  Image as ImageIcon,
+  FileText,
+  Globe,
+  Link2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -313,10 +317,20 @@ function ChatPanel({ repoId, sessionId }: { repoId: string; sessionId: string })
                   {pendingUserMessage.attachments && pendingUserMessage.attachments.length > 0 && (
                     <div className="flex flex-wrap gap-2">
                       {pendingUserMessage.attachments.map((att, i) => (
-                        <Badge key={i} variant="outline" className="text-xs gap-1">
-                          <FileCode2 className="h-3 w-3" />
-                          {att.filename}
-                        </Badge>
+                        <div key={i} className="flex items-center gap-1.5">
+                          {att.type === "image" && att.data_uri ? (
+                            <img src={att.data_uri} alt={att.filename} className="h-16 w-16 rounded-lg object-cover border border-white/20" />
+                          ) : (
+                            <Badge key={i} variant="outline" className="text-xs gap-1 border-white/30 text-white/80">
+                              {att.type === "image" ? <ImageIcon className="h-3 w-3" /> :
+                               att.type === "audio" ? <Mic className="h-3 w-3" /> :
+                               att.type === "pdf" ? <FileText className="h-3 w-3" /> :
+                               att.type === "url" ? <Link2 className="h-3 w-3" /> :
+                               <FileCode2 className="h-3 w-3" />}
+                              {att.filename}
+                            </Badge>
+                          )}
+                        </div>
                       ))}
                     </div>
                   )}
@@ -412,10 +426,20 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         {message.attachments && message.attachments.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {message.attachments.map((att, i) => (
-              <Badge key={i} variant="outline" className="text-xs gap-1">
-                <FileCode2 className="h-3 w-3" />
-                {att.filename}
-              </Badge>
+              <div key={i} className="flex items-center gap-1.5">
+                {att.type === "image" && att.data_uri ? (
+                  <img src={att.data_uri} alt={att.filename} className="h-16 w-16 rounded-lg object-cover border border-border" />
+                ) : (
+                  <Badge variant="outline" className="text-xs gap-1">
+                    {att.type === "image" ? <ImageIcon className="h-3 w-3 text-violet-400" /> :
+                     att.type === "audio" ? <Mic className="h-3 w-3 text-amber-400" /> :
+                     att.type === "pdf" ? <FileText className="h-3 w-3 text-red-400" /> :
+                     att.type === "url" ? <Link2 className="h-3 w-3 text-blue-400" /> :
+                     <FileCode2 className="h-3 w-3" />}
+                    {att.filename}
+                  </Badge>
+                )}
+              </div>
             ))}
           </div>
         )}
@@ -1083,23 +1107,93 @@ function ChatInput({
     const files = Array.from(e.dataTransfer.files);
     const droppedText = e.dataTransfer.getData("text/plain");
 
+    // If the dropped text looks like a URL, create a URL attachment.
     if (droppedText) {
-      setAttachments((prev) => [
-        ...prev,
-        {
-          type: "code_snippet",
-          filename: "dropped-snippet.txt",
-          content: droppedText,
-        },
-      ]);
+      const isUrl = /^https?:\/\/\S+$/i.test(droppedText.trim());
+      if (isUrl) {
+        setAttachments((prev) => [
+          ...prev,
+          {
+            type: "url",
+            filename: new URL(droppedText.trim()).hostname,
+            content: droppedText.trim(),
+          },
+        ]);
+      } else {
+        setAttachments((prev) => [
+          ...prev,
+          {
+            type: "code_snippet",
+            filename: "dropped-snippet.txt",
+            content: droppedText,
+          },
+        ]);
+      }
       return;
     }
 
     for (const file of files) {
-      if (file.size > 1024 * 1024) continue; // Skip files > 1MB
+      const mime = file.type.toLowerCase();
+      const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+
+      // ── Images: read as data URI for inline preview ───────────────────
+      if (mime.startsWith("image/")) {
+        if (file.size > 10 * 1024 * 1024) continue; // 10 MB limit for images
+        const dataUri = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(file);
+        });
+        setAttachments((prev) => [
+          ...prev,
+          {
+            type: "image",
+            filename: file.name,
+            content: `[Image: ${file.name}]`,
+            mime_type: mime,
+            size: file.size,
+            data_uri: dataUri,
+          },
+        ]);
+        continue;
+      }
+
+      // ── Audio files ───────────────────────────────────────────────────
+      if (mime.startsWith("audio/")) {
+        if (file.size > 25 * 1024 * 1024) continue; // 25 MB limit for audio
+        setAttachments((prev) => [
+          ...prev,
+          {
+            type: "audio",
+            filename: file.name,
+            content: `[Audio: ${file.name}, ${file.size} bytes]`,
+            mime_type: mime,
+            size: file.size,
+          },
+        ]);
+        continue;
+      }
+
+      // ── PDF files ─────────────────────────────────────────────────────
+      if (mime === "application/pdf" || ext === "pdf") {
+        if (file.size > 50 * 1024 * 1024) continue; // 50 MB limit for PDFs
+        setAttachments((prev) => [
+          ...prev,
+          {
+            type: "pdf",
+            filename: file.name,
+            content: `[PDF: ${file.name}, ${file.size} bytes]`,
+            mime_type: mime,
+            size: file.size,
+          },
+        ]);
+        continue;
+      }
+
+      // ── Text/code files (existing behavior) ──────────────────────────
+      if (file.size > 1024 * 1024) continue; // 1 MB limit for text
 
       const content = await file.text();
-      const ext = file.name.split(".").pop() ?? "";
       const langMap: Record<string, string> = {
         ts: "typescript",
         tsx: "typescript",
@@ -1158,11 +1252,29 @@ function ChatInput({
           {attachments.map((att, i) => (
             <div
               key={i}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted border border-border text-xs text-foreground"
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-muted border border-border text-xs text-foreground overflow-hidden"
             >
-              <FileCode2 className="h-3 w-3 text-emerald-400" />
+              {/* Inline image thumbnail */}
+              {att.type === "image" && att.data_uri ? (
+                <img src={att.data_uri} alt={att.filename} className="h-8 w-8 rounded object-cover shrink-0" />
+              ) : att.type === "image" ? (
+                <ImageIcon className="h-3 w-3 text-violet-400 shrink-0" />
+              ) : att.type === "audio" ? (
+                <Mic className="h-3 w-3 text-amber-400 shrink-0" />
+              ) : att.type === "pdf" ? (
+                <FileText className="h-3 w-3 text-red-400 shrink-0" />
+              ) : att.type === "url" ? (
+                <Link2 className="h-3 w-3 text-blue-400 shrink-0" />
+              ) : (
+                <FileCode2 className="h-3 w-3 text-emerald-400 shrink-0" />
+              )}
               <span className="truncate max-w-[120px]">{att.filename}</span>
-              <button onClick={() => removeAttachment(i)} className="text-muted-foreground hover:text-red-400">
+              {att.size != null && att.size > 0 && (
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  {att.size < 1024 ? `${att.size}B` : att.size < 1048576 ? `${(att.size / 1024).toFixed(0)}K` : `${(att.size / 1048576).toFixed(1)}M`}
+                </span>
+              )}
+              <button onClick={() => removeAttachment(i)} className="text-muted-foreground hover:text-red-400 shrink-0">
                 <X className="h-3 w-3" />
               </button>
             </div>
@@ -1182,15 +1294,44 @@ function ChatInput({
                 type="file"
                 className="hidden"
                 multiple
+                accept="image/*,audio/*,application/pdf,.ts,.tsx,.js,.jsx,.py,.rs,.go,.cpp,.c,.h,.hpp,.java,.rb,.sh,.yml,.yaml,.json,.md,.sql,.css,.html,.txt"
                 onChange={async (e) => {
                   const files = Array.from(e.target.files ?? []);
                   for (const file of files) {
-                    if (file.size > 1024 * 1024) continue;
-                    const content = await file.text();
-                    setAttachments((prev) => [
-                      ...prev,
-                      { type: "file", filename: file.name, content, size: file.size },
-                    ]);
+                    const mime = file.type.toLowerCase();
+                    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+
+                    if (mime.startsWith("image/")) {
+                      if (file.size > 10 * 1024 * 1024) continue;
+                      const dataUri = await new Promise<string>((resolve) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(reader.result as string);
+                        reader.readAsDataURL(file);
+                      });
+                      setAttachments((prev) => [
+                        ...prev,
+                        { type: "image", filename: file.name, content: `[Image: ${file.name}]`, mime_type: mime, size: file.size, data_uri: dataUri },
+                      ]);
+                    } else if (mime.startsWith("audio/")) {
+                      if (file.size > 25 * 1024 * 1024) continue;
+                      setAttachments((prev) => [
+                        ...prev,
+                        { type: "audio", filename: file.name, content: `[Audio: ${file.name}]`, mime_type: mime, size: file.size },
+                      ]);
+                    } else if (mime === "application/pdf" || ext === "pdf") {
+                      if (file.size > 50 * 1024 * 1024) continue;
+                      setAttachments((prev) => [
+                        ...prev,
+                        { type: "pdf", filename: file.name, content: `[PDF: ${file.name}]`, mime_type: mime, size: file.size },
+                      ]);
+                    } else {
+                      if (file.size > 1024 * 1024) continue;
+                      const content = await file.text();
+                      setAttachments((prev) => [
+                        ...prev,
+                        { type: "file", filename: file.name, content, size: file.size },
+                      ]);
+                    }
                   }
                   e.target.value = "";
                 }}
@@ -1268,7 +1409,7 @@ function ChatInput({
       <p className="text-[10px] text-muted-foreground mt-1.5 px-1">
         Press <kbd className="px-1 py-0.5 rounded bg-muted text-muted-foreground">Enter</kbd> to send,{" "}
         <kbd className="px-1 py-0.5 rounded bg-muted text-muted-foreground">Shift+Enter</kbd> for new
-        line. Drop files or code to attach.
+        line. Drop files, images, audio, PDFs, or URLs to attach.
       </p>
     </div>
   );

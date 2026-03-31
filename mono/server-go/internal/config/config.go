@@ -37,6 +37,7 @@ type Config struct {
 	Review   ReviewConfig
 	Storage  StorageConfig
 	Log      LogConfig
+	MCP      MCPConfig
 }
 
 // ServerConfig holds HTTP server settings.
@@ -177,6 +178,34 @@ type LogConfig struct {
 	Format string // text, json
 }
 
+// MCPConfig holds MCP (Model Context Protocol) integration settings.
+type MCPConfig struct {
+	Enabled          bool
+	MaxCallsPerTask  int
+	AllowedProviders []string
+	CallTimeout      time.Duration
+	SlackBaseURL     string
+	MS365GraphURL    string
+	MS365TokenURL    string
+	GmailBaseURL     string
+	GmailTokenURL    string
+	DiscordBaseURL   string
+	GitLabBaseURL    string
+
+	// Per-provider OAuth credentials for MCP integrations (separate from auth SSO providers).
+	// These enable the one-click OAuth connect flow in the MCP Integrations UI.
+	OAuthProviders map[string]MCPOAuthProviderConfig
+}
+
+// MCPOAuthProviderConfig holds OAuth2 credentials for a single MCP provider.
+type MCPOAuthProviderConfig struct {
+	ClientID     string
+	ClientSecret string
+	Scopes       []string
+	AuthURL      string
+	TokenURL     string
+}
+
 // ---- XML intermediate types ----
 // These mirror the XML structure and are unmarshalled first, then converted.
 
@@ -195,6 +224,7 @@ type xmlServerProps struct {
 	Storage       xmlStorage       `xml:"storage"`
 	Repos         xmlRepositories  `xml:"repositories"`
 	Logging       xmlLogging       `xml:"logging"`
+	MCP           xmlMCP           `xml:"mcp"`
 }
 
 type xmlServer struct {
@@ -403,6 +433,122 @@ type xmlLogging struct {
 	AppLevel  string `xml:"app-level,attr"`
 }
 
+type xmlMCP struct {
+	Enabled          string `xml:"enabled,attr"`
+	MaxCallsPerTask  string `xml:"max-calls-per-task,attr"`
+	AllowedProviders string `xml:"allowed-providers,attr"`
+	CallTimeoutMs    string `xml:"call-timeout-ms,attr"`
+	SlackBaseURL     string `xml:"slack-base-url,attr"`
+	MS365GraphURL    string `xml:"ms365-graph-url,attr"`
+	MS365TokenURL    string `xml:"ms365-token-url,attr"`
+	GmailBaseURL     string `xml:"gmail-base-url,attr"`
+	GmailTokenURL    string `xml:"gmail-token-url,attr"`
+	DiscordBaseURL   string `xml:"discord-base-url,attr"`
+	GitLabBaseURL    string `xml:"gitlab-base-url,attr"`
+
+	// ── Google Workspace (single OAuth client, per-product scopes) ──
+	// All Google products (Gmail, Calendar, Drive, etc.) share the same
+	// Google Cloud OAuth 2.0 credentials. Only the scopes differ.
+	GoogleClientID     string `xml:"google-client-id,attr"`
+	GoogleClientSecret string `xml:"google-client-secret,attr"`
+	// Per-product scope overrides (comma-separated). Each product sends
+	// only its own scopes during the authorize redirect.
+	GmailOAuthScopes          string `xml:"gmail-oauth-scopes,attr"`
+	GoogleCalendarOAuthScopes string `xml:"google-calendar-oauth-scopes,attr"`
+	GoogleDriveOAuthScopes    string `xml:"google-drive-oauth-scopes,attr"`
+
+	// ── Microsoft 365 ──
+	MS365ClientID     string `xml:"ms365-client-id,attr"`
+	MS365ClientSecret string `xml:"ms365-client-secret,attr"`
+	MS365OAuthScopes  string `xml:"ms365-oauth-scopes,attr"`
+
+	// ── Slack ──
+	SlackClientID     string `xml:"slack-client-id,attr"`
+	SlackClientSecret string `xml:"slack-client-secret,attr"`
+	SlackOAuthScopes  string `xml:"slack-oauth-scopes,attr"`
+
+	// ── Discord ──
+	DiscordClientID     string `xml:"discord-client-id,attr"`
+	DiscordClientSecret string `xml:"discord-client-secret,attr"`
+	DiscordOAuthScopes  string `xml:"discord-oauth-scopes,attr"`
+
+	// ── GitHub ──
+	GitHubClientID     string `xml:"github-client-id,attr"`
+	GitHubClientSecret string `xml:"github-client-secret,attr"`
+	GitHubOAuthScopes  string `xml:"github-oauth-scopes,attr"`
+
+	// ── Atlassian (Jira + Confluence share the same Atlassian OAuth client) ──
+	AtlassianClientID     string `xml:"atlassian-client-id,attr"`
+	AtlassianClientSecret string `xml:"atlassian-client-secret,attr"`
+	JiraOAuthScopes       string `xml:"jira-oauth-scopes,attr"`
+	ConfluenceOAuthScopes string `xml:"confluence-oauth-scopes,attr"`
+
+	// ── Notion ──
+	NotionClientID     string `xml:"notion-client-id,attr"`
+	NotionClientSecret string `xml:"notion-client-secret,attr"`
+	NotionOAuthScopes  string `xml:"notion-oauth-scopes,attr"`
+
+	// ── GitLab ──
+	GitLabClientID     string `xml:"gitlab-client-id,attr"`
+	GitLabClientSecret string `xml:"gitlab-client-secret,attr"`
+	GitLabOAuthScopes  string `xml:"gitlab-oauth-scopes,attr"`
+
+	// ── Linear ──
+	LinearClientID     string `xml:"linear-client-id,attr"`
+	LinearClientSecret string `xml:"linear-client-secret,attr"`
+	LinearOAuthScopes  string `xml:"linear-oauth-scopes,attr"`
+
+	// ── Asana ──
+	AsanaClientID     string `xml:"asana-client-id,attr"`
+	AsanaClientSecret string `xml:"asana-client-secret,attr"`
+	AsanaOAuthScopes  string `xml:"asana-oauth-scopes,attr"`
+
+	// ── Trello (Atlassian — uses REST key+token, wrapped in OAuth-like flow) ──
+	TrelloClientID     string `xml:"trello-client-id,attr"`
+	TrelloClientSecret string `xml:"trello-client-secret,attr"`
+	TrelloOAuthScopes  string `xml:"trello-oauth-scopes,attr"`
+
+	// ── Figma ──
+	FigmaClientID     string `xml:"figma-client-id,attr"`
+	FigmaClientSecret string `xml:"figma-client-secret,attr"`
+	FigmaOAuthScopes  string `xml:"figma-oauth-scopes,attr"`
+
+	// ── Zendesk ──
+	ZendeskClientID     string `xml:"zendesk-client-id,attr"`
+	ZendeskClientSecret string `xml:"zendesk-client-secret,attr"`
+	ZendeskOAuthScopes  string `xml:"zendesk-oauth-scopes,attr"`
+
+	// ── PagerDuty ──
+	PagerDutyClientID     string `xml:"pagerduty-client-id,attr"`
+	PagerDutyClientSecret string `xml:"pagerduty-client-secret,attr"`
+	PagerDutyOAuthScopes  string `xml:"pagerduty-oauth-scopes,attr"`
+
+	// ── Datadog ──
+	DatadogClientID     string `xml:"datadog-client-id,attr"`
+	DatadogClientSecret string `xml:"datadog-client-secret,attr"`
+	DatadogOAuthScopes  string `xml:"datadog-oauth-scopes,attr"`
+
+	// ── Stripe ──
+	StripeClientID     string `xml:"stripe-client-id,attr"`
+	StripeClientSecret string `xml:"stripe-client-secret,attr"`
+	StripeOAuthScopes  string `xml:"stripe-oauth-scopes,attr"`
+
+	// ── HubSpot ──
+	HubSpotClientID     string `xml:"hubspot-client-id,attr"`
+	HubSpotClientSecret string `xml:"hubspot-client-secret,attr"`
+	HubSpotOAuthScopes  string `xml:"hubspot-oauth-scopes,attr"`
+
+	// ── Salesforce ──
+	SalesforceClientID     string `xml:"salesforce-client-id,attr"`
+	SalesforceClientSecret string `xml:"salesforce-client-secret,attr"`
+	SalesforceOAuthScopes  string `xml:"salesforce-oauth-scopes,attr"`
+
+	// ── Twilio ──
+	TwilioClientID     string `xml:"twilio-client-id,attr"`
+	TwilioClientSecret string `xml:"twilio-client-secret,attr"`
+	TwilioOAuthScopes  string `xml:"twilio-oauth-scopes,attr"`
+}
+
 // ---- VCS platforms XML types ----
 
 // ---- Environment variable expansion ----
@@ -519,6 +665,13 @@ func parseSec(s string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return time.Duration(sec) * time.Second
+}
+
+func parseString(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 // ---- Config file search ----
@@ -831,6 +984,255 @@ func loadServerProps(path string) (*Config, error) {
 	cfg.Log = LogConfig{
 		Level:  appLevel,
 		Format: "text",
+	}
+
+	// -- MCP Integrations --
+	cfg.MCP = MCPConfig{
+		Enabled:         parseBool(raw.MCP.Enabled, true),
+		MaxCallsPerTask: parseInt(raw.MCP.MaxCallsPerTask, 50),
+		CallTimeout:     parseMs(raw.MCP.CallTimeoutMs, 30*time.Second),
+		SlackBaseURL:    parseString(expand(raw.MCP.SlackBaseURL), "https://slack.com/api"),
+		MS365GraphURL:   parseString(expand(raw.MCP.MS365GraphURL), "https://graph.microsoft.com/v1.0"),
+		MS365TokenURL:   parseString(expand(raw.MCP.MS365TokenURL), "https://login.microsoftonline.com/common/oauth2/v2.0/token"),
+		GmailBaseURL:    parseString(expand(raw.MCP.GmailBaseURL), "https://gmail.googleapis.com/gmail/v1"),
+		GmailTokenURL:   parseString(expand(raw.MCP.GmailTokenURL), "https://oauth2.googleapis.com/token"),
+		DiscordBaseURL:  parseString(expand(raw.MCP.DiscordBaseURL), "https://discord.com/api/v10"),
+		GitLabBaseURL:   parseString(expand(raw.MCP.GitLabBaseURL), "https://gitlab.com/api/v4"),
+		OAuthProviders:  make(map[string]MCPOAuthProviderConfig),
+	}
+	if providers := expand(raw.MCP.AllowedProviders); providers != "" {
+		for _, p := range strings.Split(providers, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				cfg.MCP.AllowedProviders = append(cfg.MCP.AllowedProviders, p)
+			}
+		}
+	}
+	// Parse per-provider MCP OAuth credentials.
+	type mcpOAuthRaw struct {
+		name         string
+		clientID     string
+		clientSecret string
+		scopes       string
+		authURL      string
+		tokenURL     string
+	}
+	mcpOAuthProviders := []mcpOAuthRaw{
+		// ── Google Workspace (single client-id/secret, per-product scopes) ──
+		{
+			name:         "gmail",
+			clientID:     expand(raw.MCP.GoogleClientID),
+			clientSecret: expand(raw.MCP.GoogleClientSecret),
+			scopes:       expand(raw.MCP.GmailOAuthScopes),
+			authURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+			tokenURL:     "https://oauth2.googleapis.com/token",
+		},
+		{
+			name:         "google_calendar",
+			clientID:     expand(raw.MCP.GoogleClientID),
+			clientSecret: expand(raw.MCP.GoogleClientSecret),
+			scopes:       expand(raw.MCP.GoogleCalendarOAuthScopes),
+			authURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+			tokenURL:     "https://oauth2.googleapis.com/token",
+		},
+		{
+			name:         "google_drive",
+			clientID:     expand(raw.MCP.GoogleClientID),
+			clientSecret: expand(raw.MCP.GoogleClientSecret),
+			scopes:       expand(raw.MCP.GoogleDriveOAuthScopes),
+			authURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+			tokenURL:     "https://oauth2.googleapis.com/token",
+		},
+		// ── Microsoft 365 ──
+		{
+			name:         "ms365",
+			clientID:     expand(raw.MCP.MS365ClientID),
+			clientSecret: expand(raw.MCP.MS365ClientSecret),
+			scopes:       expand(raw.MCP.MS365OAuthScopes),
+			authURL:      "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+			tokenURL:     "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+		},
+		// ── Slack ──
+		{
+			name:         "slack",
+			clientID:     expand(raw.MCP.SlackClientID),
+			clientSecret: expand(raw.MCP.SlackClientSecret),
+			scopes:       expand(raw.MCP.SlackOAuthScopes),
+			authURL:      "https://slack.com/oauth/v2/authorize",
+			tokenURL:     "https://slack.com/api/oauth.v2.access",
+		},
+		// ── Discord ──
+		{
+			name:         "discord",
+			clientID:     expand(raw.MCP.DiscordClientID),
+			clientSecret: expand(raw.MCP.DiscordClientSecret),
+			scopes:       expand(raw.MCP.DiscordOAuthScopes),
+			authURL:      "https://discord.com/api/oauth2/authorize",
+			tokenURL:     "https://discord.com/api/oauth2/token",
+		},
+		// ── GitHub ──
+		{
+			name:         "github",
+			clientID:     expand(raw.MCP.GitHubClientID),
+			clientSecret: expand(raw.MCP.GitHubClientSecret),
+			scopes:       expand(raw.MCP.GitHubOAuthScopes),
+			authURL:      "https://github.com/login/oauth/authorize",
+			tokenURL:     "https://github.com/login/oauth/access_token",
+		},
+		// ── Atlassian (single client-id/secret, per-product scopes) ──
+		{
+			name:         "jira",
+			clientID:     expand(raw.MCP.AtlassianClientID),
+			clientSecret: expand(raw.MCP.AtlassianClientSecret),
+			scopes:       expand(raw.MCP.JiraOAuthScopes),
+			authURL:      "https://auth.atlassian.com/authorize",
+			tokenURL:     "https://auth.atlassian.com/oauth/token",
+		},
+		{
+			name:         "confluence",
+			clientID:     expand(raw.MCP.AtlassianClientID),
+			clientSecret: expand(raw.MCP.AtlassianClientSecret),
+			scopes:       expand(raw.MCP.ConfluenceOAuthScopes),
+			authURL:      "https://auth.atlassian.com/authorize",
+			tokenURL:     "https://auth.atlassian.com/oauth/token",
+		},
+		// ── Notion ──
+		{
+			name:         "notion",
+			clientID:     expand(raw.MCP.NotionClientID),
+			clientSecret: expand(raw.MCP.NotionClientSecret),
+			scopes:       expand(raw.MCP.NotionOAuthScopes),
+			authURL:      "https://api.notion.com/v1/oauth/authorize",
+			tokenURL:     "https://api.notion.com/v1/oauth/token",
+		},
+		// ── GitLab ──
+		{
+			name:         "gitlab",
+			clientID:     expand(raw.MCP.GitLabClientID),
+			clientSecret: expand(raw.MCP.GitLabClientSecret),
+			scopes:       expand(raw.MCP.GitLabOAuthScopes),
+			authURL:      "https://gitlab.com/oauth/authorize",
+			tokenURL:     "https://gitlab.com/oauth/token",
+		},
+		// ── Linear ──
+		{
+			name:         "linear",
+			clientID:     expand(raw.MCP.LinearClientID),
+			clientSecret: expand(raw.MCP.LinearClientSecret),
+			scopes:       expand(raw.MCP.LinearOAuthScopes),
+			authURL:      "https://linear.app/oauth/authorize",
+			tokenURL:     "https://api.linear.app/oauth/token",
+		},
+		// ── Asana ──
+		{
+			name:         "asana",
+			clientID:     expand(raw.MCP.AsanaClientID),
+			clientSecret: expand(raw.MCP.AsanaClientSecret),
+			scopes:       expand(raw.MCP.AsanaOAuthScopes),
+			authURL:      "https://app.asana.com/-/oauth_authorize",
+			tokenURL:     "https://app.asana.com/-/oauth_token",
+		},
+		// ── Trello ──
+		{
+			name:         "trello",
+			clientID:     expand(raw.MCP.TrelloClientID),
+			clientSecret: expand(raw.MCP.TrelloClientSecret),
+			scopes:       expand(raw.MCP.TrelloOAuthScopes),
+			authURL:      "https://trello.com/1/authorize",
+			tokenURL:     "https://trello.com/1/OAuthGetAccessToken",
+		},
+		// ── Figma ──
+		{
+			name:         "figma",
+			clientID:     expand(raw.MCP.FigmaClientID),
+			clientSecret: expand(raw.MCP.FigmaClientSecret),
+			scopes:       expand(raw.MCP.FigmaOAuthScopes),
+			authURL:      "https://www.figma.com/oauth",
+			tokenURL:     "https://api.figma.com/v1/oauth/token",
+		},
+		// ── Zendesk ──
+		{
+			name:         "zendesk",
+			clientID:     expand(raw.MCP.ZendeskClientID),
+			clientSecret: expand(raw.MCP.ZendeskClientSecret),
+			scopes:       expand(raw.MCP.ZendeskOAuthScopes),
+			authURL:      "https://d3v.zendesk.com/oauth/authorizations/new",
+			tokenURL:     "https://d3v.zendesk.com/oauth/tokens",
+		},
+		// ── PagerDuty ──
+		{
+			name:         "pagerduty",
+			clientID:     expand(raw.MCP.PagerDutyClientID),
+			clientSecret: expand(raw.MCP.PagerDutyClientSecret),
+			scopes:       expand(raw.MCP.PagerDutyOAuthScopes),
+			authURL:      "https://app.pagerduty.com/oauth/authorize",
+			tokenURL:     "https://app.pagerduty.com/oauth/token",
+		},
+		// ── Datadog ──
+		{
+			name:         "datadog",
+			clientID:     expand(raw.MCP.DatadogClientID),
+			clientSecret: expand(raw.MCP.DatadogClientSecret),
+			scopes:       expand(raw.MCP.DatadogOAuthScopes),
+			authURL:      "https://app.datadoghq.com/oauth2/v1/authorize",
+			tokenURL:     "https://app.datadoghq.com/oauth2/v1/token",
+		},
+		// ── Stripe ──
+		{
+			name:         "stripe",
+			clientID:     expand(raw.MCP.StripeClientID),
+			clientSecret: expand(raw.MCP.StripeClientSecret),
+			scopes:       expand(raw.MCP.StripeOAuthScopes),
+			authURL:      "https://connect.stripe.com/oauth/authorize",
+			tokenURL:     "https://connect.stripe.com/oauth/token",
+		},
+		// ── HubSpot ──
+		{
+			name:         "hubspot",
+			clientID:     expand(raw.MCP.HubSpotClientID),
+			clientSecret: expand(raw.MCP.HubSpotClientSecret),
+			scopes:       expand(raw.MCP.HubSpotOAuthScopes),
+			authURL:      "https://app.hubspot.com/oauth/authorize",
+			tokenURL:     "https://api.hubapi.com/oauth/v1/token",
+		},
+		// ── Salesforce ──
+		{
+			name:         "salesforce",
+			clientID:     expand(raw.MCP.SalesforceClientID),
+			clientSecret: expand(raw.MCP.SalesforceClientSecret),
+			scopes:       expand(raw.MCP.SalesforceOAuthScopes),
+			authURL:      "https://login.salesforce.com/services/oauth2/authorize",
+			tokenURL:     "https://login.salesforce.com/services/oauth2/token",
+		},
+		// ── Twilio ──
+		{
+			name:         "twilio",
+			clientID:     expand(raw.MCP.TwilioClientID),
+			clientSecret: expand(raw.MCP.TwilioClientSecret),
+			scopes:       expand(raw.MCP.TwilioOAuthScopes),
+			authURL:      "https://www.twilio.com/authorize",
+			tokenURL:     "https://api.twilio.com/oauth/token",
+		},
+	}
+	for _, op := range mcpOAuthProviders {
+		if op.clientID != "" && op.clientSecret != "" {
+			var scopes []string
+			if op.scopes != "" {
+				for _, s := range strings.Split(op.scopes, ",") {
+					s = strings.TrimSpace(s)
+					if s != "" {
+						scopes = append(scopes, s)
+					}
+				}
+			}
+			cfg.MCP.OAuthProviders[op.name] = MCPOAuthProviderConfig{
+				ClientID:     op.clientID,
+				ClientSecret: op.clientSecret,
+				Scopes:       scopes,
+				AuthURL:      op.authURL,
+				TokenURL:     op.tokenURL,
+			}
+		}
 	}
 
 	return cfg, nil

@@ -1504,4 +1504,27 @@ void TMSMemorySystem::reconfigureEmbedding(
     metrics::Registry::instance().setGauge(metrics::EMBED_ACTIVE_BACKEND, backend_id);
 }
 
+bool TMSMemorySystem::storeAssetChunk(const AssetChunk& chunk) {
+    if (chunk.embedding.empty() || !ltm_) return false;
+
+    // Convert AssetChunk to a CodeChunk for LTM storage
+    CodeChunk cc;
+    cc.id = chunk.repo_id + ":" + chunk.asset_id + ":" + std::to_string(chunk.chunk_index);
+    cc.file_path = "[asset:" + chunk.asset_id + "] " + chunk.file_name;
+    cc.content = ""; // Binary assets have no text content
+    cc.language = chunk.mime_type;
+    cc.start_line = chunk.chunk_index;
+    cc.end_line = chunk.total_chunks;
+    cc.tags.push_back("repo:" + chunk.repo_id);
+    cc.symbols.push_back("asset:" + chunk.asset_id);
+
+    try {
+        ltm_->add(cc, chunk.embedding);
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "[TMS] storeAssetChunk failed: " << e.what() << std::endl;
+        return false;
+    }
+}
+
 } // namespace aipr::tms

@@ -23,6 +23,7 @@ export const queryKeys = {
   llmProviders: ["llm", "providers"] as const,
   llmRoutes: ["llm", "routes"] as const,
   embeddingsConfig: ["embeddings", "config"] as const,
+  multimodalConfig: ["embeddings", "multimodal"] as const,
   adminStats: ["admin", "stats"] as const,
   adminHealth: ["admin", "health"] as const,
   pullRequests: (repoId: string, p?: PaginationParams, f?: PRListFilter) =>
@@ -40,6 +41,13 @@ export const queryKeys = {
   vcsPlatforms: ["vcs", "platforms"] as const,
   branches: (repoId: string) =>
     ["repos", repoId, "branches"] as const,
+  assets: (repoId: string) =>
+    ["repos", repoId, "assets"] as const,
+  integrations: ["integrations", "connections"] as const,
+  integrationProviders: ["integrations", "providers"] as const,
+  integrationCallLog: (connectionId: string) =>
+    ["integrations", "connections", connectionId, "logs"] as const,
+  customTemplates: ["integrations", "custom-templates"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -132,6 +140,22 @@ export function useBranches(repoId: string, enabled = false) {
   });
 }
 
+// ── Assets ──────────────────────────────────────────────────────────────────
+
+export function useAssets(repoId: string) {
+  return useQuery({
+    queryKey: queryKeys.assets(repoId),
+    queryFn: () => api.assets.list(repoId),
+    enabled: !!repoId,
+    // Auto-refresh while any asset is still processing
+    refetchInterval: (query: any) => {
+      const data = query.state.data as import("@/types/api").Asset[] | undefined;
+      if (data?.some((a) => a.status === "processing")) return 3000;
+      return false;
+    },
+  });
+}
+
 // ── Reviews ─────────────────────────────────────────────────────────────────
 
 export function useReviews(params?: PaginationParams & { repo_id?: string }) {
@@ -192,6 +216,13 @@ export function useEmbeddingsConfig() {
   return useQuery({
     queryKey: queryKeys.embeddingsConfig,
     queryFn: () => api.embeddings.config(),
+  });
+}
+
+export function useMultimodalConfig() {
+  return useQuery({
+    queryKey: queryKeys.multimodalConfig,
+    queryFn: () => api.embeddings.multimodal(),
   });
 }
 
@@ -293,6 +324,44 @@ export function useVCSTokenCapabilities(platform?: string) {
   return useQuery({
     queryKey: ["vcs", "token-capabilities", platform ?? "all"] as const,
     queryFn: () => api.vcsPlatforms.tokenCapabilities(platform),
+  });
+}
+
+// ── Integrations (MCP) ─────────────────────────────────────────────────────
+
+export function useIntegrationProviders() {
+  return useQuery({
+    queryKey: queryKeys.integrationProviders,
+    queryFn: () => api.integrations.providers(),
+  });
+}
+
+export function useIntegrations() {
+  return useQuery({
+    queryKey: queryKeys.integrations,
+    queryFn: () => api.integrations.connections(),
+  });
+}
+
+export function useIntegrationCallLog(connectionId: string) {
+  return useQuery({
+    queryKey: queryKeys.integrationCallLog(connectionId),
+    queryFn: () => api.integrations.callLog(connectionId),
+    enabled: !!connectionId,
+  });
+}
+
+export function useIntegrationOAuthStatus() {
+  return useQuery({
+    queryKey: ["integrations", "oauth-status"] as const,
+    queryFn: () => api.integrations.oauthStatus(),
+  });
+}
+
+export function useCustomTemplates() {
+  return useQuery({
+    queryKey: queryKeys.customTemplates,
+    queryFn: () => api.integrations.customTemplates(),
   });
 }
 

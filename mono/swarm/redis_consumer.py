@@ -37,6 +37,7 @@ from .engine_client import EngineClient
 from .go_client import GoClient
 from .sdk.agent import Agent, AgentConfig, AgentResult, Task
 from .tools.engine_tools import init_engine_tools
+from .tools.mcp_tools import MCP_TOOLS, init_mcp_tools
 from .tools.task_tools import init_task_tools
 from .tools.workspace_tools import init_workspace_tools
 from .workspace import VirtualWorkspace
@@ -224,6 +225,13 @@ async def _run_full_pipeline(
         redis_url=get_config().redis_url,
     )
 
+    # Initialise MCP integration tools (Slack, MS365, Gmail, Discord).
+    init_mcp_tools(
+        go_client=go_client,
+        user_id=task_data.get("user_id", ""),
+        org_id=task_data.get("org_id", ""),
+    )
+
     conversation = SharedConversation(
         task_id=task.id,
         go_client=go_client,
@@ -284,6 +292,9 @@ async def _run_full_pipeline(
         )
         await orch_memory.init()
         orchestrator.memory = orch_memory
+
+        # MCP tools let the orchestrator check available integrations.
+        orchestrator.tools.extend(MCP_TOOLS)
 
         # Reuse a warm-pool agent ID if available (skip cold registration).
         warm_id = warm_pool_cb() if warm_pool_cb else None
@@ -432,6 +443,10 @@ async def _run_full_pipeline(
             if role in ("senior_dev", "architect"):
                 agent.tools.extend(HITL_TOOLS)
 
+            # MCP integration tools for roles that interact with external services.
+            if role in ("ops", "senior_dev", "architect"):
+                agent.tools.extend(MCP_TOOLS)
+
             warm_id = warm_pool_cb() if warm_pool_cb else None
             if warm_id:
                 agent.agent_id = warm_id
@@ -474,10 +489,21 @@ async def _run_full_pipeline(
         # ── Step 5: Extract changeset from workspace and submit diffs ───
         total_agents = len(code_agents) + len(review_agents)
         if agent_failures and len(agent_failures) == total_agents:
-            failure_summary = "; ".join(agent_failures)
-            await go_client.fail_task(task.id, f"All agents failed: {failure_summary}")
-            logger.error("Team %s: Task %s failed — all %d agents errored",
-                         team_id[:8], task.id, total_agents)
+            # Before marking as failed, check if an agent already completed
+            # the task (e.g. via complete_task tool).  A post-completion 401
+            # from the LLM proxy should not overwrite a successful result.
+            try:
+                current_status = await go_client.get_task_status(task.id)
+            except Exception:
+                current_status = ""
+            if current_status == "completed":
+                logger.info("Team %s: Task %s already completed (ignoring agent errors)",
+                            team_id[:8], task.id)
+            else:
+                failure_summary = "; ".join(agent_failures)
+                await go_client.fail_task(task.id, f"All agents failed: {failure_summary}")
+                logger.error("Team %s: Task %s failed — all %d agents errored",
+                             team_id[:8], task.id, total_agents)
         else:
             # Extract diffs from the shared VirtualWorkspace.
             changeset = workspace.get_changeset()

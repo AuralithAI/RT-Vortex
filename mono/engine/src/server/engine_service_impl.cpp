@@ -1299,18 +1299,60 @@ grpc::Status EngineServiceImpl::IngestAsset(
     const std::string& repo_id = request->repo_id();
     const std::string& content = request->content();
     const std::string& asset_type = request->asset_type();
+    const std::string& mime_type = request->mime_type();
+    const std::string& file_name = request->file_name();
+    const auto& binary_data = request->binary_data();
 
-    if (repo_id.empty() || content.empty()) {
-        response->set_status("error: repo_id and content are required");
+    if (repo_id.empty()) {
+        response->set_status("error: repo_id is required");
         response->set_chunks_created(0);
         return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
-                            "repo_id and content are required");
+                            "repo_id is required");
     }
 
     try {
+        // ── Binary asset path: image/audio via multimodal embedder ──
+        if (!binary_data.empty() &&
+            (asset_type == "image" || asset_type == "audio" ||
+             mime_type.find("image/") == 0 || mime_type.find("audio/") == 0)) {
+
+            std::vector<uint8_t> data(binary_data.begin(), binary_data.end());
+            std::string asset_id = request->file_name().empty()
+                ? ("asset_" + repo_id + "_" + std::to_string(
+                       std::chrono::system_clock::now().time_since_epoch().count()))
+                : file_name;
+
+            bool ok = engine_->embedBinaryAsset(
+                repo_id, data, mime_type, file_name, asset_id);
+
+            if (ok) {
+                response->set_chunks_created(1);
+                response->set_status("ok");
+                response->set_asset_id(asset_id);
+                // Detect type
+                if (mime_type.find("image/") == 0 || asset_type == "image") {
+                    response->set_detected_type(aipr::engine::v1::ASSET_TYPE_IMAGE);
+                } else {
+                    response->set_detected_type(aipr::engine::v1::ASSET_TYPE_AUDIO);
+                }
+            } else {
+                response->set_chunks_created(0);
+                response->set_status("error: multimodal embedding failed");
+                return grpc::Status(grpc::StatusCode::INTERNAL,
+                                    "multimodal embedding failed for " + asset_type);
+            }
+            return grpc::Status::OK;
+        }
+
+        // ── Text asset path: chunk + text embed ─────────────────────
+        if (content.empty()) {
+            response->set_status("error: content or binary_data is required");
+            response->set_chunks_created(0);
+            return grpc::Status(grpc::StatusCode::INVALID_ARGUMENT,
+                                "content or binary_data is required");
+        }
+
         // Chunk the content into embedding-sized pieces.
-        // For documents/PDFs, use paragraph-level splitting.
-        // For URLs, the Go server already extracted the text content.
         std::vector<std::string> chunks;
         const size_t max_chunk_chars = 1500;
         const size_t overlap_chars = 200;
@@ -1344,8 +1386,6 @@ grpc::Status EngineServiceImpl::IngestAsset(
                                    " (chunk " + std::to_string(i + 1) +
                                    "/" + std::to_string(chunks.size()) + ")\n" +
                                    chunks[i];
-            // Delegate to the engine's embedding + storage pipeline.
-            // engine_->embedAndStoreChunk handles FAISS insertion + KG update.
             bool ok = engine_->embedAndStoreAssetChunk(
                 repo_id, prefixed, source, asset_type,
                 std::map<std::string, std::string>(
@@ -1360,6 +1400,124 @@ grpc::Status EngineServiceImpl::IngestAsset(
     } catch (const std::exception& e) {
         response->set_chunks_created(0);
         response->set_status(std::string("error: ") + e.what());
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
+//=============================================================================
+// Multimodal Embedding Operations
+//=============================================================================
+
+grpc::Status EngineServiceImpl::GetMultimodalConfig(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::GetMultimodalConfigRequest* /*request*/,
+    aipr::engine::v1::GetMultimodalConfigResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    try {
+        auto configs = engine_->getMultimodalConfig();
+        bool image_enabled = false;
+        bool audio_enabled = false;
+
+        for (const auto& cfg : configs) {
+            auto* mc = response->add_modalities();
+            mc->set_modality(cfg.modality);
+            mc->set_model_name(cfg.model_name);
+            mc->set_enabled(cfg.enabled);
+            mc->set_status(cfg.status);
+            mc->set_download_progress(cfg.download_progress);
+
+            if (cfg.modality == "image") image_enabled = cfg.enabled;
+            if (cfg.modality == "audio") audio_enabled = cfg.enabled;
+        }
+        response->set_unified_dimension(1024);
+        response->set_image_enabled(image_enabled);
+        response->set_audio_enabled(audio_enabled);
+        return grpc::Status::OK;
+    } catch (const std::exception& e) {
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
+grpc::Status EngineServiceImpl::ConfigureMultimodal(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::ConfigureMultimodalRequest* request,
+    aipr::engine::v1::ConfigureMultimodalResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    try {
+        std::vector<std::string> loaded;
+
+        auto img = engine_->setModalityEnabled("image", request->enable_image());
+        if (img.enabled && img.status == "ready") {
+            loaded.push_back("image:" + img.model_name);
+        }
+
+        auto aud = engine_->setModalityEnabled("audio", request->enable_audio());
+        if (aud.enabled && aud.status == "ready") {
+            loaded.push_back("audio:" + aud.model_name);
+        }
+
+        response->set_success(true);
+        response->set_message("Multimodal configuration updated");
+        for (const auto& m : loaded) {
+            response->add_loaded_models(m);
+        }
+        return grpc::Status::OK;
+    } catch (const std::exception& e) {
+        response->set_success(false);
+        response->set_message(std::string("error: ") + e.what());
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
+grpc::Status EngineServiceImpl::DownloadModel(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::ConfigureMultimodalRequest* request,
+    grpc::ServerWriter<aipr::engine::v1::ModelDownloadProgress>* writer)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    try {
+        // Determine which modalities to enable/download
+        std::vector<std::pair<std::string, bool>> modalities;
+        modalities.push_back({"image", request->enable_image()});
+        modalities.push_back({"audio", request->enable_audio()});
+
+        for (const auto& [modality, enabled] : modalities) {
+            if (!enabled) continue;
+
+            // Send initial progress
+            aipr::engine::v1::ModelDownloadProgress progress;
+            std::string model_name = (modality == "image") ? "siglip-base" : "clap-general";
+            progress.set_model_name(model_name);
+            progress.set_phase("downloading");
+            progress.set_progress(0);
+            progress.set_done(false);
+            progress.set_success(false);
+            writer->Write(progress);
+
+            // Trigger download via enable
+            auto result = engine_->setModalityEnabled(modality, true);
+
+            // Send completion
+            progress.set_phase(result.status == "ready" ? "ready" : result.status);
+            progress.set_progress(result.status == "ready" ? 100 : result.download_progress);
+            progress.set_done(true);
+            progress.set_success(result.status == "ready");
+            writer->Write(progress);
+        }
+
+        return grpc::Status::OK;
+    } catch (const std::exception& e) {
         return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
     }
 }

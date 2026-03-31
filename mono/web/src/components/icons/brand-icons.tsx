@@ -192,6 +192,226 @@ export function OllamaIcon(props: IconProps) {
   );
 }
 
+// ── MCP Integration Providers ───────────────────────────────────────────────
+
+export function SlackIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52ZM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313Z" fill="#E01E5A" />
+      <path d="M8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834ZM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312Z" fill="#36C5F0" />
+      <path d="M18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834ZM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312Z" fill="#2EB67D" />
+      <path d="M15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52ZM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313Z" fill="#ECB22E" />
+    </svg>
+  );
+}
+
+export function DiscordIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028c.462-.63.874-1.295 1.226-1.994a.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03ZM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.42 0 1.333-.956 2.418-2.157 2.418Zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.095 2.157 2.42 0 1.333-.946 2.418-2.157 2.418Z" fill="#5865F2" />
+    </svg>
+  );
+}
+
+export function GmailIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457Z" fill="#EA4335" />
+    </svg>
+  );
+}
+
+export function MS365Icon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <rect x="1" y="1" width="10" height="10" fill="#F25022" />
+      <rect x="13" y="1" width="10" height="10" fill="#7FBA00" />
+      <rect x="1" y="13" width="10" height="10" fill="#00A4EF" />
+      <rect x="13" y="13" width="10" height="10" fill="#FFB900" />
+    </svg>
+  );
+}
+
+export function GoogleCalendarIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M18.316 5.684H5.684v12.632h12.632V5.684Z" fill="#fff" />
+      <path d="M18.316 23.368 23.368 18.316V5.684L18.316.632 5.684.632.632 5.684v12.632l5.052 5.052h12.632Z" fill="#4285F4" fillRule="evenodd" clipRule="evenodd" />
+      <path d="M12 18.316c-3.49 0-6.316-2.826-6.316-6.316S8.51 5.684 12 5.684s6.316 2.826 6.316 6.316-2.826 6.316-6.316 6.316Z" fill="#fff" />
+      <path d="M12 7.263a4.737 4.737 0 1 0 0 9.474 4.737 4.737 0 0 0 0-9.474Zm-.395 7.105V12.79l-1.868-1.868.559-.559L12 12.053l1.705-1.689.558.559-1.868 1.868v1.579h-.79Z" fill="#4285F4" fillRule="evenodd" clipRule="evenodd" />
+    </svg>
+  );
+}
+
+export function GoogleDriveIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="m8.027 1.5-7.5 13h7.973l7.5-13H8.027Z" fill="#0066DA" />
+      <path d="M8.027 1.5 16 14.5h7.5L16 1.5H8.027Z" fill="#00AC47" />
+      <path d="m.527 14.5 3.75 6.5h15l3.75-6.5h-7.5l-7.027.001L.527 14.5Z" fill="#EA4335" />
+      <path d="m8.027 1.5-7.5 13 3.75 6.5 7.75-13.5-4-6Z" fill="#00832D" />
+      <path d="M16 14.5 19.277 21l4.25-6.5H16Z" fill="#2684FC" />
+      <path d="M16 1.5 8.027 14.501l4 6.499L23.527 8.5 16 1.5Z" fill="#FFBA00" />
+    </svg>
+  );
+}
+
+export function JiraIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M11.53.028a.96.96 0 0 0-.864.508L.533 18.04a.96.96 0 0 0 .855 1.415h5.308a.96.96 0 0 0 .854-.527L11.998 10l4.448 8.928a.96.96 0 0 0 .854.527h5.308a.96.96 0 0 0 .855-1.415L13.33.536A.96.96 0 0 0 12.47.028h-.94Z" fill="#2684FF" />
+      <path d="M9.413 9.37c-.614 1.216-.614 2.647 0 3.862l4.185 8.308a.96.96 0 0 0 .854.527h5.308a.96.96 0 0 0 .855-1.415l-6.617-13.06c-.853-1.687-3.73-1.687-4.585 1.778Z" fill="url(#jira-a)" />
+      <path d="M14.583 9.37c.614 1.216.614 2.647 0 3.862L10.4 21.54a.96.96 0 0 1-.854.527H4.238a.96.96 0 0 1-.855-1.415l6.617-13.06c.854-1.687 3.73-1.687 4.583 1.778Z" fill="url(#jira-b)" />
+      <defs>
+        <linearGradient id="jira-a" x1="11.64" y1="5.4" x2="16.8" y2="17.04" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#0052CC" />
+          <stop offset="1" stopColor="#2684FF" />
+        </linearGradient>
+        <linearGradient id="jira-b" x1="12.36" y1="5.4" x2="7.2" y2="17.04" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#0052CC" />
+          <stop offset="1" stopColor="#2684FF" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
+
+export function NotionIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
+      <path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L18.29 2.14c-.42-.326-.98-.7-2.055-.607L3.01 2.67c-.467.047-.56.28-.374.466l1.823 1.072Zm.793 3.08v13.903c0 .747.373 1.027 1.214.98l14.523-.84c.84-.047.933-.56.933-1.167V6.354c0-.606-.233-.933-.746-.886l-15.177.886c-.56.047-.747.327-.747.934Zm14.337.42c.093.42 0 .84-.42.886l-.7.14v10.264c-.607.327-1.167.514-1.634.514-.747 0-.933-.234-1.494-.933l-4.577-7.186v6.953l1.447.327s0 .84-1.167.84l-3.22.187c-.093-.187 0-.653.327-.747l.84-.233V9.854L7.46 9.714c-.094-.42.14-1.026.793-1.073l3.454-.233 4.763 7.279v-6.44l-1.214-.14c-.093-.514.28-.886.747-.933l3.386-.187Z" />
+    </svg>
+  );
+}
+
+export function ConfluenceIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M1.26 17.15c-.22.37-.47.82-.66 1.17a.66.66 0 0 0 .23.9l4.38 2.72a.66.66 0 0 0 .9-.21c.17-.3.4-.7.66-1.17 1.84-3.28 3.68-2.86 7.04-1.31l4.47 2.05a.66.66 0 0 0 .88-.32l2.14-4.74a.66.66 0 0 0-.32-.86c-1.3-.6-3.6-1.66-4.47-2.05-6.8-3.12-12.62-2.9-15.25 3.82Z" fill="#1868DB" />
+      <path d="M22.74 6.85c.22-.37.47-.82.66-1.17a.66.66 0 0 0-.23-.9L18.79 2.06a.66.66 0 0 0-.9.21c-.17.3-.4.7-.66 1.17-1.84 3.28-3.68 2.86-7.04 1.31L5.72 2.7a.66.66 0 0 0-.88.32L2.7 7.76a.66.66 0 0 0 .32.86c1.3.6 3.6 1.66 4.47 2.05 6.8 3.12 12.62 2.9 15.25-3.82Z" fill="#1868DB" />
+    </svg>
+  );
+}
+
+export function LinearIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M2.77 15.71a10.1 10.1 0 0 1-.59-2.34l8.45 8.45a10.1 10.1 0 0 1-2.34-.59L2.77 15.71ZM1.95 11.81a10.23 10.23 0 0 0 .2 2.45l9.59 9.59c.82.13 1.65.18 2.45.2L1.95 11.81ZM5.5 18.5 1.95 14.95a10.2 10.2 0 0 1-.47-1.56l5.58 5.58c-.48-.14-.94-.3-1.56-.47ZM3.38 19.52l5.1 5.1c.58.28 1.18.51 1.81.69L2.69 17.71c.18.63.41 1.23.69 1.81ZM14.19 23.81l-14-14c.07-.81.21-1.6.42-2.37l15.95 15.95c-.77.21-1.56.35-2.37.42ZM17.91 22.82 1.18 6.09a10.3 10.3 0 0 1 1-1.78l17.51 17.51c-.56.42-1.15.78-1.78 1ZM20.5 20.5a10.3 10.3 0 0 0 1.6-2.37L4.87 .9A10.3 10.3 0 0 0 2.5 2.5l18 18ZM22.82 17.91a10.3 10.3 0 0 0 1-1.78L6.09 1.18a10.3 10.3 0 0 0-1.78 1l17.51 17.51Zm0 0" fill="#5E6AD2" />
+    </svg>
+  );
+}
+
+export function AsanaIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M18.78 11.03a4.89 4.89 0 1 0 0 9.78 4.89 4.89 0 0 0 0-9.78ZM5.22 11.03a4.89 4.89 0 1 0 0 9.78 4.89 4.89 0 0 0 0-9.78ZM12 3.19a4.89 4.89 0 1 0 0 9.78 4.89 4.89 0 0 0 0-9.78Z" fill="#F06A6A" />
+    </svg>
+  );
+}
+
+export function TrelloIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <rect x="1" y="1" width="22" height="22" rx="3" fill="#0079BF" />
+      <rect x="3.5" y="3.5" width="7" height="14" rx="1.2" fill="#fff" />
+      <rect x="13.5" y="3.5" width="7" height="9" rx="1.2" fill="#fff" />
+    </svg>
+  );
+}
+
+export function FigmaIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M8 24c2.208 0 4-1.792 4-4v-4H8c-2.208 0-4 1.792-4 4s1.792 4 4 4Z" fill="#0ACF83" />
+      <path d="M4 12c0-2.208 1.792-4 4-4h4v8H8c-2.208 0-4-1.792-4-4Z" fill="#A259FF" />
+      <path d="M4 4c0-2.208 1.792-4 4-4h4v8H8C5.792 8 4 6.208 4 4Z" fill="#F24E1E" />
+      <path d="M12 0h4c2.208 0 4 1.792 4 4s-1.792 4-4 4h-4V0Z" fill="#FF7262" />
+      <path d="M20 12c0 2.208-1.792 4-4 4s-4-1.792-4-4 1.792-4 4-4 4 1.792 4 4Z" fill="#1ABCFE" />
+    </svg>
+  );
+}
+
+export function ZendeskIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M11 6v12.9L1 6h10Zm2 0c0 3.04 2.46 5.5 5.5 5.5S24 9.04 24 6H13ZM13 18V5.1l10 12.9H13ZM11 18c0-3.04-2.46-5.5-5.5-5.5S0 14.96 0 18h11Z" fill="#03363D" />
+    </svg>
+  );
+}
+
+export function PagerDutyIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M5.84 17.79V22H2.44V2h8.7c4.78 0 7.56 2.66 7.56 6.9 0 4.48-3.1 7.12-7.7 7.12H5.84v1.77Zm0-5.38H10.7c3.04 0 4.68-1.44 4.68-3.96 0-2.4-1.64-3.82-4.66-3.82H5.84v7.78Z" fill="#06AC38" />
+    </svg>
+  );
+}
+
+export function DatadogIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2Z" fill="#632CA6" />
+      <path d="M15.97 9.75c-.18-.13-.58-.1-.9.06l-1.78.87-.65-.5-.02-2.78c0-.25-.06-.5-.24-.66-.2-.18-.56-.26-.77-.15l-2.2 1.02c-.17.08-.31.34-.31.58l.04 2.37-.6.56-2.08-.32c-.25-.04-.54.1-.65.36l-.6 1.38c-.1.25-.03.56.18.67l1.89 1 .1.78-1.47 1.43c-.18.17-.22.48-.1.7l.7 1.28c.12.22.42.34.67.26l2.09-.7.62.39-.02 1.87c0 .26.14.52.35.58l1.35.4c.21.06.48-.06.61-.28l1.23-2.2.77-.1 1.4 1.64c.17.2.47.28.68.17l1.2-.61c.22-.11.32-.42.22-.7l-.82-2.23.42-.64 2.22-.05c.25 0 .48-.2.52-.46l.23-1.47c.04-.26-.12-.5-.37-.54l-2.28-.39-.21-.75 1.5-1.61c.17-.19.16-.5-.03-.7l-1.03-1.02Z" fill="#fff" />
+    </svg>
+  );
+}
+
+export function StripeIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M13.98 11.15c0-1.15.93-1.6 2.47-1.6.93 0 2.1.28 3.03.78V7.41c-1.02-.4-2.02-.56-3.03-.56-2.48 0-5.13 1.3-5.13 4.47 0 4.37 6.02 3.67 6.02 5.55 0 1.36-1.18 1.8-2.84 1.8-1.23 0-2.8-.51-4.05-1.2v3c1.37.6 2.76.85 4.05.85 2.55 0 5.5-1.05 5.5-4.6 0-4.7-6.02-3.87-6.02-5.77Z" fill="#635BFF" />
+    </svg>
+  );
+}
+
+export function HubSpotIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M17.01 8.54V5.8a2.24 2.24 0 0 0 1.3-2.02v-.07A2.24 2.24 0 0 0 16.08 1.5h-.07a2.24 2.24 0 0 0-2.23 2.22v.07c0 .89.52 1.65 1.27 2.01v2.74a5.6 5.6 0 0 0-2.52 1.18l-6.66-5.18a2.69 2.69 0 1 0-1.22 1.61l6.52 5.07a5.6 5.6 0 0 0-.32 1.88 5.63 5.63 0 0 0 .46 2.23l-2 2a2.12 2.12 0 1 0 1.2 1.22l2.02-2.02a5.64 5.64 0 1 0 4.48-8.99Z" fill="#FF7A59" />
+    </svg>
+  );
+}
+
+export function SalesforceIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M10 4.4a5.12 5.12 0 0 1 3.74-1.61c2.13 0 3.98 1.3 4.76 3.14a5.64 5.64 0 0 1 2.16-.43c3.14 0 5.34 2.76 5.34 5.62 0 2.87-2.2 5.63-5.34 5.63-.41 0-.81-.05-1.19-.14a4.46 4.46 0 0 1-3.98 2.45c-.68 0-1.33-.15-1.9-.42a5.08 5.08 0 0 1-4.58 2.88 5.08 5.08 0 0 1-4.83-3.47 4.63 4.63 0 0 1-.7.05c-2.57 0-4.48-2.2-4.48-4.7 0-1.65.88-3.1 2.2-3.92A5.22 5.22 0 0 1 3.12 6.5C5.12 4.42 7.86 3.8 10 4.4Z" fill="#00A1E0" />
+    </svg>
+  );
+}
+
+export function TwilioIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0Zm0 20.077c-4.457 0-8.077-3.62-8.077-8.077S7.543 3.923 12 3.923s8.077 3.62 8.077 8.077-3.62 8.077-8.077 8.077Z" fill="#F22F46" />
+      <circle cx="9.75" cy="9.75" r="1.75" fill="#F22F46" />
+      <circle cx="14.25" cy="9.75" r="1.75" fill="#F22F46" />
+      <circle cx="9.75" cy="14.25" r="1.75" fill="#F22F46" />
+      <circle cx="14.25" cy="14.25" r="1.75" fill="#F22F46" />
+    </svg>
+  );
+}
+
 // ── Lookup helpers ──────────────────────────────────────────────────────────
 
 /** Get the right icon component for an OAuth/SSO provider name. */
@@ -231,6 +451,36 @@ export function getLLMIcon(name: string): React.ComponentType<IconProps> | null 
     ollama: OllamaIcon,
     meta: MetaIcon,
     llama: MetaIcon,
+  };
+  return map[name.toLowerCase()] ?? null;
+}
+
+/** Get the right icon component for an MCP integration provider name. */
+export function getMCPIcon(name: string): React.ComponentType<IconProps> | null {
+  const map: Record<string, React.ComponentType<IconProps>> = {
+    slack: SlackIcon,
+    ms365: MS365Icon,
+    microsoft: MS365Icon,
+    gmail: GmailIcon,
+    discord: DiscordIcon,
+    google_calendar: GoogleCalendarIcon,
+    google_drive: GoogleDriveIcon,
+    github: GitHubIcon,
+    jira: JiraIcon,
+    notion: NotionIcon,
+    gitlab: GitLabIcon,
+    confluence: ConfluenceIcon,
+    linear: LinearIcon,
+    asana: AsanaIcon,
+    trello: TrelloIcon,
+    figma: FigmaIcon,
+    zendesk: ZendeskIcon,
+    pagerduty: PagerDutyIcon,
+    datadog: DatadogIcon,
+    stripe: StripeIcon,
+    hubspot: HubSpotIcon,
+    salesforce: SalesforceIcon,
+    twilio: TwilioIcon,
   };
   return map[name.toLowerCase()] ?? null;
 }

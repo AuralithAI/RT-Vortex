@@ -530,6 +530,155 @@ INSERT INTO benchmark_elo_ratings (mode, rating) VALUES
 ON CONFLICT (mode) DO NOTHING;
 
 -- ============================================================================
+-- MULTIMODAL ASSETS
+-- ============================================================================
+-- Track uploaded/ingested assets (PDFs, images, audio, URLs) and per-modality
+-- embedding model configuration.
+
+CREATE TABLE IF NOT EXISTS repo_assets (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    repo_id       UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    asset_type    TEXT NOT NULL CHECK (asset_type IN ('pdf', 'image', 'audio', 'video', 'webpage', 'document')),
+    source_url    TEXT,
+    file_name     TEXT,
+    mime_type     TEXT,
+    size_bytes    BIGINT DEFAULT 0,
+    chunks_count  INT DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'ready', 'error')),
+    error_message TEXT,
+    metadata      JSONB DEFAULT '{}',
+    created_by    UUID REFERENCES users(id) ON DELETE SET NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_assets_repo        ON repo_assets(repo_id);
+CREATE INDEX IF NOT EXISTS idx_repo_assets_repo_type   ON repo_assets(repo_id, asset_type);
+CREATE INDEX IF NOT EXISTS idx_repo_assets_status      ON repo_assets(repo_id, status);
+
+CREATE TABLE IF NOT EXISTS embedding_model_config (
+    id            SERIAL PRIMARY KEY,
+    user_id       UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    modality      TEXT NOT NULL CHECK (modality IN ('text', 'image', 'audio')),
+    model_name    TEXT NOT NULL,
+    backend       TEXT NOT NULL DEFAULT 'onnx' CHECK (backend IN ('onnx', 'http', 'mock')),
+    dimension     INT NOT NULL,
+    enabled       BOOLEAN NOT NULL DEFAULT true,
+    config_json   JSONB DEFAULT '{}',
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(user_id, modality)
+);
+
+CREATE TABLE IF NOT EXISTS model_download_status (
+    model_name    TEXT PRIMARY KEY,
+    status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'downloading', 'ready', 'error')),
+    progress      INT DEFAULT 0,
+    size_bytes    BIGINT DEFAULT 0,
+    error_message TEXT,
+    started_at    TIMESTAMPTZ,
+    completed_at  TIMESTAMPTZ,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+INSERT INTO model_download_status (model_name, status, progress, completed_at)
+VALUES
+    ('bge-m3',      'ready',   100, NOW()),
+    ('minilm',      'ready',   100, NOW()),
+    ('siglip-base', 'pending',   0, NULL),
+    ('clap-general','pending',   0, NULL)
+ON CONFLICT (model_name) DO NOTHING;
+
+-- ============================================================================
+-- MCP INTEGRATIONS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS mcp_connections (
+    id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id           UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    org_id            UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    is_org_level      BOOLEAN NOT NULL DEFAULT false,
+    provider          TEXT NOT NULL CHECK (provider IN (
+        'gmail', 'google_calendar', 'google_drive',
+        'ms365',
+        'jira', 'confluence',
+        'github', 'gitlab',
+        'slack', 'discord',
+        'notion',
+        'linear', 'asana', 'trello',
+        'figma',
+        'zendesk',
+        'pagerduty', 'datadog',
+        'stripe',
+        'hubspot', 'salesforce',
+        'twilio'
+    )),
+    status            TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'active', 'expired', 'revoked', 'error')),
+    vault_key         TEXT NOT NULL,
+    refresh_vault_key TEXT NOT NULL DEFAULT '',
+    scopes            TEXT[] NOT NULL DEFAULT '{}',
+    metadata          JSONB NOT NULL DEFAULT '{}',
+    last_used_at      TIMESTAMPTZ,
+    connected_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at        TIMESTAMPTZ,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_connections_user_provider
+    ON mcp_connections(user_id, provider) WHERE NOT is_org_level;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_connections_org_provider
+    ON mcp_connections(org_id, provider) WHERE is_org_level;
+CREATE INDEX IF NOT EXISTS idx_mcp_connections_user     ON mcp_connections(user_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_connections_org      ON mcp_connections(org_id) WHERE org_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mcp_connections_provider ON mcp_connections(provider, status);
+CREATE INDEX IF NOT EXISTS idx_mcp_connections_expires  ON mcp_connections(expires_at) WHERE expires_at IS NOT NULL AND status = 'active';
+
+CREATE TABLE IF NOT EXISTS mcp_call_log (
+    id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    connection_id UUID NOT NULL REFERENCES mcp_connections(id) ON DELETE CASCADE,
+    agent_id      TEXT,
+    task_id       TEXT,
+    action        TEXT NOT NULL,
+    input_hash    TEXT NOT NULL DEFAULT '',
+    output_hash   TEXT NOT NULL DEFAULT '',
+    latency_ms    INT NOT NULL DEFAULT 0,
+    status        TEXT NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'error', 'rate_limited', 'consent_denied')),
+    error_message TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mcp_call_log_conn    ON mcp_call_log(connection_id);
+CREATE INDEX IF NOT EXISTS idx_mcp_call_log_task    ON mcp_call_log(task_id) WHERE task_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_mcp_call_log_created ON mcp_call_log(created_at DESC);
+
+-- ============================================================================
+-- CUSTOM MCP TEMPLATES
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS mcp_custom_templates (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name        TEXT NOT NULL,
+    label       TEXT NOT NULL,
+    category    TEXT NOT NULL DEFAULT 'custom',
+    description TEXT NOT NULL DEFAULT '',
+    base_url    TEXT NOT NULL,
+    auth_type   TEXT NOT NULL CHECK (auth_type IN ('bearer', 'basic', 'header', 'query')),
+    auth_header TEXT NOT NULL DEFAULT '',
+    actions     JSONB NOT NULL DEFAULT '[]',
+    created_by  UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    org_id      UUID REFERENCES organizations(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_custom_templates_name
+    ON mcp_custom_templates(name);
+CREATE INDEX IF NOT EXISTS idx_mcp_custom_templates_creator
+    ON mcp_custom_templates(created_by);
+CREATE INDEX IF NOT EXISTS idx_mcp_custom_templates_org
+    ON mcp_custom_templates(org_id) WHERE org_id IS NOT NULL;
+
+-- ============================================================================
 -- SCHEMA VERSION TRACKING
 -- ============================================================================
 -- Simple version tracking table (no migration runner needed).
@@ -571,6 +720,18 @@ WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 10);
 INSERT INTO schema_info (version, description)
 SELECT 11, 'Add swarm_agent_memory, swarm_hitl_log tables and tier column on swarm_agents'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 11);
+
+INSERT INTO schema_info (version, description)
+SELECT 12, 'Add multimodal asset tables — repo_assets, embedding_model_config, model_download_status'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 12);
+
+INSERT INTO schema_info (version, description)
+SELECT 13, 'Add MCP integration tables — mcp_connections, mcp_call_log'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 13);
+
+INSERT INTO schema_info (version, description)
+SELECT 14, 'Add custom MCP templates table, relax provider CHECK constraint'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 14);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
@@ -621,6 +782,31 @@ CREATE TRIGGER trg_benchmark_elo_ratings_updated_at
     BEFORE UPDATE ON benchmark_elo_ratings
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS trg_repo_assets_updated_at ON repo_assets;
+CREATE TRIGGER trg_repo_assets_updated_at
+    BEFORE UPDATE ON repo_assets
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS trg_embedding_model_config_updated_at ON embedding_model_config;
+CREATE TRIGGER trg_embedding_model_config_updated_at
+    BEFORE UPDATE ON embedding_model_config
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS trg_model_download_status_updated_at ON model_download_status;
+CREATE TRIGGER trg_model_download_status_updated_at
+    BEFORE UPDATE ON model_download_status
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS trg_mcp_connections_updated_at ON mcp_connections;
+CREATE TRIGGER trg_mcp_connections_updated_at
+    BEFORE UPDATE ON mcp_connections
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS trg_mcp_custom_templates_updated_at ON mcp_custom_templates;
+CREATE TRIGGER trg_mcp_custom_templates_updated_at
+    BEFORE UPDATE ON mcp_custom_templates
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
 -- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
@@ -655,6 +841,13 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE benchmark_runs TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE benchmark_results TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE benchmark_elo_ratings TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE repo_assets TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE embedding_model_config TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE model_download_status TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE mcp_connections TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE mcp_call_log TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE mcp_custom_templates TO rtvortex;
+    GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;
 END $$;

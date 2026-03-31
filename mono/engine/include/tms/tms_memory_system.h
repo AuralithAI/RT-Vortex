@@ -332,6 +332,17 @@ public:
         const std::string& api_key,
         size_t dims
     );
+
+    /**
+     * Store a pre-embedded asset chunk (image, audio) in the FAISS index.
+     *
+     * Converts the AssetChunk into a CodeChunk-compatible format and inserts
+     * the pre-computed embedding vector into the LTM FAISS index.
+     *
+     * @param chunk  Asset chunk with pre-computed embedding vector
+     * @return true if successfully stored in the index
+     */
+    bool storeAssetChunk(const AssetChunk& chunk);
     
 private:
     TMSConfig config_;
