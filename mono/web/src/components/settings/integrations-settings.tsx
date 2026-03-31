@@ -1143,9 +1143,9 @@ function CustomMCPWizard({ onClose }: { onClose: () => void }) {
 
   const handleCreate = () => {
     createMutation.mutate(buildTemplate() as Parameters<typeof createMutation.mutate>[0], {
-      onSuccess: (data: { validation_errors?: MCPValidationError[] }) => {
+      onSuccess: (data: CustomMCPTemplate | { validation_errors: MCPValidationError[] }) => {
         if ("validation_errors" in data && data.validation_errors?.length) {
-          setValidationErrors(data.validation_errors as MCPValidationError[]);
+          setValidationErrors(data.validation_errors);
         } else {
           onClose();
         }
