@@ -701,8 +701,13 @@ export const integrations = {
   /** Initiates OAuth flow — returns the URL the browser should navigate to. */
   oauthUrl: (provider: string, redirectUrl?: string) => {
     const base = `${BASE}/api/v1/integrations/oauth/${provider}/authorize`;
-    if (redirectUrl) return `${base}?redirect_url=${encodeURIComponent(redirectUrl)}`;
-    return base;
+    // Always pass the frontend origin so the Go server redirects back here
+    // (not to the API server which doesn't serve the SPA).
+    const target = redirectUrl
+      ?? (typeof window !== "undefined"
+        ? `${window.location.origin}/settings?tab=mcp&connected=${provider}`
+        : `/settings?tab=mcp&connected=${provider}`);
+    return `${base}?redirect_url=${encodeURIComponent(target)}`;
   },
 
   disconnect: (connectionId: string) =>

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -219,7 +220,20 @@ func (h *mcpHandler) InitiateOAuth(w http.ResponseWriter, r *http.Request) {
 	// the callback (which runs without JWT) can associate the connection.
 	settingsRedirect := r.URL.Query().Get("redirect_url")
 	if settingsRedirect == "" {
-		settingsRedirect = "/settings?tab=mcp&connected=" + providerName
+		// No explicit redirect — derive the frontend origin from the Referer or
+		// Origin header so we redirect back to the SPA, not the API server.
+		frontendBase := ""
+		if ref := r.Referer(); ref != "" {
+			if u, err := url.Parse(ref); err == nil {
+				frontendBase = u.Scheme + "://" + u.Host
+			}
+		}
+		if frontendBase == "" {
+			if origin := r.Header.Get("Origin"); origin != "" {
+				frontendBase = origin
+			}
+		}
+		settingsRedirect = frontendBase + "/settings?tab=mcp&connected=" + providerName
 	}
 	userID := claims.UserID.String()
 	orgID := ""
