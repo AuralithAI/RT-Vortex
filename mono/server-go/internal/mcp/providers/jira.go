@@ -23,7 +23,7 @@ func NewJiraProvider() *JiraProvider {
 }
 
 func (p *JiraProvider) Name() string        { return "jira" }
-func (p *JiraProvider) Category() string     { return "devops" }
+func (p *JiraProvider) Category() string     { return "atlassian" }
 func (p *JiraProvider) Description() string  { return "Issues, sprints, boards, transitions, comments, and project management." }
 
 func (p *JiraProvider) Actions() []mcp.ActionDef {

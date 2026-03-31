@@ -47,6 +47,7 @@ export const queryKeys = {
   integrationProviders: ["integrations", "providers"] as const,
   integrationCallLog: (connectionId: string) =>
     ["integrations", "connections", connectionId, "logs"] as const,
+  customTemplates: ["integrations", "custom-templates"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -354,6 +355,13 @@ export function useIntegrationOAuthStatus() {
   return useQuery({
     queryKey: ["integrations", "oauth-status"] as const,
     queryFn: () => api.integrations.oauthStatus(),
+  });
+}
+
+export function useCustomTemplates() {
+  return useQuery({
+    queryKey: queryKeys.customTemplates,
+    queryFn: () => api.integrations.customTemplates(),
   });
 }
 

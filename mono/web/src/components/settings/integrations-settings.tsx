@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, Fragment } from "react";
+import { useState, useMemo, Fragment, useCallback } from "react";
 import {
   CheckCircle,
   XCircle,
@@ -16,11 +16,19 @@ import {
   AlertTriangle,
   KeyRound,
   X,
+  Plus,
+  Zap,
+  ArrowRight,
+  ArrowLeft,
+  Globe,
+  Lock,
+  Code2,
+  Play,
 } from "lucide-react";
-import { useIntegrations, useIntegrationProviders, useIntegrationCallLog, useIntegrationOAuthStatus } from "@/lib/api/queries";
-import { useConnectIntegration, useDisconnectIntegration, useTestIntegration } from "@/lib/api/mutations";
+import { useIntegrations, useIntegrationProviders, useIntegrationCallLog, useIntegrationOAuthStatus, useCustomTemplates } from "@/lib/api/queries";
+import { useConnectIntegration, useDisconnectIntegration, useTestIntegration, useCreateCustomTemplate, useDeleteCustomTemplate, useValidateCustomTemplate, useSimulateCustomConnection } from "@/lib/api/mutations";
 import { integrations as integrationsApi } from "@/lib/api/client";
-import type { MCPConnection, MCPProviderInfo, MCPCallLogEntry } from "@/types/api";
+import type { MCPConnection, MCPProviderInfo, MCPCallLogEntry, CustomMCPTemplate, CustomMCPActionDef, MCPValidationError } from "@/types/api";
 import { getMCPIcon } from "@/components/icons/brand-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -113,7 +121,7 @@ const providerMeta: Record<string, ProviderMeta> = {
     docsUrl: "https://developer.atlassian.com/cloud/jira/platform/rest/v3/",
     description: "Issues, sprints, boards, transitions, project management",
     actions: ["Search Issues", "Create Issue", "Add Comment", "Transition Issue", "List Projects", "Board Sprints"],
-    category: "devops",
+    category: "atlassian",
   },
   slack: {
     label: "Slack",
@@ -145,15 +153,154 @@ const providerMeta: Record<string, ProviderMeta> = {
     actions: ["Search", "Get Page", "Create Page", "Query Database", "Append Blocks", "List Comments"],
     category: "productivity",
   },
+  gitlab: {
+    label: "GitLab",
+    brandColor: "#FC6D26",
+    borderColor: "border-l-[#FC6D26]",
+    gradient: "from-[#FC6D26]/10 to-transparent",
+    docsUrl: "https://docs.gitlab.com/ee/api/rest/",
+    description: "Merge requests, issues, pipelines, projects, CI/CD",
+    actions: ["List Projects", "Merge Requests", "Issues", "Pipelines", "Create MR", "MR Comments"],
+    category: "devops",
+  },
+  confluence: {
+    label: "Confluence",
+    brandColor: "#1868DB",
+    borderColor: "border-l-[#1868DB]",
+    gradient: "from-[#1868DB]/10 to-transparent",
+    docsUrl: "https://developer.atlassian.com/cloud/confluence/rest/v2/",
+    description: "Pages, spaces, search, comments, content management",
+    actions: ["List Spaces", "Get Page", "Search Content", "Create Page", "Update Page", "List Comments", "Get Space", "Delete Page"],
+    category: "atlassian",
+  },
+  linear: {
+    label: "Linear",
+    brandColor: "#5E6AD2",
+    borderColor: "border-l-[#5E6AD2]",
+    gradient: "from-[#5E6AD2]/10 to-transparent",
+    docsUrl: "https://developers.linear.app/docs/graphql/working-with-the-graphql-api",
+    description: "Issues, projects, cycles, teams, workflow management",
+    actions: ["List Issues", "Create Issue", "Update Issue", "List Projects", "List Teams", "List Cycles", "Add Comment", "Search Issues"],
+    category: "project_management",
+  },
+  asana: {
+    label: "Asana",
+    brandColor: "#F06A6A",
+    borderColor: "border-l-[#F06A6A]",
+    gradient: "from-[#F06A6A]/10 to-transparent",
+    docsUrl: "https://developers.asana.com/docs/getting-started",
+    description: "Tasks, projects, sections, workspaces, team management",
+    actions: ["List Tasks", "Create Task", "Update Task", "List Projects", "List Workspaces", "Search Tasks", "Add Comment", "List Sections"],
+    category: "project_management",
+  },
+  trello: {
+    label: "Trello",
+    brandColor: "#0079BF",
+    borderColor: "border-l-[#0079BF]",
+    gradient: "from-[#0079BF]/10 to-transparent",
+    docsUrl: "https://developer.atlassian.com/cloud/trello/rest/",
+    description: "Boards, lists, cards, checklists, members",
+    actions: ["List Boards", "List Cards", "Create Card", "Update Card", "Move Card", "Add Comment", "List Members", "Search"],
+    category: "project_management",
+  },
+  figma: {
+    label: "Figma",
+    brandColor: "#A259FF",
+    borderColor: "border-l-[#A259FF]",
+    gradient: "from-[#A259FF]/10 to-transparent",
+    docsUrl: "https://www.figma.com/developers/api",
+    description: "Design files, components, styles, comments, images",
+    actions: ["Get File", "List Projects", "Get Comments", "List Components", "Get Images", "Get Styles", "Post Comment", "Get Team Projects"],
+    category: "design",
+  },
+  zendesk: {
+    label: "Zendesk",
+    brandColor: "#03363D",
+    borderColor: "border-l-[#03363D]",
+    gradient: "from-[#03363D]/10 to-transparent",
+    docsUrl: "https://developer.zendesk.com/api-reference/",
+    description: "Tickets, users, organizations, search, support management",
+    actions: ["List Tickets", "Create Ticket", "Update Ticket", "Search", "List Users", "Get Ticket", "Add Comment", "List Organizations"],
+    category: "support",
+  },
+  pagerduty: {
+    label: "PagerDuty",
+    brandColor: "#06AC38",
+    borderColor: "border-l-[#06AC38]",
+    gradient: "from-[#06AC38]/10 to-transparent",
+    docsUrl: "https://developer.pagerduty.com/api-reference/",
+    description: "Incidents, services, on-call schedules, alerts",
+    actions: ["List Incidents", "Create Incident", "Get Incident", "List Services", "On-Call", "Acknowledge", "Resolve", "List Alerts"],
+    category: "monitoring",
+  },
+  datadog: {
+    label: "Datadog",
+    brandColor: "#632CA6",
+    borderColor: "border-l-[#632CA6]",
+    gradient: "from-[#632CA6]/10 to-transparent",
+    docsUrl: "https://docs.datadoghq.com/api/latest/",
+    description: "Metrics, monitors, dashboards, events, logs",
+    actions: ["Query Metrics", "List Monitors", "Create Monitor", "List Dashboards", "Search Logs", "Post Event", "Get Monitor", "Mute Monitor"],
+    category: "monitoring",
+  },
+  stripe: {
+    label: "Stripe",
+    brandColor: "#635BFF",
+    borderColor: "border-l-[#635BFF]",
+    gradient: "from-[#635BFF]/10 to-transparent",
+    docsUrl: "https://stripe.com/docs/api",
+    description: "Payments, customers, invoices, subscriptions, balances",
+    actions: ["List Charges", "List Customers", "Create Customer", "List Invoices", "Get Balance", "List Subscriptions", "Get Charge", "List Payouts"],
+    category: "finance",
+  },
+  hubspot: {
+    label: "HubSpot",
+    brandColor: "#FF7A59",
+    borderColor: "border-l-[#FF7A59]",
+    gradient: "from-[#FF7A59]/10 to-transparent",
+    docsUrl: "https://developers.hubspot.com/docs/api/overview",
+    description: "Contacts, deals, companies, tickets, CRM management",
+    actions: ["List Contacts", "Create Contact", "List Deals", "Create Deal", "List Companies", "Search CRM", "Get Contact", "List Tickets"],
+    category: "crm",
+  },
+  salesforce: {
+    label: "Salesforce",
+    brandColor: "#00A1E0",
+    borderColor: "border-l-[#00A1E0]",
+    gradient: "from-[#00A1E0]/10 to-transparent",
+    docsUrl: "https://developer.salesforce.com/docs/atlas.en-us.api_rest.meta/api_rest/",
+    description: "Leads, opportunities, accounts, SOQL queries, reports",
+    actions: ["SOQL Query", "List Objects", "Get Record", "Create Record", "Update Record", "Search (SOSL)", "Describe Object", "List Reports"],
+    category: "crm",
+  },
+  twilio: {
+    label: "Twilio",
+    brandColor: "#F22F46",
+    borderColor: "border-l-[#F22F46]",
+    gradient: "from-[#F22F46]/10 to-transparent",
+    docsUrl: "https://www.twilio.com/docs/usage/api",
+    description: "SMS, voice, messaging, phone numbers, call management",
+    actions: ["Send SMS", "List Messages", "Get Message", "List Calls", "Make Call", "List Numbers", "Get Call", "List Recordings"],
+    category: "messaging",
+  },
 };
 
 // Stable ordering for categories
 const categoryOrder: { key: string; label: string }[] = [
   { key: "google", label: "Google Workspace" },
   { key: "microsoft", label: "Microsoft 365" },
+  { key: "atlassian", label: "Atlassian" },
   { key: "devops", label: "DevOps & Engineering" },
   { key: "communication", label: "Communication" },
   { key: "productivity", label: "Productivity" },
+  { key: "project_management", label: "Project Management" },
+  { key: "design", label: "Design" },
+  { key: "support", label: "Support" },
+  { key: "monitoring", label: "Monitoring & Observability" },
+  { key: "finance", label: "Finance & Payments" },
+  { key: "crm", label: "CRM" },
+  { key: "messaging", label: "Messaging" },
+  { key: "custom", label: "Custom Integrations" },
 ];
 
 function getStatusBadge(status: string) {
@@ -510,14 +657,480 @@ function ConnectedDrawer({
   );
 }
 
+// ── Custom MCP Template Wizard ──────────────────────────────────────────────
+
+const emptyAction: CustomMCPActionDef = {
+  name: "",
+  description: "",
+  method: "GET",
+  path: "",
+  required_params: [],
+  optional_params: [],
+  body_template: "",
+  consent_required: false,
+};
+
+type WizardStep = "basics" | "auth" | "actions" | "review";
+const WIZARD_STEPS: { key: WizardStep; label: string; icon: React.ElementType }[] = [
+  { key: "basics", label: "Basics", icon: Globe },
+  { key: "auth", label: "Authentication", icon: Lock },
+  { key: "actions", label: "Actions", icon: Code2 },
+  { key: "review", label: "Review & Create", icon: Zap },
+];
+
+function CustomMCPWizard({ onClose }: { onClose: () => void }) {
+  const [step, setStep] = useState<WizardStep>("basics");
+  const [name, setName] = useState("");
+  const [label, setLabel] = useState("");
+  const [category, setCategory] = useState("custom");
+  const [description, setDescription] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [authType, setAuthType] = useState<"bearer" | "basic" | "header" | "query">("bearer");
+  const [authHeader, setAuthHeader] = useState("");
+  const [actions, setActions] = useState<CustomMCPActionDef[]>([{ ...emptyAction }]);
+  const [simToken, setSimToken] = useState("");
+
+  const createMutation = useCreateCustomTemplate();
+  const validateMutation = useValidateCustomTemplate();
+  const simulateMutation = useSimulateCustomConnection();
+
+  const [validationErrors, setValidationErrors] = useState<MCPValidationError[]>([]);
+
+  const fieldError = useCallback(
+    (field: string) => validationErrors.find((e) => e.field === field)?.message,
+    [validationErrors],
+  );
+
+  const stepIdx = WIZARD_STEPS.findIndex((s) => s.key === step);
+
+  const goPrev = () => {
+    if (stepIdx > 0) setStep(WIZARD_STEPS[stepIdx - 1].key);
+  };
+
+  const goNext = () => {
+    if (stepIdx < WIZARD_STEPS.length - 1) setStep(WIZARD_STEPS[stepIdx + 1].key);
+  };
+
+  const buildTemplate = () => ({
+    name,
+    label,
+    category,
+    description,
+    base_url: baseUrl,
+    auth_type: authType,
+    auth_header: authHeader,
+    actions: actions.filter((a) => a.name.trim() !== ""),
+  });
+
+  const handleValidate = () => {
+    validateMutation.mutate(buildTemplate() as Parameters<typeof validateMutation.mutate>[0], {
+      onSuccess: (data) => {
+        if (data.validation_errors?.length) {
+          setValidationErrors(data.validation_errors);
+        } else {
+          setValidationErrors([]);
+        }
+      },
+    });
+  };
+
+  const handleSimulate = () => {
+    simulateMutation.mutate({ base_url: baseUrl, token: simToken, auth_type: authType, auth_header: authHeader });
+  };
+
+  const handleCreate = () => {
+    createMutation.mutate(buildTemplate() as Parameters<typeof createMutation.mutate>[0], {
+      onSuccess: (data) => {
+        if ("validation_errors" in data && data.validation_errors?.length) {
+          setValidationErrors(data.validation_errors as MCPValidationError[]);
+        } else {
+          onClose();
+        }
+      },
+    });
+  };
+
+  const updateAction = (idx: number, patch: Partial<CustomMCPActionDef>) => {
+    setActions((prev) => prev.map((a, i) => (i === idx ? { ...a, ...patch } : a)));
+  };
+
+  const removeAction = (idx: number) => {
+    setActions((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const addAction = () => {
+    setActions((prev) => [...prev, { ...emptyAction }]);
+  };
+
+  return (
+    <Card className="border-l-4 border-l-violet-500">
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Zap className="h-4 w-4 text-violet-500" />
+            Create Custom MCP Integration
+          </CardTitle>
+          <Button variant="ghost" size="icon" onClick={onClose} className="h-7 w-7">
+            <X className="h-4 w-4" />
+          </Button>
+        </div>
+        <CardDescription>
+          Define a custom API integration that swarm agents can use as a tool.
+        </CardDescription>
+
+        {/* Step indicator */}
+        <div className="flex items-center gap-1 pt-2">
+          {WIZARD_STEPS.map(({ key, label: sLabel, icon: SIcon }, i) => (
+            <Fragment key={key}>
+              {i > 0 && <div className="h-px w-6 bg-border" />}
+              <button
+                type="button"
+                onClick={() => setStep(key)}
+                className={`flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
+                  step === key
+                    ? "bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-300"
+                    : i < stepIdx
+                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-300"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <SIcon className="h-3 w-3" />
+                {sLabel}
+              </button>
+            </Fragment>
+          ))}
+        </div>
+      </CardHeader>
+
+      <CardContent className="space-y-4">
+        {/* ─── Step: Basics ─── */}
+        {step === "basics" && (
+          <div className="space-y-3">
+            <div>
+              <Label>Name <span className="text-muted-foreground text-xs">(snake_case, unique)</span></Label>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="my_custom_api" />
+              {fieldError("name") && <p className="text-xs text-red-500 mt-1">{fieldError("name")}</p>}
+            </div>
+            <div>
+              <Label>Display Label</Label>
+              <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="My Custom API" />
+              {fieldError("label") && <p className="text-xs text-red-500 mt-1">{fieldError("label")}</p>}
+            </div>
+            <div>
+              <Label>Description</Label>
+              <Input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Short description of what this integration does" />
+            </div>
+            <div>
+              <Label>Category</Label>
+              <select
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors"
+              >
+                {categoryOrder.map((c) => (
+                  <option key={c.key} value={c.key}>{c.label}</option>
+                ))}
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div>
+              <Label>Base URL</Label>
+              <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://api.example.com/v1" />
+              {fieldError("base_url") && <p className="text-xs text-red-500 mt-1">{fieldError("base_url")}</p>}
+            </div>
+          </div>
+        )}
+
+        {/* ─── Step: Auth ─── */}
+        {step === "auth" && (
+          <div className="space-y-3">
+            <div>
+              <Label>Authentication Type</Label>
+              <div className="grid grid-cols-2 gap-2 mt-1">
+                {(["bearer", "basic", "header", "query"] as const).map((at) => (
+                  <button
+                    key={at}
+                    type="button"
+                    onClick={() => setAuthType(at)}
+                    className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                      authType === at
+                        ? "border-violet-500 bg-violet-50 text-violet-700 dark:bg-violet-900 dark:text-violet-300"
+                        : "border-border hover:border-foreground/20"
+                    }`}
+                  >
+                    <Lock className="h-3.5 w-3.5" />
+                    <div className="text-left">
+                      <div className="font-medium capitalize">{at}</div>
+                      <div className="text-[10px] text-muted-foreground">
+                        {at === "bearer" && "Authorization: Bearer <token>"}
+                        {at === "basic" && "Authorization: Basic <token>"}
+                        {at === "header" && "Custom header name"}
+                        {at === "query" && "?api_key=<token>"}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+              {fieldError("auth_type") && <p className="text-xs text-red-500 mt-1">{fieldError("auth_type")}</p>}
+            </div>
+            {authType === "header" && (
+              <div>
+                <Label>Custom Header Name</Label>
+                <Input value={authHeader} onChange={(e) => setAuthHeader(e.target.value)} placeholder="X-API-Key" />
+                {fieldError("auth_header") && <p className="text-xs text-red-500 mt-1">{fieldError("auth_header")}</p>}
+              </div>
+            )}
+
+            {/* Simulation test */}
+            <div className="rounded-lg border border-dashed p-3 space-y-2">
+              <Label className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                <Play className="h-3 w-3" /> Test Connection
+              </Label>
+              <Input
+                type="password"
+                value={simToken}
+                onChange={(e) => setSimToken(e.target.value)}
+                placeholder="Paste a test token/key..."
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleSimulate}
+                disabled={!baseUrl || !simToken || simulateMutation.isPending}
+              >
+                {simulateMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Activity className="mr-1 h-3 w-3" />}
+                Simulate
+              </Button>
+              {simulateMutation.isSuccess && (
+                <p className={`text-xs ${simulateMutation.data.success ? "text-emerald-600" : "text-red-500"}`}>
+                  {simulateMutation.data.success
+                    ? <><CheckCircle className="mr-1 inline h-3 w-3" /> Connection successful!</>
+                    : <><XCircle className="mr-1 inline h-3 w-3" /> {simulateMutation.data.error}</>}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ─── Step: Actions ─── */}
+        {step === "actions" && (
+          <div className="space-y-3">
+            {fieldError("actions") && <p className="text-xs text-red-500">{fieldError("actions")}</p>}
+            {actions.map((action, idx) => (
+              <div key={idx} className="rounded-lg border p-3 space-y-2 relative">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-muted-foreground">Action {idx + 1}</span>
+                  {actions.length > 1 && (
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeAction(idx)}>
+                      <Trash2 className="h-3 w-3" />
+                    </Button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-xs">Name</Label>
+                    <Input value={action.name} onChange={(e) => updateAction(idx, { name: e.target.value })} placeholder="list_items" className="h-8 text-xs" />
+                    {fieldError(`actions[${idx}].name`) && <p className="text-[10px] text-red-500">{fieldError(`actions[${idx}].name`)}</p>}
+                  </div>
+                  <div>
+                    <Label className="text-xs">HTTP Method</Label>
+                    <select
+                      value={action.method}
+                      onChange={(e) => updateAction(idx, { method: e.target.value as CustomMCPActionDef["method"] })}
+                      className="flex h-8 w-full rounded-md border border-input bg-background px-2 text-xs shadow-sm"
+                    >
+                      {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs">Description</Label>
+                  <Input value={action.description} onChange={(e) => updateAction(idx, { description: e.target.value })} placeholder="List all items from the API" className="h-8 text-xs" />
+                  {fieldError(`actions[${idx}].description`) && <p className="text-[10px] text-red-500">{fieldError(`actions[${idx}].description`)}</p>}
+                </div>
+                <div>
+                  <Label className="text-xs">Path <span className="text-muted-foreground">(use {"{param}"} for interpolation)</span></Label>
+                  <Input value={action.path} onChange={(e) => updateAction(idx, { path: e.target.value })} placeholder="/items/{item_id}" className="h-8 text-xs font-mono" />
+                  {fieldError(`actions[${idx}].path`) && <p className="text-[10px] text-red-500">{fieldError(`actions[${idx}].path`)}</p>}
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <Label className="text-xs">Required Params <span className="text-muted-foreground">(comma-sep)</span></Label>
+                    <Input
+                      value={action.required_params?.join(", ") ?? ""}
+                      onChange={(e) => updateAction(idx, { required_params: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                      placeholder="item_id, name"
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Optional Params <span className="text-muted-foreground">(comma-sep)</span></Label>
+                    <Input
+                      value={action.optional_params?.join(", ") ?? ""}
+                      onChange={(e) => updateAction(idx, { optional_params: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) })}
+                      placeholder="limit, offset"
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                </div>
+                {(action.method === "POST" || action.method === "PUT" || action.method === "PATCH") && (
+                  <div>
+                    <Label className="text-xs">Body Template <span className="text-muted-foreground">(JSON with {"{{param}}"} placeholders)</span></Label>
+                    <textarea
+                      value={action.body_template ?? ""}
+                      onChange={(e) => updateAction(idx, { body_template: e.target.value })}
+                      placeholder={'{"name": "{{name}}", "value": "{{value}}"}'}
+                      rows={3}
+                      className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-xs font-mono shadow-sm resize-y"
+                    />
+                    {fieldError(`actions[${idx}].body_template`) && <p className="text-[10px] text-red-500">{fieldError(`actions[${idx}].body_template`)}</p>}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={action.consent_required}
+                    onChange={(e) => updateAction(idx, { consent_required: e.target.checked })}
+                    className="h-3.5 w-3.5 rounded border-gray-300"
+                  />
+                  <Label className="text-xs">Require user consent before executing</Label>
+                </div>
+              </div>
+            ))}
+            <Button variant="outline" size="sm" onClick={addAction}>
+              <Plus className="mr-1 h-3 w-3" /> Add Action
+            </Button>
+          </div>
+        )}
+
+        {/* ─── Step: Review ─── */}
+        {step === "review" && (
+          <div className="space-y-3">
+            <div className="rounded-lg border p-3 space-y-2 text-sm">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                <span className="text-muted-foreground">Name:</span>
+                <span className="font-mono">{name || "—"}</span>
+                <span className="text-muted-foreground">Label:</span>
+                <span>{label || "—"}</span>
+                <span className="text-muted-foreground">Base URL:</span>
+                <span className="font-mono text-xs break-all">{baseUrl || "—"}</span>
+                <span className="text-muted-foreground">Auth:</span>
+                <span className="capitalize">{authType}{authType === "header" && authHeader ? ` (${authHeader})` : ""}</span>
+                <span className="text-muted-foreground">Actions:</span>
+                <span>{actions.filter((a) => a.name).length}</span>
+              </div>
+              {actions.filter((a) => a.name).length > 0 && (
+                <div className="flex flex-wrap gap-1 pt-1">
+                  {actions.filter((a) => a.name).map((a) => (
+                    <Badge key={a.name} variant="secondary" className="text-xs font-mono">
+                      {a.method} {a.name}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Inline validation */}
+            <Button variant="outline" size="sm" onClick={handleValidate} disabled={validateMutation.isPending}>
+              {validateMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <CheckCircle className="mr-1 h-3 w-3" />}
+              Validate
+            </Button>
+
+            {validationErrors.length > 0 && (
+              <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950 dark:border-red-900 p-3 space-y-1">
+                <p className="text-xs font-semibold text-red-700 dark:text-red-400 flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3" /> Validation Errors
+                </p>
+                {validationErrors.map((e, i) => (
+                  <p key={i} className="text-xs text-red-600 dark:text-red-400">
+                    <span className="font-mono">{e.field}</span>: {e.message}
+                  </p>
+                ))}
+              </div>
+            )}
+
+            {validateMutation.isSuccess && validationErrors.length === 0 && (
+              <p className="text-xs text-emerald-600 flex items-center gap-1">
+                <CheckCircle className="h-3 w-3" /> Template is valid!
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* ─── Navigation ─── */}
+        <div className="flex items-center justify-between pt-2 border-t">
+          <Button variant="ghost" size="sm" onClick={goPrev} disabled={stepIdx === 0}>
+            <ArrowLeft className="mr-1 h-3 w-3" /> Back
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={onClose}>Cancel</Button>
+            {stepIdx < WIZARD_STEPS.length - 1 ? (
+              <Button size="sm" onClick={goNext}>
+                Next <ArrowRight className="ml-1 h-3 w-3" />
+              </Button>
+            ) : (
+              <Button size="sm" onClick={handleCreate} disabled={createMutation.isPending}>
+                {createMutation.isPending ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Zap className="mr-1 h-3 w-3" />}
+                Create Integration
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {createMutation.isError && (
+          <p className="text-sm text-red-500">
+            <AlertTriangle className="mr-1 inline h-3 w-3" />
+            {(createMutation.error as Error)?.message ?? "Failed to create template."}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Custom Template Card ────────────────────────────────────────────────────
+
+function CustomTemplateCard({ template, onDelete }: { template: CustomMCPTemplate; onDelete: () => void }) {
+  const deleteMutation = useDeleteCustomTemplate();
+
+  return (
+    <div className="flex items-center justify-between rounded-lg border px-3 py-2">
+      <div className="flex items-center gap-3 min-w-0">
+        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900">
+          <Zap className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+        </div>
+        <div className="min-w-0">
+          <p className="text-sm font-medium truncate">{template.label}</p>
+          <p className="text-xs text-muted-foreground truncate">
+            <span className="font-mono">{template.name}</span> · {template.actions.length} action{template.actions.length !== 1 ? "s" : ""} · {template.auth_type}
+          </p>
+        </div>
+      </div>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-7 w-7 shrink-0"
+        onClick={() => deleteMutation.mutate(template.id, { onSuccess: onDelete })}
+        disabled={deleteMutation.isPending}
+      >
+        {deleteMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3 text-muted-foreground hover:text-red-500" />}
+      </Button>
+    </div>
+  );
+}
+
 // ── Main Component ──────────────────────────────────────────────────────────
 
 export function IntegrationsSettings() {
   const { data: connections, isLoading: connectionsLoading } = useIntegrations();
   const { data: providers, isLoading: providersLoading } = useIntegrationProviders();
   const { data: oauthStatusData } = useIntegrationOAuthStatus();
+  const { data: customTemplates, refetch: refetchTemplates } = useCustomTemplates();
   const [manualConnectProvider, setManualConnectProvider] = useState<string | null>(null);
   const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
+  const [showCustomWizard, setShowCustomWizard] = useState(false);
 
   const isLoading = connectionsLoading || providersLoading;
   const oauthEnabled = oauthStatusData?.oauth_enabled ?? {};
@@ -667,6 +1280,39 @@ export function IntegrationsSettings() {
             <ManualConnectForm provider={prov} onClose={() => setManualConnectProvider(null)} />
           ) : null;
         })()}
+
+        {/* ─── Custom MCP Templates ─── */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Custom Integrations
+            </h4>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setShowCustomWizard(true); setManualConnectProvider(null); setSelectedConnection(null); }}
+              className="h-7 text-xs"
+            >
+              <Plus className="mr-1 h-3 w-3" /> Create Custom
+            </Button>
+          </div>
+
+          {showCustomWizard && (
+            <CustomMCPWizard onClose={() => { setShowCustomWizard(false); refetchTemplates(); }} />
+          )}
+
+          {(customTemplates as CustomMCPTemplate[] | undefined)?.length ? (
+            <div className="space-y-2">
+              {(customTemplates as CustomMCPTemplate[]).map((t) => (
+                <CustomTemplateCard key={t.id} template={t} onDelete={() => refetchTemplates()} />
+              ))}
+            </div>
+          ) : !showCustomWizard ? (
+            <p className="text-xs text-muted-foreground">
+              No custom integrations yet. Create one to connect any REST API as an agent tool.
+            </p>
+          ) : null}
+        </div>
 
         {/* ─── Empty state ─── */}
         {totalCount === 0 && (

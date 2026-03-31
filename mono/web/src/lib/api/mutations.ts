@@ -402,3 +402,42 @@ export function useTestIntegration() {
     mutationFn: (connectionId: string) => api.integrations.test(connectionId),
   });
 }
+
+// ── Custom MCP Templates ────────────────────────────────────────────────────
+
+export function useCreateCustomTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: Parameters<typeof api.integrations.createCustomTemplate>[0]) =>
+      api.integrations.createCustomTemplate(body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.customTemplates });
+      qc.invalidateQueries({ queryKey: queryKeys.integrationProviders });
+    },
+  });
+}
+
+export function useDeleteCustomTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (templateId: string) => api.integrations.deleteCustomTemplate(templateId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.customTemplates });
+      qc.invalidateQueries({ queryKey: queryKeys.integrationProviders });
+    },
+  });
+}
+
+export function useValidateCustomTemplate() {
+  return useMutation({
+    mutationFn: (body: Parameters<typeof api.integrations.validateCustomTemplate>[0]) =>
+      api.integrations.validateCustomTemplate(body),
+  });
+}
+
+export function useSimulateCustomConnection() {
+  return useMutation({
+    mutationFn: (body: Parameters<typeof api.integrations.simulateCustomConnection>[0]) =>
+      api.integrations.simulateCustomConnection(body),
+  });
+}

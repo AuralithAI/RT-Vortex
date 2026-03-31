@@ -51,6 +51,10 @@ import type {
   MCPConnection,
   MCPCallLogEntry,
   MCPTestResult,
+  CustomMCPTemplate,
+  MCPValidationError,
+  MCPValidationResult,
+  MCPSimulateResult,
 } from "@/types/api";
 
 // ── Error classes ───────────────────────────────────────────────────────────
@@ -728,6 +732,39 @@ export const integrations = {
   /** Returns which providers have server-side OAuth configured. */
   oauthStatus: () =>
     request<{ oauth_enabled: Record<string, boolean> }>("/api/v1/integrations/oauth/status"),
+
+  // ── Custom MCP Templates ──────────────────────────────────────────────────
+
+  /** List custom templates visible to the current user. */
+  customTemplates: () =>
+    request<CustomMCPTemplate[]>("/api/v1/integrations/custom-templates"),
+
+  /** Create a new custom MCP template. */
+  createCustomTemplate: (body: Omit<CustomMCPTemplate, "id" | "created_by" | "created_at" | "updated_at">) =>
+    request<CustomMCPTemplate | { validation_errors: MCPValidationError[] }>("/api/v1/integrations/custom-templates", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** Delete a custom template. */
+  deleteCustomTemplate: (templateId: string) =>
+    request<{ status: string; id: string }>(`/api/v1/integrations/custom-templates/${templateId}`, {
+      method: "DELETE",
+    }),
+
+  /** Validate a template without saving. */
+  validateCustomTemplate: (body: Omit<CustomMCPTemplate, "id" | "created_by" | "created_at" | "updated_at">) =>
+    request<MCPValidationResult>("/api/v1/integrations/custom-templates/validate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  /** Simulate connectivity to a custom template's base URL. */
+  simulateCustomConnection: (body: { base_url: string; token: string; auth_type: string; auth_header?: string }) =>
+    request<MCPSimulateResult>("/api/v1/integrations/custom-templates/simulate", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
 
 // ── Convenience export ──────────────────────────────────────────────────────

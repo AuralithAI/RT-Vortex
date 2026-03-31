@@ -473,3 +473,150 @@ func hashSHA256(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:8])
 }
+
+// ── Custom MCP Template Methods ─────────────────────────────────────────────
+
+// CreateCustomTemplate validates, saves, and registers a custom MCP provider.
+func (s *Service) CreateCustomTemplate(ctx context.Context, tmpl *CustomMCPTemplate) ([]ValidationError, error) {
+	if errs := ValidateTemplate(tmpl); len(errs) > 0 {
+		return errs, nil
+	}
+
+	// Check for name collision with built-in providers
+	if _, exists := s.registry.Get(tmpl.Name); exists {
+		return []ValidationError{{Field: "name", Message: "A provider with this name already exists."}}, nil
+	}
+
+	// Serialize actions to JSON for DB
+	actionsJSON, err := json.Marshal(tmpl.Actions)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize actions: %w", err)
+	}
+
+	userID, _ := uuid.Parse(tmpl.CreatedBy)
+
+	dbTmpl := &store.MCPCustomTemplate{
+		Name:        tmpl.Name,
+		Label:       tmpl.Label,
+		Category:    tmpl.Category,
+		Description: tmpl.Description,
+		BaseURL:     tmpl.BaseURL,
+		AuthType:    tmpl.AuthType,
+		AuthHeader:  tmpl.AuthHeader,
+		ActionsJSON: string(actionsJSON),
+		CreatedBy:   userID,
+	}
+
+	if err := s.repo.CreateCustomTemplate(ctx, dbTmpl); err != nil {
+		if strings.Contains(err.Error(), "duplicate key") || strings.Contains(err.Error(), "unique") {
+			return []ValidationError{{Field: "name", Message: "A custom template with this name already exists."}}, nil
+		}
+		return nil, fmt.Errorf("failed to save template: %w", err)
+	}
+
+	// Register the runtime provider
+	tmpl.ID = dbTmpl.ID.String()
+	tmpl.CreatedAt = dbTmpl.CreatedAt
+	tmpl.UpdatedAt = dbTmpl.UpdatedAt
+	provider := NewCustomMCPProvider(tmpl)
+	s.registry.Register(provider)
+
+	slog.Info("mcp: registered custom provider", "name", tmpl.Name, "actions", len(tmpl.Actions))
+	return nil, nil
+}
+
+// ListCustomTemplates returns custom templates visible to the user.
+func (s *Service) ListCustomTemplates(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID) ([]CustomMCPTemplate, error) {
+	rows, err := s.repo.ListCustomTemplates(ctx, userID, orgID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CustomMCPTemplate, 0, len(rows))
+	for _, r := range rows {
+		t, err := dbTemplateToCustom(r)
+		if err != nil {
+			slog.Warn("mcp: failed to parse custom template", "id", r.ID, "error", err)
+			continue
+		}
+		out = append(out, *t)
+	}
+	return out, nil
+}
+
+// DeleteCustomTemplate removes a custom template and unregisters its provider.
+func (s *Service) DeleteCustomTemplate(ctx context.Context, id uuid.UUID, userID uuid.UUID) error {
+	tmpl, err := s.repo.GetCustomTemplate(ctx, id)
+	if err != nil {
+		return fmt.Errorf("template not found: %w", err)
+	}
+	if tmpl.CreatedBy != userID {
+		return fmt.Errorf("forbidden: only the template creator can delete it")
+	}
+
+	// Unregister from the provider registry
+	s.registry.Unregister(tmpl.Name)
+
+	return s.repo.DeleteCustomTemplate(ctx, id)
+}
+
+// ValidateCustomTemplate validates a template without saving it.
+func (s *Service) ValidateCustomTemplate(tmpl *CustomMCPTemplate) []ValidationError {
+	errs := ValidateTemplate(tmpl)
+	// Also check name collision
+	if tmpl.Name != "" {
+		if _, exists := s.registry.Get(tmpl.Name); exists {
+			errs = append(errs, ValidationError{Field: "name", Message: "A provider with this name already exists."})
+		}
+	}
+	return errs
+}
+
+// SimulateCustomConnection tests connectivity for a custom template's base URL.
+func (s *Service) SimulateCustomConnection(ctx context.Context, baseURL, token, authType, authHeader string) (*Result, error) {
+	return SimulateConnection(ctx, baseURL, token, authType, authHeader)
+}
+
+// LoadCustomTemplates loads all custom templates from DB and registers them.
+// Call this on startup.
+func (s *Service) LoadCustomTemplates(ctx context.Context) {
+	rows, err := s.repo.ListAllCustomTemplates(ctx)
+	if err != nil {
+		slog.Warn("mcp: failed to load custom templates", "error", err)
+		return
+	}
+	count := 0
+	for _, r := range rows {
+		t, err := dbTemplateToCustom(r)
+		if err != nil {
+			slog.Warn("mcp: failed to parse custom template", "id", r.ID, "error", err)
+			continue
+		}
+		provider := NewCustomMCPProvider(t)
+		s.registry.Register(provider)
+		count++
+	}
+	if count > 0 {
+		slog.Info("mcp: loaded custom templates", "count", count)
+	}
+}
+
+func dbTemplateToCustom(r store.MCPCustomTemplate) (*CustomMCPTemplate, error) {
+	var actions []CustomActionDef
+	if err := json.Unmarshal([]byte(r.ActionsJSON), &actions); err != nil {
+		return nil, fmt.Errorf("parse actions: %w", err)
+	}
+	return &CustomMCPTemplate{
+		ID:          r.ID.String(),
+		Name:        r.Name,
+		Label:       r.Label,
+		Category:    r.Category,
+		Description: r.Description,
+		BaseURL:     r.BaseURL,
+		AuthType:    r.AuthType,
+		AuthHeader:  r.AuthHeader,
+		Actions:     actions,
+		CreatedBy:   r.CreatedBy.String(),
+		CreatedAt:   r.CreatedAt,
+		UpdatedAt:   r.UpdatedAt,
+	}, nil
+}

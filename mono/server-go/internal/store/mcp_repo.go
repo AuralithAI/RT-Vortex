@@ -222,3 +222,139 @@ func (r *MCPRepository) CountCallsForTask(ctx context.Context, taskID string) (i
 		`SELECT COUNT(*) FROM mcp_call_log WHERE task_id = $1`, taskID).Scan(&count)
 	return count, err
 }
+
+// ── Custom MCP Templates ────────────────────────────────────────────────────
+
+type MCPCustomTemplate struct {
+	ID          uuid.UUID  `json:"id"`
+	Name        string     `json:"name"`
+	Label       string     `json:"label"`
+	Category    string     `json:"category"`
+	Description string     `json:"description"`
+	BaseURL     string     `json:"base_url"`
+	AuthType    string     `json:"auth_type"`
+	AuthHeader  string     `json:"auth_header"`
+	ActionsJSON string     `json:"-"`
+	CreatedBy   uuid.UUID  `json:"created_by"`
+	OrgID       *uuid.UUID `json:"org_id,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+func (r *MCPRepository) CreateCustomTemplate(ctx context.Context, t *MCPCustomTemplate) error {
+	if t.ID == uuid.Nil {
+		t.ID = uuid.New()
+	}
+	now := time.Now().UTC()
+	t.CreatedAt = now
+	t.UpdatedAt = now
+
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO mcp_custom_templates
+			(id, name, label, category, description, base_url, auth_type, auth_header, actions, created_by, org_id, created_at, updated_at)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11,$12,$13)`,
+		t.ID, t.Name, t.Label, t.Category, t.Description, t.BaseURL,
+		t.AuthType, t.AuthHeader, t.ActionsJSON, t.CreatedBy, t.OrgID,
+		t.CreatedAt, t.UpdatedAt,
+	)
+	return err
+}
+
+func (r *MCPRepository) GetCustomTemplate(ctx context.Context, id uuid.UUID) (*MCPCustomTemplate, error) {
+	var t MCPCustomTemplate
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, name, label, category, description, base_url, auth_type, auth_header,
+		        actions::text, created_by, org_id, created_at, updated_at
+		 FROM mcp_custom_templates WHERE id = $1`, id,
+	).Scan(
+		&t.ID, &t.Name, &t.Label, &t.Category, &t.Description, &t.BaseURL,
+		&t.AuthType, &t.AuthHeader, &t.ActionsJSON, &t.CreatedBy, &t.OrgID,
+		&t.CreatedAt, &t.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (r *MCPRepository) GetCustomTemplateByName(ctx context.Context, name string) (*MCPCustomTemplate, error) {
+	var t MCPCustomTemplate
+	err := r.pool.QueryRow(ctx,
+		`SELECT id, name, label, category, description, base_url, auth_type, auth_header,
+		        actions::text, created_by, org_id, created_at, updated_at
+		 FROM mcp_custom_templates WHERE name = $1`, name,
+	).Scan(
+		&t.ID, &t.Name, &t.Label, &t.Category, &t.Description, &t.BaseURL,
+		&t.AuthType, &t.AuthHeader, &t.ActionsJSON, &t.CreatedBy, &t.OrgID,
+		&t.CreatedAt, &t.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (r *MCPRepository) ListCustomTemplates(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID) ([]MCPCustomTemplate, error) {
+	q := `SELECT id, name, label, category, description, base_url, auth_type, auth_header,
+	             actions::text, created_by, org_id, created_at, updated_at
+	      FROM mcp_custom_templates
+	      WHERE created_by = $1 OR org_id = $2
+	      ORDER BY name`
+
+	rows, err := r.pool.Query(ctx, q, userID, orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (MCPCustomTemplate, error) {
+		var t MCPCustomTemplate
+		err := row.Scan(
+			&t.ID, &t.Name, &t.Label, &t.Category, &t.Description, &t.BaseURL,
+			&t.AuthType, &t.AuthHeader, &t.ActionsJSON, &t.CreatedBy, &t.OrgID,
+			&t.CreatedAt, &t.UpdatedAt,
+		)
+		return t, err
+	})
+}
+
+func (r *MCPRepository) UpdateCustomTemplate(ctx context.Context, t *MCPCustomTemplate) error {
+	t.UpdatedAt = time.Now().UTC()
+	_, err := r.pool.Exec(ctx,
+		`UPDATE mcp_custom_templates
+		 SET label = $1, category = $2, description = $3, base_url = $4,
+		     auth_type = $5, auth_header = $6, actions = $7::jsonb, updated_at = $8
+		 WHERE id = $9`,
+		t.Label, t.Category, t.Description, t.BaseURL,
+		t.AuthType, t.AuthHeader, t.ActionsJSON, t.UpdatedAt, t.ID,
+	)
+	return err
+}
+
+func (r *MCPRepository) DeleteCustomTemplate(ctx context.Context, id uuid.UUID) error {
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM mcp_custom_templates WHERE id = $1`, id)
+	return err
+}
+
+// ListAllCustomTemplates returns every template (used on startup to register providers).
+func (r *MCPRepository) ListAllCustomTemplates(ctx context.Context) ([]MCPCustomTemplate, error) {
+	q := `SELECT id, name, label, category, description, base_url, auth_type, auth_header,
+	             actions::text, created_by, org_id, created_at, updated_at
+	      FROM mcp_custom_templates
+	      ORDER BY name`
+
+	rows, err := r.pool.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (MCPCustomTemplate, error) {
+		var t MCPCustomTemplate
+		err := row.Scan(
+			&t.ID, &t.Name, &t.Label, &t.Category, &t.Description, &t.BaseURL,
+			&t.AuthType, &t.AuthHeader, &t.ActionsJSON, &t.CreatedBy, &t.OrgID,
+			&t.CreatedAt, &t.UpdatedAt,
+		)
+		return t, err
+	})
+}

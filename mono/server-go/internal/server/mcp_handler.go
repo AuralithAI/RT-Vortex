@@ -397,6 +397,146 @@ func (h *mcpHandler) OAuthStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ── Custom MCP Templates ────────────────────────────────────────────────────
+
+// CreateCustomTemplate validates and stores a new custom MCP template.
+// POST /api/v1/integrations/custom-templates
+func (h *mcpHandler) CreateCustomTemplate(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	var body mcp.CustomMCPTemplate
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	body.CreatedBy = claims.UserID.String()
+
+	validationErrs, err := h.svc.CreateCustomTemplate(r.Context(), &body)
+	if err != nil {
+		slog.Error("mcp: failed to create custom template", "error", err)
+		http.Error(w, `{"error":"failed to create template"}`, http.StatusInternalServerError)
+		return
+	}
+	if len(validationErrs) > 0 {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]interface{}{
+			"validation_errors": validationErrs,
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, body)
+}
+
+// ListCustomTemplates returns custom templates visible to the user.
+// GET /api/v1/integrations/custom-templates
+func (h *mcpHandler) ListCustomTemplates(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	var orgID *uuid.UUID
+	if claims.OrgID != uuid.Nil {
+		oid := claims.OrgID
+		orgID = &oid
+	}
+
+	templates, err := h.svc.ListCustomTemplates(r.Context(), claims.UserID, orgID)
+	if err != nil {
+		slog.Error("mcp: failed to list custom templates", "error", err)
+		http.Error(w, `{"error":"failed to list templates"}`, http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, templates)
+}
+
+// DeleteCustomTemplate removes a custom template.
+// DELETE /api/v1/integrations/custom-templates/{templateID}
+func (h *mcpHandler) DeleteCustomTemplate(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	tmplID, err := uuid.Parse(chi.URLParam(r, "templateID"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid template id"}`, http.StatusBadRequest)
+		return
+	}
+
+	if err := h.svc.DeleteCustomTemplate(r.Context(), tmplID, claims.UserID); err != nil {
+		if fmt.Sprintf("%v", err) == "forbidden: only the template creator can delete it" {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		slog.Error("mcp: failed to delete custom template", "error", err)
+		http.Error(w, `{"error":"failed to delete template"}`, http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted", "id": tmplID.String()})
+}
+
+// ValidateCustomTemplate validates a template without saving.
+// POST /api/v1/integrations/custom-templates/validate
+func (h *mcpHandler) ValidateCustomTemplate(w http.ResponseWriter, r *http.Request) {
+	var body mcp.CustomMCPTemplate
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	errs := h.svc.ValidateCustomTemplate(&body)
+	if len(errs) > 0 {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"valid":             false,
+			"validation_errors": errs,
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"valid": true,
+	})
+}
+
+// SimulateCustomConnection tests connectivity for a custom template.
+// POST /api/v1/integrations/custom-templates/simulate
+func (h *mcpHandler) SimulateCustomConnection(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		BaseURL    string `json:"base_url"`
+		Token      string `json:"token"`
+		AuthType   string `json:"auth_type"`
+		AuthHeader string `json:"auth_header"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+	if body.BaseURL == "" || body.Token == "" {
+		http.Error(w, `{"error":"base_url and token are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	result, err := h.svc.SimulateCustomConnection(r.Context(), body.BaseURL, body.Token, body.AuthType, body.AuthHeader)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"success": false,
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

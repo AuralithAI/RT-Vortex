@@ -190,6 +190,7 @@ type MCPConfig struct {
 	GmailBaseURL     string
 	GmailTokenURL    string
 	DiscordBaseURL   string
+	GitLabBaseURL    string
 
 	// Per-provider OAuth credentials for MCP integrations (separate from auth SSO providers).
 	// These enable the one-click OAuth connect flow in the MCP Integrations UI.
@@ -443,6 +444,7 @@ type xmlMCP struct {
 	GmailBaseURL     string `xml:"gmail-base-url,attr"`
 	GmailTokenURL    string `xml:"gmail-token-url,attr"`
 	DiscordBaseURL   string `xml:"discord-base-url,attr"`
+	GitLabBaseURL    string `xml:"gitlab-base-url,attr"`
 
 	// Per-provider OAuth credentials (for one-click connect).
 	GmailClientID       string `xml:"gmail-client-id,attr"`
@@ -907,6 +909,7 @@ func loadServerProps(path string) (*Config, error) {
 		GmailBaseURL:    parseString(expand(raw.MCP.GmailBaseURL), "https://gmail.googleapis.com/gmail/v1"),
 		GmailTokenURL:   parseString(expand(raw.MCP.GmailTokenURL), "https://oauth2.googleapis.com/token"),
 		DiscordBaseURL:  parseString(expand(raw.MCP.DiscordBaseURL), "https://discord.com/api/v10"),
+		GitLabBaseURL:   parseString(expand(raw.MCP.GitLabBaseURL), "https://gitlab.com/api/v4"),
 		OAuthProviders:  make(map[string]MCPOAuthProviderConfig),
 	}
 	if providers := expand(raw.MCP.AllowedProviders); providers != "" {

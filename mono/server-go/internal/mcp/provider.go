@@ -61,6 +61,13 @@ func (r *ProviderRegistry) Get(name string) (Provider, bool) {
 	return p, ok
 }
 
+func (r *ProviderRegistry) Unregister(name string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.providers, name)
+	delete(r.breakers, name)
+}
+
 func (r *ProviderRegistry) List() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -131,6 +138,19 @@ func (r *ProviderRegistry) CheckRateLimit(ctx context.Context, provider string) 
 		"github":          60,
 		"jira":            60,
 		"notion":          60,
+		"gitlab":          60,
+		"confluence":      60,
+		"linear":          60,
+		"asana":           60,
+		"trello":          30,
+		"figma":           30,
+		"zendesk":         60,
+		"pagerduty":       60,
+		"datadog":         60,
+		"stripe":          30,
+		"hubspot":         60,
+		"salesforce":      60,
+		"twilio":          30,
 	}
 	limit, ok := limits[provider]
 	if !ok {

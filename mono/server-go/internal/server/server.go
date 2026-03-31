@@ -363,6 +363,13 @@ func (s *Server) setupRouter() {
 					r.Get("/oauth/status", mh.OAuthStatus)
 					r.Get("/oauth/{provider}/authorize", mh.InitiateOAuth)
 					r.Get("/oauth/{provider}/callback", mh.OAuthCallback)
+
+					// Custom MCP templates
+					r.Get("/custom-templates", mh.ListCustomTemplates)
+					r.Post("/custom-templates", mh.CreateCustomTemplate)
+					r.Delete("/custom-templates/{templateID}", mh.DeleteCustomTemplate)
+					r.Post("/custom-templates/validate", mh.ValidateCustomTemplate)
+					r.Post("/custom-templates/simulate", mh.SimulateCustomConnection)
 				})
 			} // Engine Metrics
 			r.Route("/engine", func(r chi.Router) {
@@ -458,8 +465,11 @@ func (s *Server) setupRouter() {
 
 				// MCP integration call (agent → external services).
 				r.Post("/mcp/call", sh.HandleMCPCall)
+				r.Post("/mcp/batch", sh.HandleMCPBatchCall)
 				r.Get("/mcp/providers", sh.HandleMCPListProviders)
 				r.Get("/mcp/describe", sh.HandleMCPDescribeAction)
+				r.Get("/mcp/tools", sh.HandleMCPListTools)
+				r.Get("/mcp/connections", sh.HandleMCPCheckConnections)
 
 				// VCS proxy for agent workspace reads.
 				r.Post("/vcs/read-file", sh.VCSReadFile)

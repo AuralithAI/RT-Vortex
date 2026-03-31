@@ -747,3 +747,47 @@ export interface MCPTestResult {
   data?: Record<string, unknown>;
   error?: string;
 }
+
+// ── Custom MCP Templates ────────────────────────────────────────────────────
+
+export interface CustomMCPActionDef {
+  name: string;
+  description: string;
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  path: string;
+  required_params?: string[];
+  optional_params?: string[];
+  body_template?: string;
+  consent_required: boolean;
+}
+
+export interface CustomMCPTemplate {
+  id: string;
+  name: string;
+  label: string;
+  category: string;
+  description: string;
+  base_url: string;
+  auth_type: "bearer" | "basic" | "header" | "query";
+  auth_header?: string;
+  actions: CustomMCPActionDef[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MCPValidationError {
+  field: string;
+  message: string;
+}
+
+export interface MCPValidationResult {
+  valid: boolean;
+  validation_errors?: MCPValidationError[];
+}
+
+export interface MCPSimulateResult {
+  success: boolean;
+  data?: Record<string, unknown>;
+  error?: string;
+}
