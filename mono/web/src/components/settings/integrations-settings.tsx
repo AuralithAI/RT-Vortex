@@ -23,12 +23,16 @@ import {
   Lock,
   Code2,
   Play,
+  RefreshCw,
+  Settings2,
+  Link2,
+  Unlink,
 } from "lucide-react";
 import { useIntegrations, useIntegrationProviders, useIntegrationCallLog, useIntegrationOAuthStatus, useCustomTemplates } from "@/lib/api/queries";
 import { useDisconnectIntegration, useTestIntegration, useCreateCustomTemplate, useDeleteCustomTemplate, useValidateCustomTemplate, useSimulateCustomConnection } from "@/lib/api/mutations";
 import { integrations as integrationsApi } from "@/lib/api/client";
 import type { MCPConnection, MCPProviderInfo, MCPCallLogEntry, CustomMCPTemplate, CustomMCPActionDef, MCPValidationError } from "@/types/api";
-import { getMCPIcon } from "@/components/icons/brand-icons";
+import { getMCPIcon, GoogleIcon, MicrosoftIcon } from "@/components/icons/brand-icons";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,13 +56,13 @@ import {
 
 interface ProviderMeta {
   label: string;
-  brandColor: string;        // raw hex for icon tinting & accents
-  borderColor: string;       // Tailwind border-l color class
-  gradient: string;          // Tailwind gradient class
+  brandColor: string;
+  borderColor: string;
+  gradient: string;
   docsUrl: string;
   description: string;
   actions: string[];
-  category: string;          // used if server doesn't supply one
+  category: string;
 }
 
 const providerMeta: Record<string, ProviderMeta> = {
@@ -284,11 +288,62 @@ const providerMeta: Record<string, ProviderMeta> = {
   },
 };
 
-// Stable ordering for categories
-const categoryOrder: { key: string; label: string }[] = [
-  { key: "google", label: "Google Workspace" },
-  { key: "microsoft", label: "Microsoft 365" },
-  { key: "atlassian", label: "Atlassian" },
+// ── Platform group definitions ──────────────────────────────────────────────
+
+interface PlatformGroupDef {
+  key: string;
+  label: string;
+  description: string;
+  brandColor: string;
+  borderColor: string;
+  gradient: string;
+  icon: React.ComponentType<{ size?: number }>;
+  /** Provider keys that belong to this platform */
+  services: string[];
+}
+
+const AtlassianIcon = ({ size = 28 }: { size?: number }) => (
+  <svg viewBox="0 0 24 24" fill="none" width={size} height={size}>
+    <path d="M7.12 11.53a.69.69 0 0 0-1.18.14L1.26 21.39a.69.69 0 0 0 .62 1h6.88a.69.69 0 0 0 .62-.39 13.28 13.28 0 0 0-2.26-10.47Z" fill="#2684FF" />
+    <path d="M11.37 2.41a16.3 16.3 0 0 0-.85 16.15.69.69 0 0 0 .62.39h6.88a.69.69 0 0 0 .62-1L12.56 2.55a.69.69 0 0 0-1.19-.14Z" fill="#2684FF" />
+  </svg>
+);
+
+const platformGroups: PlatformGroupDef[] = [
+  {
+    key: "google",
+    label: "Google Workspace",
+    description: "Gmail, Calendar, Drive — unified under a single Google OAuth credential",
+    brandColor: "#4285F4",
+    borderColor: "border-l-[#4285F4]",
+    gradient: "from-[#4285F4]/8 via-[#EA4335]/5 to-transparent",
+    icon: GoogleIcon,
+    services: ["gmail", "google_calendar", "google_drive"],
+  },
+  {
+    key: "microsoft",
+    label: "Microsoft 365",
+    description: "Outlook, OneDrive, Teams, Calendar — unified under a single Microsoft OAuth credential",
+    brandColor: "#0078D4",
+    borderColor: "border-l-[#0078D4]",
+    gradient: "from-[#0078D4]/8 via-[#00A4EF]/5 to-transparent",
+    icon: MicrosoftIcon,
+    services: ["ms365"],
+  },
+  {
+    key: "atlassian",
+    label: "Atlassian",
+    description: "Jira, Confluence — unified under a single Atlassian OAuth credential",
+    brandColor: "#2684FF",
+    borderColor: "border-l-[#2684FF]",
+    gradient: "from-[#2684FF]/8 via-[#1868DB]/5 to-transparent",
+    icon: AtlassianIcon,
+    services: ["jira", "confluence"],
+  },
+];
+
+// Standalone categories for non-platform providers
+const standaloneCategoryOrder: { key: string; label: string }[] = [
   { key: "devops", label: "DevOps & Engineering" },
   { key: "communication", label: "Communication" },
   { key: "productivity", label: "Productivity" },
@@ -299,8 +354,18 @@ const categoryOrder: { key: string; label: string }[] = [
   { key: "finance", label: "Finance & Payments" },
   { key: "crm", label: "CRM" },
   { key: "messaging", label: "Messaging" },
+];
+
+// Category order used in the custom wizard dropdown
+const categoryOrder: { key: string; label: string }[] = [
+  { key: "google", label: "Google Workspace" },
+  { key: "microsoft", label: "Microsoft 365" },
+  { key: "atlassian", label: "Atlassian" },
+  ...standaloneCategoryOrder,
   { key: "custom", label: "Custom Integrations" },
 ];
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function getStatusBadge(status: string) {
   switch (status) {
@@ -316,6 +381,13 @@ function getStatusBadge(status: string) {
       return <Badge variant="outline">{status}</Badge>;
   }
 }
+
+function formatDate(dateStr: string) {
+  return new Date(dateStr).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
+/** Set of all provider keys that belong to any platform group. */
+const platformProviderKeys = new Set(platformGroups.flatMap((g) => g.services));
 
 // ── OAuth Not Configured Notice ─────────────────────────────────────────────
 
@@ -406,111 +478,492 @@ function CallLogSection({ connectionId }: { connectionId: string }) {
   );
 }
 
-// ── Provider Icon Tile (icon grid) ──────────────────────────────────────────
+// ── Service Row (individual service within a platform card) ─────────────────
 
-function ProviderTile({
+function ServiceRow({
+  providerName,
+  isConnected,
+  hasOAuth,
+  connection,
+  onConnect,
+  onNotConfigured,
+}: {
+  providerName: string;
+  isConnected: boolean;
+  hasOAuth: boolean;
+  connection?: MCPConnection;
+  onConnect: () => void;
+  onDisconnect: (id: string) => void;
+  onNotConfigured: () => void;
+}) {
+  const meta = providerMeta[providerName];
+  const Icon = getMCPIcon(providerName);
+  const label = meta?.label ?? providerName;
+  const description = meta?.description ?? "";
+  const disconnectMutation = useDisconnectIntegration();
+  const testMutation = useTestIntegration();
+  const [showLog, setShowLog] = useState(false);
+
+  return (
+    <div className="group">
+      <div className="flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors hover:bg-muted/50">
+        {/* Icon */}
+        <span
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-all ${
+            isConnected ? "bg-background shadow-sm" : "bg-muted/60 grayscale opacity-50 group-hover:grayscale-0 group-hover:opacity-100"
+          }`}
+        >
+          {Icon ? <Icon size={20} /> : <Plug className="h-4 w-4 text-muted-foreground" />}
+        </span>
+
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">{label}</span>
+            {isConnected && (
+              <Badge variant="default" className="bg-emerald-600 hover:bg-emerald-600 h-5 text-[10px] px-1.5">
+                <CheckCircle className="mr-0.5 h-2.5 w-2.5" /> Connected
+              </Badge>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground truncate">{description}</p>
+          {isConnected && connection && (
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              Since {formatDate(connection.connected_at)}
+              {connection.last_used_at && <> · Last used {formatDate(connection.last_used_at)}</>}
+            </p>
+          )}
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {isConnected && connection ? (
+            <>
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => testMutation.mutate(connection.id)}
+                      disabled={testMutation.isPending}
+                    >
+                      {testMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Test connection</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7"
+                      onClick={() => setShowLog(!showLog)}
+                    >
+                      {showLog ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>View logs</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+              <TooltipProvider delayDuration={200}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-red-500"
+                      onClick={() => disconnectMutation.mutate(connection.id)}
+                      disabled={disconnectMutation.isPending}
+                    >
+                      {disconnectMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unlink className="h-3.5 w-3.5" />}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Disconnect</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            </>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={() => {
+                if (hasOAuth) {
+                  onConnect();
+                } else {
+                  onNotConfigured();
+                }
+              }}
+            >
+              <Link2 className="mr-1 h-3 w-3" /> Connect
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Test result */}
+      {testMutation.isSuccess && (
+        <div className={`px-14 pb-1 text-xs ${testMutation.data.success ? "text-emerald-600" : "text-red-500"}`}>
+          {testMutation.data.success ? <CheckCircle className="mr-1 inline h-3 w-3" /> : <XCircle className="mr-1 inline h-3 w-3" />}
+          {testMutation.data.success ? "Connection verified" : testMutation.data.error ?? "Test failed"}
+        </div>
+      )}
+
+      {/* Inline call log */}
+      {showLog && connection && (
+        <div className="px-14 pb-2">
+          <CallLogSection connectionId={connection.id} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Platform Card (expandable card for a platform group) ────────────────────
+
+function PlatformCard({
+  platform,
+  providers,
+  connectionMap,
+  oauthEnabled,
+  onNotConfigured,
+}: {
+  platform: PlatformGroupDef;
+  providers: MCPProviderInfo[];
+  connectionMap: Record<string, MCPConnection>;
+  oauthEnabled: Record<string, boolean>;
+  onNotConfigured: (providerName: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const PlatformIcon = platform.icon;
+
+  // Calculate connection stats
+  const connectedServices = platform.services.filter((s) => connectionMap[s]);
+  const totalServices = platform.services.length;
+  const isAnyConnected = connectedServices.length > 0;
+  const isAllConnected = connectedServices.length === totalServices;
+
+  // Get earliest connection date
+  const earliestConnection = connectedServices.length > 0
+    ? connectedServices.reduce((earliest, s) => {
+        const date = connectionMap[s]?.connected_at;
+        return date && (!earliest || date < earliest) ? date : earliest;
+      }, "" as string)
+    : null;
+
+  // Check if any service has OAuth configured
+  const hasAnyOAuth = platform.services.some((s) => oauthEnabled[s]);
+
+  const handleConnectAll = () => {
+    // Find the first service that's not connected and has OAuth
+    const firstDisconnected = platform.services.find((s) => !connectionMap[s] && oauthEnabled[s]);
+    if (firstDisconnected) {
+      window.location.href = integrationsApi.oauthUrl(firstDisconnected);
+    } else if (!hasAnyOAuth) {
+      onNotConfigured(platform.services[0]);
+    }
+  };
+
+  const handleReconnect = () => {
+    const firstService = platform.services[0];
+    if (oauthEnabled[firstService]) {
+      window.location.href = integrationsApi.oauthUrl(firstService);
+    }
+  };
+
+  return (
+    <Card
+      className={`relative overflow-hidden transition-all duration-200 ${
+        isAnyConnected ? `border-l-4 ${platform.borderColor}` : "border"
+      } ${expanded ? "shadow-md" : "hover:shadow-sm"}`}
+    >
+      {/* Background gradient for connected state */}
+      {isAnyConnected && (
+        <div className={`absolute inset-0 bg-gradient-to-r ${platform.gradient} pointer-events-none`} />
+      )}
+
+      {/* Header */}
+      <div className="relative">
+        <div
+          className="flex items-center gap-4 px-5 py-4 cursor-pointer select-none"
+          onClick={() => setExpanded(!expanded)}
+        >
+          {/* Platform icon */}
+          <span
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl transition-all ${
+              isAnyConnected
+                ? "bg-background shadow-sm"
+                : "bg-muted/60 grayscale opacity-50"
+            }`}
+          >
+            <PlatformIcon size={28} />
+          </span>
+
+          {/* Platform info */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-sm font-semibold">{platform.label}</h3>
+              {isAllConnected ? (
+                <Badge variant="default" className="bg-emerald-600 hover:bg-emerald-600 h-5 text-[10px] px-1.5">
+                  <CheckCircle className="mr-0.5 h-2.5 w-2.5" /> All Connected
+                </Badge>
+              ) : isAnyConnected ? (
+                <Badge variant="secondary" className="h-5 text-[10px] px-1.5">
+                  {connectedServices.length}/{totalServices} Connected
+                </Badge>
+              ) : null}
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">{platform.description}</p>
+            {earliestConnection && (
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                Connected since {formatDate(earliestConnection)}
+              </p>
+            )}
+          </div>
+
+          {/* Service icons preview (when collapsed) */}
+          {!expanded && (
+            <div className="hidden sm:flex items-center gap-1">
+              {platform.services.map((s) => {
+                const SIcon = getMCPIcon(s);
+                const connected = !!connectionMap[s];
+                return (
+                  <TooltipProvider key={s} delayDuration={200}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span
+                          className={`relative flex h-7 w-7 items-center justify-center rounded-md border transition-all ${
+                            connected
+                              ? "bg-background border-emerald-200 dark:border-emerald-800"
+                              : "bg-muted/40 border-transparent opacity-40"
+                          }`}
+                        >
+                          {SIcon ? <SIcon size={16} /> : <Plug className="h-3.5 w-3.5 text-muted-foreground" />}
+                          {connected && (
+                            <span className="absolute -top-1 -right-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-emerald-500">
+                              <CheckCircle className="h-2 w-2 text-white" />
+                            </span>
+                          )}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="bottom" className="text-xs">
+                        {providerMeta[s]?.label ?? s} — {connected ? "Connected" : "Not connected"}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Quick actions & expand toggle */}
+          <div className="flex items-center gap-2 shrink-0">
+            {!isAnyConnected && !expanded && (
+              <Button
+                variant="default"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleConnectAll();
+                }}
+              >
+                <Link2 className="mr-1.5 h-3 w-3" /> Connect
+              </Button>
+            )}
+            {isAnyConnected && !expanded && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setExpanded(true);
+                }}
+              >
+                <Settings2 className="mr-1.5 h-3 w-3" /> Manage
+              </Button>
+            )}
+            <ChevronDown
+              className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${
+                expanded ? "rotate-180" : ""
+              }`}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Expanded services list */}
+      {expanded && (
+        <div className="relative border-t">
+          {/* Platform-level actions bar */}
+          {isAnyConnected && (
+            <div className="flex items-center gap-2 px-5 py-2.5 bg-muted/30 border-b">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={handleReconnect}
+              >
+                <RefreshCw className="mr-1 h-3 w-3" /> Reconnect
+              </Button>
+              {!isAllConnected && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={handleConnectAll}
+                >
+                  <Link2 className="mr-1 h-3 w-3" /> Connect Remaining
+                </Button>
+              )}
+              <div className="flex-1" />
+              <span className="text-[10px] text-muted-foreground uppercase tracking-wider font-medium">
+                {connectedServices.length} of {totalServices} services active
+              </span>
+            </div>
+          )}
+
+          {/* Service rows */}
+          <div className="divide-y">
+            {platform.services.map((serviceName) => {
+              const provider = providers.find((p) => p.name === serviceName);
+              if (!provider) return null;
+              return (
+                <ServiceRow
+                  key={serviceName}
+                  providerName={serviceName}
+                  isConnected={!!connectionMap[serviceName]}
+                  hasOAuth={!!oauthEnabled[serviceName]}
+                  connection={connectionMap[serviceName]}
+                  onConnect={() => {
+                    window.location.href = integrationsApi.oauthUrl(serviceName);
+                  }}
+                  onDisconnect={() => {}}
+                  onNotConfigured={() => onNotConfigured(serviceName)}
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ── Standalone Provider Card (for non-platform providers) ───────────────────
+
+function StandaloneProviderCard({
   provider,
   isConnected,
   hasOAuth,
   connection,
   onNotConfigured,
+  onSelect,
+  isSelected,
 }: {
   provider: MCPProviderInfo;
   isConnected: boolean;
   hasOAuth: boolean;
   connection?: MCPConnection;
   onNotConfigured: () => void;
+  onSelect: () => void;
+  isSelected: boolean;
 }) {
   const meta = providerMeta[provider.name];
   const Icon = getMCPIcon(provider.name);
   const label = meta?.label ?? provider.name;
   const description = meta?.description ?? provider.description ?? "";
-  const actions = meta?.actions ?? provider.actions;
 
-  const handleClick = () => {
-    if (isConnected) return; // already connected — no action on click
+  const handleConnect = () => {
     if (hasOAuth) {
-      // Redirect to server-side OAuth flow — tokens are handled automatically.
       window.location.href = integrationsApi.oauthUrl(provider.name);
     } else {
-      // OAuth not configured for this provider — show notice.
       onNotConfigured();
     }
   };
 
   return (
-    <TooltipProvider delayDuration={200}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={handleClick}
-            className={`
-              group relative flex flex-col items-center justify-center gap-2
-              w-[88px] h-[88px] rounded-xl border transition-all duration-200
-              focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring
-              ${isConnected
-                ? "border-emerald-500/40 bg-background shadow-sm hover:shadow-md cursor-default"
-                : "border-border bg-muted/40 hover:bg-muted hover:shadow-md hover:border-foreground/20 cursor-pointer"
-              }
-            `}
-          >
-            {/* Connected badge */}
+    <Card
+      className={`relative overflow-hidden transition-all duration-200 cursor-pointer ${
+        isConnected ? `border-l-4 ${meta?.borderColor ?? ""}` : "border hover:border-foreground/20"
+      } ${isSelected ? "ring-2 ring-ring shadow-md" : "hover:shadow-sm"}`}
+      onClick={() => {
+        if (isConnected) onSelect();
+      }}
+    >
+      {isConnected && (
+        <div className={`absolute inset-0 bg-gradient-to-r ${meta?.gradient ?? ""} pointer-events-none`} />
+      )}
+      <div className="relative flex items-center gap-3 px-4 py-3">
+        {/* Icon */}
+        <span
+          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all ${
+            isConnected ? "bg-background shadow-sm" : "bg-muted/60 grayscale opacity-50"
+          }`}
+        >
+          {Icon ? <Icon size={24} /> : <Plug className="h-5 w-5 text-muted-foreground" />}
+        </span>
+
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">{label}</span>
             {isConnected && (
-              <span className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-emerald-500 shadow-sm">
-                <CheckCircle className="h-3 w-3 text-white" />
-              </span>
-            )}
-
-            {/* Icon — greyed when disconnected, brand-colored when connected */}
-            <span
-              className={`flex h-9 w-9 items-center justify-center transition-all duration-200 ${
-                isConnected
-                  ? ""
-                  : "grayscale opacity-40 group-hover:grayscale-0 group-hover:opacity-100"
-              }`}
-            >
-              {Icon ? <Icon size={28} /> : <Plug className="h-7 w-7 text-muted-foreground" />}
-            </span>
-
-            {/* Label */}
-            <span className={`text-[11px] font-medium leading-tight text-center px-1 truncate w-full ${
-              isConnected ? "text-foreground" : "text-muted-foreground group-hover:text-foreground"
-            }`}>
-              {label}
-            </span>
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="bottom" className="max-w-[240px] space-y-2 p-3">
-          <p className="font-semibold text-sm">{label}</p>
-          <p className="text-xs text-muted-foreground">{description}</p>
-          <div className="flex flex-wrap gap-1">
-            {actions.map((a) => (
-              <Badge key={a} variant="secondary" className="text-[10px] font-normal px-1.5 py-0">
-                {a}
+              <Badge variant="default" className="bg-emerald-600 hover:bg-emerald-600 h-5 text-[10px] px-1.5">
+                <CheckCircle className="mr-0.5 h-2.5 w-2.5" /> Connected
               </Badge>
-            ))}
+            )}
           </div>
+          <p className="text-xs text-muted-foreground truncate">{description}</p>
           {isConnected && connection && (
-            <p className="text-[10px] text-emerald-600">
-              <CheckCircle className="mr-0.5 inline h-3 w-3" />
-              Connected {new Date(connection.connected_at).toLocaleDateString()}
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              Since {formatDate(connection.connected_at)}
             </p>
           )}
-          {!isConnected && (
-            <p className="text-[10px] text-muted-foreground italic">
-              {hasOAuth ? "Click to connect via OAuth" : "OAuth not configured — contact admin"}
-            </p>
+        </div>
+
+        {/* Action */}
+        <div className="shrink-0">
+          {isConnected ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelect();
+              }}
+            >
+              <Settings2 className="mr-1 h-3 w-3" /> Manage
+            </Button>
+          ) : (
+            <Button
+              variant="default"
+              size="sm"
+              className="h-8 text-xs"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleConnect();
+              }}
+            >
+              <Link2 className="mr-1.5 h-3 w-3" /> Connect
+            </Button>
           )}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+        </div>
+      </div>
+    </Card>
   );
 }
 
-// ── Connected Drawer (expanded details for a connected provider) ────────────
+// ── Connected Detail Panel (expanded details for a selected standalone) ─────
 
-function ConnectedDrawer({
+function ConnectedDetailPanel({
   connection,
   onClose,
 }: {
@@ -545,9 +998,9 @@ function ConnectedDrawer({
           </div>
         </div>
         <CardDescription className="text-xs pl-9">
-          Connected {new Date(connection.connected_at).toLocaleDateString()}
-          {connection.last_used_at && <> · Last used {new Date(connection.last_used_at).toLocaleDateString()}</>}
-          {connection.expires_at && <> · Expires {new Date(connection.expires_at).toLocaleDateString()}</>}
+          Connected {formatDate(connection.connected_at)}
+          {connection.last_used_at && <> · Last used {formatDate(connection.last_used_at)}</>}
+          {connection.expires_at && <> · Expires {formatDate(connection.expires_at)}</>}
         </CardDescription>
       </CardHeader>
       <CardContent className="relative space-y-2 pl-9">
@@ -559,6 +1012,15 @@ function ConnectedDrawer({
           </div>
         )}
         <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              window.location.href = integrationsApi.oauthUrl(connection.provider);
+            }}
+          >
+            <RefreshCw className="mr-1 h-3 w-3" /> Reconnect
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -665,7 +1127,7 @@ function CustomMCPWizard({ onClose }: { onClose: () => void }) {
 
   const handleValidate = () => {
     validateMutation.mutate(buildTemplate() as Parameters<typeof validateMutation.mutate>[0], {
-      onSuccess: (data) => {
+      onSuccess: (data: { validation_errors?: MCPValidationError[] }) => {
         if (data.validation_errors?.length) {
           setValidationErrors(data.validation_errors);
         } else {
@@ -681,7 +1143,7 @@ function CustomMCPWizard({ onClose }: { onClose: () => void }) {
 
   const handleCreate = () => {
     createMutation.mutate(buildTemplate() as Parameters<typeof createMutation.mutate>[0], {
-      onSuccess: (data) => {
+      onSuccess: (data: { validation_errors?: MCPValidationError[] }) => {
         if ("validation_errors" in data && data.validation_errors?.length) {
           setValidationErrors(data.validation_errors as MCPValidationError[]);
         } else {
@@ -1085,11 +1547,12 @@ export function IntegrationsSettings() {
     return map;
   }, [connections]);
 
-  // Group providers by category
-  const groupedProviders = useMemo(() => {
+  // Group standalone providers by category (excluding platform-grouped ones)
+  const standaloneGrouped = useMemo(() => {
     const allProviders = (providers as MCPProviderInfo[] | undefined) ?? [];
     const groups: Record<string, MCPProviderInfo[]> = {};
     for (const p of allProviders) {
+      if (platformProviderKeys.has(p.name)) continue;
       const cat = p.category || providerMeta[p.name]?.category || "other";
       if (!groups[cat]) groups[cat] = [];
       groups[cat].push(p);
@@ -1100,14 +1563,18 @@ export function IntegrationsSettings() {
   // Count connected
   const connectedCount = Object.keys(connectionMap).length;
   const totalCount = (providers as MCPProviderInfo[] | undefined)?.length ?? 0;
+  const allProviders = (providers as MCPProviderInfo[] | undefined) ?? [];
 
   if (isLoading) {
     return (
       <Card className="max-w-4xl">
-        <CardContent className="py-8">
-          <div className="grid grid-cols-6 gap-4">
-            {Array.from({ length: 9 }).map((_, i) => (
-              <Skeleton key={i} className="h-[88px] w-[88px] rounded-xl" />
+        <CardContent className="py-8 space-y-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-20 w-full rounded-xl" />
+          ))}
+          <div className="grid grid-cols-2 gap-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-16 w-full rounded-xl" />
             ))}
           </div>
         </CardContent>
@@ -1133,83 +1600,109 @@ export function IntegrationsSettings() {
           )}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-6">
-        {/* ─── Icon grid grouped by category ─── */}
-        {categoryOrder.map(({ key: cat, label: catLabel }) => {
-          const group = groupedProviders[cat];
+      <CardContent className="space-y-8">
+
+        {/* ─── Platform Groups ─── */}
+        <section className="space-y-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+            <Shield className="h-3.5 w-3.5" />
+            Platform Suites
+          </h3>
+          <p className="text-xs text-muted-foreground -mt-1">
+            Unified OAuth — one credential connects all services within a platform.
+          </p>
+          <div className="space-y-3">
+            {platformGroups.map((platform) => (
+              <PlatformCard
+                key={platform.key}
+                platform={platform}
+                providers={allProviders}
+                connectionMap={connectionMap}
+                oauthEnabled={oauthEnabled}
+                onNotConfigured={(providerName) => {
+                  setNotConfiguredProvider(providerName);
+                  setSelectedConnection(null);
+                }}
+              />
+            ))}
+          </div>
+        </section>
+
+        {/* ─── Standalone Providers by Category ─── */}
+        {standaloneCategoryOrder.map(({ key: cat, label: catLabel }) => {
+          const group = standaloneGrouped[cat];
           if (!group?.length) return null;
           return (
-            <Fragment key={cat}>
-              <div>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
-                  {catLabel}
-                </h4>
-                <div className="flex flex-wrap gap-3">
-                  {group.map((p) => (
-                    <div key={p.name} onClick={() => {
-                      if (connectionMap[p.name]) {
-                        setSelectedConnection(selectedConnection === p.name ? null : p.name);
-                        setNotConfiguredProvider(null);
-                      }
-                    }}>
-                      <ProviderTile
-                        provider={p}
-                        isConnected={!!connectionMap[p.name]}
-                        hasOAuth={!!oauthEnabled[p.name]}
-                        connection={connectionMap[p.name]}
-                        onNotConfigured={() => {
-                          setNotConfiguredProvider(p.name);
-                          setSelectedConnection(null);
-                        }}
-                      />
-                    </div>
-                  ))}
-                </div>
+            <section key={cat} className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                {catLabel}
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {group.map((p) => (
+                  <StandaloneProviderCard
+                    key={p.name}
+                    provider={p}
+                    isConnected={!!connectionMap[p.name]}
+                    hasOAuth={!!oauthEnabled[p.name]}
+                    connection={connectionMap[p.name]}
+                    onNotConfigured={() => {
+                      setNotConfiguredProvider(p.name);
+                      setSelectedConnection(null);
+                    }}
+                    onSelect={() => {
+                      setSelectedConnection(selectedConnection === p.name ? null : p.name);
+                      setNotConfiguredProvider(null);
+                    }}
+                    isSelected={selectedConnection === p.name}
+                  />
+                ))}
               </div>
-            </Fragment>
+            </section>
           );
         })}
 
         {/* Show providers that don't fit known categories */}
         {(() => {
-          const knownCats = new Set(categoryOrder.map((c) => c.key));
-          const otherProviders = Object.entries(groupedProviders)
+          const knownCats = new Set([
+            ...platformGroups.map((g) => g.key),
+            ...standaloneCategoryOrder.map((c) => c.key),
+          ]);
+          const otherProviders = Object.entries(standaloneGrouped)
             .filter(([cat]) => !knownCats.has(cat))
             .flatMap(([, pList]) => pList);
           if (!otherProviders.length) return null;
           return (
-            <div>
-              <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-3">
+            <section className="space-y-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Other
-              </h4>
-              <div className="flex flex-wrap gap-3">
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {otherProviders.map((p) => (
-                  <div key={p.name} onClick={() => {
-                    if (connectionMap[p.name]) {
+                  <StandaloneProviderCard
+                    key={p.name}
+                    provider={p}
+                    isConnected={!!connectionMap[p.name]}
+                    hasOAuth={!!oauthEnabled[p.name]}
+                    connection={connectionMap[p.name]}
+                    onNotConfigured={() => {
+                      setNotConfiguredProvider(p.name);
+                      setSelectedConnection(null);
+                    }}
+                    onSelect={() => {
                       setSelectedConnection(selectedConnection === p.name ? null : p.name);
                       setNotConfiguredProvider(null);
-                    }
-                  }}>
-                    <ProviderTile
-                      provider={p}
-                      isConnected={!!connectionMap[p.name]}
-                      hasOAuth={!!oauthEnabled[p.name]}
-                      connection={connectionMap[p.name]}
-                      onNotConfigured={() => {
-                        setNotConfiguredProvider(p.name);
-                        setSelectedConnection(null);
-                      }}
-                    />
-                  </div>
+                    }}
+                    isSelected={selectedConnection === p.name}
+                  />
                 ))}
               </div>
-            </div>
+            </section>
           );
         })()}
 
-        {/* ─── Expanded detail panel for connected provider ─── */}
+        {/* ─── Expanded detail panel for selected standalone provider ─── */}
         {selectedConnection && connectionMap[selectedConnection] && (
-          <ConnectedDrawer
+          <ConnectedDetailPanel
             connection={connectionMap[selectedConnection]}
             onClose={() => setSelectedConnection(null)}
           />
@@ -1217,18 +1710,18 @@ export function IntegrationsSettings() {
 
         {/* ─── OAuth not configured notice ─── */}
         {notConfiguredProvider && (() => {
-          const prov = (providers as MCPProviderInfo[] | undefined)?.find((p) => p.name === notConfiguredProvider);
+          const prov = allProviders.find((p) => p.name === notConfiguredProvider);
           return prov ? (
             <OAuthNotConfiguredNotice provider={prov} onClose={() => setNotConfiguredProvider(null)} />
           ) : null;
         })()}
 
         {/* ─── Custom MCP Templates ─── */}
-        <div className="space-y-3">
+        <section className="space-y-3">
           <div className="flex items-center justify-between">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Custom Integrations
-            </h4>
+            </h3>
             <Button
               variant="outline"
               size="sm"
@@ -1254,7 +1747,7 @@ export function IntegrationsSettings() {
               No custom integrations yet. Create one to connect any REST API as an agent tool.
             </p>
           ) : null}
-        </div>
+        </section>
 
         {/* ─── Empty state ─── */}
         {totalCount === 0 && (
