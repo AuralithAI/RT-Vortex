@@ -708,6 +708,8 @@ export interface MCPActionDef {
 
 export interface MCPProviderInfo {
   name: string;
+  category: string;
+  description: string;
   actions: MCPActionDef[];
 }
 

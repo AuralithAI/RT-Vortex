@@ -25,6 +25,8 @@ type Result struct {
 
 type Provider interface {
 	Name() string
+	Category() string
+	Description() string
 	Actions() []ActionDef
 	Execute(ctx context.Context, action string, params map[string]interface{}, token string) (*Result, error)
 	RefreshToken(ctx context.Context, refreshToken string) (newAccessToken string, newRefreshToken string, expiresIn time.Duration, err error)
@@ -120,10 +122,15 @@ func (r *ProviderRegistry) CheckRateLimit(ctx context.Context, provider string) 
 		r.rdb.Expire(ctx, key, time.Minute)
 	}
 	limits := map[string]int64{
-		"slack":   60,
-		"ms365":   120,
-		"gmail":   60,
-		"discord": 30,
+		"slack":           60,
+		"ms365":           120,
+		"gmail":           60,
+		"discord":         30,
+		"google_calendar": 60,
+		"google_drive":    60,
+		"github":          60,
+		"jira":            60,
+		"notion":          60,
 	}
 	limit, ok := limits[provider]
 	if !ok {

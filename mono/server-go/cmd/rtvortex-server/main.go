@@ -605,6 +605,11 @@ func main() {
 	mcpRegistry.Register(mcpproviders.NewMS365Provider(cfg.MCP.MS365GraphURL, cfg.MCP.MS365TokenURL))
 	mcpRegistry.Register(mcpproviders.NewGmailProvider(cfg.MCP.GmailBaseURL, cfg.MCP.GmailTokenURL))
 	mcpRegistry.Register(mcpproviders.NewDiscordProvider(cfg.MCP.DiscordBaseURL))
+	mcpRegistry.Register(mcpproviders.NewGoogleCalendarProvider(cfg.MCP.GmailTokenURL))
+	mcpRegistry.Register(mcpproviders.NewGoogleDriveProvider(cfg.MCP.GmailTokenURL))
+	mcpRegistry.Register(mcpproviders.NewGitHubMCPProvider())
+	mcpRegistry.Register(mcpproviders.NewJiraProvider())
+	mcpRegistry.Register(mcpproviders.NewNotionProvider())
 	mcpService := mcp.NewService(mcpRepo, mcpRegistry, fileVault, redisClient.Client(), cfg.MCP)
 	go mcpService.StartRefreshLoop(ctx)
 	swarmHandler.MCPSvc = mcpService

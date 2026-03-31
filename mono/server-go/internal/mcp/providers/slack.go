@@ -26,7 +26,9 @@ func NewSlackProvider(baseURL string) *SlackProvider {
 	}
 }
 
-func (p *SlackProvider) Name() string { return "slack" }
+func (p *SlackProvider) Name() string        { return "slack" }
+func (p *SlackProvider) Category() string     { return "communication" }
+func (p *SlackProvider) Description() string  { return "Send messages, read channels, search conversations, and share snippets." }
 
 func (p *SlackProvider) Actions() []mcp.ActionDef {
 	return []mcp.ActionDef{

@@ -193,16 +193,20 @@ func (s *Service) ListProviders() []ProviderInfo {
 			continue
 		}
 		out = append(out, ProviderInfo{
-			Name:    name,
-			Actions: p.Actions(),
+			Name:        name,
+			Category:    p.Category(),
+			Description: p.Description(),
+			Actions:     p.Actions(),
 		})
 	}
 	return out
 }
 
 type ProviderInfo struct {
-	Name    string      `json:"name"`
-	Actions []ActionDef `json:"actions"`
+	Name        string      `json:"name"`
+	Category    string      `json:"category"`
+	Description string      `json:"description,omitempty"`
+	Actions     []ActionDef `json:"actions"`
 }
 
 func (s *Service) ListConnections(ctx context.Context, userID uuid.UUID, orgID *uuid.UUID) ([]store.MCPConnection, error) {

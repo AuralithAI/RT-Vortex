@@ -26,7 +26,9 @@ func NewDiscordProvider(baseURL string) *DiscordProvider {
 	}
 }
 
-func (p *DiscordProvider) Name() string { return "discord" }
+func (p *DiscordProvider) Name() string        { return "discord" }
+func (p *DiscordProvider) Category() string     { return "communication" }
+func (p *DiscordProvider) Description() string  { return "Send messages, manage channels, create threads, and add reactions." }
 
 func (p *DiscordProvider) Actions() []mcp.ActionDef {
 	return []mcp.ActionDef{

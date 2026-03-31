@@ -236,6 +236,62 @@ export function MS365Icon(props: IconProps) {
   );
 }
 
+export function GoogleCalendarIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M18.316 5.684H5.684v12.632h12.632V5.684Z" fill="#fff" />
+      <path d="M18.316 23.368 23.368 18.316V5.684L18.316.632 5.684.632.632 5.684v12.632l5.052 5.052h12.632Z" fill="#4285F4" fillRule="evenodd" clipRule="evenodd" />
+      <path d="M12 18.316c-3.49 0-6.316-2.826-6.316-6.316S8.51 5.684 12 5.684s6.316 2.826 6.316 6.316-2.826 6.316-6.316 6.316Z" fill="#fff" />
+      <path d="M12 7.263a4.737 4.737 0 1 0 0 9.474 4.737 4.737 0 0 0 0-9.474Zm-.395 7.105V12.79l-1.868-1.868.559-.559L12 12.053l1.705-1.689.558.559-1.868 1.868v1.579h-.79Z" fill="#4285F4" fillRule="evenodd" clipRule="evenodd" />
+    </svg>
+  );
+}
+
+export function GoogleDriveIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="m8.027 1.5-7.5 13h7.973l7.5-13H8.027Z" fill="#0066DA" />
+      <path d="M8.027 1.5 16 14.5h7.5L16 1.5H8.027Z" fill="#00AC47" />
+      <path d="m.527 14.5 3.75 6.5h15l3.75-6.5h-7.5l-7.027.001L.527 14.5Z" fill="#EA4335" />
+      <path d="m8.027 1.5-7.5 13 3.75 6.5 7.75-13.5-4-6Z" fill="#00832D" />
+      <path d="M16 14.5 19.277 21l4.25-6.5H16Z" fill="#2684FC" />
+      <path d="M16 1.5 8.027 14.501l4 6.499L23.527 8.5 16 1.5Z" fill="#FFBA00" />
+    </svg>
+  );
+}
+
+export function JiraIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="none" {...p}>
+      <path d="M11.53.028a.96.96 0 0 0-.864.508L.533 18.04a.96.96 0 0 0 .855 1.415h5.308a.96.96 0 0 0 .854-.527L11.998 10l4.448 8.928a.96.96 0 0 0 .854.527h5.308a.96.96 0 0 0 .855-1.415L13.33.536A.96.96 0 0 0 12.47.028h-.94Z" fill="#2684FF" />
+      <path d="M9.413 9.37c-.614 1.216-.614 2.647 0 3.862l4.185 8.308a.96.96 0 0 0 .854.527h5.308a.96.96 0 0 0 .855-1.415l-6.617-13.06c-.853-1.687-3.73-1.687-4.585 1.778Z" fill="url(#jira-a)" />
+      <path d="M14.583 9.37c.614 1.216.614 2.647 0 3.862L10.4 21.54a.96.96 0 0 1-.854.527H4.238a.96.96 0 0 1-.855-1.415l6.617-13.06c.854-1.687 3.73-1.687 4.583 1.778Z" fill="url(#jira-b)" />
+      <defs>
+        <linearGradient id="jira-a" x1="11.64" y1="5.4" x2="16.8" y2="17.04" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#0052CC" />
+          <stop offset="1" stopColor="#2684FF" />
+        </linearGradient>
+        <linearGradient id="jira-b" x1="12.36" y1="5.4" x2="7.2" y2="17.04" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#0052CC" />
+          <stop offset="1" stopColor="#2684FF" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
+
+export function NotionIcon(props: IconProps) {
+  const p = defaults(props);
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
+      <path d="M4.459 4.208c.746.606 1.026.56 2.428.466l13.215-.793c.28 0 .047-.28-.046-.326L18.29 2.14c-.42-.326-.98-.7-2.055-.607L3.01 2.67c-.467.047-.56.28-.374.466l1.823 1.072Zm.793 3.08v13.903c0 .747.373 1.027 1.214.98l14.523-.84c.84-.047.933-.56.933-1.167V6.354c0-.606-.233-.933-.746-.886l-15.177.886c-.56.047-.747.327-.747.934Zm14.337.42c.093.42 0 .84-.42.886l-.7.14v10.264c-.607.327-1.167.514-1.634.514-.747 0-.933-.234-1.494-.933l-4.577-7.186v6.953l1.447.327s0 .84-1.167.84l-3.22.187c-.093-.187 0-.653.327-.747l.84-.233V9.854L7.46 9.714c-.094-.42.14-1.026.793-1.073l3.454-.233 4.763 7.279v-6.44l-1.214-.14c-.093-.514.28-.886.747-.933l3.386-.187Z" />
+    </svg>
+  );
+}
+
 // ── Lookup helpers ──────────────────────────────────────────────────────────
 
 /** Get the right icon component for an OAuth/SSO provider name. */
@@ -287,6 +343,11 @@ export function getMCPIcon(name: string): React.ComponentType<IconProps> | null 
     microsoft: MS365Icon,
     gmail: GmailIcon,
     discord: DiscordIcon,
+    google_calendar: GoogleCalendarIcon,
+    google_drive: GoogleDriveIcon,
+    github: GitHubIcon,
+    jira: JiraIcon,
+    notion: NotionIcon,
   };
   return map[name.toLowerCase()] ?? null;
 }

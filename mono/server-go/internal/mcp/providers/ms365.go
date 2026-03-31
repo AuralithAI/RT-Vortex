@@ -28,7 +28,9 @@ func NewMS365Provider(graphURL, tokenURL string) *MS365Provider {
 	}
 }
 
-func (p *MS365Provider) Name() string { return "ms365" }
+func (p *MS365Provider) Name() string        { return "ms365" }
+func (p *MS365Provider) Category() string     { return "microsoft" }
+func (p *MS365Provider) Description() string  { return "Outlook mail, calendar, OneDrive files, Teams channels, and SharePoint." }
 
 func (p *MS365Provider) Actions() []mcp.ActionDef {
 	return []mcp.ActionDef{

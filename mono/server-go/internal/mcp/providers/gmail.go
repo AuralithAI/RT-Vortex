@@ -28,7 +28,9 @@ func NewGmailProvider(baseURL, tokenURL string) *GmailProvider {
 	}
 }
 
-func (p *GmailProvider) Name() string { return "gmail" }
+func (p *GmailProvider) Name() string        { return "gmail" }
+func (p *GmailProvider) Category() string     { return "google" }
+func (p *GmailProvider) Description() string  { return "Read emails, send messages, manage labels, and search mail." }
 
 func (p *GmailProvider) Actions() []mcp.ActionDef {
 	return []mcp.ActionDef{
