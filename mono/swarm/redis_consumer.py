@@ -489,10 +489,21 @@ async def _run_full_pipeline(
         # ── Step 5: Extract changeset from workspace and submit diffs ───
         total_agents = len(code_agents) + len(review_agents)
         if agent_failures and len(agent_failures) == total_agents:
-            failure_summary = "; ".join(agent_failures)
-            await go_client.fail_task(task.id, f"All agents failed: {failure_summary}")
-            logger.error("Team %s: Task %s failed — all %d agents errored",
-                         team_id[:8], task.id, total_agents)
+            # Before marking as failed, check if an agent already completed
+            # the task (e.g. via complete_task tool).  A post-completion 401
+            # from the LLM proxy should not overwrite a successful result.
+            try:
+                current_status = await go_client.get_task_status(task.id)
+            except Exception:
+                current_status = ""
+            if current_status == "completed":
+                logger.info("Team %s: Task %s already completed (ignoring agent errors)",
+                            team_id[:8], task.id)
+            else:
+                failure_summary = "; ".join(agent_failures)
+                await go_client.fail_task(task.id, f"All agents failed: {failure_summary}")
+                logger.error("Team %s: Task %s failed — all %d agents errored",
+                             team_id[:8], task.id, total_agents)
         else:
             # Extract diffs from the shared VirtualWorkspace.
             changeset = workspace.get_changeset()

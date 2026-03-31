@@ -144,6 +144,7 @@ async def agent_loop(
             break
 
         # Execute each tool call and append results.
+        task_completed = False
         for tc in tool_calls:
             fn_name = tc["function"]["name"]
             fn_args_str = tc["function"].get("arguments", "{}")
@@ -191,6 +192,17 @@ async def agent_loop(
                     )
                 except Exception as mem_err:
                     logger.debug("agent_loop: memory reflect failed: %s", mem_err)
+
+            # If the agent just called complete_task, the task is done on the
+            # server side and the agent token may be invalidated.  Break out of
+            # the loop immediately to avoid a spurious 401 on the next LLM call.
+            if fn_name == "complete_task":
+                task_completed = True
+                logger.info("agent_loop: complete_task called — exiting loop")
+                break
+
+        if task_completed:
+            break
 
         # Self-critique nudge — on the penultimate turn, inject a prompt
         # asking the agent to review its work before it's forced to stop.
