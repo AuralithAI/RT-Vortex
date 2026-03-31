@@ -215,13 +215,18 @@ func (h *mcpHandler) InitiateOAuth(w http.ResponseWriter, r *http.Request) {
 	}
 	state := hex.EncodeToString(stateBytes)
 
-	// Store state in Redis. We re-use the session manager's OAuth state mechanism.
-	// redirect_url points back to the settings page.
+	// Store state in Redis along with the authenticated user's identity so
+	// the callback (which runs without JWT) can associate the connection.
 	settingsRedirect := r.URL.Query().Get("redirect_url")
 	if settingsRedirect == "" {
 		settingsRedirect = "/settings?tab=mcp&connected=" + providerName
 	}
-	if err := h.sessionMgr.StoreOAuthState(r.Context(), state, "mcp:"+providerName, settingsRedirect); err != nil {
+	userID := claims.UserID.String()
+	orgID := ""
+	if claims.OrgID != uuid.Nil {
+		orgID = claims.OrgID.String()
+	}
+	if err := h.sessionMgr.StoreOAuthStateWithUser(r.Context(), state, "mcp:"+providerName, settingsRedirect, userID, orgID); err != nil {
 		slog.Error("mcp: failed to store OAuth state", "error", err)
 		http.Error(w, `{"error":"failed to store state"}`, http.StatusInternalServerError)
 		return
@@ -269,7 +274,7 @@ func (h *mcpHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	storedProvider, redirectURL, err := h.sessionMgr.ValidateOAuthState(ctx, state)
+	storedProvider, redirectURL, userIDStr, orgIDStr, err := h.sessionMgr.ValidateOAuthStateWithUser(ctx, state)
 	if err != nil {
 		slog.Error("mcp: invalid OAuth state", "error", err)
 		http.Error(w, `{"error":"invalid or expired OAuth state"}`, http.StatusBadRequest)
@@ -281,6 +286,19 @@ func (h *mcpHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	expectedKey := "mcp:" + providerName
 	if storedProvider != expectedKey {
 		http.Error(w, `{"error":"state/provider mismatch"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Parse user identity from state.
+	if userIDStr == "" {
+		slog.Error("mcp: OAuth state missing user_id", "provider", providerName)
+		http.Error(w, `{"error":"invalid state — user identity missing, please try again"}`, http.StatusBadRequest)
+		return
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		slog.Error("mcp: OAuth state has invalid user_id", "user_id", userIDStr, "error", err)
+		http.Error(w, `{"error":"invalid state — bad user identity"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -311,27 +329,18 @@ func (h *mcpHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get user claims from JWT to associate the connection.
-	claims, ok := auth.ClaimsFromContext(ctx)
-	if !ok || claims == nil {
-		// For the callback, the user may not have a JWT cookie since the browser
-		// navigated to the provider. Try to get user from session cookie instead.
-		// We'll fall through and try; if claims is nil we error.
-		http.Error(w, `{"error":"unauthorized — please log in and try again"}`, http.StatusUnauthorized)
-		return
-	}
-
 	// Create MCP connection with the obtained tokens.
 	conn := &store.MCPConnection{
 		ID:       uuid.New(),
-		UserID:   claims.UserID,
+		UserID:   userID,
 		Provider: providerName,
 		Scopes:   oauthCfg.Scopes,
 	}
 
-	if claims.OrgID != uuid.Nil {
-		oid := claims.OrgID
-		conn.OrgID = &oid
+	if orgIDStr != "" {
+		if oid, err := uuid.Parse(orgIDStr); err == nil && oid != uuid.Nil {
+			conn.OrgID = &oid
+		}
 	}
 
 	if !token.Expiry.IsZero() {
@@ -347,7 +356,7 @@ func (h *mcpHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("mcp: OAuth connection created",
 		"provider", providerName,
-		"user_id", claims.UserID,
+		"user_id", userID,
 		"connection_id", conn.ID,
 	)
 

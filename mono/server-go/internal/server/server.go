@@ -210,6 +210,18 @@ func (s *Server) setupRouter() {
 			r.Post("/logout", h.Logout)
 		})
 
+		// ── MCP OAuth callback (public — Google/MS/etc. redirect here) ──
+		if s.deps.MCPService != nil {
+			mh := &mcpHandler{
+				svc:        s.deps.MCPService,
+				repo:       s.deps.MCPRepo,
+				sessionMgr: s.deps.SessionMgr,
+				mcpCfg:     s.deps.Config.MCP,
+				serverBase: s.deps.ServerBase,
+			}
+			r.Get("/integrations/oauth/{provider}/callback", mh.OAuthCallback)
+		}
+
 		// ── Protected routes (require JWT) ──────────────────────────
 		r.Group(func(r chi.Router) {
 			if s.deps.JWTMgr != nil {
@@ -362,7 +374,6 @@ func (s *Server) setupRouter() {
 					r.Get("/connections/{connectionID}/logs", mh.GetCallLog)
 					r.Get("/oauth/status", mh.OAuthStatus)
 					r.Get("/oauth/{provider}/authorize", mh.InitiateOAuth)
-					r.Get("/oauth/{provider}/callback", mh.OAuthCallback)
 
 					// Custom MCP templates
 					r.Get("/custom-templates", mh.ListCustomTemplates)

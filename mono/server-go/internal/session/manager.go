@@ -102,9 +102,16 @@ const oauthStateTTL = 10 * time.Minute
 
 // StoreOAuthState stores a random state parameter for CSRF protection.
 func (m *Manager) StoreOAuthState(ctx context.Context, state, provider string, redirectURL string) error {
+	return m.StoreOAuthStateWithUser(ctx, state, provider, redirectURL, "", "")
+}
+
+// StoreOAuthStateWithUser stores an OAuth state parameter with user context.
+func (m *Manager) StoreOAuthStateWithUser(ctx context.Context, state, provider, redirectURL, userID, orgID string) error {
 	data := map[string]string{
 		"provider":     provider,
 		"redirect_url": redirectURL,
+		"user_id":      userID,
+		"org_id":       orgID,
 	}
 	jsonData, _ := json.Marshal(data)
 	key := statePrefix + state
@@ -114,20 +121,27 @@ func (m *Manager) StoreOAuthState(ctx context.Context, state, provider string, r
 // ValidateOAuthState validates and consumes an OAuth state parameter.
 // Uses GET + DEL instead of GETDEL for compatibility with Redis < 6.2.
 func (m *Manager) ValidateOAuthState(ctx context.Context, state string) (provider string, redirectURL string, err error) {
+	p, r, _, _, e := m.ValidateOAuthStateWithUser(ctx, state)
+	return p, r, e
+}
+
+// ValidateOAuthStateWithUser validates and consumes an OAuth state, also
+// returning the user_id and org_id that were stored when the flow started.
+func (m *Manager) ValidateOAuthStateWithUser(ctx context.Context, state string) (provider, redirectURL, userID, orgID string, err error) {
 	key := statePrefix + state
 	val, err := m.rdb.Get(ctx, key).Bytes()
 	if err == redis.Nil {
-		return "", "", fmt.Errorf("invalid or expired OAuth state")
+		return "", "", "", "", fmt.Errorf("invalid or expired OAuth state")
 	}
 	if err != nil {
-		return "", "", fmt.Errorf("get oauth state: %w", err)
+		return "", "", "", "", fmt.Errorf("get oauth state: %w", err)
 	}
 	// Consume the state so it can't be reused (CSRF protection).
 	m.rdb.Del(ctx, key)
 
 	var data map[string]string
 	if err := json.Unmarshal(val, &data); err != nil {
-		return "", "", fmt.Errorf("unmarshal state: %w", err)
+		return "", "", "", "", fmt.Errorf("unmarshal state: %w", err)
 	}
-	return data["provider"], data["redirect_url"], nil
+	return data["provider"], data["redirect_url"], data["user_id"], data["org_id"], nil
 }

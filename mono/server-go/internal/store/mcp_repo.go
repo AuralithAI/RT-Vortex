@@ -60,6 +60,10 @@ func (r *MCPRepository) CreateConnection(ctx context.Context, conn *MCPConnectio
 	if conn.ConnectedAt.IsZero() {
 		conn.ConnectedAt = now
 	}
+	// Ensure metadata is valid JSON for the jsonb column.
+	if conn.Metadata == "" {
+		conn.Metadata = "{}"
+	}
 
 	_, err := r.pool.Exec(ctx,
 		`INSERT INTO mcp_connections
