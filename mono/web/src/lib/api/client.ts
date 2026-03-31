@@ -698,19 +698,12 @@ export const integrations = {
   connections: () =>
     request<MCPConnection[]>("/api/v1/integrations/connections"),
 
-  connect: (body: {
-    provider: string;
-    access_token: string;
-    refresh_token?: string;
-    scopes?: string[];
-    is_org_level?: boolean;
-    expires_in?: number;
-    metadata?: string;
-  }) =>
-    request<MCPConnection>("/api/v1/integrations/connections", {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
+  /** Initiates OAuth flow — returns the URL the browser should navigate to. */
+  oauthUrl: (provider: string, redirectUrl?: string) => {
+    const base = `${BASE}/api/v1/integrations/oauth/${provider}/authorize`;
+    if (redirectUrl) return `${base}?redirect_url=${encodeURIComponent(redirectUrl)}`;
+    return base;
+  },
 
   disconnect: (connectionId: string) =>
     request<{ status: string; id: string }>(`/api/v1/integrations/connections/${connectionId}`, {
@@ -724,10 +717,6 @@ export const integrations = {
 
   callLog: (connectionId: string) =>
     request<MCPCallLogEntry[]>(`/api/v1/integrations/connections/${connectionId}/logs`),
-
-  /** Returns the OAuth authorize URL for a provider — browser should navigate to it. */
-  oauthUrl: (provider: string) =>
-    `${BASE}/api/v1/integrations/oauth/${provider}/authorize`,
 
   /** Returns which providers have server-side OAuth configured. */
   oauthStatus: () =>

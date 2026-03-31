@@ -14,7 +14,6 @@ import {
   ChevronDown,
   ChevronRight,
   AlertTriangle,
-  KeyRound,
   X,
   Plus,
   Zap,
@@ -26,7 +25,7 @@ import {
   Play,
 } from "lucide-react";
 import { useIntegrations, useIntegrationProviders, useIntegrationCallLog, useIntegrationOAuthStatus, useCustomTemplates } from "@/lib/api/queries";
-import { useConnectIntegration, useDisconnectIntegration, useTestIntegration, useCreateCustomTemplate, useDeleteCustomTemplate, useValidateCustomTemplate, useSimulateCustomConnection } from "@/lib/api/mutations";
+import { useDisconnectIntegration, useTestIntegration, useCreateCustomTemplate, useDeleteCustomTemplate, useValidateCustomTemplate, useSimulateCustomConnection } from "@/lib/api/mutations";
 import { integrations as integrationsApi } from "@/lib/api/client";
 import type { MCPConnection, MCPProviderInfo, MCPCallLogEntry, CustomMCPTemplate, CustomMCPActionDef, MCPValidationError } from "@/types/api";
 import { getMCPIcon } from "@/components/icons/brand-icons";
@@ -318,45 +317,26 @@ function getStatusBadge(status: string) {
   }
 }
 
-// ── Manual Token Form ───────────────────────────────────────────────────────
+// ── OAuth Not Configured Notice ─────────────────────────────────────────────
 
-function ManualConnectForm({ provider, onClose }: { provider: MCPProviderInfo; onClose: () => void }) {
-  const [token, setToken] = useState("");
-  const [refreshToken, setRefreshToken] = useState("");
-  const [scopes, setScopes] = useState("");
-  const [isOrgLevel, setIsOrgLevel] = useState(false);
-  const connectMutation = useConnectIntegration();
-
+function OAuthNotConfiguredNotice({ provider, onClose }: { provider: MCPProviderInfo; onClose: () => void }) {
   const meta = providerMeta[provider.name];
-
-  const handleSubmit = () => {
-    if (!token.trim()) return;
-    connectMutation.mutate(
-      {
-        provider: provider.name,
-        access_token: token.trim(),
-        refresh_token: refreshToken.trim() || undefined,
-        scopes: scopes ? scopes.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
-        is_org_level: isOrgLevel,
-      },
-      { onSuccess: () => onClose() },
-    );
-  };
 
   return (
     <Card className={`border-l-4 ${meta?.borderColor ?? ""}`}>
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-base">
-            <KeyRound className="h-4 w-4" />
-            Manual Token — {meta?.label ?? provider.name}
+            <AlertTriangle className="h-4 w-4 text-amber-500" />
+            OAuth Not Configured — {meta?.label ?? provider.name}
           </CardTitle>
           <Button variant="ghost" size="icon" onClick={onClose} className="h-7 w-7">
             <X className="h-4 w-4" />
           </Button>
         </div>
         <CardDescription>
-          Paste an API token or OAuth access token directly.
+          This integration requires OAuth credentials to be configured on the server.
+          Ask your administrator to set the <code className="text-xs bg-muted rounded px-1">{provider.name.toUpperCase()}_CLIENT_ID</code> and <code className="text-xs bg-muted rounded px-1">{provider.name.toUpperCase()}_CLIENT_SECRET</code> environment variables.
           {meta?.docsUrl && (
             <a href={meta.docsUrl} target="_blank" rel="noopener noreferrer" className="ml-1 inline-flex items-center gap-0.5 text-blue-500 hover:underline">
               Docs <ExternalLink className="h-3 w-3" />
@@ -364,61 +344,20 @@ function ManualConnectForm({ provider, onClose }: { provider: MCPProviderInfo; o
           )}
         </CardDescription>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <div>
-          <Label htmlFor={`token-${provider.name}`}>Access Token</Label>
-          <Input
-            id={`token-${provider.name}`}
-            type="password"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            placeholder="xoxb-... or Bearer token"
-          />
-        </div>
-        <div>
-          <Label htmlFor={`refresh-${provider.name}`}>Refresh Token (optional)</Label>
-          <Input
-            id={`refresh-${provider.name}`}
-            type="password"
-            value={refreshToken}
-            onChange={(e) => setRefreshToken(e.target.value)}
-            placeholder="Refresh token for auto-renewal"
-          />
-        </div>
-        <div>
-          <Label htmlFor={`scopes-${provider.name}`}>Scopes (comma-separated, optional)</Label>
-          <Input
-            id={`scopes-${provider.name}`}
-            value={scopes}
-            onChange={(e) => setScopes(e.target.value)}
-            placeholder="channels:read,chat:write"
-          />
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id={`org-${provider.name}`}
-            checked={isOrgLevel}
-            onChange={(e) => setIsOrgLevel(e.target.checked)}
-            className="h-4 w-4 rounded border-gray-300"
-          />
-          <Label htmlFor={`org-${provider.name}`} className="text-sm">
-            <Shield className="mr-1 inline h-3 w-3" /> Organization-level connection
-          </Label>
-        </div>
-        <div className="flex gap-2 pt-2">
-          <Button onClick={handleSubmit} disabled={!token.trim() || connectMutation.isPending} size="sm">
-            {connectMutation.isPending ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Plug className="mr-1 h-4 w-4" />}
-            Connect
-          </Button>
-          <Button variant="outline" onClick={onClose} size="sm">Cancel</Button>
-        </div>
-        {connectMutation.isError && (
-          <p className="text-sm text-red-500">
-            <AlertTriangle className="mr-1 inline h-3 w-3" />
-            {(connectMutation.error as Error)?.message ?? "Connection failed."}
+      <CardContent>
+        <div className="rounded-lg border border-amber-200 bg-amber-50 dark:bg-amber-950 dark:border-amber-900 p-3 text-sm text-amber-800 dark:text-amber-200">
+          <p className="flex items-center gap-1.5 font-medium">
+            <Shield className="h-4 w-4" />
+            All integrations connect via OAuth
           </p>
-        )}
+          <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+            When you click Connect, you&apos;ll be redirected to {meta?.label ?? provider.name}&apos;s login page to authorize access.
+            No tokens or API keys need to be managed manually — we handle token storage, refresh, and expiry automatically.
+          </p>
+        </div>
+        <div className="flex gap-2 pt-3">
+          <Button variant="outline" onClick={onClose} size="sm">Close</Button>
+        </div>
       </CardContent>
     </Card>
   );
@@ -474,13 +413,13 @@ function ProviderTile({
   isConnected,
   hasOAuth,
   connection,
-  onManualConnect,
+  onNotConfigured,
 }: {
   provider: MCPProviderInfo;
   isConnected: boolean;
   hasOAuth: boolean;
   connection?: MCPConnection;
-  onManualConnect: () => void;
+  onNotConfigured: () => void;
 }) {
   const meta = providerMeta[provider.name];
   const Icon = getMCPIcon(provider.name);
@@ -491,9 +430,11 @@ function ProviderTile({
   const handleClick = () => {
     if (isConnected) return; // already connected — no action on click
     if (hasOAuth) {
+      // Redirect to server-side OAuth flow — tokens are handled automatically.
       window.location.href = integrationsApi.oauthUrl(provider.name);
     } else {
-      onManualConnect();
+      // OAuth not configured for this provider — show notice.
+      onNotConfigured();
     }
   };
 
@@ -558,7 +499,7 @@ function ProviderTile({
           )}
           {!isConnected && (
             <p className="text-[10px] text-muted-foreground italic">
-              {hasOAuth ? "Click to connect via OAuth" : "Click to connect with token"}
+              {hasOAuth ? "Click to connect via OAuth" : "OAuth not configured — contact admin"}
             </p>
           )}
         </TooltipContent>
@@ -1128,7 +1069,7 @@ export function IntegrationsSettings() {
   const { data: providers, isLoading: providersLoading } = useIntegrationProviders();
   const { data: oauthStatusData } = useIntegrationOAuthStatus();
   const { data: customTemplates, refetch: refetchTemplates } = useCustomTemplates();
-  const [manualConnectProvider, setManualConnectProvider] = useState<string | null>(null);
+  const [notConfiguredProvider, setNotConfiguredProvider] = useState<string | null>(null);
   const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
   const [showCustomWizard, setShowCustomWizard] = useState(false);
 
@@ -1182,7 +1123,8 @@ export function IntegrationsSettings() {
           MCP Integrations
         </CardTitle>
         <CardDescription>
-          Connect external services to enable swarm agents to act on your behalf.
+          Connect external services via OAuth to enable swarm agents to act on your behalf.
+          Tokens are managed automatically — no manual API keys needed.
           {connectedCount > 0 && (
             <span className="ml-2 inline-flex items-center gap-1">
               <CheckCircle className="h-3 w-3 text-emerald-500" />
@@ -1207,7 +1149,7 @@ export function IntegrationsSettings() {
                     <div key={p.name} onClick={() => {
                       if (connectionMap[p.name]) {
                         setSelectedConnection(selectedConnection === p.name ? null : p.name);
-                        setManualConnectProvider(null);
+                        setNotConfiguredProvider(null);
                       }
                     }}>
                       <ProviderTile
@@ -1215,8 +1157,8 @@ export function IntegrationsSettings() {
                         isConnected={!!connectionMap[p.name]}
                         hasOAuth={!!oauthEnabled[p.name]}
                         connection={connectionMap[p.name]}
-                        onManualConnect={() => {
-                          setManualConnectProvider(p.name);
+                        onNotConfigured={() => {
+                          setNotConfiguredProvider(p.name);
                           setSelectedConnection(null);
                         }}
                       />
@@ -1245,7 +1187,7 @@ export function IntegrationsSettings() {
                   <div key={p.name} onClick={() => {
                     if (connectionMap[p.name]) {
                       setSelectedConnection(selectedConnection === p.name ? null : p.name);
-                      setManualConnectProvider(null);
+                      setNotConfiguredProvider(null);
                     }
                   }}>
                     <ProviderTile
@@ -1253,8 +1195,8 @@ export function IntegrationsSettings() {
                       isConnected={!!connectionMap[p.name]}
                       hasOAuth={!!oauthEnabled[p.name]}
                       connection={connectionMap[p.name]}
-                      onManualConnect={() => {
-                        setManualConnectProvider(p.name);
+                      onNotConfigured={() => {
+                        setNotConfiguredProvider(p.name);
                         setSelectedConnection(null);
                       }}
                     />
@@ -1273,11 +1215,11 @@ export function IntegrationsSettings() {
           />
         )}
 
-        {/* ─── Manual token form ─── */}
-        {manualConnectProvider && (() => {
-          const prov = (providers as MCPProviderInfo[] | undefined)?.find((p) => p.name === manualConnectProvider);
+        {/* ─── OAuth not configured notice ─── */}
+        {notConfiguredProvider && (() => {
+          const prov = (providers as MCPProviderInfo[] | undefined)?.find((p) => p.name === notConfiguredProvider);
           return prov ? (
-            <ManualConnectForm provider={prov} onClose={() => setManualConnectProvider(null)} />
+            <OAuthNotConfiguredNotice provider={prov} onClose={() => setNotConfiguredProvider(null)} />
           ) : null;
         })()}
 
@@ -1290,7 +1232,7 @@ export function IntegrationsSettings() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => { setShowCustomWizard(true); setManualConnectProvider(null); setSelectedConnection(null); }}
+              onClick={() => { setShowCustomWizard(true); setNotConfiguredProvider(null); setSelectedConnection(null); }}
               className="h-7 text-xs"
             >
               <Plus className="mr-1 h-3 w-3" /> Create Custom

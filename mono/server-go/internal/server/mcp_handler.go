@@ -62,56 +62,10 @@ func (h *mcpHandler) ListConnections(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *mcpHandler) CreateConnection(w http.ResponseWriter, r *http.Request) {
-	claims, ok := auth.ClaimsFromContext(r.Context())
-	if !ok || claims == nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	var body struct {
-		Provider     string   `json:"provider"`
-		AccessToken  string   `json:"access_token"`
-		RefreshToken string   `json:"refresh_token"`
-		Scopes       []string `json:"scopes"`
-		IsOrgLevel   bool     `json:"is_org_level"`
-		ExpiresIn    int      `json:"expires_in"`
-		Metadata     string   `json:"metadata"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
-		return
-	}
-	if body.Provider == "" || body.AccessToken == "" {
-		http.Error(w, `{"error":"provider and access_token are required"}`, http.StatusBadRequest)
-		return
-	}
-
-	conn := &store.MCPConnection{
-		ID:       uuid.New(),
-		UserID:   claims.UserID,
-		Provider: body.Provider,
-		Scopes:   body.Scopes,
-		Metadata: body.Metadata,
-	}
-
-	if body.IsOrgLevel && claims.OrgID != uuid.Nil {
-		oid := claims.OrgID
-		conn.OrgID = &oid
-		conn.IsOrgLevel = true
-	}
-
-	if body.ExpiresIn > 0 {
-		exp := time.Now().Add(time.Duration(body.ExpiresIn) * time.Second)
-		conn.ExpiresAt = &exp
-	}
-
-	if err := h.svc.CreateConnection(r.Context(), conn, body.AccessToken, body.RefreshToken); err != nil {
-		slog.Error("mcp: failed to create connection", "error", err)
-		http.Error(w, `{"error":"failed to create connection"}`, http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, toConnectionResponse(*conn))
+	// Manual token submission is deprecated — all MCP integrations should use
+	// the OAuth redirect flow (GET /oauth/{provider}/authorize).
+	// This endpoint is kept for internal/service-to-service use only.
+	http.Error(w, `{"error":"manual token submission is disabled — use the OAuth connect flow instead","oauth_url":"/api/v1/integrations/oauth/{provider}/authorize"}`, http.StatusGone)
 }
 
 func (h *mcpHandler) DeleteConnection(w http.ResponseWriter, r *http.Request) {
@@ -275,11 +229,27 @@ func (h *mcpHandler) InitiateOAuth(w http.ResponseWriter, r *http.Request) {
 
 	// Additional oauth2 options for specific providers.
 	var authOpts []oauth2.AuthCodeOption
-	if providerName == "gmail" {
+	switch providerName {
+	case "gmail", "google_calendar", "google_drive":
 		authOpts = append(authOpts, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
-	}
-	if providerName == "ms365" {
+	case "ms365":
 		authOpts = append(authOpts, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
+	case "jira", "confluence":
+		// Atlassian requires audience param and prompt for refresh tokens.
+		authOpts = append(authOpts,
+			oauth2.SetAuthURLParam("audience", "api.atlassian.com"),
+			oauth2.SetAuthURLParam("prompt", "consent"),
+		)
+	case "gitlab":
+		authOpts = append(authOpts, oauth2.SetAuthURLParam("response_type", "code"))
+	case "notion":
+		// Notion uses basic auth in the token exchange; no special auth URL params.
+	case "salesforce":
+		authOpts = append(authOpts, oauth2.SetAuthURLParam("prompt", "login consent"))
+	case "hubspot":
+		// HubSpot uses standard auth code flow, no extra params.
+	case "figma", "linear", "asana", "pagerduty", "stripe", "datadog", "zendesk":
+		// Standard OAuth2 code flow, no extra params needed.
 	}
 
 	authURL := oc.AuthCodeURL(state, authOpts...)

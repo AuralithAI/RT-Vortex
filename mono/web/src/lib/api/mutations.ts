@@ -368,24 +368,9 @@ export function useCheckClonePermission() {
 }
 
 // ── Integrations (MCP) ─────────────────────────────────────────────────────
-
-export function useConnectIntegration() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (body: {
-      provider: string;
-      access_token: string;
-      refresh_token?: string;
-      scopes?: string[];
-      is_org_level?: boolean;
-      expires_in?: number;
-      metadata?: string;
-    }) => api.integrations.connect(body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.integrations });
-    },
-  });
-}
+// Manual connect (useConnectIntegration) has been removed — all integrations
+// now use the server-side OAuth redirect flow.  The frontend simply navigates
+// to integrations.oauthUrl(provider) which triggers the full OAuth dance.
 
 export function useDisconnectIntegration() {
   const qc = useQueryClient();
