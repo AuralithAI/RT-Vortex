@@ -105,6 +105,9 @@ type Dependencies struct {
 	// MCP — external service integrations (Slack, MS365, Gmail, Discord)
 	MCPService *mcp.Service
 	MCPRepo    *store.MCPRepository
+
+	// ServerBase — canonical server URL for constructing OAuth callback URLs.
+	ServerBase string
 }
 
 // Server holds the HTTP server components.
@@ -343,7 +346,13 @@ func (s *Server) setupRouter() {
 
 			// MCP Integrations (connected apps: Slack, MS365, Gmail, Discord)
 			if s.deps.MCPService != nil {
-				mh := &mcpHandler{svc: s.deps.MCPService, repo: s.deps.MCPRepo}
+				mh := &mcpHandler{
+					svc:        s.deps.MCPService,
+					repo:       s.deps.MCPRepo,
+					sessionMgr: s.deps.SessionMgr,
+					mcpCfg:     s.deps.Config.MCP,
+					serverBase: s.deps.ServerBase,
+				}
 				r.Route("/integrations", func(r chi.Router) {
 					r.Get("/providers", mh.ListProviders)
 					r.Get("/connections", mh.ListConnections)
@@ -351,10 +360,11 @@ func (s *Server) setupRouter() {
 					r.Delete("/connections/{connectionID}", mh.DeleteConnection)
 					r.Post("/connections/{connectionID}/test", mh.TestConnection)
 					r.Get("/connections/{connectionID}/logs", mh.GetCallLog)
+					r.Get("/oauth/status", mh.OAuthStatus)
+					r.Get("/oauth/{provider}/authorize", mh.InitiateOAuth)
+					r.Get("/oauth/{provider}/callback", mh.OAuthCallback)
 				})
-			}
-
-			// Engine Metrics
+			} // Engine Metrics
 			r.Route("/engine", func(r chi.Router) {
 				r.Get("/metrics", h.GetEngineMetrics)
 				r.Get("/health", h.GetEngineHealth)

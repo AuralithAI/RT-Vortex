@@ -190,6 +190,19 @@ type MCPConfig struct {
 	GmailBaseURL     string
 	GmailTokenURL    string
 	DiscordBaseURL   string
+
+	// Per-provider OAuth credentials for MCP integrations (separate from auth SSO providers).
+	// These enable the one-click OAuth connect flow in the MCP Integrations UI.
+	OAuthProviders map[string]MCPOAuthProviderConfig
+}
+
+// MCPOAuthProviderConfig holds OAuth2 credentials for a single MCP provider.
+type MCPOAuthProviderConfig struct {
+	ClientID     string
+	ClientSecret string
+	Scopes       []string
+	AuthURL      string
+	TokenURL     string
 }
 
 // ---- XML intermediate types ----
@@ -430,6 +443,20 @@ type xmlMCP struct {
 	GmailBaseURL     string `xml:"gmail-base-url,attr"`
 	GmailTokenURL    string `xml:"gmail-token-url,attr"`
 	DiscordBaseURL   string `xml:"discord-base-url,attr"`
+
+	// Per-provider OAuth credentials (for one-click connect).
+	GmailClientID       string `xml:"gmail-client-id,attr"`
+	GmailClientSecret   string `xml:"gmail-client-secret,attr"`
+	GmailOAuthScopes    string `xml:"gmail-oauth-scopes,attr"`
+	MS365ClientID       string `xml:"ms365-client-id,attr"`
+	MS365ClientSecret   string `xml:"ms365-client-secret,attr"`
+	MS365OAuthScopes    string `xml:"ms365-oauth-scopes,attr"`
+	SlackClientID       string `xml:"slack-client-id,attr"`
+	SlackClientSecret   string `xml:"slack-client-secret,attr"`
+	SlackOAuthScopes    string `xml:"slack-oauth-scopes,attr"`
+	DiscordClientID     string `xml:"discord-client-id,attr"`
+	DiscordClientSecret string `xml:"discord-client-secret,attr"`
+	DiscordOAuthScopes  string `xml:"discord-oauth-scopes,attr"`
 }
 
 // ---- VCS platforms XML types ----
@@ -880,12 +907,76 @@ func loadServerProps(path string) (*Config, error) {
 		GmailBaseURL:    parseString(expand(raw.MCP.GmailBaseURL), "https://gmail.googleapis.com/gmail/v1"),
 		GmailTokenURL:   parseString(expand(raw.MCP.GmailTokenURL), "https://oauth2.googleapis.com/token"),
 		DiscordBaseURL:  parseString(expand(raw.MCP.DiscordBaseURL), "https://discord.com/api/v10"),
+		OAuthProviders:  make(map[string]MCPOAuthProviderConfig),
 	}
 	if providers := expand(raw.MCP.AllowedProviders); providers != "" {
 		for _, p := range strings.Split(providers, ",") {
 			p = strings.TrimSpace(p)
 			if p != "" {
 				cfg.MCP.AllowedProviders = append(cfg.MCP.AllowedProviders, p)
+			}
+		}
+	}
+	// Parse per-provider MCP OAuth credentials.
+	type mcpOAuthRaw struct {
+		name         string
+		clientID     string
+		clientSecret string
+		scopes       string
+		authURL      string
+		tokenURL     string
+	}
+	mcpOAuthProviders := []mcpOAuthRaw{
+		{
+			name:         "gmail",
+			clientID:     expand(raw.MCP.GmailClientID),
+			clientSecret: expand(raw.MCP.GmailClientSecret),
+			scopes:       expand(raw.MCP.GmailOAuthScopes),
+			authURL:      "https://accounts.google.com/o/oauth2/v2/auth",
+			tokenURL:     "https://oauth2.googleapis.com/token",
+		},
+		{
+			name:         "ms365",
+			clientID:     expand(raw.MCP.MS365ClientID),
+			clientSecret: expand(raw.MCP.MS365ClientSecret),
+			scopes:       expand(raw.MCP.MS365OAuthScopes),
+			authURL:      "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+			tokenURL:     "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+		},
+		{
+			name:         "slack",
+			clientID:     expand(raw.MCP.SlackClientID),
+			clientSecret: expand(raw.MCP.SlackClientSecret),
+			scopes:       expand(raw.MCP.SlackOAuthScopes),
+			authURL:      "https://slack.com/oauth/v2/authorize",
+			tokenURL:     "https://slack.com/api/oauth.v2.access",
+		},
+		{
+			name:         "discord",
+			clientID:     expand(raw.MCP.DiscordClientID),
+			clientSecret: expand(raw.MCP.DiscordClientSecret),
+			scopes:       expand(raw.MCP.DiscordOAuthScopes),
+			authURL:      "https://discord.com/api/oauth2/authorize",
+			tokenURL:     "https://discord.com/api/oauth2/token",
+		},
+	}
+	for _, op := range mcpOAuthProviders {
+		if op.clientID != "" && op.clientSecret != "" {
+			var scopes []string
+			if op.scopes != "" {
+				for _, s := range strings.Split(op.scopes, ",") {
+					s = strings.TrimSpace(s)
+					if s != "" {
+						scopes = append(scopes, s)
+					}
+				}
+			}
+			cfg.MCP.OAuthProviders[op.name] = MCPOAuthProviderConfig{
+				ClientID:     op.clientID,
+				ClientSecret: op.clientSecret,
+				Scopes:       scopes,
+				AuthURL:      op.authURL,
+				TokenURL:     op.tokenURL,
 			}
 		}
 	}

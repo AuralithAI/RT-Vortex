@@ -720,6 +720,14 @@ export const integrations = {
 
   callLog: (connectionId: string) =>
     request<MCPCallLogEntry[]>(`/api/v1/integrations/connections/${connectionId}/logs`),
+
+  /** Returns the OAuth authorize URL for a provider — browser should navigate to it. */
+  oauthUrl: (provider: string) =>
+    `${BASE}/api/v1/integrations/oauth/${provider}/authorize`,
+
+  /** Returns which providers have server-side OAuth configured. */
+  oauthStatus: () =>
+    request<{ oauth_enabled: Record<string, boolean> }>("/api/v1/integrations/oauth/status"),
 };
 
 // ── Convenience export ──────────────────────────────────────────────────────

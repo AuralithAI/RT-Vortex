@@ -1,22 +1,31 @@
 package server
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
+	"github.com/AuralithAI/rtvortex-server/internal/config"
 	"github.com/AuralithAI/rtvortex-server/internal/mcp"
+	"github.com/AuralithAI/rtvortex-server/internal/session"
 	"github.com/AuralithAI/rtvortex-server/internal/store"
 )
 
 type mcpHandler struct {
-	svc  *mcp.Service
-	repo *store.MCPRepository
+	svc        *mcp.Service
+	repo       *store.MCPRepository
+	sessionMgr *session.Manager
+	mcpCfg     config.MCPConfig
+	serverBase string
 }
 
 func (h *mcpHandler) ListProviders(w http.ResponseWriter, r *http.Request) {
@@ -210,6 +219,182 @@ func toConnectionResponse(c store.MCPConnection) connectionResponse {
 		ExpiresAt:   c.ExpiresAt,
 		CreatedAt:   c.CreatedAt,
 	}
+}
+
+// ── MCP OAuth Flow ──────────────────────────────────────────────────────────
+
+// InitiateOAuth redirects the user to the MCP provider's OAuth consent screen.
+// GET /api/v1/integrations/oauth/{provider}/authorize
+func (h *mcpHandler) InitiateOAuth(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.ClaimsFromContext(r.Context())
+	if !ok || claims == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+
+	providerName := chi.URLParam(r, "provider")
+	oauthCfg, exists := h.mcpCfg.OAuthProviders[providerName]
+	if !exists {
+		http.Error(w, `{"error":"OAuth not configured for this provider"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Build oauth2.Config.
+	redirectURL := fmt.Sprintf("%s/api/v1/integrations/oauth/%s/callback", h.serverBase, providerName)
+	oc := &oauth2.Config{
+		ClientID:     oauthCfg.ClientID,
+		ClientSecret: oauthCfg.ClientSecret,
+		Scopes:       oauthCfg.Scopes,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  oauthCfg.AuthURL,
+			TokenURL: oauthCfg.TokenURL,
+		},
+		RedirectURL: redirectURL,
+	}
+
+	// Generate CSRF state.
+	stateBytes := make([]byte, 16)
+	if _, err := rand.Read(stateBytes); err != nil {
+		slog.Error("mcp: failed to generate OAuth state", "error", err)
+		http.Error(w, `{"error":"failed to generate state"}`, http.StatusInternalServerError)
+		return
+	}
+	state := hex.EncodeToString(stateBytes)
+
+	// Store state in Redis. We re-use the session manager's OAuth state mechanism.
+	// redirect_url points back to the settings page.
+	settingsRedirect := r.URL.Query().Get("redirect_url")
+	if settingsRedirect == "" {
+		settingsRedirect = "/settings?tab=mcp&connected=" + providerName
+	}
+	if err := h.sessionMgr.StoreOAuthState(r.Context(), state, "mcp:"+providerName, settingsRedirect); err != nil {
+		slog.Error("mcp: failed to store OAuth state", "error", err)
+		http.Error(w, `{"error":"failed to store state"}`, http.StatusInternalServerError)
+		return
+	}
+
+	// Additional oauth2 options for specific providers.
+	var authOpts []oauth2.AuthCodeOption
+	if providerName == "gmail" {
+		authOpts = append(authOpts, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
+	}
+	if providerName == "ms365" {
+		authOpts = append(authOpts, oauth2.AccessTypeOffline, oauth2.SetAuthURLParam("prompt", "consent"))
+	}
+
+	authURL := oc.AuthCodeURL(state, authOpts...)
+	http.Redirect(w, r, authURL, http.StatusTemporaryRedirect)
+}
+
+// OAuthCallback handles the callback from the MCP provider OAuth consent screen.
+// GET /api/v1/integrations/oauth/{provider}/callback
+func (h *mcpHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	// Validate state + code.
+	state := r.URL.Query().Get("state")
+	code := r.URL.Query().Get("code")
+	if state == "" || code == "" {
+		http.Error(w, `{"error":"missing state or code parameter"}`, http.StatusBadRequest)
+		return
+	}
+
+	storedProvider, redirectURL, err := h.sessionMgr.ValidateOAuthState(ctx, state)
+	if err != nil {
+		slog.Error("mcp: invalid OAuth state", "error", err)
+		http.Error(w, `{"error":"invalid or expired OAuth state"}`, http.StatusBadRequest)
+		return
+	}
+
+	// storedProvider is "mcp:{provider}", extract the provider name.
+	providerName := chi.URLParam(r, "provider")
+	expectedKey := "mcp:" + providerName
+	if storedProvider != expectedKey {
+		http.Error(w, `{"error":"state/provider mismatch"}`, http.StatusBadRequest)
+		return
+	}
+
+	oauthCfg, exists := h.mcpCfg.OAuthProviders[providerName]
+	if !exists {
+		http.Error(w, `{"error":"OAuth not configured for this provider"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Build the same oauth2.Config.
+	callbackURL := fmt.Sprintf("%s/api/v1/integrations/oauth/%s/callback", h.serverBase, providerName)
+	oc := &oauth2.Config{
+		ClientID:     oauthCfg.ClientID,
+		ClientSecret: oauthCfg.ClientSecret,
+		Scopes:       oauthCfg.Scopes,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  oauthCfg.AuthURL,
+			TokenURL: oauthCfg.TokenURL,
+		},
+		RedirectURL: callbackURL,
+	}
+
+	// Exchange code for token.
+	token, err := oc.Exchange(ctx, code)
+	if err != nil {
+		slog.Error("mcp: OAuth code exchange failed", "provider", providerName, "error", err)
+		http.Error(w, `{"error":"failed to exchange OAuth code for token"}`, http.StatusBadGateway)
+		return
+	}
+
+	// Get user claims from JWT to associate the connection.
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok || claims == nil {
+		// For the callback, the user may not have a JWT cookie since the browser
+		// navigated to the provider. Try to get user from session cookie instead.
+		// We'll fall through and try; if claims is nil we error.
+		http.Error(w, `{"error":"unauthorized — please log in and try again"}`, http.StatusUnauthorized)
+		return
+	}
+
+	// Create MCP connection with the obtained tokens.
+	conn := &store.MCPConnection{
+		ID:       uuid.New(),
+		UserID:   claims.UserID,
+		Provider: providerName,
+		Scopes:   oauthCfg.Scopes,
+	}
+
+	if claims.OrgID != uuid.Nil {
+		oid := claims.OrgID
+		conn.OrgID = &oid
+	}
+
+	if !token.Expiry.IsZero() {
+		exp := token.Expiry
+		conn.ExpiresAt = &exp
+	}
+
+	if err := h.svc.CreateConnection(ctx, conn, token.AccessToken, token.RefreshToken); err != nil {
+		slog.Error("mcp: failed to create OAuth connection", "provider", providerName, "error", err)
+		http.Error(w, `{"error":"failed to store connection"}`, http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("mcp: OAuth connection created",
+		"provider", providerName,
+		"user_id", claims.UserID,
+		"connection_id", conn.ID,
+	)
+
+	// Redirect the user back to settings.
+	http.Redirect(w, r, redirectURL, http.StatusTemporaryRedirect)
+}
+
+// OAuthStatus returns which MCP providers have OAuth configured (for the UI to show OAuth vs manual).
+// GET /api/v1/integrations/oauth/status
+func (h *mcpHandler) OAuthStatus(w http.ResponseWriter, r *http.Request) {
+	status := make(map[string]bool)
+	for name := range h.mcpCfg.OAuthProviders {
+		status[name] = true
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"oauth_enabled": status,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {

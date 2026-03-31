@@ -350,6 +350,13 @@ export function useIntegrationCallLog(connectionId: string) {
   });
 }
 
+export function useIntegrationOAuthStatus() {
+  return useQuery({
+    queryKey: ["integrations", "oauth-status"] as const,
+    queryFn: () => api.integrations.oauthStatus(),
+  });
+}
+
 // ── Benchmark ───────────────────────────────────────────────────────────────
 
 export const benchmarkKeys = {

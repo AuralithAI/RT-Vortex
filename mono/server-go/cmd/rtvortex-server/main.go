@@ -699,6 +699,8 @@ func main() {
 
 		MCPService: mcpService,
 		MCPRepo:    mcpRepo,
+
+		ServerBase: serverBase,
 	}
 
 	// ── Create HTTP server ──────────────────────────────────────────────

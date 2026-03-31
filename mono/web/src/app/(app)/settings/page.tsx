@@ -29,7 +29,7 @@ export default function SettingsPage() {
           <TabsTrigger value="orchestration">Agent Orchestration</TabsTrigger>
           <TabsTrigger value="embeddings">Embeddings</TabsTrigger>
           <TabsTrigger value="vcs">Version Control</TabsTrigger>
-          <TabsTrigger value="integrations">Integrations</TabsTrigger>
+          <TabsTrigger value="integrations">MCP Integrations</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile">
