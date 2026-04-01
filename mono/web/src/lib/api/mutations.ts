@@ -483,6 +483,16 @@ export function useRecoverKeychain() {
   });
 }
 
+export function useRefreshRecovery() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: KeychainRecoverRequest) => api.keychain.refreshRecovery(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
+    },
+  });
+}
+
 export function useSyncKeychain() {
   const qc = useQueryClient();
   return useMutation({

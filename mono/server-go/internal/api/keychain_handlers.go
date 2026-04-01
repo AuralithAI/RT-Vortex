@@ -345,6 +345,44 @@ func (h *Handler) RecoverKeychain(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recovered"})
 }
 
+// RefreshRecovery re-wraps the current master key with the recovery phrase.
+// Must be called after key rotation to re-establish the recovery path.
+// POST /api/v1/keychain/refresh-recovery
+func (h *Handler) RefreshRecovery(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
+	if h.KeychainService == nil {
+		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
+		return
+	}
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req keychainRecoverRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.RecoveryPhrase == "" {
+		writeError(w, http.StatusBadRequest, "recovery_phrase is required")
+		return
+	}
+
+	if err := h.KeychainService.RefreshRecovery(r.Context(), userID, req.RecoveryPhrase); err != nil {
+		slog.Warn("keychain refresh-recovery failed", "user_id", userID, "error", err)
+		metrics.RecordKeychainOp("refresh_recovery", "error", time.Since(start))
+		writeError(w, http.StatusForbidden, "refresh recovery failed — phrase may be invalid")
+		return
+	}
+
+	metrics.RecordKeychainOp("refresh_recovery", "ok", time.Since(start))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "recovery_refreshed"})
+}
+
 // ── Audit Log ───────────────────────────────────────────────────────────────
 
 type keychainAuditLogEntry struct {

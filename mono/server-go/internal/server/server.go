@@ -374,6 +374,7 @@ func (s *Server) setupRouter() {
 					r.Post("/init", h.InitKeychain)
 					r.Post("/rotate", h.RotateKeychainKeys)
 					r.Post("/recover", h.RecoverKeychain)
+					r.Post("/refresh-recovery", h.RefreshRecovery)
 				})
 			})
 

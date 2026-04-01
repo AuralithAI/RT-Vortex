@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"time"
 )
 
 // KeychainClient provides methods for the /api/v1/keychain endpoints.
@@ -137,6 +136,12 @@ func (k *KeychainClient) Recover(ctx context.Context, req KeychainRecoverRequest
 	return k.c.do(ctx, http.MethodPost, "/api/v1/keychain/recover", req, nil)
 }
 
+// RefreshRecovery re-wraps the current master key with the recovery phrase.
+// Must be called after RotateKeys to re-establish the recovery path.
+func (k *KeychainClient) RefreshRecovery(ctx context.Context, req KeychainRecoverRequest) error {
+	return k.c.do(ctx, http.MethodPost, "/api/v1/keychain/refresh-recovery", req, nil)
+}
+
 // Sync performs version-vector sync negotiation and returns the diff.
 func (k *KeychainClient) Sync(ctx context.Context, req KeychainSyncRequest) (*KeychainSyncResponse, error) {
 	var out KeychainSyncResponse
@@ -182,7 +187,3 @@ func (k *KeychainClient) SyncAll(ctx context.Context) (*KeychainSyncResponse, er
 		ClientVersions: make(map[string]int64),
 	})
 }
-
-// ── Unused but reserved for future use ──────────────────────────────────────
-
-var _ = time.Now // ensure time import is used

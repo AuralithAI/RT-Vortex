@@ -351,6 +351,11 @@ export class RTVortexClient {
     return this.request("POST", "/keychain/recover", { body: data });
   }
 
+  /** Re-wrap master key with recovery phrase (call after key rotation). */
+  async keychainRefreshRecovery(data: KeychainRecoverRequest): Promise<{ status: string }> {
+    return this.request("POST", "/keychain/refresh-recovery", { body: data });
+  }
+
   /** Sync secrets using version-vector negotiation. */
   async keychainSync(data: KeychainSyncRequest): Promise<KeychainSyncResponse> {
     return this.request("POST", "/keychain/sync", { body: data });

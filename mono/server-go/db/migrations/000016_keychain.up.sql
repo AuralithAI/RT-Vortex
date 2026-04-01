@@ -15,13 +15,15 @@
 
 -- Per-user keychain metadata
 CREATE TABLE IF NOT EXISTS user_keychains (
-    user_id         UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    salt            BYTEA NOT NULL,
-    auth_key_hash   TEXT NOT NULL,
-    recovery_hint   TEXT NOT NULL DEFAULT '',
-    key_version     INTEGER NOT NULL DEFAULT 1,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    user_id              UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    salt                 BYTEA NOT NULL,
+    auth_key_hash        TEXT NOT NULL,
+    recovery_hint        TEXT NOT NULL DEFAULT '',
+    recovery_salt        BYTEA,
+    recovery_wrapped_key BYTEA,
+    key_version          INTEGER NOT NULL DEFAULT 1,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Encrypted secrets with CRDT-style versioning

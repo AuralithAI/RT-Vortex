@@ -817,6 +817,13 @@ export const keychain = {
       body: JSON.stringify(data),
     }),
 
+  /** Re-wrap master key with recovery phrase (call after key rotation). */
+  refreshRecovery: (data: KeychainRecoverRequest) =>
+    request<{ status: string }>("/api/v1/keychain/refresh-recovery", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
   /** Fetch the audit log for the user's keychain. */
   auditLog: (limit = 50) =>
     request<KeychainAuditLogEntry[]>(`/api/v1/keychain/audit?limit=${limit}`),

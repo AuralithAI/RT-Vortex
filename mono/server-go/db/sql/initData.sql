@@ -688,13 +688,15 @@ CREATE INDEX IF NOT EXISTS idx_mcp_custom_templates_org
 
 -- Per-user keychain metadata
 CREATE TABLE IF NOT EXISTS user_keychains (
-    user_id         UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-    salt            BYTEA NOT NULL,
-    auth_key_hash   TEXT NOT NULL,
-    recovery_hint   TEXT NOT NULL DEFAULT '',
-    key_version     INTEGER NOT NULL DEFAULT 1,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    user_id              UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    salt                 BYTEA NOT NULL,
+    auth_key_hash        TEXT NOT NULL,
+    recovery_hint        TEXT NOT NULL DEFAULT '',
+    recovery_salt        BYTEA,
+    recovery_wrapped_key BYTEA,
+    key_version          INTEGER NOT NULL DEFAULT 1,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- Encrypted secrets with CRDT-style versioning
@@ -797,6 +799,10 @@ WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 15);
 INSERT INTO schema_info (version, description)
 SELECT 16, 'Add keychain tables — user_keychains, keychain_secrets, keychain_audit_log'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 16);
+
+INSERT INTO schema_info (version, description)
+SELECT 17, 'Add recovery_salt and recovery_wrapped_key columns to user_keychains'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 17);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
