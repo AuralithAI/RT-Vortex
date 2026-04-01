@@ -371,6 +371,7 @@ func (s *Server) setupRouter() {
 				r.Delete("/secret", h.DeleteKeychainSecret)
 				r.Post("/rotate", h.RotateKeychainKeys)
 				r.Post("/recover", h.RecoverKeychain)
+				r.Get("/audit", h.ListKeychainAuditLog)
 			})
 
 			// MCP Integrations (connected apps: Slack, MS365, Gmail, Discord)

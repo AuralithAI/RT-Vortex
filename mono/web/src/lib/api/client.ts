@@ -55,6 +55,13 @@ import type {
   MCPValidationError,
   MCPValidationResult,
   MCPSimulateResult,
+  KeychainStatus,
+  KeychainInitResponse,
+  KeychainSecret,
+  KeychainSecretListEntry,
+  KeychainPutSecretRequest,
+  KeychainRecoverRequest,
+  KeychainAuditLogEntry,
 } from "@/types/api";
 
 // ── Error classes ───────────────────────────────────────────────────────────
@@ -761,7 +768,59 @@ export const integrations = {
     }),
 };
 
+// ── Keychain Vault ──────────────────────────────────────────────────────────
+
+export const keychain = {
+  /** Check whether the user's keychain is initialized. */
+  status: () =>
+    request<KeychainStatus>("/api/v1/keychain/status"),
+
+  /** Initialize a new keychain — returns a BIP39 recovery phrase (show once). */
+  init: () =>
+    request<KeychainInitResponse>("/api/v1/keychain/init", {
+      method: "POST",
+    }),
+
+  /** Store a secret (server encrypts with per-user key). */
+  putSecret: (data: KeychainPutSecretRequest) =>
+    request<{ status: string }>("/api/v1/keychain/secrets", {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  /** Retrieve a single decrypted secret by name. */
+  getSecret: (name: string) =>
+    request<KeychainSecret>(`/api/v1/keychain/secret?name=${encodeURIComponent(name)}`),
+
+  /** List all secret names/versions (no plaintext). */
+  listSecrets: () =>
+    request<KeychainSecretListEntry[]>("/api/v1/keychain/secrets"),
+
+  /** Delete a secret by name. */
+  deleteSecret: (name: string) =>
+    request<{ status: string }>(`/api/v1/keychain/secret?name=${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
+
+  /** Rotate all encryption keys (re-encrypts every secret). */
+  rotateKeys: () =>
+    request<{ status: string }>("/api/v1/keychain/rotate", {
+      method: "POST",
+    }),
+
+  /** Recover a keychain from a BIP39 recovery phrase. */
+  recover: (data: KeychainRecoverRequest) =>
+    request<{ status: string }>("/api/v1/keychain/recover", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** Fetch the audit log for the user's keychain. */
+  auditLog: (limit = 50) =>
+    request<KeychainAuditLogEntry[]>(`/api/v1/keychain/audit?limit=${limit}`),
+};
+
 // ── Convenience export ──────────────────────────────────────────────────────
 
-const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms, assets, integrations };
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms, assets, integrations, keychain };
 export default api;

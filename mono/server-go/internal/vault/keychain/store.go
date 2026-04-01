@@ -213,15 +213,16 @@ func (s *Store) DeleteAllSecrets(ctx context.Context, userID uuid.UUID) error {
 type SecretVersionEntry struct {
 	Name      string
 	Version   int64
+	Category  string
 	UpdatedAt time.Time
 }
 
-// ListVersions returns name + version for all of a user's secrets.
+// ListVersions returns name + version + category for all of a user's secrets.
 // Used for efficient sync: the client compares versions and only pulls
 // secrets with newer versions.
 func (s *Store) ListVersions(ctx context.Context, userID uuid.UUID) ([]SecretVersionEntry, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT name, version, updated_at FROM keychain_secrets WHERE user_id = $1 ORDER BY name`,
+		`SELECT name, version, category, updated_at FROM keychain_secrets WHERE user_id = $1 ORDER BY name`,
 		userID,
 	)
 	if err != nil {
@@ -230,7 +231,7 @@ func (s *Store) ListVersions(ctx context.Context, userID uuid.UUID) ([]SecretVer
 	defer rows.Close()
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (SecretVersionEntry, error) {
 		var e SecretVersionEntry
-		err := row.Scan(&e.Name, &e.Version, &e.UpdatedAt)
+		err := row.Scan(&e.Name, &e.Version, &e.Category, &e.UpdatedAt)
 		return e, err
 	})
 }
@@ -335,6 +336,42 @@ func (s *Store) LogAccess(ctx context.Context, userID uuid.UUID, action AuditAct
 	if err != nil {
 		slog.Warn("keychain: failed to write audit log", "error", err, "user_id", userID, "action", action)
 	}
+}
+
+// AuditLogEntry represents a single row from the keychain_audit_log table.
+type AuditLogEntry struct {
+	ID         uuid.UUID   `json:"id"`
+	UserID     uuid.UUID   `json:"user_id"`
+	Action     string      `json:"action"`
+	SecretName string      `json:"secret_name"`
+	IPAddr     string      `json:"ip_addr"`
+	UserAgent  string      `json:"user_agent"`
+	CreatedAt  time.Time   `json:"created_at"`
+}
+
+// ListAuditLog returns the most recent audit events for a user, newest first.
+// limit controls the max rows returned (default 50, max 200).
+func (s *Store) ListAuditLog(ctx context.Context, userID uuid.UUID, limit int) ([]AuditLogEntry, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx,
+		`SELECT id, user_id, action, secret_name, ip_addr, user_agent, created_at
+		 FROM keychain_audit_log
+		 WHERE user_id = $1
+		 ORDER BY created_at DESC
+		 LIMIT $2`,
+		userID, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (AuditLogEntry, error) {
+		var e AuditLogEntry
+		err := row.Scan(&e.ID, &e.UserID, &e.Action, &e.SecretName, &e.IPAddr, &e.UserAgent, &e.CreatedAt)
+		return e, err
+	})
 }
 
 // ── Auth Challenge Storage ──────────────────────────────────────────────────

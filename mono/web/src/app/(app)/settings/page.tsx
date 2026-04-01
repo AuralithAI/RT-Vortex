@@ -13,6 +13,7 @@ import { AgentOrchestration } from "@/components/settings/agent-orchestration";
 import { EmbeddingsSettings } from "@/components/settings/embeddings-settings";
 import { VCSSettings } from "@/components/settings/vcs-settings";
 import { IntegrationsSettings } from "@/components/settings/integrations-settings";
+import { KeychainSettings } from "@/components/settings/keychain-settings";
 
 export default function SettingsPage() {
   return (
@@ -30,6 +31,7 @@ export default function SettingsPage() {
           <TabsTrigger value="embeddings">Embeddings</TabsTrigger>
           <TabsTrigger value="vcs">Version Control</TabsTrigger>
           <TabsTrigger value="integrations">MCP Integrations</TabsTrigger>
+          <TabsTrigger value="vault">Secure Vault</TabsTrigger>
         </TabsList>
 
         <TabsContent value="profile">
@@ -54,6 +56,10 @@ export default function SettingsPage() {
 
         <TabsContent value="integrations">
           <IntegrationsSettings />
+        </TabsContent>
+
+        <TabsContent value="vault">
+          <KeychainSettings />
         </TabsContent>
       </Tabs>
     </>

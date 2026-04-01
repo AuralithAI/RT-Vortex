@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
 )
@@ -85,9 +86,19 @@ func (h *Handler) GetKeychainStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Try to load the keychain metadata to check initialization and key version.
+	kc, kcErr := h.KeychainService.GetKeychain(r.Context(), userID)
+	if kcErr != nil {
+		writeJSON(w, http.StatusOK, keychainStatusResponse{Initialized: false})
+		return
+	}
+
 	versions, err := h.KeychainService.ListSecretNames(r.Context(), userID)
 	if err != nil {
-		writeJSON(w, http.StatusOK, keychainStatusResponse{Initialized: false})
+		writeJSON(w, http.StatusOK, keychainStatusResponse{
+			Initialized: true,
+			KeyVersion:  kc.KeyVersion,
+		})
 		return
 	}
 
@@ -100,6 +111,7 @@ func (h *Handler) GetKeychainStatus(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, keychainStatusResponse{
 		Initialized: true,
+		KeyVersion:  kc.KeyVersion,
 		SecretCount: count,
 	})
 }
@@ -206,6 +218,7 @@ func (h *Handler) ListKeychainSecrets(w http.ResponseWriter, r *http.Request) {
 		entries = append(entries, keychainSecretListEntry{
 			Name:      v.Name,
 			Version:   v.Version,
+			Category:  v.Category,
 			UpdatedAt: v.UpdatedAt.Format("2006-01-02T15:04:05Z"),
 		})
 	}
@@ -295,4 +308,57 @@ func (h *Handler) RecoverKeychain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recovered"})
+}
+
+// ── Audit Log ───────────────────────────────────────────────────────────────
+
+type keychainAuditLogEntry struct {
+	ID         string `json:"id"`
+	Action     string `json:"action"`
+	SecretName string `json:"secret_name,omitempty"`
+	IPAddr     string `json:"ip_addr,omitempty"`
+	UserAgent  string `json:"user_agent,omitempty"`
+	CreatedAt  string `json:"created_at"`
+}
+
+// ListKeychainAuditLog returns recent audit events for the user's keychain.
+// GET /api/v1/keychain/audit
+func (h *Handler) ListKeychainAuditLog(w http.ResponseWriter, r *http.Request) {
+	if h.KeychainService == nil {
+		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
+		return
+	}
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	limit := 50
+	if ls := r.URL.Query().Get("limit"); ls != "" {
+		if n, err := strconv.Atoi(ls); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	entries, err := h.KeychainService.ListAuditLog(r.Context(), userID, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list audit log")
+		return
+	}
+
+	out := make([]keychainAuditLogEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, keychainAuditLogEntry{
+			ID:         e.ID.String(),
+			Action:     e.Action,
+			SecretName: e.SecretName,
+			IPAddr:     e.IPAddr,
+			UserAgent:  e.UserAgent,
+			CreatedAt:  e.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, out)
 }

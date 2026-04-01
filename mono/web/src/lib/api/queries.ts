@@ -48,6 +48,9 @@ export const queryKeys = {
   integrationCallLog: (connectionId: string) =>
     ["integrations", "connections", connectionId, "logs"] as const,
   customTemplates: ["integrations", "custom-templates"] as const,
+  keychainStatus: ["keychain", "status"] as const,
+  keychainSecrets: ["keychain", "secrets"] as const,
+  keychainAuditLog: ["keychain", "audit"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -362,6 +365,32 @@ export function useCustomTemplates() {
   return useQuery({
     queryKey: queryKeys.customTemplates,
     queryFn: () => api.integrations.customTemplates(),
+  });
+}
+
+// ── Keychain Vault ──────────────────────────────────────────────────────────
+
+export function useKeychainStatus() {
+  return useQuery({
+    queryKey: queryKeys.keychainStatus,
+    queryFn: () => api.keychain.status(),
+    retry: false,
+  });
+}
+
+export function useKeychainSecrets() {
+  return useQuery({
+    queryKey: queryKeys.keychainSecrets,
+    queryFn: () => api.keychain.listSecrets(),
+    retry: false,
+  });
+}
+
+export function useKeychainAuditLog(limit = 50) {
+  return useQuery({
+    queryKey: queryKeys.keychainAuditLog,
+    queryFn: () => api.keychain.auditLog(limit),
+    retry: false,
   });
 }
 

@@ -159,6 +159,12 @@ func (svc *Service) InitForUser(ctx context.Context, userID uuid.UUID) (*InitRes
 
 // ── Key Loading & Caching ───────────────────────────────────────────────────
 
+// GetKeychain retrieves the user's keychain metadata (salt, key version, etc.).
+// Returns nil and an error if the keychain is not initialized.
+func (svc *Service) GetKeychain(ctx context.Context, userID uuid.UUID) (*UserKeychain, error) {
+	return svc.store.GetKeychain(ctx, userID)
+}
+
 // LoadKeys loads and caches the user's derived keys. Called on authentication.
 // The server unwraps the master key using the server KEK, then derives sub-keys.
 func (svc *Service) LoadKeys(ctx context.Context, userID uuid.UUID) (*DerivedKeys, error) {
@@ -312,6 +318,11 @@ func (svc *Service) DeleteSecret(ctx context.Context, userID uuid.UUID, name str
 // (no plaintext or ciphertext — metadata only).
 func (svc *Service) ListSecretNames(ctx context.Context, userID uuid.UUID) ([]SecretVersionEntry, error) {
 	return svc.store.ListVersions(ctx, userID)
+}
+
+// ListAuditLog returns recent audit log entries for a user.
+func (svc *Service) ListAuditLog(ctx context.Context, userID uuid.UUID, limit int) ([]AuditLogEntry, error) {
+	return svc.store.ListAuditLog(ctx, userID, limit)
 }
 
 // ── Key Rotation ────────────────────────────────────────────────────────────
