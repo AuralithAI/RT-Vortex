@@ -835,3 +835,20 @@ export interface KeychainAuditLogEntry {
   user_agent?: string;
   created_at: string;
 }
+
+export interface KeychainSyncRequest {
+  client_versions: Record<string, number>;
+}
+
+export interface KeychainSyncVersionEntry {
+  name: string;
+  version: number;
+  category?: string;
+  updated_at: string;
+}
+
+export interface KeychainSyncResponse {
+  updated: KeychainSyncVersionEntry[];
+  deleted: string[];
+  server_versions: Record<string, number>;
+}

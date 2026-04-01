@@ -8,6 +8,15 @@ import type {
   AdminStats,
   HealthStatus,
   IndexStatus,
+  KeychainAuditLogEntry,
+  KeychainInitResponse,
+  KeychainPutSecretRequest,
+  KeychainRecoverRequest,
+  KeychainSecret,
+  KeychainSecretListEntry,
+  KeychainStatus,
+  KeychainSyncRequest,
+  KeychainSyncResponse,
   MemberListResponse,
   Org,
   OrgListResponse,
@@ -294,5 +303,63 @@ export class RTVortexClient {
 
   async healthDetailed(): Promise<HealthStatus> {
     return this.request("GET", "/admin/health/detailed");
+  }
+
+  // ── Keychain Vault ────────────────────────────────────────────────────────
+
+  /** Check whether the user's keychain is initialized. */
+  async keychainStatus(): Promise<KeychainStatus> {
+    return this.request("GET", "/keychain/status");
+  }
+
+  /** Initialize a new keychain. Returns a BIP39 recovery phrase (show once). */
+  async keychainInit(): Promise<KeychainInitResponse> {
+    return this.request("POST", "/keychain/init");
+  }
+
+  /** Store a secret (server encrypts with the user's per-user key). */
+  async keychainPutSecret(data: KeychainPutSecretRequest): Promise<{ status: string }> {
+    return this.request("PUT", "/keychain/secrets", { body: data });
+  }
+
+  /** Retrieve a single decrypted secret by name. */
+  async keychainGetSecret(name: string): Promise<KeychainSecret> {
+    return this.request("GET", "/keychain/secret", {
+      params: { name },
+    });
+  }
+
+  /** List all secret names/versions (no plaintext). */
+  async keychainListSecrets(): Promise<KeychainSecretListEntry[]> {
+    return this.request("GET", "/keychain/secrets");
+  }
+
+  /** Delete a secret by name. */
+  async keychainDeleteSecret(name: string): Promise<{ status: string }> {
+    return this.request("DELETE", "/keychain/secret", {
+      params: { name },
+    });
+  }
+
+  /** Rotate all encryption keys (re-wraps every secret DEK). */
+  async keychainRotateKeys(): Promise<{ status: string }> {
+    return this.request("POST", "/keychain/rotate");
+  }
+
+  /** Recover a keychain from a BIP39 recovery phrase. */
+  async keychainRecover(data: KeychainRecoverRequest): Promise<{ status: string }> {
+    return this.request("POST", "/keychain/recover", { body: data });
+  }
+
+  /** Sync secrets using version-vector negotiation. */
+  async keychainSync(data: KeychainSyncRequest): Promise<KeychainSyncResponse> {
+    return this.request("POST", "/keychain/sync", { body: data });
+  }
+
+  /** Fetch the audit log for the user's keychain. */
+  async keychainAuditLog(limit = 50): Promise<KeychainAuditLogEntry[]> {
+    return this.request("GET", "/keychain/audit", {
+      params: { limit },
+    });
   }
 }

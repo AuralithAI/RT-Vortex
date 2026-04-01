@@ -184,9 +184,9 @@ func (s *Server) setupRouter() {
 		ChatRepo:        s.deps.ChatRepo,
 		ChatService:     s.deps.ChatService,
 		AssetRepo:       s.deps.AssetRepo,
-		Vault:            s.deps.Vault,
-		KeychainService:  s.deps.KeychainService,
-		VCSPlatformRepo:  s.deps.VCSPlatformRepo,
+		Vault:           s.deps.Vault,
+		KeychainService: s.deps.KeychainService,
+		VCSPlatformRepo: s.deps.VCSPlatformRepo,
 	}
 	if s.deps.MetricsCollector != nil {
 		h.MetricsCollector = s.deps.MetricsCollector
@@ -371,6 +371,7 @@ func (s *Server) setupRouter() {
 				r.Delete("/secret", h.DeleteKeychainSecret)
 				r.Post("/rotate", h.RotateKeychainKeys)
 				r.Post("/recover", h.RecoverKeychain)
+				r.Post("/sync", h.SyncKeychainSecrets)
 				r.Get("/audit", h.ListKeychainAuditLog)
 			})
 

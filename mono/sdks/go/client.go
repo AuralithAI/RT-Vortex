@@ -40,9 +40,10 @@ type Client struct {
 	token      string
 
 	// Sub-clients for each API area.
-	Swarm   *SwarmClient
-	Repos   *RepoClient
-	Reviews *ReviewClient
+	Swarm    *SwarmClient
+	Repos    *RepoClient
+	Reviews  *ReviewClient
+	Keychain *KeychainClient
 }
 
 // Option configures the Client.
@@ -72,6 +73,7 @@ func NewClient(baseURL string, opts ...Option) *Client {
 	c.Swarm = &SwarmClient{c: c}
 	c.Repos = &RepoClient{c: c}
 	c.Reviews = &ReviewClient{c: c}
+	c.Keychain = &KeychainClient{c: c}
 	return c
 }
 

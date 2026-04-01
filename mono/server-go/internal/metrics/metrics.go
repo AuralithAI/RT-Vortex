@@ -193,6 +193,68 @@ var (
 	}, []string{"provider", "result"})
 )
 
+// ── Keychain Vault Metrics ──────────────────────────────────────────────────
+
+var (
+	// KeychainOpsTotal counts keychain operations by type and result.
+	KeychainOpsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Subsystem: "keychain",
+		Name:      "operations_total",
+		Help:      "Total keychain operations by operation type and result (ok, error).",
+	}, []string{"operation", "result"})
+
+	// KeychainOpDuration observes keychain operation latency.
+	KeychainOpDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: ns,
+		Subsystem: "keychain",
+		Name:      "operation_duration_seconds",
+		Help:      "Keychain operation duration in seconds.",
+		Buckets:   []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 5},
+	}, []string{"operation"})
+
+	// KeychainSecretsGauge tracks the total number of active secrets.
+	KeychainSecretsGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: ns,
+		Subsystem: "keychain",
+		Name:      "secrets_active",
+		Help:      "Current number of active secrets in the keychain across all users.",
+	})
+
+	// KeychainEncryptionDuration observes encryption/decryption latency specifically.
+	KeychainEncryptionDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: ns,
+		Subsystem: "keychain",
+		Name:      "encryption_duration_seconds",
+		Help:      "Duration of encryption and decryption operations.",
+		Buckets:   []float64{0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1},
+	}, []string{"operation"}) // "encrypt" or "decrypt"
+
+	// KeychainKeyRotationsTotal counts key rotation events.
+	KeychainKeyRotationsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Subsystem: "keychain",
+		Name:      "key_rotations_total",
+		Help:      "Total key rotation events by result.",
+	}, []string{"result"})
+
+	// KeychainSyncTotal counts sync negotiation requests.
+	KeychainSyncTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Subsystem: "keychain",
+		Name:      "sync_total",
+		Help:      "Total sync negotiation requests by result.",
+	}, []string{"result"})
+
+	// KeychainRecoveryTotal counts recovery attempts.
+	KeychainRecoveryTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Subsystem: "keychain",
+		Name:      "recovery_total",
+		Help:      "Total recovery attempts by result.",
+	}, []string{"result"})
+)
+
 // ── Recording Helpers ───────────────────────────────────────────────────────
 
 // RecordHTTPRequest records an HTTP request's metrics.
@@ -226,4 +288,35 @@ func RecordPipelineComplete(status string, duration time.Duration, commentsCount
 	ReviewPipelineDuration.Observe(duration.Seconds())
 	ReviewCommentsTotal.Add(float64(commentsCount))
 	ReviewFilesAnalyzed.Add(float64(filesCount))
+}
+
+// RecordKeychainOp records a keychain operation's outcome and latency.
+func RecordKeychainOp(operation, result string, duration time.Duration) {
+	KeychainOpsTotal.WithLabelValues(operation, result).Inc()
+	KeychainOpDuration.WithLabelValues(operation).Observe(duration.Seconds())
+}
+
+// RecordKeychainEncryption records encryption or decryption latency.
+func RecordKeychainEncryption(op string, duration time.Duration) {
+	KeychainEncryptionDuration.WithLabelValues(op).Observe(duration.Seconds())
+}
+
+// RecordKeychainKeyRotation records a key rotation event.
+func RecordKeychainKeyRotation(result string) {
+	KeychainKeyRotationsTotal.WithLabelValues(result).Inc()
+}
+
+// RecordKeychainSync records a sync negotiation event.
+func RecordKeychainSync(result string) {
+	KeychainSyncTotal.WithLabelValues(result).Inc()
+}
+
+// RecordKeychainRecovery records a recovery attempt.
+func RecordKeychainRecovery(result string) {
+	KeychainRecoveryTotal.WithLabelValues(result).Inc()
+}
+
+// SetKeychainSecretsGauge updates the active secrets gauge.
+func SetKeychainSecretsGauge(count float64) {
+	KeychainSecretsGauge.Set(count)
 }

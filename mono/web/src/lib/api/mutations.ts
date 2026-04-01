@@ -5,7 +5,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./client";
 import { queryKeys } from "./queries";
-import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute, MultimodalUpdateRequest, KeychainPutSecretRequest, KeychainRecoverRequest } from "@/types/api";
+import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute, MultimodalUpdateRequest, KeychainPutSecretRequest, KeychainRecoverRequest, KeychainSyncRequest } from "@/types/api";
 
 // ── Assets ──────────────────────────────────────────────────────────────────
 
@@ -479,6 +479,17 @@ export function useRecoverKeychain() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
       qc.invalidateQueries({ queryKey: queryKeys.keychainSecrets });
+    },
+  });
+}
+
+export function useSyncKeychain() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: KeychainSyncRequest) => api.keychain.sync(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keychainSecrets });
+      qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
     },
   });
 }

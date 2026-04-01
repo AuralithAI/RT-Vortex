@@ -62,6 +62,8 @@ import type {
   KeychainPutSecretRequest,
   KeychainRecoverRequest,
   KeychainAuditLogEntry,
+  KeychainSyncRequest,
+  KeychainSyncResponse,
 } from "@/types/api";
 
 // ── Error classes ───────────────────────────────────────────────────────────
@@ -818,6 +820,13 @@ export const keychain = {
   /** Fetch the audit log for the user's keychain. */
   auditLog: (limit = 50) =>
     request<KeychainAuditLogEntry[]>(`/api/v1/keychain/audit?limit=${limit}`),
+
+  /** Sync secrets using version-vector negotiation. */
+  sync: (data: KeychainSyncRequest) =>
+    request<KeychainSyncResponse>("/api/v1/keychain/sync", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
 };
 
 // ── Convenience export ──────────────────────────────────────────────────────

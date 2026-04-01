@@ -325,6 +325,80 @@ func (svc *Service) ListAuditLog(ctx context.Context, userID uuid.UUID, limit in
 	return svc.store.ListAuditLog(ctx, userID, limit)
 }
 
+// ── Sync ────────────────────────────────────────────────────────────────────
+
+// SyncRequest is the payload from a client that wants to synchronize secrets.
+// The client sends its known version vector; the server returns only the
+// secrets that have newer versions on the server side, plus a list of any
+// secrets the server is missing so the client can push them.
+type SyncRequest struct {
+	// ClientVersions maps secret name → version the client currently holds.
+	ClientVersions map[string]int64 `json:"client_versions"`
+}
+
+// SyncResponse is returned by the sync endpoint.
+type SyncResponse struct {
+	// Updated contains secrets that are newer on the server than the client.
+	// Only metadata — the client must call GetSecret to decrypt each one.
+	Updated []SecretVersionEntry `json:"updated"`
+
+	// Deleted contains secret names that exist in the client's vector but
+	// no longer exist on the server (were deleted).
+	Deleted []string `json:"deleted"`
+
+	// ServerVersions is the full version vector from the server so the
+	// client can update its local cache in one shot.
+	ServerVersions map[string]int64 `json:"server_versions"`
+}
+
+// SyncSecrets compares the client's version vector against the server state
+// and returns a diff. This is the core sync negotiation — no ciphertext is
+// transferred in this call; the client pulls individual secrets as needed.
+func (svc *Service) SyncSecrets(ctx context.Context, userID uuid.UUID, req *SyncRequest) (*SyncResponse, error) {
+	serverEntries, err := svc.store.ListVersions(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("keychain: list versions for sync: %w", err)
+	}
+
+	// Build server version map.
+	serverMap := make(map[string]SecretVersionEntry, len(serverEntries))
+	serverVersions := make(map[string]int64, len(serverEntries))
+	for _, e := range serverEntries {
+		if e.Name == "__master_key__" {
+			continue
+		}
+		serverMap[e.Name] = e
+		serverVersions[e.Name] = e.Version
+	}
+
+	resp := &SyncResponse{
+		Updated:        make([]SecretVersionEntry, 0),
+		Deleted:        make([]string, 0),
+		ServerVersions: serverVersions,
+	}
+
+	// Find secrets that are newer on the server.
+	for name, entry := range serverMap {
+		clientVer, exists := req.ClientVersions[name]
+		if !exists || clientVer < entry.Version {
+			resp.Updated = append(resp.Updated, entry)
+		}
+	}
+
+	// Find secrets the client has that the server doesn't (deleted).
+	for name := range req.ClientVersions {
+		if name == "__master_key__" {
+			continue
+		}
+		if _, exists := serverMap[name]; !exists {
+			resp.Deleted = append(resp.Deleted, name)
+		}
+	}
+
+	svc.store.LogAccess(ctx, userID, AuditSync, "", "", "")
+	return resp, nil
+}
+
 // ── Key Rotation ────────────────────────────────────────────────────────────
 
 // RotateKeys generates a new master key, re-wraps all DEKs, and updates

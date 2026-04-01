@@ -5,8 +5,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
+	"github.com/AuralithAI/rtvortex-server/internal/metrics"
+	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
 )
 
 // ── Request / Response Types ────────────────────────────────────────────────
@@ -49,6 +52,8 @@ type keychainRecoverRequest struct {
 // InitKeychain creates a new keychain for the authenticated user.
 // POST /api/v1/keychain/init
 func (h *Handler) InitKeychain(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if h.KeychainService == nil {
 		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
 		return
@@ -63,10 +68,12 @@ func (h *Handler) InitKeychain(w http.ResponseWriter, r *http.Request) {
 	result, err := h.KeychainService.InitForUser(r.Context(), userID)
 	if err != nil {
 		slog.Warn("keychain init failed", "user_id", userID, "error", err)
+		metrics.RecordKeychainOp("init", "error", time.Since(start))
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 
+	metrics.RecordKeychainOp("init", "ok", time.Since(start))
 	writeJSON(w, http.StatusCreated, keychainInitResponse{
 		RecoveryPhrase: result.RecoveryPhrase,
 	})
@@ -319,6 +326,78 @@ type keychainAuditLogEntry struct {
 	IPAddr     string `json:"ip_addr,omitempty"`
 	UserAgent  string `json:"user_agent,omitempty"`
 	CreatedAt  string `json:"created_at"`
+}
+
+// ── Sync ────────────────────────────────────────────────────────────────────
+
+type keychainSyncRequest struct {
+	ClientVersions map[string]int64 `json:"client_versions"`
+}
+
+type keychainSyncVersionEntry struct {
+	Name      string `json:"name"`
+	Version   int64  `json:"version"`
+	Category  string `json:"category,omitempty"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type keychainSyncResponse struct {
+	Updated        []keychainSyncVersionEntry `json:"updated"`
+	Deleted        []string                   `json:"deleted"`
+	ServerVersions map[string]int64           `json:"server_versions"`
+}
+
+// SyncKeychainSecrets performs version-vector sync negotiation.
+// The client sends its known versions; the server returns what changed.
+// POST /api/v1/keychain/sync
+func (h *Handler) SyncKeychainSecrets(w http.ResponseWriter, r *http.Request) {
+	if h.KeychainService == nil {
+		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
+		return
+	}
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req keychainSyncRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.ClientVersions == nil {
+		req.ClientVersions = make(map[string]int64)
+	}
+
+	syncReq := &keychain.SyncRequest{
+		ClientVersions: req.ClientVersions,
+	}
+
+	result, err := h.KeychainService.SyncSecrets(r.Context(), userID, syncReq)
+	if err != nil {
+		slog.Warn("keychain sync failed", "user_id", userID, "error", err)
+		writeError(w, http.StatusInternalServerError, "sync failed")
+		return
+	}
+
+	// Convert to response types.
+	updated := make([]keychainSyncVersionEntry, 0, len(result.Updated))
+	for _, u := range result.Updated {
+		updated = append(updated, keychainSyncVersionEntry{
+			Name:      u.Name,
+			Version:   u.Version,
+			Category:  u.Category,
+			UpdatedAt: u.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		})
+	}
+
+	writeJSON(w, http.StatusOK, keychainSyncResponse{
+		Updated:        updated,
+		Deleted:        result.Deleted,
+		ServerVersions: result.ServerVersions,
+	})
 }
 
 // ListKeychainAuditLog returns recent audit events for the user's keychain.
