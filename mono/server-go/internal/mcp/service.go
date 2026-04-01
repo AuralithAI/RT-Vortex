@@ -63,7 +63,7 @@ var sensitivePatterns = []*regexp.Regexp{
 type Service struct {
 	repo     *store.MCPRepository
 	registry *ProviderRegistry
-	vault    *vault.FileVault
+	vault    vault.SecretStore
 	rdb      *redis.Client
 	cfg      config.MCPConfig
 }
@@ -71,7 +71,7 @@ type Service struct {
 func NewService(
 	repo *store.MCPRepository,
 	registry *ProviderRegistry,
-	v *vault.FileVault,
+	v vault.SecretStore,
 	rdb *redis.Client,
 	cfg config.MCPConfig,
 ) *Service {

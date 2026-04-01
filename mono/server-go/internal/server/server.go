@@ -33,6 +33,7 @@ import (
 	swarmauth "github.com/AuralithAI/rtvortex-server/internal/swarm/auth"
 	"github.com/AuralithAI/rtvortex-server/internal/tracing"
 	"github.com/AuralithAI/rtvortex-server/internal/vault"
+	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
 	"github.com/AuralithAI/rtvortex-server/internal/webhookq"
 	"github.com/AuralithAI/rtvortex-server/internal/ws"
@@ -82,8 +83,11 @@ type Dependencies struct {
 	// Multimodal assets
 	AssetRepo *store.AssetRepository
 
-	// File Vault — shared vault for per-user secret storage
-	Vault *vault.FileVault
+	// Vault — shared vault for per-user secret storage
+	Vault vault.SecretStore
+
+	// Keychain — production-grade encrypted secret storage
+	KeychainService *keychain.Service
 
 	// VCS Platform Config — per-user non-secret VCS settings (URLs, usernames)
 	VCSPlatformRepo *store.VCSPlatformRepo
@@ -180,8 +184,9 @@ func (s *Server) setupRouter() {
 		ChatRepo:        s.deps.ChatRepo,
 		ChatService:     s.deps.ChatService,
 		AssetRepo:       s.deps.AssetRepo,
-		Vault:           s.deps.Vault,
-		VCSPlatformRepo: s.deps.VCSPlatformRepo,
+		Vault:            s.deps.Vault,
+		KeychainService:  s.deps.KeychainService,
+		VCSPlatformRepo:  s.deps.VCSPlatformRepo,
 	}
 	if s.deps.MetricsCollector != nil {
 		h.MetricsCollector = s.deps.MetricsCollector
@@ -354,6 +359,18 @@ func (s *Server) setupRouter() {
 				r.Post("/platforms/{platform}/test", h.TestVCSPlatform)
 				r.Post("/platforms/{platform}/check-clone", h.CheckClonePermission)
 				r.Get("/token-capabilities", h.ListVCSTokenCapabilities)
+			})
+
+			// Keychain — encrypted per-user secret vault
+			r.Route("/keychain", func(r chi.Router) {
+				r.Post("/init", h.InitKeychain)
+				r.Get("/status", h.GetKeychainStatus)
+				r.Get("/secrets", h.ListKeychainSecrets)
+				r.Put("/secrets", h.PutKeychainSecret)
+				r.Get("/secret", h.GetKeychainSecret)
+				r.Delete("/secret", h.DeleteKeychainSecret)
+				r.Post("/rotate", h.RotateKeychainKeys)
+				r.Post("/recover", h.RecoverKeychain)
 			})
 
 			// MCP Integrations (connected apps: Slack, MS365, Gmail, Discord)

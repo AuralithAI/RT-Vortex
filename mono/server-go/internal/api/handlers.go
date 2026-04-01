@@ -36,6 +36,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/store"
 	"github.com/AuralithAI/rtvortex-server/internal/validation"
 	"github.com/AuralithAI/rtvortex-server/internal/vault"
+	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
 	"github.com/AuralithAI/rtvortex-server/internal/webhookq"
 )
@@ -69,7 +70,8 @@ type Handler struct {
 	ChatRepo         *store.ChatRepository
 	ChatService      *chat.Service
 	AssetRepo        *store.AssetRepository    // multimodal asset persistence (repo_assets)
-	Vault            *vault.FileVault          // shared file vault — user-scoped via vault token
+	Vault            vault.SecretStore          // shared vault — user-scoped via keychain or vault token
+	KeychainService  *keychain.Service         // encrypted keychain service
 	VCSPlatformRepo  *store.VCSPlatformRepo    // per-user VCS platform config (URLs, usernames)
 	MetricsCollector *engine.MetricsCollector  // engine metrics stream consumer
 	EmbedCache       *engine.EmbedCacheService // Redis-backed L2 embedding cache

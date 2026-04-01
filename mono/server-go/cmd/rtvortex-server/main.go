@@ -56,6 +56,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/swarm"
 	swarmauth "github.com/AuralithAI/rtvortex-server/internal/swarm/auth"
 	"github.com/AuralithAI/rtvortex-server/internal/vault"
+	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
 
 	// Import platform packages to trigger init() factory registration.
@@ -412,6 +413,29 @@ func main() {
 		}
 	}
 
+	// Keychain — production-grade encrypted per-user secret storage.
+	// Uses the same server encryption key as the FileVault / TokenEncryptor,
+	// normalized to 64-char hex for the keychain KEK.
+	var keychainSvc *keychain.Service
+	if cfg.Auth.EncryptionKey != "" {
+		serverKeyHex := cfg.Auth.EncryptionKey
+		if len(serverKeyHex) != 64 {
+			// Key is raw bytes or non-hex — hash to get a deterministic 256-bit key.
+			h := sha256.Sum256([]byte(cfg.Auth.EncryptionKey))
+			serverKeyHex = hex.EncodeToString(h[:])
+		}
+		kcStore := keychain.NewStore(db.Pool)
+		kcSvc, kcErr := keychain.NewService(kcStore, redisClient.Client(), keychain.ServiceConfig{
+			ServerEncryptionKey: serverKeyHex,
+		})
+		if kcErr != nil {
+			slog.Warn("Keychain service init failed — keychain will be unavailable", "error", kcErr)
+		} else {
+			keychainSvc = kcSvc
+			slog.Info("Keychain service initialized (encrypted per-user secret store)")
+		}
+	}
+
 	// Set primary from config (default: openai).
 	if cfg.LLM.Primary != "" {
 		llmRegistry.SetPrimary(cfg.LLM.Primary)
@@ -703,6 +727,7 @@ func main() {
 		ChatService:      chatService,
 		AssetRepo:        assetRepo,
 		Vault:            fileVault,
+		KeychainService:  keychainSvc,
 		VCSPlatformRepo:  vcsPlatformRepo,
 		MetricsCollector: metricsCollector,
 
