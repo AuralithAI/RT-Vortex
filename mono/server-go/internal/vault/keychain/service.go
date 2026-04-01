@@ -81,65 +81,83 @@ type InitResult struct {
 }
 
 // InitForUser creates a new keychain for a user. This is called once during
-// user registration or on first vault access. Returns the recovery phrase
-// which MUST be shown to the user exactly once.
+// user registration or on first vault access.
+//
+// The master key is a full 256-bit random value (crypto/rand). It is wrapped
+// twice — once by the server KEK (fast path) and once by an Argon2id key
+// derived from the recovery phrase (recovery path). The server never stores
+// the plaintext master key or the recovery phrase.
+//
+// Returns the recovery phrase which MUST be shown to the user exactly once.
 func (svc *Service) InitForUser(ctx context.Context, userID uuid.UUID) (*InitResult, error) {
 	// Check if already initialized.
 	if _, err := svc.store.GetKeychain(ctx, userID); err == nil {
 		return nil, fmt.Errorf("keychain: already initialized for user %s", userID)
 	}
 
-	// Generate master key.
+	// 1. Generate random 256-bit master key (full entropy).
 	masterKey, err := GenerateMasterKey()
 	if err != nil {
 		return nil, err
 	}
 
-	// Generate salt.
+	// 2. Generate HKDF salt for sub-key derivation.
 	salt, err := GenerateSalt()
 	if err != nil {
 		return nil, err
 	}
 
-	// Derive sub-keys.
+	// 3. Derive sub-keys (encryption, auth, sync) from master key + salt.
 	dk, err := DeriveKeys(masterKey, salt)
 	if err != nil {
 		return nil, err
 	}
 	defer dk.Wipe()
 
-	// Generate recovery phrase.
+	// 4. Generate BIP39 recovery phrase (128-bit entropy, 12 words).
 	phrase, err := GenerateRecoveryPhrase()
 	if err != nil {
 		return nil, err
 	}
 
-	// Compute auth key verifier (HMAC of fixed challenge — stored for verification).
-	authVerifier := ComputeAuthKeyVerifier(dk.AuthKey)
-
-	// Wrap the master key with the server KEK for server-side storage.
-	wrappedMaster, err := WrapDEK(svc.serverMasterKey, masterKey)
+	// 5. Wrap master key with server KEK (fast path — primary device).
+	wrappedMasterKEK, err := WrapDEK(svc.serverMasterKey, masterKey)
 	if err != nil {
-		return nil, fmt.Errorf("keychain: wrap master key: %w", err)
+		return nil, fmt.Errorf("keychain: wrap master key with KEK: %w", err)
 	}
 
-	// Store keychain metadata.
+	// 6. Derive recovery wrapping key from phrase (Argon2id) and wrap master key.
+	recoverySalt, err := GenerateRecoverySalt()
+	if err != nil {
+		return nil, err
+	}
+	wrappedMasterPhrase, err := WrapMasterKeyWithPhrase(masterKey, phrase, recoverySalt)
+	if err != nil {
+		return nil, fmt.Errorf("keychain: wrap master key with phrase: %w", err)
+	}
+
+	// 7. Compute auth key verifier for zero-knowledge verification.
+	authVerifier := ComputeAuthKeyVerifier(dk.AuthKey)
+
+	// 8. Store keychain metadata (salt, auth verifier, recovery blob — all ciphertext).
 	kc := &UserKeychain{
-		UserID:       userID,
-		Salt:         salt,
-		AuthKeyHash:  authVerifier,
-		RecoveryHint: "",
-		KeyVersion:   1,
+		UserID:             userID,
+		Salt:               salt,
+		AuthKeyHash:        authVerifier,
+		RecoveryHint:       "",
+		RecoverySalt:       recoverySalt,
+		RecoveryWrappedKey: wrappedMasterPhrase,
+		KeyVersion:         1,
 	}
 	if err := svc.store.InitKeychain(ctx, kc); err != nil {
 		return nil, fmt.Errorf("keychain: init keychain record: %w", err)
 	}
 
-	// Store the wrapped master key as a special keychain secret.
+	// 9. Store KEK-wrapped master key as a special keychain secret.
 	entry := &SecretEntry{
 		UserID:     userID,
 		Name:       "__master_key__",
-		Ciphertext: wrappedMaster,
+		Ciphertext: wrappedMasterKEK,
 		WrappedDEK: nil, // master key is wrapped by server KEK, not by itself
 		Version:    1,
 		Category:   "system",
@@ -403,6 +421,11 @@ func (svc *Service) SyncSecrets(ctx context.Context, userID uuid.UUID, req *Sync
 
 // RotateKeys generates a new master key, re-wraps all DEKs, and updates
 // the keychain. The old master key is needed to unwrap existing DEKs.
+//
+// IMPORTANT: Key rotation invalidates the recovery blob because the server
+// does not have the recovery phrase. After rotation, the user MUST call
+// RefreshRecovery with their phrase to re-establish the recovery path.
+// Until they do, the recovery_wrapped_key column will be NULL.
 func (svc *Service) RotateKeys(ctx context.Context, userID uuid.UUID) error {
 	// Load current keys.
 	oldDK, err := svc.LoadKeys(ctx, userID)
@@ -488,6 +511,13 @@ func (svc *Service) RotateKeys(ctx context.Context, userID uuid.UUID) error {
 		return fmt.Errorf("keychain: update keychain keys: %w", err)
 	}
 
+	// Invalidate recovery blob — the old phrase-wrapped key wraps the OLD
+	// master key, which is now useless. User must call RefreshRecovery.
+	if err := svc.store.UpdateRecoveryWrappedKey(ctx, userID, nil, nil); err != nil {
+		slog.Warn("keychain: failed to clear recovery blob after rotation",
+			"user_id", userID, "error", err)
+	}
+
 	// Evict old cached keys.
 	svc.EvictKeys(userID)
 	newDK.Wipe()
@@ -498,41 +528,111 @@ func (svc *Service) RotateKeys(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
 
-// ── Recovery ────────────────────────────────────────────────────────────────
-
-// RecoverFromPhrase reconstructs the master key from a recovery phrase and
-// re-initializes the keychain. This generates a NEW master key and re-wraps
-// all DEKs. The recovery phrase is used to derive the old master key for
-// unwrapping.
-func (svc *Service) RecoverFromPhrase(ctx context.Context, userID uuid.UUID, phrase string) error {
-	oldMaster, err := RecoveryPhraseToMasterKey(phrase)
-	if err != nil {
+// RefreshRecovery re-wraps the current master key with a fresh Argon2id key
+// derived from the recovery phrase. This MUST be called after RotateKeys to
+// re-establish the recovery path.
+//
+// The phrase must be the user's original BIP39 recovery phrase (or a new one
+// if they are resetting). The master key is obtained via the server KEK
+// (fast path), then wrapped with the phrase-derived key and stored.
+func (svc *Service) RefreshRecovery(ctx context.Context, userID uuid.UUID, phrase string) error {
+	if err := ValidateRecoveryPhrase(phrase); err != nil {
 		return err
 	}
 
+	// Load the current master key via server KEK.
+	masterEntry, err := svc.store.GetSecret(ctx, userID, "__master_key__")
+	if err != nil {
+		return fmt.Errorf("keychain: master key not found for user %s", userID)
+	}
+	masterKey, err := UnwrapDEK(svc.serverMasterKey, masterEntry.Ciphertext)
+	if err != nil {
+		return fmt.Errorf("keychain: unwrap master key for recovery refresh: %w", err)
+	}
+
+	// Generate fresh recovery salt and wrap.
+	recoverySalt, err := GenerateRecoverySalt()
+	if err != nil {
+		return err
+	}
+	wrappedMasterPhrase, err := WrapMasterKeyWithPhrase(masterKey, phrase, recoverySalt)
+	if err != nil {
+		return fmt.Errorf("keychain: wrap master key with phrase: %w", err)
+	}
+
+	if err := svc.store.UpdateRecoveryWrappedKey(ctx, userID, recoverySalt, wrappedMasterPhrase); err != nil {
+		return fmt.Errorf("keychain: persist recovery blob: %w", err)
+	}
+
+	svc.store.LogAccess(ctx, userID, AuditRefreshRecovery, "", "", "")
+	slog.Info("keychain: recovery blob refreshed", "user_id", userID)
+	return nil
+}
+
+// ── Recovery ────────────────────────────────────────────────────────────────
+
+// RecoverFromPhrase recovers the master key using the BIP39 recovery phrase.
+//
+// The phrase is used to derive an Argon2id wrapping key, which unwraps the
+// phrase-wrapped master key blob stored in user_keychains. If successful, the
+// unwrapped master key is verified against the stored auth verifier, then
+// used to re-wrap under the server KEK (restoring the fast path).
+//
+// This does NOT rotate the master key — all existing DEKs remain valid.
+// The user's secrets are instantly accessible again after recovery.
+func (svc *Service) RecoverFromPhrase(ctx context.Context, userID uuid.UUID, phrase string) error {
 	kc, err := svc.store.GetKeychain(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("keychain: no keychain found for user %s", userID)
 	}
 
-	// Derive old keys.
-	oldDK, err := DeriveKeys(oldMaster, kc.Salt)
-	if err != nil {
-		return fmt.Errorf("keychain: derive keys from phrase: %w", err)
+	if len(kc.RecoveryWrappedKey) == 0 || len(kc.RecoverySalt) == 0 {
+		return fmt.Errorf("keychain: no recovery blob stored for user %s (legacy keychain — re-init required)", userID)
 	}
 
-	// Verify the auth key matches.
-	expectedVerifier := ComputeAuthKeyVerifier(oldDK.AuthKey)
-	if expectedVerifier != kc.AuthKeyHash {
-		oldDK.Wipe()
+	// 1. Derive wrapping key from phrase + stored recovery salt (Argon2id).
+	// 2. Unwrap the master key from the phrase-wrapped blob.
+	masterKey, err := UnwrapMasterKeyWithPhrase(kc.RecoveryWrappedKey, phrase, kc.RecoverySalt)
+	if err != nil {
 		return fmt.Errorf("keychain: recovery phrase does not match")
 	}
 
-	oldDK.Wipe()
+	// 3. Verify: derive sub-keys from the unwrapped master and check auth verifier.
+	dk, err := DeriveKeys(masterKey, kc.Salt)
+	if err != nil {
+		return fmt.Errorf("keychain: derive keys from recovered master: %w", err)
+	}
+	expectedVerifier := ComputeAuthKeyVerifier(dk.AuthKey)
+	dk.Wipe()
 
-	// Phrase is valid. Rotate to a new master key (re-wraps all DEKs).
+	if expectedVerifier != kc.AuthKeyHash {
+		return fmt.Errorf("keychain: recovery phrase does not match (auth verifier mismatch)")
+	}
+
+	// 4. Re-wrap master key with server KEK and update the stored blob.
+	wrappedMasterKEK, err := WrapDEK(svc.serverMasterKey, masterKey)
+	if err != nil {
+		return fmt.Errorf("keychain: re-wrap master key after recovery: %w", err)
+	}
+
+	masterEntry := &SecretEntry{
+		UserID:     userID,
+		Name:       "__master_key__",
+		Ciphertext: wrappedMasterKEK,
+		Version:    int64(kc.KeyVersion),
+		Category:   "system",
+		Metadata:   "{}",
+	}
+	if err := svc.store.PutSecret(ctx, masterEntry); err != nil {
+		return fmt.Errorf("keychain: update master key after recovery: %w", err)
+	}
+
+	// Evict any stale cached keys.
+	svc.EvictKeys(userID)
+
 	svc.store.LogAccess(ctx, userID, AuditRecover, "", "", "")
-	return svc.RotateKeys(ctx, userID)
+	slog.Info("keychain: recovery successful", "user_id", userID, "key_version", kc.KeyVersion)
+	return nil
 }
 
 // ── Compatibility: SecretStore Interface ─────────────────────────────────────

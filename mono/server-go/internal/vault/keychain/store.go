@@ -14,27 +14,29 @@ import (
 
 // SecretEntry represents a single encrypted secret stored in Postgres.
 type SecretEntry struct {
-	ID            uuid.UUID
-	UserID        uuid.UUID
-	Name          string
-	Ciphertext    []byte // nonce || AES-256-GCM ciphertext
-	WrappedDEK    []byte // nonce || AES-256-GCM(encryption_key, DEK)
-	Version       int64
-	Category      string // "vcs", "llm", "mcp", "custom"
-	Metadata      string // non-secret metadata JSON (provider name, etc.)
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	Name       string
+	Ciphertext []byte // nonce || AES-256-GCM ciphertext
+	WrappedDEK []byte // nonce || AES-256-GCM(encryption_key, DEK)
+	Version    int64
+	Category   string // "vcs", "llm", "mcp", "custom"
+	Metadata   string // non-secret metadata JSON (provider name, etc.)
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // UserKeychain holds per-user keychain metadata in Postgres.
 type UserKeychain struct {
-	UserID          uuid.UUID
-	Salt            []byte // HKDF salt for key derivation
-	AuthKeyHash     string // hex-encoded HMAC(auth_key, fixed_challenge) for verification
-	RecoveryHint    string // user-provided hint (NOT the phrase itself)
-	KeyVersion      int    // incremented on master key rotation
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	UserID             uuid.UUID
+	Salt               []byte // HKDF salt for sub-key derivation
+	AuthKeyHash        string // hex-encoded HMAC(auth_key, fixed_challenge) for verification
+	RecoveryHint       string // user-provided hint (NOT the phrase itself)
+	RecoverySalt       []byte // Argon2id salt for recovery wrapping key derivation
+	RecoveryWrappedKey []byte // master key wrapped with phrase-derived key (recovery path)
+	KeyVersion         int    // incremented on master key rotation
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // Store is the Postgres-backed keychain storage layer. It stores only
@@ -57,15 +59,18 @@ func (s *Store) InitKeychain(ctx context.Context, kc *UserKeychain) error {
 	kc.UpdatedAt = now
 
 	_, err := s.pool.Exec(ctx,
-		`INSERT INTO user_keychains (user_id, salt, auth_key_hash, recovery_hint, key_version, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`INSERT INTO user_keychains (user_id, salt, auth_key_hash, recovery_hint, recovery_salt, recovery_wrapped_key, key_version, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		 ON CONFLICT (user_id) DO UPDATE SET
 		     salt = EXCLUDED.salt,
 		     auth_key_hash = EXCLUDED.auth_key_hash,
 		     recovery_hint = EXCLUDED.recovery_hint,
+		     recovery_salt = EXCLUDED.recovery_salt,
+		     recovery_wrapped_key = EXCLUDED.recovery_wrapped_key,
 		     key_version = EXCLUDED.key_version,
 		     updated_at = EXCLUDED.updated_at`,
 		kc.UserID, kc.Salt, kc.AuthKeyHash, kc.RecoveryHint,
+		kc.RecoverySalt, kc.RecoveryWrappedKey,
 		kc.KeyVersion, kc.CreatedAt, kc.UpdatedAt,
 	)
 	return err
@@ -75,9 +80,10 @@ func (s *Store) InitKeychain(ctx context.Context, kc *UserKeychain) error {
 func (s *Store) GetKeychain(ctx context.Context, userID uuid.UUID) (*UserKeychain, error) {
 	var kc UserKeychain
 	err := s.pool.QueryRow(ctx,
-		`SELECT user_id, salt, auth_key_hash, recovery_hint, key_version, created_at, updated_at
+		`SELECT user_id, salt, auth_key_hash, recovery_hint, recovery_salt, recovery_wrapped_key, key_version, created_at, updated_at
 		 FROM user_keychains WHERE user_id = $1`, userID,
 	).Scan(&kc.UserID, &kc.Salt, &kc.AuthKeyHash, &kc.RecoveryHint,
+		&kc.RecoverySalt, &kc.RecoveryWrappedKey,
 		&kc.KeyVersion, &kc.CreatedAt, &kc.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -92,6 +98,18 @@ func (s *Store) UpdateKeychainKeys(ctx context.Context, userID uuid.UUID, salt [
 		 SET salt = $1, auth_key_hash = $2, key_version = $3, updated_at = NOW()
 		 WHERE user_id = $4`,
 		salt, authKeyHash, keyVersion, userID,
+	)
+	return err
+}
+
+// UpdateRecoveryWrappedKey updates only the recovery-wrapped master key blob
+// (e.g. after key rotation when the caller has the phrase or re-wraps).
+func (s *Store) UpdateRecoveryWrappedKey(ctx context.Context, userID uuid.UUID, recoverySalt, recoveryWrappedKey []byte) error {
+	_, err := s.pool.Exec(ctx,
+		`UPDATE user_keychains
+		 SET recovery_salt = $1, recovery_wrapped_key = $2, updated_at = NOW()
+		 WHERE user_id = $3`,
+		recoverySalt, recoveryWrappedKey, userID,
 	)
 	return err
 }
@@ -316,13 +334,14 @@ func (s *Store) ReWrapAllDEKs(ctx context.Context, userID uuid.UUID, reWrapped m
 type AuditAction string
 
 const (
-	AuditInit        AuditAction = "keychain_init"
-	AuditPutSecret   AuditAction = "secret_put"
-	AuditGetSecret   AuditAction = "secret_get"
-	AuditDeleteSecret AuditAction = "secret_delete"
-	AuditSync        AuditAction = "sync"
-	AuditRotateKey   AuditAction = "key_rotate"
-	AuditRecover     AuditAction = "recovery"
+	AuditInit            AuditAction = "keychain_init"
+	AuditPutSecret       AuditAction = "secret_put"
+	AuditGetSecret       AuditAction = "secret_get"
+	AuditDeleteSecret    AuditAction = "secret_delete"
+	AuditSync            AuditAction = "sync"
+	AuditRotateKey       AuditAction = "key_rotate"
+	AuditRecover         AuditAction = "recovery"
+	AuditRefreshRecovery AuditAction = "recovery_refresh"
 )
 
 // LogAccess records an auditable event in the keychain_audit_log table.
@@ -340,13 +359,13 @@ func (s *Store) LogAccess(ctx context.Context, userID uuid.UUID, action AuditAct
 
 // AuditLogEntry represents a single row from the keychain_audit_log table.
 type AuditLogEntry struct {
-	ID         uuid.UUID   `json:"id"`
-	UserID     uuid.UUID   `json:"user_id"`
-	Action     string      `json:"action"`
-	SecretName string      `json:"secret_name"`
-	IPAddr     string      `json:"ip_addr"`
-	UserAgent  string      `json:"user_agent"`
-	CreatedAt  time.Time   `json:"created_at"`
+	ID         uuid.UUID `json:"id"`
+	UserID     uuid.UUID `json:"user_id"`
+	Action     string    `json:"action"`
+	SecretName string    `json:"secret_name"`
+	IPAddr     string    `json:"ip_addr"`
+	UserAgent  string    `json:"user_agent"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // ListAuditLog returns the most recent audit events for a user, newest first.

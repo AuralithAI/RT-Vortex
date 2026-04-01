@@ -1,23 +1,37 @@
 // Package keychain implements a production-grade secret vault inspired by
-// Apple's iCloud Keychain architecture.
+// Apple's iCloud Keychain architecture (2026 model).
 //
-// Key hierarchy:
+// Key hierarchy (iCloud-style dual-wrap):
 //
-//	Recovery Phrase (BIP39 128-bit)
-//	  └→ Master Key (HKDF-SHA256)
-//	       ├→ Encryption Key (AES-256-GCM — wraps individual secrets)
-//	       ├→ Auth Key        (HMAC-SHA256 — challenge-response with server)
-//	       └→ Sync Key        (X25519     — future device-to-device exchange)
+//	Random Master Key (256-bit, crypto/rand)
+//	  ├→ Encryption Key (AES-256-GCM — wraps individual secret DEKs)
+//	  ├→ Auth Key        (HMAC-SHA256 — challenge-response with server)
+//	  └→ Sync Key        (X25519     — future device-to-device exchange)
+//
+//	Server KEK (from env/KMS)
+//	  └→ KEK-wrapped master key      (fast path — primary device)
+//
+//	Recovery Phrase (BIP39 128-bit, shown once)
+//	  └→ Argon2id wrapping key
+//	       └→ Phrase-wrapped master key (recovery path — stored server-side)
 //
 // Every individual secret is encrypted with its own random DEK (data
 // encryption key).  The DEK is then wrapped (encrypted) with the user's
 // Encryption Key.  This two-layer scheme means rotating the master key
 // only requires re-wrapping DEKs, not re-encrypting every secret value.
 //
+// The master key has full 256-bit entropy (random). The recovery phrase
+// is NOT the master key — it wraps/derives a wrapping key that can unlock
+// the real master. The server stores two ciphertext blobs per user:
+//  1. KEK-wrapped master key  (fast path, used on primary device)
+//  2. Phrase-wrapped master key (recovery path, used when entering phrase)
+//
+// Server is a blind relay — it never sees plaintext master keys.
+//
 // Primitives:
 //   - AES-256-GCM for authenticated encryption
-//   - HKDF-SHA256 for key derivation
-//   - Argon2id for password-to-key derivation (future client-side use)
+//   - HKDF-SHA256 for sub-key derivation
+//   - Argon2id for recovery-phrase-to-wrapping-key derivation
 //   - HMAC-SHA256 for auth challenge-response
 //   - BIP39 for human-readable recovery phrases
 package keychain
@@ -33,6 +47,7 @@ import (
 	"fmt"
 	"io"
 
+	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -271,4 +286,109 @@ func wipeBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
 	}
+}
+
+// ── Recovery Wrapping Key (Argon2id) ────────────────────────────────────────
+
+// Argon2id parameters for recovery-phrase → wrapping-key derivation.
+// These are tuned for server-side one-shot operations (init + recovery),
+// not interactive login, so we use stronger parameters.
+const (
+	argon2Time       = 3         // iterations
+	argon2Memory     = 64 * 1024 // 64 MiB
+	argon2Threads    = 4
+	RecoverySaltSize = 16 // separate salt for the recovery wrapping key
+)
+
+// GenerateRecoverySalt creates a cryptographically random salt for Argon2id
+// recovery key derivation. This salt is stored alongside the user's keychain
+// metadata (NOT secret — its purpose is to prevent rainbow tables).
+func GenerateRecoverySalt() ([]byte, error) {
+	salt := make([]byte, RecoverySaltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("keychain: generate recovery salt: %w", err)
+	}
+	return salt, nil
+}
+
+// DeriveRecoveryWrappingKey derives a 256-bit AES wrapping key from a BIP39
+// recovery phrase and a per-user salt using Argon2id. This key is used to
+// wrap (encrypt) the master key for the recovery path.
+//
+// The phrase provides 128 bits of entropy; Argon2id makes brute-force
+// infeasible even if the salt + wrapped blob leak.
+func DeriveRecoveryWrappingKey(phrase string, salt []byte) ([MasterKeySize]byte, error) {
+	var wk [MasterKeySize]byte
+	if len(salt) < RecoverySaltSize {
+		return wk, errors.New("keychain: recovery salt too short")
+	}
+
+	// Normalize phrase: lowercase, single spaces.
+	normalized := normalizePhrase(phrase)
+
+	raw := argon2.IDKey([]byte(normalized), salt, argon2Time, argon2Memory, argon2Threads, MasterKeySize)
+	copy(wk[:], raw)
+	wipeBytes(raw)
+	return wk, nil
+}
+
+// WrapMasterKeyWithPhrase wraps a master key using a key derived from the
+// recovery phrase (via Argon2id). Returns the ciphertext blob (nonce || ct).
+func WrapMasterKeyWithPhrase(masterKey [MasterKeySize]byte, phrase string, recoverySalt []byte) ([]byte, error) {
+	wk, err := DeriveRecoveryWrappingKey(phrase, recoverySalt)
+	if err != nil {
+		return nil, err
+	}
+	defer wipeBytes(wk[:])
+
+	wrapped, err := WrapDEK(wk, masterKey)
+	if err != nil {
+		return nil, fmt.Errorf("keychain: wrap master key with phrase: %w", err)
+	}
+	return wrapped, nil
+}
+
+// UnwrapMasterKeyWithPhrase unwraps a master key using a key derived from the
+// recovery phrase (via Argon2id). Returns the plaintext master key.
+func UnwrapMasterKeyWithPhrase(wrappedBlob []byte, phrase string, recoverySalt []byte) ([MasterKeySize]byte, error) {
+	wk, err := DeriveRecoveryWrappingKey(phrase, recoverySalt)
+	if err != nil {
+		var zero [MasterKeySize]byte
+		return zero, err
+	}
+	defer wipeBytes(wk[:])
+
+	masterKey, err := UnwrapDEK(wk, wrappedBlob)
+	if err != nil {
+		var zero [MasterKeySize]byte
+		return zero, fmt.Errorf("keychain: unwrap master key with phrase: %w", err)
+	}
+	return masterKey, nil
+}
+
+// normalizePhrase lowercases and collapses whitespace in a phrase.
+func normalizePhrase(phrase string) string {
+	// Inline to avoid import cycle with recovery.go — simple normalization.
+	words := make([]byte, 0, len(phrase))
+	inSpace := true
+	for i := 0; i < len(phrase); i++ {
+		c := phrase[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			if !inSpace && len(words) > 0 {
+				words = append(words, ' ')
+			}
+			inSpace = true
+		} else {
+			if c >= 'A' && c <= 'Z' {
+				c += 32 // toLower
+			}
+			words = append(words, c)
+			inSpace = false
+		}
+	}
+	// Trim trailing space.
+	if len(words) > 0 && words[len(words)-1] == ' ' {
+		words = words[:len(words)-1]
+	}
+	return string(words)
 }

@@ -58,32 +58,138 @@ func TestValidateRecoveryPhrase_Invalid(t *testing.T) {
 	}
 }
 
-func TestRecoveryPhraseToMasterKey_Deterministic(t *testing.T) {
-	phrase, _ := GenerateRecoveryPhrase()
+// ── Recovery Wrapping Key (Argon2id) Tests ──────────────────────────────────
 
-	k1, err := RecoveryPhraseToMasterKey(phrase)
+func TestDeriveRecoveryWrappingKey_Deterministic(t *testing.T) {
+	phrase, _ := GenerateRecoveryPhrase()
+	salt, err := GenerateRecoverySalt()
 	if err != nil {
 		t.Fatal(err)
 	}
-	k2, err := RecoveryPhraseToMasterKey(phrase)
+
+	k1, err := DeriveRecoveryWrappingKey(phrase, salt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k2, err := DeriveRecoveryWrappingKey(phrase, salt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if k1 != k2 {
-		t.Error("same phrase must produce same master key")
+		t.Error("same phrase + salt must produce same wrapping key")
 	}
 }
 
-func TestRecoveryPhraseToMasterKey_DifferentPhrases(t *testing.T) {
+func TestDeriveRecoveryWrappingKey_DifferentPhrases(t *testing.T) {
+	salt, _ := GenerateRecoverySalt()
 	p1, _ := GenerateRecoveryPhrase()
 	p2, _ := GenerateRecoveryPhrase()
 
-	k1, _ := RecoveryPhraseToMasterKey(p1)
-	k2, _ := RecoveryPhraseToMasterKey(p2)
+	k1, _ := DeriveRecoveryWrappingKey(p1, salt)
+	k2, _ := DeriveRecoveryWrappingKey(p2, salt)
 	if k1 == k2 {
-		t.Error("different phrases must produce different keys")
+		t.Error("different phrases must produce different wrapping keys")
 	}
 }
+
+func TestDeriveRecoveryWrappingKey_DifferentSalts(t *testing.T) {
+	phrase, _ := GenerateRecoveryPhrase()
+	salt1, _ := GenerateRecoverySalt()
+	salt2, _ := GenerateRecoverySalt()
+
+	k1, _ := DeriveRecoveryWrappingKey(phrase, salt1)
+	k2, _ := DeriveRecoveryWrappingKey(phrase, salt2)
+	if k1 == k2 {
+		t.Error("different salts must produce different wrapping keys")
+	}
+}
+
+func TestDeriveRecoveryWrappingKey_CaseInsensitive(t *testing.T) {
+	phrase, _ := GenerateRecoveryPhrase()
+	salt, _ := GenerateRecoverySalt()
+
+	k1, _ := DeriveRecoveryWrappingKey(phrase, salt)
+	k2, _ := DeriveRecoveryWrappingKey(strings.ToUpper(phrase), salt)
+	if k1 != k2 {
+		t.Error("phrase derivation should be case-insensitive")
+	}
+}
+
+// ── Master Key Wrap / Unwrap (iCloud-style recovery path) ───────────────────
+
+func TestWrapUnwrapMasterKeyWithPhrase(t *testing.T) {
+	masterKey, err := GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	phrase, _ := GenerateRecoveryPhrase()
+	salt, _ := GenerateRecoverySalt()
+
+	wrapped, err := WrapMasterKeyWithPhrase(masterKey, phrase, salt)
+	if err != nil {
+		t.Fatalf("wrap failed: %v", err)
+	}
+
+	recovered, err := UnwrapMasterKeyWithPhrase(wrapped, phrase, salt)
+	if err != nil {
+		t.Fatalf("unwrap failed: %v", err)
+	}
+
+	if recovered != masterKey {
+		t.Error("unwrapped master key does not match original")
+	}
+}
+
+func TestUnwrapMasterKeyWithPhrase_WrongPhrase(t *testing.T) {
+	masterKey, _ := GenerateMasterKey()
+	phrase1, _ := GenerateRecoveryPhrase()
+	phrase2, _ := GenerateRecoveryPhrase()
+	salt, _ := GenerateRecoverySalt()
+
+	wrapped, _ := WrapMasterKeyWithPhrase(masterKey, phrase1, salt)
+
+	_, err := UnwrapMasterKeyWithPhrase(wrapped, phrase2, salt)
+	if err == nil {
+		t.Error("unwrap with wrong phrase should fail")
+	}
+}
+
+func TestUnwrapMasterKeyWithPhrase_WrongSalt(t *testing.T) {
+	masterKey, _ := GenerateMasterKey()
+	phrase, _ := GenerateRecoveryPhrase()
+	salt1, _ := GenerateRecoverySalt()
+	salt2, _ := GenerateRecoverySalt()
+
+	wrapped, _ := WrapMasterKeyWithPhrase(masterKey, phrase, salt1)
+
+	_, err := UnwrapMasterKeyWithPhrase(wrapped, phrase, salt2)
+	if err == nil {
+		t.Error("unwrap with wrong salt should fail")
+	}
+}
+
+func TestWrapMasterKeyWithPhrase_DifferentWraps(t *testing.T) {
+	masterKey, _ := GenerateMasterKey()
+	phrase, _ := GenerateRecoveryPhrase()
+	salt, _ := GenerateRecoverySalt()
+
+	w1, _ := WrapMasterKeyWithPhrase(masterKey, phrase, salt)
+	w2, _ := WrapMasterKeyWithPhrase(masterKey, phrase, salt)
+
+	// Wrapped blobs should differ (random nonce each time).
+	if string(w1) == string(w2) {
+		t.Error("two wraps of same key should differ (different nonces)")
+	}
+
+	// But both should unwrap to the same master key.
+	k1, _ := UnwrapMasterKeyWithPhrase(w1, phrase, salt)
+	k2, _ := UnwrapMasterKeyWithPhrase(w2, phrase, salt)
+	if k1 != k2 {
+		t.Error("both wraps should unwrap to the same master key")
+	}
+}
+
+// ── BIP39 Word List Tests ───────────────────────────────────────────────────
 
 func TestBIP39WordList(t *testing.T) {
 	if len(bip39WordList) != 2048 {

@@ -39,29 +39,6 @@ func ValidateRecoveryPhrase(phrase string) error {
 	return nil
 }
 
-// RecoveryPhraseToMasterKey derives a 256-bit master key from a 12-word
-// recovery phrase using HKDF-SHA256. The phrase provides 128 bits of entropy
-// which is expanded to 256 bits via HKDF with a fixed domain-separation salt.
-func RecoveryPhraseToMasterKey(phrase string) ([MasterKeySize]byte, error) {
-	var key [MasterKeySize]byte
-
-	if err := ValidateRecoveryPhrase(phrase); err != nil {
-		return key, err
-	}
-
-	// Normalize: lowercase, single spaces.
-	normalized := strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(phrase))), " ")
-
-	// Use HKDF to expand 128 bits of phrase entropy into 256-bit master key.
-	// The salt is a fixed domain-separation string (not secret).
-	phraseSalt := []byte("rtvortex-keychain-recovery-phrase-v1")
-	phraseInfo := []byte("master-key-from-recovery-phrase")
-	if err := hkdfExpand([]byte(normalized), phraseSalt, phraseInfo, key[:]); err != nil {
-		return key, fmt.Errorf("keychain: derive master key from phrase: %w", err)
-	}
-	return key, nil
-}
-
 // entropyToMnemonic generates a BIP39-style mnemonic from random entropy.
 func entropyToMnemonic(bits int) ([]string, error) {
 	if bits != 128 {
