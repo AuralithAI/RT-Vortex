@@ -126,6 +126,8 @@ func (h *Handler) GetKeychainStatus(w http.ResponseWriter, r *http.Request) {
 // PutKeychainSecret stores a secret in the user's keychain.
 // PUT /api/v1/keychain/secrets
 func (h *Handler) PutKeychainSecret(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if h.KeychainService == nil {
 		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
 		return
@@ -158,16 +160,20 @@ func (h *Handler) PutKeychainSecret(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.KeychainService.PutSecret(r.Context(), userID, req.Name, category, []byte(req.Value), metadata); err != nil {
 		slog.Warn("keychain put secret failed", "user_id", userID, "name", req.Name, "error", err)
+		metrics.RecordKeychainOp("put_secret", "error", time.Since(start))
 		writeError(w, http.StatusInternalServerError, "failed to store secret")
 		return
 	}
 
+	metrics.RecordKeychainOp("put_secret", "ok", time.Since(start))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stored"})
 }
 
 // GetKeychainSecret retrieves a decrypted secret from the user's keychain.
 // GET /api/v1/keychain/secrets/{name}
 func (h *Handler) GetKeychainSecret(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if h.KeychainService == nil {
 		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
 		return
@@ -187,10 +193,12 @@ func (h *Handler) GetKeychainSecret(w http.ResponseWriter, r *http.Request) {
 
 	plaintext, err := h.KeychainService.GetSecret(r.Context(), userID, name)
 	if err != nil {
+		metrics.RecordKeychainOp("get_secret", "error", time.Since(start))
 		writeError(w, http.StatusNotFound, "secret not found")
 		return
 	}
 
+	metrics.RecordKeychainOp("get_secret", "ok", time.Since(start))
 	writeJSON(w, http.StatusOK, keychainSecretResponse{
 		Name:  name,
 		Value: string(plaintext),
@@ -200,6 +208,8 @@ func (h *Handler) GetKeychainSecret(w http.ResponseWriter, r *http.Request) {
 // ListKeychainSecrets returns metadata for all of the user's secrets.
 // GET /api/v1/keychain/secrets
 func (h *Handler) ListKeychainSecrets(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if h.KeychainService == nil {
 		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
 		return
@@ -213,6 +223,7 @@ func (h *Handler) ListKeychainSecrets(w http.ResponseWriter, r *http.Request) {
 
 	versions, err := h.KeychainService.ListSecretNames(r.Context(), userID)
 	if err != nil {
+		metrics.RecordKeychainOp("list_secrets", "error", time.Since(start))
 		writeError(w, http.StatusInternalServerError, "failed to list secrets")
 		return
 	}
@@ -230,12 +241,15 @@ func (h *Handler) ListKeychainSecrets(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	metrics.RecordKeychainOp("list_secrets", "ok", time.Since(start))
 	writeJSON(w, http.StatusOK, entries)
 }
 
 // DeleteKeychainSecret removes a secret from the user's keychain.
 // DELETE /api/v1/keychain/secrets
 func (h *Handler) DeleteKeychainSecret(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if h.KeychainService == nil {
 		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
 		return
@@ -254,16 +268,20 @@ func (h *Handler) DeleteKeychainSecret(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.KeychainService.DeleteSecret(r.Context(), userID, name); err != nil {
+		metrics.RecordKeychainOp("delete_secret", "error", time.Since(start))
 		writeError(w, http.StatusInternalServerError, "failed to delete secret")
 		return
 	}
 
+	metrics.RecordKeychainOp("delete_secret", "ok", time.Since(start))
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // RotateKeychainKeys triggers a key rotation for the user's keychain.
 // POST /api/v1/keychain/rotate
 func (h *Handler) RotateKeychainKeys(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if h.KeychainService == nil {
 		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
 		return
@@ -277,16 +295,22 @@ func (h *Handler) RotateKeychainKeys(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.KeychainService.RotateKeys(r.Context(), userID); err != nil {
 		slog.Warn("keychain key rotation failed", "user_id", userID, "error", err)
+		metrics.RecordKeychainOp("rotate_keys", "error", time.Since(start))
+		metrics.RecordKeychainKeyRotation("error")
 		writeError(w, http.StatusInternalServerError, "key rotation failed")
 		return
 	}
 
+	metrics.RecordKeychainOp("rotate_keys", "ok", time.Since(start))
+	metrics.RecordKeychainKeyRotation("ok")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "rotated"})
 }
 
 // RecoverKeychain recovers a keychain using the BIP39 recovery phrase.
 // POST /api/v1/keychain/recover
 func (h *Handler) RecoverKeychain(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if h.KeychainService == nil {
 		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
 		return
@@ -310,10 +334,14 @@ func (h *Handler) RecoverKeychain(w http.ResponseWriter, r *http.Request) {
 
 	if err := h.KeychainService.RecoverFromPhrase(r.Context(), userID, req.RecoveryPhrase); err != nil {
 		slog.Warn("keychain recovery failed", "user_id", userID, "error", err)
+		metrics.RecordKeychainOp("recover", "error", time.Since(start))
+		metrics.RecordKeychainRecovery("error")
 		writeError(w, http.StatusForbidden, "recovery failed — phrase may be incorrect")
 		return
 	}
 
+	metrics.RecordKeychainOp("recover", "ok", time.Since(start))
+	metrics.RecordKeychainRecovery("ok")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "recovered"})
 }
 
@@ -351,6 +379,8 @@ type keychainSyncResponse struct {
 // The client sends its known versions; the server returns what changed.
 // POST /api/v1/keychain/sync
 func (h *Handler) SyncKeychainSecrets(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
 	if h.KeychainService == nil {
 		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
 		return
@@ -378,6 +408,8 @@ func (h *Handler) SyncKeychainSecrets(w http.ResponseWriter, r *http.Request) {
 	result, err := h.KeychainService.SyncSecrets(r.Context(), userID, syncReq)
 	if err != nil {
 		slog.Warn("keychain sync failed", "user_id", userID, "error", err)
+		metrics.RecordKeychainOp("sync", "error", time.Since(start))
+		metrics.RecordKeychainSync("error")
 		writeError(w, http.StatusInternalServerError, "sync failed")
 		return
 	}
@@ -393,6 +425,8 @@ func (h *Handler) SyncKeychainSecrets(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	metrics.RecordKeychainOp("sync", "ok", time.Since(start))
+	metrics.RecordKeychainSync("ok")
 	writeJSON(w, http.StatusOK, keychainSyncResponse{
 		Updated:        updated,
 		Deleted:        result.Deleted,

@@ -545,11 +545,16 @@ func main() {
 		MaxRequests: 60,
 		Window:      1 * time.Minute,
 	})
+	rateLimiter.Configure("keychain_sensitive", session.RateLimitConfig{
+		MaxRequests: 5,
+		Window:      1 * time.Minute,
+	})
 	slog.Info("Rate limiter configured",
 		"api_user", "100/min",
 		"api_org", "500/min",
 		"auth", "20/min",
 		"webhook", "60/min",
+		"keychain_sensitive", "5/min",
 	)
 
 	// Audit logger (security event tracking)
