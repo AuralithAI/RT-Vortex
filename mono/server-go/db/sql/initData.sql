@@ -679,6 +679,63 @@ CREATE INDEX IF NOT EXISTS idx_mcp_custom_templates_org
     ON mcp_custom_templates(org_id) WHERE org_id IS NOT NULL;
 
 -- ============================================================================
+-- KEYCHAIN VAULT (encrypted per-user secret storage)
+-- ============================================================================
+-- Production-grade secret vault inspired by Apple's iCloud Keychain.
+-- The server never stores plaintext secrets. Every value in keychain_secrets
+-- is encrypted with a random DEK, which is wrapped by the user's encryption
+-- key (derived from the master key via HKDF-SHA256).
+
+-- Per-user keychain metadata
+CREATE TABLE IF NOT EXISTS user_keychains (
+    user_id         UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    salt            BYTEA NOT NULL,
+    auth_key_hash   TEXT NOT NULL,
+    recovery_hint   TEXT NOT NULL DEFAULT '',
+    key_version     INTEGER NOT NULL DEFAULT 1,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Encrypted secrets with CRDT-style versioning
+CREATE TABLE IF NOT EXISTS keychain_secrets (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name            TEXT NOT NULL,
+    ciphertext      BYTEA NOT NULL,
+    wrapped_dek     BYTEA,
+    version         BIGINT NOT NULL DEFAULT 1,
+    category        TEXT NOT NULL DEFAULT 'custom',
+    metadata        TEXT NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (user_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_keychain_secrets_user
+    ON keychain_secrets(user_id);
+CREATE INDEX IF NOT EXISTS idx_keychain_secrets_user_category
+    ON keychain_secrets(user_id, category);
+CREATE INDEX IF NOT EXISTS idx_keychain_secrets_user_version
+    ON keychain_secrets(user_id, version);
+
+-- Immutable audit log
+CREATE TABLE IF NOT EXISTS keychain_audit_log (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    action          TEXT NOT NULL,
+    secret_name     TEXT NOT NULL DEFAULT '',
+    ip_addr         TEXT NOT NULL DEFAULT '',
+    user_agent      TEXT NOT NULL DEFAULT '',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_keychain_audit_user
+    ON keychain_audit_log(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_keychain_audit_action
+    ON keychain_audit_log(action, created_at DESC);
+
+-- ============================================================================
 -- SCHEMA VERSION TRACKING
 -- ============================================================================
 -- Simple version tracking table (no migration runner needed).
@@ -732,6 +789,14 @@ WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 13);
 INSERT INTO schema_info (version, description)
 SELECT 14, 'Add custom MCP templates table, relax provider CHECK constraint'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 14);
+
+INSERT INTO schema_info (version, description)
+SELECT 15, 'Expand MCP provider list with 10 additional providers'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 15);
+
+INSERT INTO schema_info (version, description)
+SELECT 16, 'Add keychain tables — user_keychains, keychain_secrets, keychain_audit_log'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 16);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
@@ -807,6 +872,16 @@ CREATE TRIGGER trg_mcp_custom_templates_updated_at
     BEFORE UPDATE ON mcp_custom_templates
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+DROP TRIGGER IF EXISTS trg_user_keychains_updated_at ON user_keychains;
+CREATE TRIGGER trg_user_keychains_updated_at
+    BEFORE UPDATE ON user_keychains
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+DROP TRIGGER IF EXISTS trg_keychain_secrets_updated_at ON keychain_secrets;
+CREATE TRIGGER trg_keychain_secrets_updated_at
+    BEFORE UPDATE ON keychain_secrets
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
 -- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
@@ -847,6 +922,9 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE mcp_connections TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE mcp_call_log TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE mcp_custom_templates TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE user_keychains TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE keychain_secrets TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE keychain_audit_log TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;
