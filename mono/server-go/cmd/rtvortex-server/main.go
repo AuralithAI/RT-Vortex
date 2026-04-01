@@ -395,26 +395,8 @@ func main() {
 		},
 	)
 
-	// File vault — persists API keys entered via the dashboard across restarts.
-	// Uses the same AES-256-GCM key as token encryption.
-	vaultPath := filepath.Join(env.ConfigDir, ".vault.enc")
-	var vaultOpts []vault.FileVaultOption
-	if cfg.Auth.EncryptionKey != "" {
-		vaultOpts = append(vaultOpts, vault.WithEncryptionKey(cfg.Auth.EncryptionKey))
-	}
-	fileVault, err := vault.NewFileVault(vaultPath, vaultOpts...)
-	if err != nil {
-		slog.Warn("File vault init failed — API keys will not persist", "error", err)
-	} else {
-		llmRegistry.SetVault(fileVault)
-		loaded := llmRegistry.LoadFromVault()
-		if loaded > 0 {
-			slog.Info("Loaded API keys from vault", "count", loaded)
-		}
-	}
-
 	// Keychain — production-grade encrypted per-user secret storage.
-	// Uses the same server encryption key as the FileVault / TokenEncryptor,
+	// Uses the same server encryption key as the TokenEncryptor,
 	// normalized to 64-char hex for the keychain KEK.
 	var keychainSvc *keychain.Service
 	if cfg.Auth.EncryptionKey != "" {
@@ -480,9 +462,15 @@ func main() {
 		"routes", len(llmRegistry.GetRoutes()),
 	)
 
-	// VCS resolver — resolves credentials dynamically from vault/DB per repo
-	vcsResolver := vcs.NewResolver(db.Pool, vault.NewVCSVaultAdapter(fileVault))
-	slog.Info("VCS resolver initialised (credentials resolved per-repo from vault)")
+	// VCS resolver — resolves credentials dynamically from keychain per repo.
+	var vcsVaultReader vcs.VaultReader
+	if keychainSvc != nil {
+		kcAdapter := vault.NewKeychainAdapter(keychainSvc)
+		dbResolver := vault.NewDBUserIDResolver(db.Pool)
+		vcsVaultReader = vault.NewVCSKeychainAdapter(kcAdapter, dbResolver)
+	}
+	vcsResolver := vcs.NewResolver(db.Pool, vcsVaultReader)
+	slog.Info("VCS resolver initialised (credentials resolved per-repo from keychain)")
 
 	// Review pipeline
 	reviewPipeline := review.NewPipeline(reviewRepo, repoRepo, llmRegistry, vcsResolver, engineClient, review.PipelineConfig{
@@ -652,7 +640,14 @@ func main() {
 	mcpRegistry.Register(mcpproviders.NewHubSpotProvider())
 	mcpRegistry.Register(mcpproviders.NewSalesforceProvider())
 	mcpRegistry.Register(mcpproviders.NewTwilioProvider())
-	mcpService := mcp.NewService(mcpRepo, mcpRegistry, fileVault, redisClient.Client(), cfg.MCP)
+	// MCP vault factory: per-user keychain for token storage.
+	var mcpVaultFactory mcp.VaultFactory
+	if keychainSvc != nil {
+		mcpVaultFactory = func(userID uuid.UUID) vault.SecretStore {
+			return keychainSvc.ForUser(userID)
+		}
+	}
+	mcpService := mcp.NewService(mcpRepo, mcpRegistry, mcpVaultFactory, redisClient.Client(), cfg.MCP)
 	go mcpService.StartRefreshLoop(ctx)
 	swarmHandler.MCPSvc = mcpService
 	slog.Info("MCP integrations initialized",
@@ -731,7 +726,6 @@ func main() {
 		ChatRepo:         chatRepo,
 		ChatService:      chatService,
 		AssetRepo:        assetRepo,
-		Vault:            fileVault,
 		KeychainService:  keychainSvc,
 		VCSPlatformRepo:  vcsPlatformRepo,
 		MetricsCollector: metricsCollector,

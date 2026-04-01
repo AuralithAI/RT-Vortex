@@ -149,16 +149,10 @@ func (h *Handler) ListVCSPlatforms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.UserRepo.GetByID(r.Context(), userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load user")
-		return
-	}
-
-	// Load user-scoped vault.
-	var userVault *vault.UserScopedVault
-	if h.Vault != nil {
-		userVault = vault.NewUserScopedVault(h.Vault, user.VaultToken)
+	// Load user-scoped vault via keychain.
+	var userVault vault.SecretStore
+	if uv := h.userVaultFor(userID); uv != nil {
+		userVault = uv
 	}
 
 	// Load all user VCS platform configs from DB.
@@ -260,14 +254,9 @@ func (h *Handler) ConfigureVCSPlatform(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.UserRepo.GetByID(r.Context(), userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load user")
-		return
-	}
-
-	if h.Vault == nil {
-		writeError(w, http.StatusServiceUnavailable, "vault not configured")
+	userVault := h.userVaultFor(userID)
+	if userVault == nil {
+		writeError(w, http.StatusServiceUnavailable, "keychain not configured")
 		return
 	}
 	if h.VCSPlatformRepo == nil {
@@ -280,8 +269,6 @@ func (h *Handler) ConfigureVCSPlatform(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-
-	userVault := vault.NewUserScopedVault(h.Vault, user.VaultToken)
 
 	// Build set of allowed field keys with their types.
 	allowedSecret := make(map[string]bool, len(def.Fields))
@@ -359,18 +346,11 @@ func (h *Handler) DeleteVCSPlatform(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.UserRepo.GetByID(r.Context(), userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load user")
+	userVault := h.userVaultFor(userID)
+	if userVault == nil {
+		writeError(w, http.StatusServiceUnavailable, "keychain not configured")
 		return
 	}
-
-	if h.Vault == nil {
-		writeError(w, http.StatusServiceUnavailable, "vault not configured")
-		return
-	}
-
-	userVault := vault.NewUserScopedVault(h.Vault, user.VaultToken)
 
 	// Delete all secret fields from vault.
 	deletedVault := 0
@@ -409,18 +389,11 @@ func (h *Handler) TestVCSPlatform(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.UserRepo.GetByID(r.Context(), userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load user")
+	userVault := h.userVaultFor(userID)
+	if userVault == nil {
+		writeError(w, http.StatusServiceUnavailable, "keychain not configured")
 		return
 	}
-
-	if h.Vault == nil {
-		writeError(w, http.StatusServiceUnavailable, "vault not configured")
-		return
-	}
-
-	userVault := vault.NewUserScopedVault(h.Vault, user.VaultToken)
 
 	// Load token from vault.
 	token, _ := userVault.Get(fmt.Sprintf("vcs.%s.token", platformName))
@@ -739,23 +712,16 @@ func (h *Handler) CheckClonePermission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.UserRepo.GetByID(r.Context(), userID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load user")
-		return
-	}
-
-	if h.Vault == nil {
+	userVault := h.userVaultFor(userID)
+	if userVault == nil {
 		writeJSON(w, http.StatusOK, map[string]interface{}{
 			"platform":  platformName,
 			"can_clone": false,
-			"reason":    "Vault not configured. Cannot verify token.",
+			"reason":    "Keychain not configured. Cannot verify token.",
 			"has_token": false,
 		})
 		return
 	}
-
-	userVault := vault.NewUserScopedVault(h.Vault, user.VaultToken)
 
 	// Resolve token
 	tokenKey := "vcs." + platformName + ".token"

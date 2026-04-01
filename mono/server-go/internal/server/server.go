@@ -32,7 +32,6 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/swarm"
 	swarmauth "github.com/AuralithAI/rtvortex-server/internal/swarm/auth"
 	"github.com/AuralithAI/rtvortex-server/internal/tracing"
-	"github.com/AuralithAI/rtvortex-server/internal/vault"
 	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
 	"github.com/AuralithAI/rtvortex-server/internal/webhookq"
@@ -82,9 +81,6 @@ type Dependencies struct {
 
 	// Multimodal assets
 	AssetRepo *store.AssetRepository
-
-	// Vault — shared vault for per-user secret storage
-	Vault vault.SecretStore
 
 	// Keychain — production-grade encrypted secret storage
 	KeychainService *keychain.Service
@@ -184,7 +180,6 @@ func (s *Server) setupRouter() {
 		ChatRepo:        s.deps.ChatRepo,
 		ChatService:     s.deps.ChatService,
 		AssetRepo:       s.deps.AssetRepo,
-		Vault:           s.deps.Vault,
 		KeychainService: s.deps.KeychainService,
 		VCSPlatformRepo: s.deps.VCSPlatformRepo,
 	}
