@@ -94,12 +94,11 @@ export function KeychainSettings() {
     qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
   }, [qc]);
 
-  const handleCopyPhrase = useCallback(() => {
+  const handleCopyPhrase = useCallback(async () => {
     if (!recoveryPhrase) return;
-    navigator.clipboard.writeText(recoveryPhrase).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    await copyToClipboard(recoveryPhrase);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }, [recoveryPhrase]);
 
   const handleRotate = useCallback(() => {
@@ -571,10 +570,9 @@ function SecretRow({ secret }: { secret: KeychainSecretListEntry }) {
         return;
       }
     }
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+    await copyToClipboard(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }, [value, secret.name]);
 
   const handleDelete = useCallback(() => {
@@ -1043,6 +1041,16 @@ function RotateKeysDialog({
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Copy text to the clipboard.
+ */
+async function copyToClipboard(text: string): Promise<void> {
+  if (!navigator.clipboard) {
+    throw new Error("Clipboard API unavailable — serve over HTTPS or localhost");
+  }
+  return navigator.clipboard.writeText(text);
+}
 
 function ErrorBanner({ message }: { message: string }) {
   return (
