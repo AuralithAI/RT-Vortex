@@ -2,6 +2,7 @@ package review
 
 import "github.com/AuralithAI/rtvortex-server/internal/vcs"
 import "github.com/AuralithAI/rtvortex-server/internal/model"
+import "github.com/AuralithAI/rtvortex-server/internal/crossrepo"
 
 // ── Exported test helpers ───────────────────────────────────────────────────
 // These wrappers expose unexported functions for unit testing.
@@ -27,4 +28,9 @@ func FilterFilesExported(cfg PipelineConfig, files []vcs.DiffFile) []vcs.DiffFil
 func MatchesSkipPatternExported(cfg PipelineConfig, filename string) bool {
 	p := &Pipeline{config: cfg}
 	return p.matchesSkipPattern(filename)
+}
+
+// SetCrossRepoEnricherExported wraps SetCrossRepoEnricher for testing.
+func SetCrossRepoEnricherExported(p *Pipeline, enricher *crossrepo.PipelineEnricher) {
+	p.SetCrossRepoEnricher(enricher)
 }

@@ -40,6 +40,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/benchmark"
 	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
+	"github.com/AuralithAI/rtvortex-server/internal/crossrepo"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
@@ -550,6 +551,26 @@ func main() {
 	auditLogger := audit.NewLogger(auditRepo)
 	slog.Info("Audit logger initialized")
 
+	// ── Cross-Repo Observatory ──────────────────────────────────────────
+	repoLinkRepo := store.NewRepoLinkRepo(db.Pool)
+	crossRepoAuthorizer := crossrepo.NewAuthorizer(orgRepo, repoRepo, repoLinkRepo, repoMemberRepo)
+	crossRepoHandler := crossrepo.NewHandler(crossRepoAuthorizer, repoLinkRepo, repoRepo, auditLogger)
+
+	depGraphService := crossrepo.NewDepGraphService(crossRepoAuthorizer, engineClient, repoLinkRepo, repoRepo)
+	federatedSearchService := crossrepo.NewFederatedSearchService(crossRepoAuthorizer, engineClient, repoLinkRepo, repoRepo)
+	crossRepoGraphHandler := crossrepo.NewGraphHandler(depGraphService, federatedSearchService, auditLogger)
+
+	// Wire cross-repo enrichment into the review pipeline.
+	crossRepoEnricher := crossrepo.NewPipelineEnricher(federatedSearchService, repoLinkRepo, crossrepo.DefaultEnricherConfig())
+	reviewPipeline.SetCrossRepoEnricher(crossRepoEnricher)
+
+	slog.Info("Cross-Repo Observatory initialized",
+		"authorizer", crossRepoAuthorizer != nil,
+		"handler", crossRepoHandler != nil,
+		"graph_handler", crossRepoGraphHandler != nil,
+		"pipeline_enricher", crossRepoEnricher != nil,
+	)
+
 	// Background scheduler
 	bgScheduler := background.NewScheduler(ctx, engineClient, llmRegistry, indexingService)
 	bgScheduler.Start()
@@ -741,6 +762,11 @@ func main() {
 
 		MCPService: mcpService,
 		MCPRepo:    mcpRepo,
+
+		CrossRepoAuthorizer:   crossRepoAuthorizer,
+		CrossRepoHandler:      crossRepoHandler,
+		CrossRepoGraphHandler: crossRepoGraphHandler,
+		RepoLinkRepo:          repoLinkRepo,
 
 		ServerBase: serverBase,
 	}
