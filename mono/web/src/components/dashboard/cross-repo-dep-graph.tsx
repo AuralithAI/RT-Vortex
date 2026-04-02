@@ -315,8 +315,8 @@ function DepGraphCanvas({
     [deps, repoId],
   );
 
-  const [nodes, , onNodesChange] = useNodesState(initNodes);
-  const [edges, , onEdgesChange] = useEdgesState(initEdges);
+  const [nodes, setNodes, onNodesChange] = useNodesState(initNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initEdges);
   const [selectedEdge, setSelectedEdge] = useState<SelectedEdgeInfo | null>(
     null,
   );
@@ -324,14 +324,10 @@ function DepGraphCanvas({
   // Sync when deps change
   useEffect(() => {
     const { nodes: n, edges: e } = buildGraph(deps, repoId);
-    onNodesChange(
-      n.map((node) => ({ type: "reset" as const, item: node })),
-    );
-    onEdgesChange(
-      e.map((edge) => ({ type: "reset" as const, item: edge })),
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deps, repoId]);
+    setNodes(n);
+    setEdges(e);
+    setSelectedEdge(null);
+  }, [deps, repoId, setNodes, setEdges]);
 
   const onEdgeClick: EdgeMouseHandler = useCallback(
     (_evt: React.MouseEvent, edge: Edge) => {
