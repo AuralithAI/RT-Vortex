@@ -33,9 +33,15 @@ import {
   FileCode,
   GitFork,
   Info,
+  Play,
+  Loader2,
 } from "lucide-react";
-import { useCrossRepoDeps } from "@/lib/api/queries";
+import { useQueryClient } from "@tanstack/react-query";
+import { useCrossRepoDeps, queryKeys } from "@/lib/api/queries";
+import { useBuildGraph } from "@/lib/api/mutations";
+import { useUIStore } from "@/lib/stores/ui";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { CrossRepoDependency } from "@/types/api";
@@ -44,6 +50,8 @@ import type { CrossRepoDependency } from "@/types/api";
 
 interface CrossRepoDepGraphProps {
   repoId: string;
+  /** orgId is required to trigger graph builds from the repo page */
+  orgId?: string;
 }
 
 // ── Node data shape ─────────────────────────────────────────────────────────
@@ -404,34 +412,105 @@ function DepGraphCanvas({
 
 // ── Exported Component ──────────────────────────────────────────────────────
 
-export function CrossRepoDepGraph({ repoId }: CrossRepoDepGraphProps) {
+export function CrossRepoDepGraph({ repoId, orgId }: CrossRepoDepGraphProps) {
   const { data: deps, isLoading } = useCrossRepoDeps(repoId);
+  const buildGraphMut = useBuildGraph();
+  const { addToast } = useUIStore();
+  const qc = useQueryClient();
+  const [building, setBuilding] = useState(false);
 
   const hasDeps = (deps?.dependencies?.length ?? 0) > 0;
 
+  const handleBuild = async (forceRescan = false) => {
+    if (!orgId) return;
+    setBuilding(true);
+    try {
+      const result = await buildGraphMut.mutateAsync({
+        orgId,
+        data: { force_rescan: forceRescan },
+      });
+      // Refresh repo-level deps after org graph is built
+      qc.invalidateQueries({ queryKey: queryKeys.crossRepoDeps(repoId) });
+      addToast({
+        title: "Dependency graph built",
+        description: `${result.total_nodes} nodes, ${result.total_edges} edges across ${result.repos_scanned} repos`,
+        variant: "success",
+      });
+    } catch (err) {
+      addToast({
+        title: "Failed to build graph",
+        description: err instanceof Error ? err.message : "Unknown error",
+        variant: "error",
+      });
+    } finally {
+      setBuilding(false);
+    }
+  };
+
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="flex items-center gap-2 text-base">
           <Network className="h-4 w-4" />
           Dependency Graph
-          {deps && (
+          {deps && hasDeps && (
             <Badge variant="secondary" className="ml-1 text-xs">
               {deps.total_edges} edges · {deps.repos_authorized} repos
             </Badge>
           )}
         </CardTitle>
+        {orgId && (
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handleBuild(true)}
+              disabled={building}
+            >
+              {building ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="mr-1 h-4 w-4" />
+              )}
+              Force Rescan
+            </Button>
+            <Button size="sm" onClick={() => handleBuild()} disabled={building}>
+              {building ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="mr-1 h-4 w-4" />
+              )}
+              Build Graph
+            </Button>
+          </div>
+        )}
       </CardHeader>
       <CardContent>
         {isLoading ? (
           <Skeleton className="h-[420px] w-full rounded-lg" />
         ) : !hasDeps ? (
-          <div className="flex flex-col items-center gap-2 py-12 text-center">
+          <div className="flex flex-col items-center gap-3 py-12 text-center">
             <GitFork className="h-8 w-8 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              No cross-repo dependencies detected yet. Link repos and
-              re-build the org graph to discover dependency edges.
+              No cross-repo dependencies detected yet.
+              {orgId
+                ? " Link repos above, then click Build Graph to discover dependency edges."
+                : " Link repos and re-build the org graph to discover dependency edges."}
             </p>
+            {orgId && (
+              <Button
+                size="sm"
+                onClick={() => handleBuild()}
+                disabled={building}
+              >
+                {building ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <Play className="mr-1 h-4 w-4" />
+                )}
+                Build Graph
+              </Button>
+            )}
           </div>
         ) : (
           <ReactFlowProvider>

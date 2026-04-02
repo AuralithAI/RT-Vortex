@@ -554,7 +554,7 @@ export default function RepoDetailPage({
 
       {/* ── Cross-Repo Observatory ───────────────────────────────────────── */}
       <CrossRepoLinks repoId={id} orgId={repo.org_id} />
-      <CrossRepoDepGraph repoId={id} />
+      <CrossRepoDepGraph repoId={id} orgId={repo.org_id} />
       <CrossRepoDeps repoId={id} />
       <CrossRepoSearch repoId={id} />
 
