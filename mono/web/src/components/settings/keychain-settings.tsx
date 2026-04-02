@@ -225,12 +225,12 @@ export function KeychainSettings() {
                 <SecurityStatCard
                   icon={<KeyRound className="h-4 w-4 text-blue-500" />}
                   label="Secrets"
-                  value={String(status.secret_count)}
+                  value={String(status?.secret_count ?? 0)}
                 />
                 <SecurityStatCard
                   icon={<RefreshCw className="h-4 w-4 text-violet-500" />}
                   label="Key Version"
-                  value={`v${status.key_version}`}
+                  value={`v${status?.key_version ?? 1}`}
                 />
                 <SecurityStatCard
                   icon={<Lock className="h-4 w-4 text-amber-500" />}
