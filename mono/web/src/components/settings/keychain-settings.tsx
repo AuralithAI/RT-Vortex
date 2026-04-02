@@ -1,5 +1,4 @@
 // ─── Keychain Vault Settings ─────────────────────────────────────────────────
-// Apple iCloud Keychain-inspired vault UI.
 // AES-256-GCM + HKDF-SHA256 • BIP39 recovery phrase • Per-secret DEK wrapping
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -126,9 +125,9 @@ export function KeychainSettings() {
               Secure Vault
             </CardTitle>
             <CardDescription>
-              End-to-end encrypted secret storage inspired by Apple&apos;s iCloud Keychain.
-              Your secrets are encrypted with AES-256-GCM using per-secret keys wrapped
-              by your master encryption key — the server never stores plaintext.
+              End-to-end encrypted secret storage. Your secrets are encrypted with
+              AES-256-GCM using per-secret keys wrapped by your master encryption
+              key — the server never stores plaintext.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
@@ -566,13 +565,21 @@ function SecretRow({ secret }: { secret: KeychainSecretListEntry }) {
     }
   }, [revealed, secret.name]);
 
-  const handleCopy = useCallback(() => {
-    if (!value) return;
-    navigator.clipboard.writeText(value).then(() => {
+  const handleCopy = useCallback(async () => {
+    let text = value;
+    if (!text) {
+      try {
+        const res = await api.keychain.getSecret(secret.name);
+        text = res.value;
+      } catch {
+        return;
+      }
+    }
+    navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
-  }, [value]);
+  }, [value, secret.name]);
 
   const handleDelete = useCallback(() => {
     if (!confirm(`Delete secret "${secret.name}"? This cannot be undone.`)) return;
@@ -625,20 +632,18 @@ function SecretRow({ secret }: { secret: KeychainSecretListEntry }) {
             <Eye className="h-3.5 w-3.5" />
           )}
         </Button>
-        {revealed && value && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleCopy}
-            className="h-8 w-8 p-0"
-          >
-            {copied ? (
-              <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />
-            ) : (
-              <Copy className="h-3.5 w-3.5" />
-            )}
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleCopy}
+          className="h-8 w-8 p-0"
+        >
+          {copied ? (
+            <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />
+          ) : (
+            <Copy className="h-3.5 w-3.5" />
+          )}
+        </Button>
         <Button
           variant="ghost"
           size="sm"

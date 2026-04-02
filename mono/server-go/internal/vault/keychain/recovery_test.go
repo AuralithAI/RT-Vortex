@@ -115,7 +115,7 @@ func TestDeriveRecoveryWrappingKey_CaseInsensitive(t *testing.T) {
 	}
 }
 
-// ── Master Key Wrap / Unwrap (iCloud-style recovery path) ───────────────────
+// ── Master Key Wrap / Unwrap (dual-wrap recovery path) ──────────────────────
 
 func TestWrapUnwrapMasterKeyWithPhrase(t *testing.T) {
 	masterKey, err := GenerateMasterKey()

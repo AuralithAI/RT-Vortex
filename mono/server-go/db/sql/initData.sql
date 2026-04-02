@@ -681,7 +681,7 @@ CREATE INDEX IF NOT EXISTS idx_mcp_custom_templates_org
 -- ============================================================================
 -- KEYCHAIN VAULT (encrypted per-user secret storage)
 -- ============================================================================
--- Production-grade secret vault inspired by Apple's iCloud Keychain.
+-- End-to-end encrypted per-user secret vault.
 -- The server never stores plaintext secrets. Every value in keychain_secrets
 -- is encrypted with a random DEK, which is wrapped by the user's encryption
 -- key (derived from the master key via HKDF-SHA256).

@@ -1,7 +1,6 @@
-// Package keychain implements a production-grade secret vault inspired by
-// Apple's iCloud Keychain architecture (2026 model).
+// Package keychain implements an end-to-end encrypted secret vault.
 //
-// Key hierarchy (iCloud-style dual-wrap):
+// Key hierarchy (dual-wrap):
 //
 //	Random Master Key (256-bit, crypto/rand)
 //	  ├→ Encryption Key (AES-256-GCM — wraps individual secret DEKs)
