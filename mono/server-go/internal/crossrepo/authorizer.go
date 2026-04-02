@@ -8,8 +8,9 @@
 //
 // Authorization is a three-layer matrix check:
 //
-//  1. Org ceiling policy — org.Settings["cross_repo_enabled"] must be true.
-//     If the org has cross-repo disabled, all requests are denied.
+//  1. Org ceiling policy — org.Settings["cross_repo_enabled"] must be true
+//     (defaults to true). If the org has explicitly set cross_repo_enabled=false,
+//     all requests are denied.
 //
 //  2. Link share profile — the repo_links row must exist and its share_profile
 //     must permit the requested action. (e.g., "metadata" profile allows
@@ -234,17 +235,18 @@ func (a *Authorizer) CheckOrgLinkBudget(ctx context.Context, orgID uuid.UUID) De
 // ── Internal helpers ────────────────────────────────────────────────────────
 
 // IsOrgCrossRepoEnabled checks the org's Settings JSONB for cross_repo_enabled.
-// Defaults to false if not set (opt-in model).
+// Defaults to true if not explicitly set (opt-out model). Orgs can disable
+// cross-repo features by setting cross_repo_enabled=false in their settings.
 func (a *Authorizer) IsOrgCrossRepoEnabled(org *model.Organization) bool {
 	if org.Settings == nil {
-		return false
+		return true
 	}
 	enabled, ok := org.Settings["cross_repo_enabled"]
 	if !ok {
-		return false
+		return true
 	}
 	b, ok := enabled.(bool)
-	return ok && b
+	return !ok || b
 }
 
 // GetOrgMaxLinks reads the max_linked_repos setting from org Settings.
