@@ -19,6 +19,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
+	"github.com/AuralithAI/rtvortex-server/internal/crossrepo"
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
@@ -105,6 +106,11 @@ type Dependencies struct {
 	// MCP — external service integrations (Slack, MS365, Gmail, Discord)
 	MCPService *mcp.Service
 	MCPRepo    *store.MCPRepository
+
+	// Cross-Repo Observatory — centralized authorization and link management
+	CrossRepoAuthorizer *crossrepo.Authorizer
+	CrossRepoHandler    *crossrepo.Handler
+	RepoLinkRepo        *store.RepoLinkRepo
 
 	// ServerBase — canonical server URL for constructing OAuth callback URLs.
 	ServerBase string
@@ -243,6 +249,13 @@ func (s *Server) setupRouter() {
 					r.Get("/members", h.ListOrgMembers)
 					r.Post("/members", h.InviteOrgMember)
 					r.Delete("/members/{userID}", h.RemoveOrgMember)
+
+					// Cross-repo links (org-level view)
+					if s.deps.CrossRepoHandler != nil {
+						r.Route("/links", func(r chi.Router) {
+							s.deps.CrossRepoHandler.RegisterOrgRoutes(r)
+						})
+					}
 				})
 			})
 
@@ -307,6 +320,13 @@ func (s *Server) setupRouter() {
 						r.Get("/{assetID}/content", h.ServeAssetContent)
 						r.Delete("/{assetID}", h.DeleteAsset)
 					})
+
+					// Cross-repo links (repo-level management)
+					if s.deps.CrossRepoHandler != nil {
+						r.Route("/links", func(r chi.Router) {
+							s.deps.CrossRepoHandler.RegisterRoutes(r)
+						})
+					}
 				})
 			})
 
