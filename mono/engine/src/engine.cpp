@@ -16,6 +16,7 @@
 #include "tms/tms_memory_system.h"
 #include "tms/tms_types.h"
 #include "tms/repo_parser.h"
+#include "knowledge_graph.h"
 #include "tms/embedding_engine.h"
 #include "tms/multimodal_embedder.h"
 #include <nlohmann/json.hpp>
@@ -1054,9 +1055,13 @@ public:
                 if (!et_filter.empty() && et_filter.find(e.edge_type) == et_filter.end())
                     continue;
                 if (seen_edge_ids.insert(e.id).second) {
-                    result.edges.push_back({
-                        e.id, e.src_id, e.dst_id, e.edge_type, e.weight
-                    });
+                    FileMapEdge fe;
+                    fe.id        = e.id;
+                    fe.src_id    = e.src_id;
+                    fe.dst_id    = e.dst_id;
+                    fe.edge_type = e.edge_type;
+                    fe.weight    = e.weight;
+                    result.edges.push_back(std::move(fe));
                 }
             }
         }
