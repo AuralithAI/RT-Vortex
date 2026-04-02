@@ -826,6 +826,60 @@ grpc::Status EngineServiceImpl::GetEmbedStats(
 }
 
 //=============================================================================
+// GetRepoFileMap — Knowledge Graph intra-repo file dependency map
+//=============================================================================
+
+grpc::Status EngineServiceImpl::GetRepoFileMap(
+    grpc::ServerContext* context,
+    const aipr::engine::v1::RepoFileMapRequest* request,
+    aipr::engine::v1::RepoFileMapResponse* response)
+{
+    if (context->IsCancelled()) {
+        return grpc::Status(grpc::StatusCode::CANCELLED, "Request cancelled by client");
+    }
+
+    try {
+        std::vector<std::string> node_types(
+            request->node_types().begin(), request->node_types().end());
+        std::vector<std::string> edge_types(
+            request->edge_types().begin(), request->edge_types().end());
+
+        auto file_map = engine_->getRepoFileMap(
+            request->repo_id(), node_types, edge_types);
+
+        for (const auto& n : file_map.nodes) {
+            auto* proto_node = response->add_nodes();
+            proto_node->set_id(n.id);
+            proto_node->set_node_type(n.node_type);
+            proto_node->set_name(n.name);
+            proto_node->set_file_path(n.file_path);
+            proto_node->set_language(n.language);
+            proto_node->set_repo_id(request->repo_id());
+            proto_node->set_metadata(n.metadata);
+        }
+
+        for (const auto& e : file_map.edges) {
+            auto* proto_edge = response->add_edges();
+            proto_edge->set_id(e.id);
+            proto_edge->set_src_id(e.src_id);
+            proto_edge->set_dst_id(e.dst_id);
+            proto_edge->set_edge_type(e.edge_type);
+            proto_edge->set_weight(static_cast<float>(e.weight));
+            proto_edge->set_repo_id(request->repo_id());
+        }
+
+        response->set_total_nodes(static_cast<uint32_t>(file_map.total_nodes));
+        response->set_total_edges(static_cast<uint32_t>(file_map.total_edges));
+
+        return grpc::Status::OK;
+
+    } catch (const std::exception& e) {
+        LOG_ERROR("GetRepoFileMap failed: " + std::string(e.what()));
+        return grpc::Status(grpc::StatusCode::INTERNAL, e.what());
+    }
+}
+
+//=============================================================================
 // Proto Mapping Helpers
 //=============================================================================
 

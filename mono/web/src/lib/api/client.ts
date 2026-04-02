@@ -76,6 +76,7 @@ import type {
   FederatedSearchResponse,
   BuildGraphRequest,
   BuildGraphResponse,
+  RepoFileMap,
 } from "@/types/api";
 
 // ── Error classes ───────────────────────────────────────────────────────────
@@ -405,6 +406,14 @@ export const repos = {
 
   branches: (id: string) =>
     request<{ branches: string[]; default_branch: string; count: number }>(`/api/v1/repos/${id}/branches`),
+
+  fileMap: (id: string, nodeTypes?: string[], edgeTypes?: string[]) => {
+    const params = new URLSearchParams();
+    nodeTypes?.forEach((t) => params.append("node_type", t));
+    edgeTypes?.forEach((t) => params.append("edge_type", t));
+    const q = params.toString();
+    return request<RepoFileMap>(`/api/v1/repos/${id}/file-map${q ? `?${q}` : ""}`);
+  },
 };
 
 // ── Reviews ─────────────────────────────────────────────────────────────────

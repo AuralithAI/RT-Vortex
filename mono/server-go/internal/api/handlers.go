@@ -1306,6 +1306,35 @@ func (h *Handler) GetEmbedStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// ─── Intra-Repo File Map endpoint ───────────────────────────────────────────
+
+// GetRepoFileMap returns the knowledge graph nodes and edges for a repository.
+// GET /api/v1/repos/{repoID}/file-map
+func (h *Handler) GetRepoFileMap(w http.ResponseWriter, r *http.Request) {
+	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repo ID")
+		return
+	}
+
+	if h.EngineClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine not connected")
+		return
+	}
+
+	// Parse optional filter query params
+	nodeTypes := r.URL.Query()["node_type"]
+	edgeTypes := r.URL.Query()["edge_type"]
+
+	fileMap, err := h.EngineClient.GetRepoFileMap(r.Context(), repoID.String(), nodeTypes, edgeTypes)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get file map: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, fileMap)
+}
+
 // ─── Review endpoints ───────────────────────────────────────────────────────
 
 // ListReviews returns reviews for a repository, or all user-accessible reviews.

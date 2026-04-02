@@ -43,6 +43,8 @@ export const queryKeys = {
     ["repos", repoId, "branches"] as const,
   assets: (repoId: string) =>
     ["repos", repoId, "assets"] as const,
+  fileMap: (repoId: string) =>
+    ["repos", repoId, "file-map"] as const,
   integrations: ["integrations", "connections"] as const,
   integrationProviders: ["integrations", "providers"] as const,
   integrationCallLog: (connectionId: string) =>
@@ -453,6 +455,16 @@ export function useCrossRepoManifest(repoId: string, enabled = true) {
     queryKey: queryKeys.crossRepoManifest(repoId),
     queryFn: () => api.crossRepo.getManifest(repoId),
     enabled: !!repoId && enabled,
+  });
+}
+
+/** Intra-repo file dependency graph from the knowledge graph. */
+export function useRepoFileMap(repoId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.fileMap(repoId),
+    queryFn: () => api.repos.fileMap(repoId),
+    enabled: !!repoId && enabled,
+    staleTime: 5 * 60 * 1000, // 5 min — KG data doesn't change often
   });
 }
 

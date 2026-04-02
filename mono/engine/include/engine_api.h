@@ -378,6 +378,42 @@ public:
     virtual EmbedStats getEmbedStats(const std::string& repo_id) {
         return EmbedStats{};
     }
+
+    /**
+     * Intra-repo file dependency map from the Knowledge Graph.
+     *
+     * Returns the KG nodes and edges for a single repository, optionally
+     * filtered by node_types and edge_types. Used by the frontend to
+     * render an interactive file-to-file dependency visualization.
+     */
+    struct FileMapNode {
+        std::string id;
+        std::string node_type;     // "function", "class", "file_summary", etc.
+        std::string name;
+        std::string file_path;
+        std::string language;
+        std::string metadata;      // JSON blob
+    };
+    struct FileMapEdge {
+        int64_t     id = 0;
+        std::string src_id;
+        std::string dst_id;
+        std::string edge_type;     // "CONTAINS", "IMPORTS", "REFERENCES"
+        double      weight = 1.0;
+    };
+    struct RepoFileMap {
+        std::vector<FileMapNode> nodes;
+        std::vector<FileMapEdge> edges;
+        size_t total_nodes = 0;
+        size_t total_edges = 0;
+    };
+    virtual RepoFileMap getRepoFileMap(
+        const std::string& repo_id,
+        const std::vector<std::string>& node_types = {},
+        const std::vector<std::string>& edge_types = {}) {
+        (void)repo_id; (void)node_types; (void)edge_types;
+        return {};
+    }
     
     /**
      * Configure embedding provider at runtime (per-request override).

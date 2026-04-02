@@ -43,6 +43,8 @@
 #include <mutex>
 #include <functional>
 
+namespace aipr { class KnowledgeGraph; } // forward-decl for knowledgeGraph() accessor
+
 namespace aipr::tms {
 
 // Forward declarations
@@ -311,6 +313,12 @@ public:
     EmbeddingEngine& embeddingEngine() { return *embedding_engine_; }
     MultiVectorIndex* multiVector() { return multi_vector_.get(); }
     const TMSConfig& tmsConfig() const { return config_; }
+
+    /**
+     * Get a pointer to the KnowledgeGraph if it exists and is open.
+     * Returns nullptr if KG is disabled or not initialized.
+     */
+    KnowledgeGraph* knowledgeGraph();
     
     /**
      * Reconfigure the embedding engine at runtime.

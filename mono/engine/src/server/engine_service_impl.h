@@ -143,6 +143,16 @@ public:
     ) override;
 
     //-------------------------------------------------------------------------
+    // Knowledge Graph — Intra-Repo File Map
+    //-------------------------------------------------------------------------
+
+    grpc::Status GetRepoFileMap(
+        grpc::ServerContext* context,
+        const aipr::engine::v1::RepoFileMapRequest* request,
+        aipr::engine::v1::RepoFileMapResponse* response
+    ) override;
+
+    //-------------------------------------------------------------------------
     // File Content (Swarm)
     //-------------------------------------------------------------------------
 

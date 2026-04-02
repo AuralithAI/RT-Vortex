@@ -278,6 +278,7 @@ func (s *Server) setupRouter() {
 					r.Post("/index", h.TriggerIndex)
 					r.Get("/index/status", h.GetIndexStatus)
 					r.Get("/embed-stats", h.GetEmbedStats)
+					r.Get("/file-map", h.GetRepoFileMap)
 					r.Get("/branches", h.ListBranches)
 					r.Get("/members", h.ListRepoMembers)
 					r.Post("/members", h.AddRepoMember)

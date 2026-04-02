@@ -42,6 +42,7 @@ const (
 	EngineService_ConfigureMultimodal_FullMethodName      = "/aipr.engine.v1.EngineService/ConfigureMultimodal"
 	EngineService_DownloadModel_FullMethodName            = "/aipr.engine.v1.EngineService/DownloadModel"
 	EngineService_StreamEngineMetrics_FullMethodName      = "/aipr.engine.v1.EngineService/StreamEngineMetrics"
+	EngineService_GetRepoFileMap_FullMethodName           = "/aipr.engine.v1.EngineService/GetRepoFileMap"
 )
 
 // EngineServiceClient is the client API for EngineService service.
@@ -81,6 +82,8 @@ type EngineServiceClient interface {
 	// Metrics — server-streaming so the Go API server can relay to the dashboard.
 	// The engine pushes a snapshot every interval_ms (default 1000).
 	StreamEngineMetrics(ctx context.Context, in *EngineMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineMetricsSnapshot], error)
+	// Knowledge Graph — retrieve the intra-repo file/symbol dependency map.
+	GetRepoFileMap(ctx context.Context, in *RepoFileMapRequest, opts ...grpc.CallOption) (*RepoFileMapResponse, error)
 }
 
 type engineServiceClient struct {
@@ -336,6 +339,16 @@ func (c *engineServiceClient) StreamEngineMetrics(ctx context.Context, in *Engin
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EngineService_StreamEngineMetricsClient = grpc.ServerStreamingClient[EngineMetricsSnapshot]
 
+func (c *engineServiceClient) GetRepoFileMap(ctx context.Context, in *RepoFileMapRequest, opts ...grpc.CallOption) (*RepoFileMapResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RepoFileMapResponse)
+	err := c.cc.Invoke(ctx, EngineService_GetRepoFileMap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EngineServiceServer is the server API for EngineService service.
 // All implementations must embed UnimplementedEngineServiceServer
 // for forward compatibility.
@@ -373,6 +386,8 @@ type EngineServiceServer interface {
 	// Metrics — server-streaming so the Go API server can relay to the dashboard.
 	// The engine pushes a snapshot every interval_ms (default 1000).
 	StreamEngineMetrics(*EngineMetricsRequest, grpc.ServerStreamingServer[EngineMetricsSnapshot]) error
+	// Knowledge Graph — retrieve the intra-repo file/symbol dependency map.
+	GetRepoFileMap(context.Context, *RepoFileMapRequest) (*RepoFileMapResponse, error)
 	mustEmbedUnimplementedEngineServiceServer()
 }
 
@@ -442,6 +457,9 @@ func (UnimplementedEngineServiceServer) DownloadModel(*ConfigureMultimodalReques
 }
 func (UnimplementedEngineServiceServer) StreamEngineMetrics(*EngineMetricsRequest, grpc.ServerStreamingServer[EngineMetricsSnapshot]) error {
 	return status.Error(codes.Unimplemented, "method StreamEngineMetrics not implemented")
+}
+func (UnimplementedEngineServiceServer) GetRepoFileMap(context.Context, *RepoFileMapRequest) (*RepoFileMapResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRepoFileMap not implemented")
 }
 func (UnimplementedEngineServiceServer) mustEmbedUnimplementedEngineServiceServer() {}
 func (UnimplementedEngineServiceServer) testEmbeddedByValue()                       {}
@@ -789,6 +807,24 @@ func _EngineService_StreamEngineMetrics_Handler(srv interface{}, stream grpc.Ser
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EngineService_StreamEngineMetricsServer = grpc.ServerStreamingServer[EngineMetricsSnapshot]
 
+func _EngineService_GetRepoFileMap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RepoFileMapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngineServiceServer).GetRepoFileMap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngineService_GetRepoFileMap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngineServiceServer).GetRepoFileMap(ctx, req.(*RepoFileMapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EngineService_ServiceDesc is the grpc.ServiceDesc for EngineService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -855,6 +891,10 @@ var EngineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ConfigureMultimodal",
 			Handler:    _EngineService_ConfigureMultimodal_Handler,
+		},
+		{
+			MethodName: "GetRepoFileMap",
+			Handler:    _EngineService_GetRepoFileMap_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

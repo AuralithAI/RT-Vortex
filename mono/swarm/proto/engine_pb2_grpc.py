@@ -135,6 +135,11 @@ class EngineServiceStub(object):
                 request_serializer=engine__pb2.EngineMetricsRequest.SerializeToString,
                 response_deserializer=engine__pb2.EngineMetricsSnapshot.FromString,
                 _registered_method=True)
+        self.GetRepoFileMap = channel.unary_unary(
+                '/aipr.engine.v1.EngineService/GetRepoFileMap',
+                request_serializer=engine__pb2.RepoFileMapRequest.SerializeToString,
+                response_deserializer=engine__pb2.RepoFileMapResponse.FromString,
+                _registered_method=True)
 
 
 class EngineServiceServicer(object):
@@ -272,6 +277,13 @@ class EngineServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetRepoFileMap(self, request, context):
+        """Knowledge Graph — retrieve the intra-repo file/symbol dependency map.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_EngineServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -374,6 +386,11 @@ def add_EngineServiceServicer_to_server(servicer, server):
                     servicer.StreamEngineMetrics,
                     request_deserializer=engine__pb2.EngineMetricsRequest.FromString,
                     response_serializer=engine__pb2.EngineMetricsSnapshot.SerializeToString,
+            ),
+            'GetRepoFileMap': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRepoFileMap,
+                    request_deserializer=engine__pb2.RepoFileMapRequest.FromString,
+                    response_serializer=engine__pb2.RepoFileMapResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -917,6 +934,33 @@ class EngineService(object):
             '/aipr.engine.v1.EngineService/StreamEngineMetrics',
             engine__pb2.EngineMetricsRequest.SerializeToString,
             engine__pb2.EngineMetricsSnapshot.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetRepoFileMap(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aipr.engine.v1.EngineService/GetRepoFileMap',
+            engine__pb2.RepoFileMapRequest.SerializeToString,
+            engine__pb2.RepoFileMapResponse.FromString,
             options,
             channel_credentials,
             insecure,

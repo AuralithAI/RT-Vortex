@@ -1071,3 +1071,76 @@ func (c *Client) ConfigureMultimodal(ctx context.Context, enableImage, enableAud
 		LoadedModels: resp.LoadedModels,
 	}, nil
 }
+
+// ── Intra-Repo File Map (Knowledge Graph) ───────────────────────────────────
+
+// KGNode represents a node in the knowledge graph.
+type KGNode struct {
+	ID       string `json:"id"`
+	NodeType string `json:"node_type"`
+	Name     string `json:"name"`
+	FilePath string `json:"file_path"`
+	Language string `json:"language"`
+	RepoID   string `json:"repo_id"`
+	Metadata string `json:"metadata"`
+}
+
+// KGEdge represents an edge in the knowledge graph.
+type KGEdge struct {
+	ID       int64   `json:"id"`
+	SrcID    string  `json:"src_id"`
+	DstID    string  `json:"dst_id"`
+	EdgeType string  `json:"edge_type"`
+	Weight   float32 `json:"weight"`
+	RepoID   string  `json:"repo_id"`
+}
+
+// RepoFileMap is the intra-repo file dependency graph.
+type RepoFileMap struct {
+	Nodes      []KGNode `json:"nodes"`
+	Edges      []KGEdge `json:"edges"`
+	TotalNodes uint32   `json:"total_nodes"`
+	TotalEdges uint32   `json:"total_edges"`
+}
+
+// GetRepoFileMap retrieves the intra-repo file/symbol dependency map from the KG.
+func (c *Client) GetRepoFileMap(ctx context.Context, repoID string, nodeTypes, edgeTypes []string) (*RepoFileMap, error) {
+	ctx, cancel := c.ctx(ctx)
+	defer cancel()
+
+	resp, err := c.stub().GetRepoFileMap(ctx, &pb.RepoFileMapRequest{
+		RepoId:    repoID,
+		NodeTypes: nodeTypes,
+		EdgeTypes: edgeTypes,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get repo file map: %w", err)
+	}
+
+	result := &RepoFileMap{
+		TotalNodes: resp.TotalNodes,
+		TotalEdges: resp.TotalEdges,
+	}
+	for _, n := range resp.Nodes {
+		result.Nodes = append(result.Nodes, KGNode{
+			ID:       n.Id,
+			NodeType: n.NodeType,
+			Name:     n.Name,
+			FilePath: n.FilePath,
+			Language: n.Language,
+			RepoID:   n.RepoId,
+			Metadata: n.Metadata,
+		})
+	}
+	for _, e := range resp.Edges {
+		result.Edges = append(result.Edges, KGEdge{
+			ID:       e.Id,
+			SrcID:    e.SrcId,
+			DstID:    e.DstId,
+			EdgeType: e.EdgeType,
+			Weight:   e.Weight,
+			RepoID:   e.RepoId,
+		})
+	}
+	return result, nil
+}

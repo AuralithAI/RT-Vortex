@@ -52,6 +52,9 @@ service EngineService {
     // Metrics — server-streaming so the Go API server can relay to the dashboard.
     // The engine pushes a snapshot every interval_ms (default 1000).
     rpc StreamEngineMetrics(EngineMetricsRequest) returns (stream EngineMetricsSnapshot);
+
+    // Knowledge Graph — retrieve the intra-repo file/symbol dependency map.
+    rpc GetRepoFileMap(RepoFileMapRequest) returns (RepoFileMapResponse);
 }
 
 // ============================================================================
@@ -832,4 +835,44 @@ message FederatedSearchMetrics {
     map<string, uint64> per_repo_time_ms = 5;   // Per-repo search latency
     map<string, uint32> per_repo_results = 6;   // Per-repo result count
     string normalization_used = 7;   // Which normalization was applied
+}
+
+// ============================================================================
+// Intra-Repo File Map (Knowledge Graph)
+// ============================================================================
+
+message RepoFileMapRequest {
+    string repo_id = 1;
+    // Optional: filter by node types (e.g. ["file_summary", "function", "class"]).
+    // Empty means all node types.
+    repeated string node_types = 2;
+    // Optional: filter by edge types (e.g. ["IMPORTS", "CONTAINS", "REFERENCES"]).
+    // Empty means all edge types.
+    repeated string edge_types = 3;
+}
+
+message RepoFileMapResponse {
+    repeated KGNodeProto nodes = 1;
+    repeated KGEdgeProto edges = 2;
+    uint32 total_nodes = 3;
+    uint32 total_edges = 4;
+}
+
+message KGNodeProto {
+    string id = 1;
+    string node_type = 2;             // "function", "class", "file_summary", "module", etc.
+    string name = 3;
+    string file_path = 4;
+    string language = 5;
+    string repo_id = 6;
+    string metadata = 7;              // JSON blob (deps, symbols)
+}
+
+message KGEdgeProto {
+    int64  id = 1;
+    string src_id = 2;
+    string dst_id = 3;
+    string edge_type = 4;             // "CONTAINS", "IMPORTS", "REFERENCES", "CALLS"
+    float  weight = 5;
+    string repo_id = 6;
 }

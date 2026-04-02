@@ -1049,3 +1049,34 @@ export interface FederatedSearchRequest {
   max_concurrent?: number;
   score_normalization?: string;
 }
+
+// ── Intra-Repo File Map (Knowledge Graph) ───────────────────────────────────
+
+/** A node in the intra-repo knowledge graph. */
+export interface KGNode {
+  id: string;
+  node_type: string;
+  name: string;
+  file_path: string;
+  language: string;
+  repo_id: string;
+  metadata: string; // JSON blob
+}
+
+/** An edge in the intra-repo knowledge graph. */
+export interface KGEdge {
+  id: number;
+  src_id: string;
+  dst_id: string;
+  edge_type: string;
+  weight: number;
+  repo_id: string;
+}
+
+/** Response from GET /repos/{id}/file-map. */
+export interface RepoFileMap {
+  nodes: KGNode[];
+  edges: KGEdge[];
+  total_nodes: number;
+  total_edges: number;
+}

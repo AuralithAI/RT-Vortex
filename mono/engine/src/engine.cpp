@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <unordered_set>
 #include <mutex>
 
 // Platform-specific headers for system diagnostics
@@ -1013,6 +1014,56 @@ public:
         }
 
         return stats;
+    }
+
+    // =========================================================================
+    // Knowledge Graph — Intra-Repo File Map
+    // =========================================================================
+
+    RepoFileMap getRepoFileMap(
+        const std::string& repo_id,
+        const std::vector<std::string>& node_types,
+        const std::vector<std::string>& edge_types) override
+    {
+        RepoFileMap result;
+
+        auto* kg = tms_->knowledgeGraph();
+        if (!kg || !kg->isOpen()) return result;
+
+        // Build filter sets (empty = accept all)
+        std::unordered_set<std::string> nt_filter(node_types.begin(), node_types.end());
+        std::unordered_set<std::string> et_filter(edge_types.begin(), edge_types.end());
+
+        // Fetch all nodes for the repo
+        auto raw_nodes = kg->getNodes(repo_id);
+        for (const auto& n : raw_nodes) {
+            if (!nt_filter.empty() && nt_filter.find(n.node_type) == nt_filter.end())
+                continue;
+            result.nodes.push_back({
+                n.id, n.node_type, n.name, n.file_path, n.language, n.metadata
+            });
+        }
+
+        // Fetch edges by iterating over nodes and getting neighbors
+        // Use a set to deduplicate edges (since neighbors() returns edges from both sides)
+        std::unordered_set<int64_t> seen_edge_ids;
+        for (const auto& n : result.nodes) {
+            auto edges = kg->neighbors(n.id);
+            for (const auto& e : edges) {
+                if (e.repo_id != repo_id) continue;
+                if (!et_filter.empty() && et_filter.find(e.edge_type) == et_filter.end())
+                    continue;
+                if (seen_edge_ids.insert(e.id).second) {
+                    result.edges.push_back({
+                        e.id, e.src_id, e.dst_id, e.edge_type, e.weight
+                    });
+                }
+            }
+        }
+
+        result.total_nodes = result.nodes.size();
+        result.total_edges = result.edges.size();
+        return result;
     }
 
     // =========================================================================
