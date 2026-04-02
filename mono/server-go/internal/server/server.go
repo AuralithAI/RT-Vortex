@@ -18,8 +18,8 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/benchmark"
 	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
-	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
 	"github.com/AuralithAI/rtvortex-server/internal/crossrepo"
+	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
@@ -108,9 +108,10 @@ type Dependencies struct {
 	MCPRepo    *store.MCPRepository
 
 	// Cross-Repo Observatory — centralized authorization and link management
-	CrossRepoAuthorizer *crossrepo.Authorizer
-	CrossRepoHandler    *crossrepo.Handler
-	RepoLinkRepo        *store.RepoLinkRepo
+	CrossRepoAuthorizer   *crossrepo.Authorizer
+	CrossRepoHandler      *crossrepo.Handler
+	CrossRepoGraphHandler *crossrepo.GraphHandler
+	RepoLinkRepo          *store.RepoLinkRepo
 
 	// ServerBase — canonical server URL for constructing OAuth callback URLs.
 	ServerBase string
@@ -256,6 +257,13 @@ func (s *Server) setupRouter() {
 							s.deps.CrossRepoHandler.RegisterOrgRoutes(r)
 						})
 					}
+
+					// Cross-repo graph (org-level operations)
+					if s.deps.CrossRepoGraphHandler != nil {
+						r.Route("/cross-repo", func(r chi.Router) {
+							s.deps.CrossRepoGraphHandler.RegisterOrgRoutes(r)
+						})
+					}
 				})
 			})
 
@@ -325,6 +333,13 @@ func (s *Server) setupRouter() {
 					if s.deps.CrossRepoHandler != nil {
 						r.Route("/links", func(r chi.Router) {
 							s.deps.CrossRepoHandler.RegisterRoutes(r)
+						})
+					}
+
+					// Cross-repo graph + federated search (repo-level)
+					if s.deps.CrossRepoGraphHandler != nil {
+						r.Route("/cross-repo", func(r chi.Router) {
+							s.deps.CrossRepoGraphHandler.RegisterRepoRoutes(r)
 						})
 					}
 				})

@@ -4364,6 +4364,1160 @@ func (x *ModelDownloadProgress) GetError() string {
 	return ""
 }
 
+type RepoManifestRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RepoId        string                 `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RepoManifestRequest) Reset() {
+	*x = RepoManifestRequest{}
+	mi := &file_engine_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RepoManifestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RepoManifestRequest) ProtoMessage() {}
+
+func (x *RepoManifestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RepoManifestRequest.ProtoReflect.Descriptor instead.
+func (*RepoManifestRequest) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *RepoManifestRequest) GetRepoId() string {
+	if x != nil {
+		return x.RepoId
+	}
+	return ""
+}
+
+type RepoManifestResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
+	Manifest      *RepoManifestProto     `protobuf:"bytes,2,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RepoManifestResponse) Reset() {
+	*x = RepoManifestResponse{}
+	mi := &file_engine_proto_msgTypes[48]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RepoManifestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RepoManifestResponse) ProtoMessage() {}
+
+func (x *RepoManifestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[48]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RepoManifestResponse.ProtoReflect.Descriptor instead.
+func (*RepoManifestResponse) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{48}
+}
+
+func (x *RepoManifestResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+func (x *RepoManifestResponse) GetManifest() *RepoManifestProto {
+	if x != nil {
+		return x.Manifest
+	}
+	return nil
+}
+
+// Mirrors the C++ RepoManifest struct from hierarchy_builder.h.
+type RepoManifestProto struct {
+	state           protoimpl.MessageState  `protogen:"open.v1"`
+	RepoId          string                  `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
+	RepoRoot        string                  `protobuf:"bytes,2,opt,name=repo_root,json=repoRoot,proto3" json:"repo_root,omitempty"`
+	PrimaryLanguage string                  `protobuf:"bytes,3,opt,name=primary_language,json=primaryLanguage,proto3" json:"primary_language,omitempty"`
+	BuildSystem     string                  `protobuf:"bytes,4,opt,name=build_system,json=buildSystem,proto3" json:"build_system,omitempty"`
+	RepoType        RepoType                `protobuf:"varint,5,opt,name=repo_type,json=repoType,proto3,enum=aipr.engine.v1.RepoType" json:"repo_type,omitempty"`
+	Targets         []*BuildTargetProto     `protobuf:"bytes,6,rep,name=targets,proto3" json:"targets,omitempty"`
+	ModuleToFiles   map[string]*ModuleFiles `protobuf:"bytes,7,rep,name=module_to_files,json=moduleToFiles,proto3" json:"module_to_files,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RepoManifestProto) Reset() {
+	*x = RepoManifestProto{}
+	mi := &file_engine_proto_msgTypes[49]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RepoManifestProto) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RepoManifestProto) ProtoMessage() {}
+
+func (x *RepoManifestProto) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[49]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RepoManifestProto.ProtoReflect.Descriptor instead.
+func (*RepoManifestProto) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{49}
+}
+
+func (x *RepoManifestProto) GetRepoId() string {
+	if x != nil {
+		return x.RepoId
+	}
+	return ""
+}
+
+func (x *RepoManifestProto) GetRepoRoot() string {
+	if x != nil {
+		return x.RepoRoot
+	}
+	return ""
+}
+
+func (x *RepoManifestProto) GetPrimaryLanguage() string {
+	if x != nil {
+		return x.PrimaryLanguage
+	}
+	return ""
+}
+
+func (x *RepoManifestProto) GetBuildSystem() string {
+	if x != nil {
+		return x.BuildSystem
+	}
+	return ""
+}
+
+func (x *RepoManifestProto) GetRepoType() RepoType {
+	if x != nil {
+		return x.RepoType
+	}
+	return RepoType_REPO_TYPE_UNKNOWN
+}
+
+func (x *RepoManifestProto) GetTargets() []*BuildTargetProto {
+	if x != nil {
+		return x.Targets
+	}
+	return nil
+}
+
+func (x *RepoManifestProto) GetModuleToFiles() map[string]*ModuleFiles {
+	if x != nil {
+		return x.ModuleToFiles
+	}
+	return nil
+}
+
+type BuildTargetProto struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Type          string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"` // "library", "executable", "module", "image", "package"
+	SourceGlobs   []string               `protobuf:"bytes,3,rep,name=source_globs,json=sourceGlobs,proto3" json:"source_globs,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildTargetProto) Reset() {
+	*x = BuildTargetProto{}
+	mi := &file_engine_proto_msgTypes[50]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildTargetProto) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildTargetProto) ProtoMessage() {}
+
+func (x *BuildTargetProto) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[50]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildTargetProto.ProtoReflect.Descriptor instead.
+func (*BuildTargetProto) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{50}
+}
+
+func (x *BuildTargetProto) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *BuildTargetProto) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *BuildTargetProto) GetSourceGlobs() []string {
+	if x != nil {
+		return x.SourceGlobs
+	}
+	return nil
+}
+
+// Wrapper for repeated strings inside a map value.
+type ModuleFiles struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Files         []string               `protobuf:"bytes,1,rep,name=files,proto3" json:"files,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModuleFiles) Reset() {
+	*x = ModuleFiles{}
+	mi := &file_engine_proto_msgTypes[51]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModuleFiles) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModuleFiles) ProtoMessage() {}
+
+func (x *ModuleFiles) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[51]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModuleFiles.ProtoReflect.Descriptor instead.
+func (*ModuleFiles) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{51}
+}
+
+func (x *ModuleFiles) GetFiles() []string {
+	if x != nil {
+		return x.Files
+	}
+	return nil
+}
+
+type CrossRepoDepsRequest struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	SourceRepoId string                 `protobuf:"bytes,1,opt,name=source_repo_id,json=sourceRepoId,proto3" json:"source_repo_id,omitempty"`
+	// Optionally restrict to specific target repos (empty = check all linked).
+	TargetRepoIds []string `protobuf:"bytes,2,rep,name=target_repo_ids,json=targetRepoIds,proto3" json:"target_repo_ids,omitempty"`
+	// Maximum dependency depth (0 = direct only, 1 = transitive one hop, etc.).
+	MaxDepth      uint32 `protobuf:"varint,3,opt,name=max_depth,json=maxDepth,proto3" json:"max_depth,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CrossRepoDepsRequest) Reset() {
+	*x = CrossRepoDepsRequest{}
+	mi := &file_engine_proto_msgTypes[52]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CrossRepoDepsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CrossRepoDepsRequest) ProtoMessage() {}
+
+func (x *CrossRepoDepsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[52]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CrossRepoDepsRequest.ProtoReflect.Descriptor instead.
+func (*CrossRepoDepsRequest) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{52}
+}
+
+func (x *CrossRepoDepsRequest) GetSourceRepoId() string {
+	if x != nil {
+		return x.SourceRepoId
+	}
+	return ""
+}
+
+func (x *CrossRepoDepsRequest) GetTargetRepoIds() []string {
+	if x != nil {
+		return x.TargetRepoIds
+	}
+	return nil
+}
+
+func (x *CrossRepoDepsRequest) GetMaxDepth() uint32 {
+	if x != nil {
+		return x.MaxDepth
+	}
+	return 0
+}
+
+type CrossRepoDepsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Dependencies  []*CrossRepoDependency `protobuf:"bytes,1,rep,name=dependencies,proto3" json:"dependencies,omitempty"`
+	TotalEdges    uint32                 `protobuf:"varint,2,opt,name=total_edges,json=totalEdges,proto3" json:"total_edges,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CrossRepoDepsResponse) Reset() {
+	*x = CrossRepoDepsResponse{}
+	mi := &file_engine_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CrossRepoDepsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CrossRepoDepsResponse) ProtoMessage() {}
+
+func (x *CrossRepoDepsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CrossRepoDepsResponse.ProtoReflect.Descriptor instead.
+func (*CrossRepoDepsResponse) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *CrossRepoDepsResponse) GetDependencies() []*CrossRepoDependency {
+	if x != nil {
+		return x.Dependencies
+	}
+	return nil
+}
+
+func (x *CrossRepoDepsResponse) GetTotalEdges() uint32 {
+	if x != nil {
+		return x.TotalEdges
+	}
+	return 0
+}
+
+// A single cross-repo dependency edge.
+type CrossRepoDependency struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SourceRepoId   string                 `protobuf:"bytes,1,opt,name=source_repo_id,json=sourceRepoId,proto3" json:"source_repo_id,omitempty"`
+	SourceFile     string                 `protobuf:"bytes,2,opt,name=source_file,json=sourceFile,proto3" json:"source_file,omitempty"`       // Relative file path in source repo
+	SourceSymbol   string                 `protobuf:"bytes,3,opt,name=source_symbol,json=sourceSymbol,proto3" json:"source_symbol,omitempty"` // Import/require statement or symbol name
+	TargetRepoId   string                 `protobuf:"bytes,4,opt,name=target_repo_id,json=targetRepoId,proto3" json:"target_repo_id,omitempty"`
+	TargetFile     string                 `protobuf:"bytes,5,opt,name=target_file,json=targetFile,proto3" json:"target_file,omitempty"`             // Resolved file in target repo (may be empty)
+	TargetSymbol   string                 `protobuf:"bytes,6,opt,name=target_symbol,json=targetSymbol,proto3" json:"target_symbol,omitempty"`       // Resolved symbol in target repo
+	DependencyType string                 `protobuf:"bytes,7,opt,name=dependency_type,json=dependencyType,proto3" json:"dependency_type,omitempty"` // "import", "package", "submodule", "api_call"
+	Confidence     float32                `protobuf:"fixed32,8,opt,name=confidence,proto3" json:"confidence,omitempty"`                             // 0.0-1.0 match confidence
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *CrossRepoDependency) Reset() {
+	*x = CrossRepoDependency{}
+	mi := &file_engine_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CrossRepoDependency) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CrossRepoDependency) ProtoMessage() {}
+
+func (x *CrossRepoDependency) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CrossRepoDependency.ProtoReflect.Descriptor instead.
+func (*CrossRepoDependency) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *CrossRepoDependency) GetSourceRepoId() string {
+	if x != nil {
+		return x.SourceRepoId
+	}
+	return ""
+}
+
+func (x *CrossRepoDependency) GetSourceFile() string {
+	if x != nil {
+		return x.SourceFile
+	}
+	return ""
+}
+
+func (x *CrossRepoDependency) GetSourceSymbol() string {
+	if x != nil {
+		return x.SourceSymbol
+	}
+	return ""
+}
+
+func (x *CrossRepoDependency) GetTargetRepoId() string {
+	if x != nil {
+		return x.TargetRepoId
+	}
+	return ""
+}
+
+func (x *CrossRepoDependency) GetTargetFile() string {
+	if x != nil {
+		return x.TargetFile
+	}
+	return ""
+}
+
+func (x *CrossRepoDependency) GetTargetSymbol() string {
+	if x != nil {
+		return x.TargetSymbol
+	}
+	return ""
+}
+
+func (x *CrossRepoDependency) GetDependencyType() string {
+	if x != nil {
+		return x.DependencyType
+	}
+	return ""
+}
+
+func (x *CrossRepoDependency) GetConfidence() float32 {
+	if x != nil {
+		return x.Confidence
+	}
+	return 0
+}
+
+type BuildDepGraphRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	OrgId string                 `protobuf:"bytes,1,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`
+	// Repo IDs to include in the graph (empty = all linked repos in org).
+	RepoIds []string `protobuf:"bytes,2,rep,name=repo_ids,json=repoIds,proto3" json:"repo_ids,omitempty"`
+	// Whether to re-scan all repos or use cached manifests.
+	ForceRescan   bool `protobuf:"varint,3,opt,name=force_rescan,json=forceRescan,proto3" json:"force_rescan,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildDepGraphRequest) Reset() {
+	*x = BuildDepGraphRequest{}
+	mi := &file_engine_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildDepGraphRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildDepGraphRequest) ProtoMessage() {}
+
+func (x *BuildDepGraphRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildDepGraphRequest.ProtoReflect.Descriptor instead.
+func (*BuildDepGraphRequest) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *BuildDepGraphRequest) GetOrgId() string {
+	if x != nil {
+		return x.OrgId
+	}
+	return ""
+}
+
+func (x *BuildDepGraphRequest) GetRepoIds() []string {
+	if x != nil {
+		return x.RepoIds
+	}
+	return nil
+}
+
+func (x *BuildDepGraphRequest) GetForceRescan() bool {
+	if x != nil {
+		return x.ForceRescan
+	}
+	return false
+}
+
+type BuildDepGraphResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	ReposScanned  uint32                 `protobuf:"varint,3,opt,name=repos_scanned,json=reposScanned,proto3" json:"repos_scanned,omitempty"`
+	TotalNodes    uint32                 `protobuf:"varint,4,opt,name=total_nodes,json=totalNodes,proto3" json:"total_nodes,omitempty"` // repos + modules
+	TotalEdges    uint32                 `protobuf:"varint,5,opt,name=total_edges,json=totalEdges,proto3" json:"total_edges,omitempty"` // dependency edges
+	Nodes         []*DepGraphNode        `protobuf:"bytes,6,rep,name=nodes,proto3" json:"nodes,omitempty"`
+	Edges         []*DepGraphEdge        `protobuf:"bytes,7,rep,name=edges,proto3" json:"edges,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BuildDepGraphResponse) Reset() {
+	*x = BuildDepGraphResponse{}
+	mi := &file_engine_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BuildDepGraphResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BuildDepGraphResponse) ProtoMessage() {}
+
+func (x *BuildDepGraphResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BuildDepGraphResponse.ProtoReflect.Descriptor instead.
+func (*BuildDepGraphResponse) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *BuildDepGraphResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *BuildDepGraphResponse) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *BuildDepGraphResponse) GetReposScanned() uint32 {
+	if x != nil {
+		return x.ReposScanned
+	}
+	return 0
+}
+
+func (x *BuildDepGraphResponse) GetTotalNodes() uint32 {
+	if x != nil {
+		return x.TotalNodes
+	}
+	return 0
+}
+
+func (x *BuildDepGraphResponse) GetTotalEdges() uint32 {
+	if x != nil {
+		return x.TotalEdges
+	}
+	return 0
+}
+
+func (x *BuildDepGraphResponse) GetNodes() []*DepGraphNode {
+	if x != nil {
+		return x.Nodes
+	}
+	return nil
+}
+
+func (x *BuildDepGraphResponse) GetEdges() []*DepGraphEdge {
+	if x != nil {
+		return x.Edges
+	}
+	return nil
+}
+
+// A node in the org-level dependency graph.
+type DepGraphNode struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // Unique node ID
+	RepoId        string                 `protobuf:"bytes,2,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`
+	Label         string                 `protobuf:"bytes,3,opt,name=label,proto3" json:"label,omitempty"`                       // Repo name or module name
+	NodeType      string                 `protobuf:"bytes,4,opt,name=node_type,json=nodeType,proto3" json:"node_type,omitempty"` // "repo", "module", "package"
+	Language      string                 `protobuf:"bytes,5,opt,name=language,proto3" json:"language,omitempty"`
+	RepoType      RepoType               `protobuf:"varint,6,opt,name=repo_type,json=repoType,proto3,enum=aipr.engine.v1.RepoType" json:"repo_type,omitempty"`
+	Metadata      map[string]string      `protobuf:"bytes,7,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DepGraphNode) Reset() {
+	*x = DepGraphNode{}
+	mi := &file_engine_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DepGraphNode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DepGraphNode) ProtoMessage() {}
+
+func (x *DepGraphNode) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DepGraphNode.ProtoReflect.Descriptor instead.
+func (*DepGraphNode) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *DepGraphNode) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *DepGraphNode) GetRepoId() string {
+	if x != nil {
+		return x.RepoId
+	}
+	return ""
+}
+
+func (x *DepGraphNode) GetLabel() string {
+	if x != nil {
+		return x.Label
+	}
+	return ""
+}
+
+func (x *DepGraphNode) GetNodeType() string {
+	if x != nil {
+		return x.NodeType
+	}
+	return ""
+}
+
+func (x *DepGraphNode) GetLanguage() string {
+	if x != nil {
+		return x.Language
+	}
+	return ""
+}
+
+func (x *DepGraphNode) GetRepoType() RepoType {
+	if x != nil {
+		return x.RepoType
+	}
+	return RepoType_REPO_TYPE_UNKNOWN
+}
+
+func (x *DepGraphNode) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+// An edge in the org-level dependency graph.
+type DepGraphEdge struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SourceNodeId  string                 `protobuf:"bytes,1,opt,name=source_node_id,json=sourceNodeId,proto3" json:"source_node_id,omitempty"`
+	TargetNodeId  string                 `protobuf:"bytes,2,opt,name=target_node_id,json=targetNodeId,proto3" json:"target_node_id,omitempty"`
+	EdgeType      string                 `protobuf:"bytes,3,opt,name=edge_type,json=edgeType,proto3" json:"edge_type,omitempty"` // "depends_on", "imports", "submodule_of"
+	Weight        float32                `protobuf:"fixed32,4,opt,name=weight,proto3" json:"weight,omitempty"`                   // Edge strength (number of references)
+	Metadata      map[string]string      `protobuf:"bytes,5,rep,name=metadata,proto3" json:"metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DepGraphEdge) Reset() {
+	*x = DepGraphEdge{}
+	mi := &file_engine_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DepGraphEdge) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DepGraphEdge) ProtoMessage() {}
+
+func (x *DepGraphEdge) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DepGraphEdge.ProtoReflect.Descriptor instead.
+func (*DepGraphEdge) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *DepGraphEdge) GetSourceNodeId() string {
+	if x != nil {
+		return x.SourceNodeId
+	}
+	return ""
+}
+
+func (x *DepGraphEdge) GetTargetNodeId() string {
+	if x != nil {
+		return x.TargetNodeId
+	}
+	return ""
+}
+
+func (x *DepGraphEdge) GetEdgeType() string {
+	if x != nil {
+		return x.EdgeType
+	}
+	return ""
+}
+
+func (x *DepGraphEdge) GetWeight() float32 {
+	if x != nil {
+		return x.Weight
+	}
+	return 0
+}
+
+func (x *DepGraphEdge) GetMetadata() map[string]string {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+type FederatedSearchRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The query text.
+	Query string `protobuf:"bytes,1,opt,name=query,proto3" json:"query,omitempty"`
+	// Repo IDs to search across. The Go server has already filtered these
+	// through crossrepo.Authorizer — the engine trusts this list.
+	RepoIds []string `protobuf:"bytes,2,rep,name=repo_ids,json=repoIds,proto3" json:"repo_ids,omitempty"`
+	// Optional symbols from the current diff context.
+	TouchedSymbols []string `protobuf:"bytes,3,rep,name=touched_symbols,json=touchedSymbols,proto3" json:"touched_symbols,omitempty"`
+	// Search configuration (applied to each repo's index).
+	Config *SearchConfig `protobuf:"bytes,4,opt,name=config,proto3" json:"config,omitempty"`
+	// Maximum total results across all repos.
+	MaxTotalResults uint32 `protobuf:"varint,5,opt,name=max_total_results,json=maxTotalResults,proto3" json:"max_total_results,omitempty"`
+	// Concurrency budget: max repos to search in parallel (0 = engine default).
+	MaxConcurrent uint32 `protobuf:"varint,6,opt,name=max_concurrent,json=maxConcurrent,proto3" json:"max_concurrent,omitempty"`
+	// Score normalization strategy: "min_max", "z_score", "none".
+	ScoreNormalization string `protobuf:"bytes,7,opt,name=score_normalization,json=scoreNormalization,proto3" json:"score_normalization,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *FederatedSearchRequest) Reset() {
+	*x = FederatedSearchRequest{}
+	mi := &file_engine_proto_msgTypes[59]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FederatedSearchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FederatedSearchRequest) ProtoMessage() {}
+
+func (x *FederatedSearchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[59]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FederatedSearchRequest.ProtoReflect.Descriptor instead.
+func (*FederatedSearchRequest) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{59}
+}
+
+func (x *FederatedSearchRequest) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *FederatedSearchRequest) GetRepoIds() []string {
+	if x != nil {
+		return x.RepoIds
+	}
+	return nil
+}
+
+func (x *FederatedSearchRequest) GetTouchedSymbols() []string {
+	if x != nil {
+		return x.TouchedSymbols
+	}
+	return nil
+}
+
+func (x *FederatedSearchRequest) GetConfig() *SearchConfig {
+	if x != nil {
+		return x.Config
+	}
+	return nil
+}
+
+func (x *FederatedSearchRequest) GetMaxTotalResults() uint32 {
+	if x != nil {
+		return x.MaxTotalResults
+	}
+	return 0
+}
+
+func (x *FederatedSearchRequest) GetMaxConcurrent() uint32 {
+	if x != nil {
+		return x.MaxConcurrent
+	}
+	return 0
+}
+
+func (x *FederatedSearchRequest) GetScoreNormalization() string {
+	if x != nil {
+		return x.ScoreNormalization
+	}
+	return ""
+}
+
+type FederatedSearchResponse struct {
+	state         protoimpl.MessageState   `protogen:"open.v1"`
+	Chunks        []*FederatedContextChunk `protobuf:"bytes,1,rep,name=chunks,proto3" json:"chunks,omitempty"`
+	Metrics       *FederatedSearchMetrics  `protobuf:"bytes,2,opt,name=metrics,proto3" json:"metrics,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FederatedSearchResponse) Reset() {
+	*x = FederatedSearchResponse{}
+	mi := &file_engine_proto_msgTypes[60]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FederatedSearchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FederatedSearchResponse) ProtoMessage() {}
+
+func (x *FederatedSearchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[60]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FederatedSearchResponse.ProtoReflect.Descriptor instead.
+func (*FederatedSearchResponse) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{60}
+}
+
+func (x *FederatedSearchResponse) GetChunks() []*FederatedContextChunk {
+	if x != nil {
+		return x.Chunks
+	}
+	return nil
+}
+
+func (x *FederatedSearchResponse) GetMetrics() *FederatedSearchMetrics {
+	if x != nil {
+		return x.Metrics
+	}
+	return nil
+}
+
+// A context chunk with repo attribution.
+type FederatedContextChunk struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	RepoId          string                 `protobuf:"bytes,1,opt,name=repo_id,json=repoId,proto3" json:"repo_id,omitempty"`                              // Which repo this chunk came from
+	RepoName        string                 `protobuf:"bytes,2,opt,name=repo_name,json=repoName,proto3" json:"repo_name,omitempty"`                        // Human-readable repo name
+	Chunk           *ContextChunk          `protobuf:"bytes,3,opt,name=chunk,proto3" json:"chunk,omitempty"`                                              // The actual content
+	NormalizedScore float32                `protobuf:"fixed32,4,opt,name=normalized_score,json=normalizedScore,proto3" json:"normalized_score,omitempty"` // Score after cross-repo normalization
+	RawScore        float32                `protobuf:"fixed32,5,opt,name=raw_score,json=rawScore,proto3" json:"raw_score,omitempty"`                      // Original per-repo score
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *FederatedContextChunk) Reset() {
+	*x = FederatedContextChunk{}
+	mi := &file_engine_proto_msgTypes[61]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FederatedContextChunk) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FederatedContextChunk) ProtoMessage() {}
+
+func (x *FederatedContextChunk) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[61]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FederatedContextChunk.ProtoReflect.Descriptor instead.
+func (*FederatedContextChunk) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{61}
+}
+
+func (x *FederatedContextChunk) GetRepoId() string {
+	if x != nil {
+		return x.RepoId
+	}
+	return ""
+}
+
+func (x *FederatedContextChunk) GetRepoName() string {
+	if x != nil {
+		return x.RepoName
+	}
+	return ""
+}
+
+func (x *FederatedContextChunk) GetChunk() *ContextChunk {
+	if x != nil {
+		return x.Chunk
+	}
+	return nil
+}
+
+func (x *FederatedContextChunk) GetNormalizedScore() float32 {
+	if x != nil {
+		return x.NormalizedScore
+	}
+	return 0
+}
+
+func (x *FederatedContextChunk) GetRawScore() float32 {
+	if x != nil {
+		return x.RawScore
+	}
+	return 0
+}
+
+type FederatedSearchMetrics struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	ReposSearched     uint32                 `protobuf:"varint,1,opt,name=repos_searched,json=reposSearched,proto3" json:"repos_searched,omitempty"`
+	ReposFailed       uint32                 `protobuf:"varint,2,opt,name=repos_failed,json=reposFailed,proto3" json:"repos_failed,omitempty"`                                                                                      // Repos where search errored (partial results)
+	TotalCandidates   uint32                 `protobuf:"varint,3,opt,name=total_candidates,json=totalCandidates,proto3" json:"total_candidates,omitempty"`                                                                          // Sum across all repos
+	TotalSearchTimeMs uint64                 `protobuf:"varint,4,opt,name=total_search_time_ms,json=totalSearchTimeMs,proto3" json:"total_search_time_ms,omitempty"`                                                                // Wall-clock time for the entire fan-out
+	PerRepoTimeMs     map[string]uint64      `protobuf:"bytes,5,rep,name=per_repo_time_ms,json=perRepoTimeMs,proto3" json:"per_repo_time_ms,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`  // Per-repo search latency
+	PerRepoResults    map[string]uint32      `protobuf:"bytes,6,rep,name=per_repo_results,json=perRepoResults,proto3" json:"per_repo_results,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"` // Per-repo result count
+	NormalizationUsed string                 `protobuf:"bytes,7,opt,name=normalization_used,json=normalizationUsed,proto3" json:"normalization_used,omitempty"`                                                                     // Which normalization was applied
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *FederatedSearchMetrics) Reset() {
+	*x = FederatedSearchMetrics{}
+	mi := &file_engine_proto_msgTypes[62]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FederatedSearchMetrics) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FederatedSearchMetrics) ProtoMessage() {}
+
+func (x *FederatedSearchMetrics) ProtoReflect() protoreflect.Message {
+	mi := &file_engine_proto_msgTypes[62]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FederatedSearchMetrics.ProtoReflect.Descriptor instead.
+func (*FederatedSearchMetrics) Descriptor() ([]byte, []int) {
+	return file_engine_proto_rawDescGZIP(), []int{62}
+}
+
+func (x *FederatedSearchMetrics) GetReposSearched() uint32 {
+	if x != nil {
+		return x.ReposSearched
+	}
+	return 0
+}
+
+func (x *FederatedSearchMetrics) GetReposFailed() uint32 {
+	if x != nil {
+		return x.ReposFailed
+	}
+	return 0
+}
+
+func (x *FederatedSearchMetrics) GetTotalCandidates() uint32 {
+	if x != nil {
+		return x.TotalCandidates
+	}
+	return 0
+}
+
+func (x *FederatedSearchMetrics) GetTotalSearchTimeMs() uint64 {
+	if x != nil {
+		return x.TotalSearchTimeMs
+	}
+	return 0
+}
+
+func (x *FederatedSearchMetrics) GetPerRepoTimeMs() map[string]uint64 {
+	if x != nil {
+		return x.PerRepoTimeMs
+	}
+	return nil
+}
+
+func (x *FederatedSearchMetrics) GetPerRepoResults() map[string]uint32 {
+	if x != nil {
+		return x.PerRepoResults
+	}
+	return nil
+}
+
+func (x *FederatedSearchMetrics) GetNormalizationUsed() string {
+	if x != nil {
+		return x.NormalizationUsed
+	}
+	return ""
+}
+
 var File_engine_proto protoreflect.FileDescriptor
 
 const file_engine_proto_rawDesc = "" +
@@ -4768,7 +5922,115 @@ const file_engine_proto_rawDesc = "" +
 	"bytesTotal\x12\x12\n" +
 	"\x04done\x18\x06 \x01(\bR\x04done\x12\x18\n" +
 	"\asuccess\x18\a \x01(\bR\asuccess\x12\x14\n" +
-	"\x05error\x18\b \x01(\tR\x05error*x\n" +
+	"\x05error\x18\b \x01(\tR\x05error\".\n" +
+	"\x13RepoManifestRequest\x12\x17\n" +
+	"\arepo_id\x18\x01 \x01(\tR\x06repoId\"k\n" +
+	"\x14RepoManifestResponse\x12\x14\n" +
+	"\x05found\x18\x01 \x01(\bR\x05found\x12=\n" +
+	"\bmanifest\x18\x02 \x01(\v2!.aipr.engine.v1.RepoManifestProtoR\bmanifest\"\xc7\x03\n" +
+	"\x11RepoManifestProto\x12\x17\n" +
+	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12\x1b\n" +
+	"\trepo_root\x18\x02 \x01(\tR\brepoRoot\x12)\n" +
+	"\x10primary_language\x18\x03 \x01(\tR\x0fprimaryLanguage\x12!\n" +
+	"\fbuild_system\x18\x04 \x01(\tR\vbuildSystem\x125\n" +
+	"\trepo_type\x18\x05 \x01(\x0e2\x18.aipr.engine.v1.RepoTypeR\brepoType\x12:\n" +
+	"\atargets\x18\x06 \x03(\v2 .aipr.engine.v1.BuildTargetProtoR\atargets\x12\\\n" +
+	"\x0fmodule_to_files\x18\a \x03(\v24.aipr.engine.v1.RepoManifestProto.ModuleToFilesEntryR\rmoduleToFiles\x1a]\n" +
+	"\x12ModuleToFilesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x121\n" +
+	"\x05value\x18\x02 \x01(\v2\x1b.aipr.engine.v1.ModuleFilesR\x05value:\x028\x01\"]\n" +
+	"\x10BuildTargetProto\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12!\n" +
+	"\fsource_globs\x18\x03 \x03(\tR\vsourceGlobs\"#\n" +
+	"\vModuleFiles\x12\x14\n" +
+	"\x05files\x18\x01 \x03(\tR\x05files\"\x81\x01\n" +
+	"\x14CrossRepoDepsRequest\x12$\n" +
+	"\x0esource_repo_id\x18\x01 \x01(\tR\fsourceRepoId\x12&\n" +
+	"\x0ftarget_repo_ids\x18\x02 \x03(\tR\rtargetRepoIds\x12\x1b\n" +
+	"\tmax_depth\x18\x03 \x01(\rR\bmaxDepth\"\x81\x01\n" +
+	"\x15CrossRepoDepsResponse\x12G\n" +
+	"\fdependencies\x18\x01 \x03(\v2#.aipr.engine.v1.CrossRepoDependencyR\fdependencies\x12\x1f\n" +
+	"\vtotal_edges\x18\x02 \x01(\rR\n" +
+	"totalEdges\"\xb6\x02\n" +
+	"\x13CrossRepoDependency\x12$\n" +
+	"\x0esource_repo_id\x18\x01 \x01(\tR\fsourceRepoId\x12\x1f\n" +
+	"\vsource_file\x18\x02 \x01(\tR\n" +
+	"sourceFile\x12#\n" +
+	"\rsource_symbol\x18\x03 \x01(\tR\fsourceSymbol\x12$\n" +
+	"\x0etarget_repo_id\x18\x04 \x01(\tR\ftargetRepoId\x12\x1f\n" +
+	"\vtarget_file\x18\x05 \x01(\tR\n" +
+	"targetFile\x12#\n" +
+	"\rtarget_symbol\x18\x06 \x01(\tR\ftargetSymbol\x12'\n" +
+	"\x0fdependency_type\x18\a \x01(\tR\x0edependencyType\x12\x1e\n" +
+	"\n" +
+	"confidence\x18\b \x01(\x02R\n" +
+	"confidence\"k\n" +
+	"\x14BuildDepGraphRequest\x12\x15\n" +
+	"\x06org_id\x18\x01 \x01(\tR\x05orgId\x12\x19\n" +
+	"\brepo_ids\x18\x02 \x03(\tR\arepoIds\x12!\n" +
+	"\fforce_rescan\x18\x03 \x01(\bR\vforceRescan\"\x9a\x02\n" +
+	"\x15BuildDepGraphResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\x12#\n" +
+	"\rrepos_scanned\x18\x03 \x01(\rR\freposScanned\x12\x1f\n" +
+	"\vtotal_nodes\x18\x04 \x01(\rR\n" +
+	"totalNodes\x12\x1f\n" +
+	"\vtotal_edges\x18\x05 \x01(\rR\n" +
+	"totalEdges\x122\n" +
+	"\x05nodes\x18\x06 \x03(\v2\x1c.aipr.engine.v1.DepGraphNodeR\x05nodes\x122\n" +
+	"\x05edges\x18\a \x03(\v2\x1c.aipr.engine.v1.DepGraphEdgeR\x05edges\"\xc2\x02\n" +
+	"\fDepGraphNode\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
+	"\arepo_id\x18\x02 \x01(\tR\x06repoId\x12\x14\n" +
+	"\x05label\x18\x03 \x01(\tR\x05label\x12\x1b\n" +
+	"\tnode_type\x18\x04 \x01(\tR\bnodeType\x12\x1a\n" +
+	"\blanguage\x18\x05 \x01(\tR\blanguage\x125\n" +
+	"\trepo_type\x18\x06 \x01(\x0e2\x18.aipr.engine.v1.RepoTypeR\brepoType\x12F\n" +
+	"\bmetadata\x18\a \x03(\v2*.aipr.engine.v1.DepGraphNode.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x94\x02\n" +
+	"\fDepGraphEdge\x12$\n" +
+	"\x0esource_node_id\x18\x01 \x01(\tR\fsourceNodeId\x12$\n" +
+	"\x0etarget_node_id\x18\x02 \x01(\tR\ftargetNodeId\x12\x1b\n" +
+	"\tedge_type\x18\x03 \x01(\tR\bedgeType\x12\x16\n" +
+	"\x06weight\x18\x04 \x01(\x02R\x06weight\x12F\n" +
+	"\bmetadata\x18\x05 \x03(\v2*.aipr.engine.v1.DepGraphEdge.MetadataEntryR\bmetadata\x1a;\n" +
+	"\rMetadataEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xac\x02\n" +
+	"\x16FederatedSearchRequest\x12\x14\n" +
+	"\x05query\x18\x01 \x01(\tR\x05query\x12\x19\n" +
+	"\brepo_ids\x18\x02 \x03(\tR\arepoIds\x12'\n" +
+	"\x0ftouched_symbols\x18\x03 \x03(\tR\x0etouchedSymbols\x124\n" +
+	"\x06config\x18\x04 \x01(\v2\x1c.aipr.engine.v1.SearchConfigR\x06config\x12*\n" +
+	"\x11max_total_results\x18\x05 \x01(\rR\x0fmaxTotalResults\x12%\n" +
+	"\x0emax_concurrent\x18\x06 \x01(\rR\rmaxConcurrent\x12/\n" +
+	"\x13score_normalization\x18\a \x01(\tR\x12scoreNormalization\"\x9a\x01\n" +
+	"\x17FederatedSearchResponse\x12=\n" +
+	"\x06chunks\x18\x01 \x03(\v2%.aipr.engine.v1.FederatedContextChunkR\x06chunks\x12@\n" +
+	"\ametrics\x18\x02 \x01(\v2&.aipr.engine.v1.FederatedSearchMetricsR\ametrics\"\xc9\x01\n" +
+	"\x15FederatedContextChunk\x12\x17\n" +
+	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12\x1b\n" +
+	"\trepo_name\x18\x02 \x01(\tR\brepoName\x122\n" +
+	"\x05chunk\x18\x03 \x01(\v2\x1c.aipr.engine.v1.ContextChunkR\x05chunk\x12)\n" +
+	"\x10normalized_score\x18\x04 \x01(\x02R\x0fnormalizedScore\x12\x1b\n" +
+	"\traw_score\x18\x05 \x01(\x02R\brawScore\"\xbc\x04\n" +
+	"\x16FederatedSearchMetrics\x12%\n" +
+	"\x0erepos_searched\x18\x01 \x01(\rR\rreposSearched\x12!\n" +
+	"\frepos_failed\x18\x02 \x01(\rR\vreposFailed\x12)\n" +
+	"\x10total_candidates\x18\x03 \x01(\rR\x0ftotalCandidates\x12/\n" +
+	"\x14total_search_time_ms\x18\x04 \x01(\x04R\x11totalSearchTimeMs\x12b\n" +
+	"\x10per_repo_time_ms\x18\x05 \x03(\v29.aipr.engine.v1.FederatedSearchMetrics.PerRepoTimeMsEntryR\rperRepoTimeMs\x12d\n" +
+	"\x10per_repo_results\x18\x06 \x03(\v2:.aipr.engine.v1.FederatedSearchMetrics.PerRepoResultsEntryR\x0eperRepoResults\x12-\n" +
+	"\x12normalization_used\x18\a \x01(\tR\x11normalizationUsed\x1a@\n" +
+	"\x12PerRepoTimeMsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\x1aA\n" +
+	"\x13PerRepoResultsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01*x\n" +
 	"\bSeverity\x12\x18\n" +
 	"\x14SEVERITY_UNSPECIFIED\x10\x00\x12\x11\n" +
 	"\rSEVERITY_INFO\x10\x01\x12\x14\n" +
@@ -4832,7 +6094,13 @@ const file_engine_proto_rawDesc = "" +
 	"\x13GetMultimodalConfig\x12*.aipr.engine.v1.GetMultimodalConfigRequest\x1a+.aipr.engine.v1.GetMultimodalConfigResponse\x12n\n" +
 	"\x13ConfigureMultimodal\x12*.aipr.engine.v1.ConfigureMultimodalRequest\x1a+.aipr.engine.v1.ConfigureMultimodalResponse\x12d\n" +
 	"\rDownloadModel\x12*.aipr.engine.v1.ConfigureMultimodalRequest\x1a%.aipr.engine.v1.ModelDownloadProgress0\x01\x12d\n" +
-	"\x13StreamEngineMetrics\x12$.aipr.engine.v1.EngineMetricsRequest\x1a%.aipr.engine.v1.EngineMetricsSnapshot0\x01B^\n" +
+	"\x13StreamEngineMetrics\x12$.aipr.engine.v1.EngineMetricsRequest\x1a%.aipr.engine.v1.EngineMetricsSnapshot0\x012\x8c\x04\n" +
+	"\x10CrossRepoService\x12\\\n" +
+	"\x0fGetRepoManifest\x12#.aipr.engine.v1.RepoManifestRequest\x1a$.aipr.engine.v1.RepoManifestResponse\x12g\n" +
+	"\x18GetCrossRepoDependencies\x12$.aipr.engine.v1.CrossRepoDepsRequest\x1a%.aipr.engine.v1.CrossRepoDepsResponse\x12c\n" +
+	"\x14BuildDependencyGraph\x12$.aipr.engine.v1.BuildDepGraphRequest\x1a%.aipr.engine.v1.BuildDepGraphResponse\x12b\n" +
+	"\x0fFederatedSearch\x12&.aipr.engine.v1.FederatedSearchRequest\x1a'.aipr.engine.v1.FederatedSearchResponse\x12h\n" +
+	"\x15FederatedSearchStream\x12&.aipr.engine.v1.FederatedSearchRequest\x1a%.aipr.engine.v1.FederatedContextChunk0\x01B^\n" +
 	"\x13ai.aipr.engine.grpcB\vEngineProtoP\x01Z8github.com/AuralithAI/rtvortex-server/internal/engine/pbb\x06proto3"
 
 var (
@@ -4848,7 +6116,7 @@ func file_engine_proto_rawDescGZIP() []byte {
 }
 
 var file_engine_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 53)
+var file_engine_proto_msgTypes = make([]protoimpl.MessageInfo, 74)
 var file_engine_proto_goTypes = []any{
 	(Severity)(0),                       // 0: aipr.engine.v1.Severity
 	(CheckCategory)(0),                  // 1: aipr.engine.v1.CheckCategory
@@ -4903,12 +6171,33 @@ var file_engine_proto_goTypes = []any{
 	(*ConfigureMultimodalRequest)(nil),  // 50: aipr.engine.v1.ConfigureMultimodalRequest
 	(*ConfigureMultimodalResponse)(nil), // 51: aipr.engine.v1.ConfigureMultimodalResponse
 	(*ModelDownloadProgress)(nil),       // 52: aipr.engine.v1.ModelDownloadProgress
-	nil,                                 // 53: aipr.engine.v1.IndexStats.FilesByLanguageEntry
-	nil,                                 // 54: aipr.engine.v1.HealthCheckResponse.ComponentsEntry
-	nil,                                 // 55: aipr.engine.v1.DiagnosticsResponse.ConfigEntry
-	nil,                                 // 56: aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
-	nil,                                 // 57: aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
-	nil,                                 // 58: aipr.engine.v1.IngestAssetRequest.MetadataEntry
+	(*RepoManifestRequest)(nil),         // 53: aipr.engine.v1.RepoManifestRequest
+	(*RepoManifestResponse)(nil),        // 54: aipr.engine.v1.RepoManifestResponse
+	(*RepoManifestProto)(nil),           // 55: aipr.engine.v1.RepoManifestProto
+	(*BuildTargetProto)(nil),            // 56: aipr.engine.v1.BuildTargetProto
+	(*ModuleFiles)(nil),                 // 57: aipr.engine.v1.ModuleFiles
+	(*CrossRepoDepsRequest)(nil),        // 58: aipr.engine.v1.CrossRepoDepsRequest
+	(*CrossRepoDepsResponse)(nil),       // 59: aipr.engine.v1.CrossRepoDepsResponse
+	(*CrossRepoDependency)(nil),         // 60: aipr.engine.v1.CrossRepoDependency
+	(*BuildDepGraphRequest)(nil),        // 61: aipr.engine.v1.BuildDepGraphRequest
+	(*BuildDepGraphResponse)(nil),       // 62: aipr.engine.v1.BuildDepGraphResponse
+	(*DepGraphNode)(nil),                // 63: aipr.engine.v1.DepGraphNode
+	(*DepGraphEdge)(nil),                // 64: aipr.engine.v1.DepGraphEdge
+	(*FederatedSearchRequest)(nil),      // 65: aipr.engine.v1.FederatedSearchRequest
+	(*FederatedSearchResponse)(nil),     // 66: aipr.engine.v1.FederatedSearchResponse
+	(*FederatedContextChunk)(nil),       // 67: aipr.engine.v1.FederatedContextChunk
+	(*FederatedSearchMetrics)(nil),      // 68: aipr.engine.v1.FederatedSearchMetrics
+	nil,                                 // 69: aipr.engine.v1.IndexStats.FilesByLanguageEntry
+	nil,                                 // 70: aipr.engine.v1.HealthCheckResponse.ComponentsEntry
+	nil,                                 // 71: aipr.engine.v1.DiagnosticsResponse.ConfigEntry
+	nil,                                 // 72: aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
+	nil,                                 // 73: aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
+	nil,                                 // 74: aipr.engine.v1.IngestAssetRequest.MetadataEntry
+	nil,                                 // 75: aipr.engine.v1.RepoManifestProto.ModuleToFilesEntry
+	nil,                                 // 76: aipr.engine.v1.DepGraphNode.MetadataEntry
+	nil,                                 // 77: aipr.engine.v1.DepGraphEdge.MetadataEntry
+	nil,                                 // 78: aipr.engine.v1.FederatedSearchMetrics.PerRepoTimeMsEntry
+	nil,                                 // 79: aipr.engine.v1.FederatedSearchMetrics.PerRepoResultsEntry
 }
 var file_engine_proto_depIdxs = []int32{
 	7,  // 0: aipr.engine.v1.IndexRequest.config:type_name -> aipr.engine.v1.IndexConfig
@@ -4916,7 +6205,7 @@ var file_engine_proto_depIdxs = []int32{
 	13, // 2: aipr.engine.v1.IndexResponse.stats:type_name -> aipr.engine.v1.IndexStats
 	13, // 3: aipr.engine.v1.IndexProgressUpdate.final_stats:type_name -> aipr.engine.v1.IndexStats
 	13, // 4: aipr.engine.v1.IndexStatsResponse.stats:type_name -> aipr.engine.v1.IndexStats
-	53, // 5: aipr.engine.v1.IndexStats.files_by_language:type_name -> aipr.engine.v1.IndexStats.FilesByLanguageEntry
+	69, // 5: aipr.engine.v1.IndexStats.files_by_language:type_name -> aipr.engine.v1.IndexStats.FilesByLanguageEntry
 	17, // 6: aipr.engine.v1.SearchRequest.config:type_name -> aipr.engine.v1.SearchConfig
 	19, // 7: aipr.engine.v1.SearchResponse.chunks:type_name -> aipr.engine.v1.ContextChunk
 	20, // 8: aipr.engine.v1.SearchResponse.metrics:type_name -> aipr.engine.v1.SearchMetrics
@@ -4927,65 +6216,92 @@ var file_engine_proto_depIdxs = []int32{
 	28, // 13: aipr.engine.v1.HeuristicsResponse.findings:type_name -> aipr.engine.v1.HeuristicFinding
 	1,  // 14: aipr.engine.v1.HeuristicFinding.category:type_name -> aipr.engine.v1.CheckCategory
 	0,  // 15: aipr.engine.v1.HeuristicFinding.severity:type_name -> aipr.engine.v1.Severity
-	54, // 16: aipr.engine.v1.HealthCheckResponse.components:type_name -> aipr.engine.v1.HealthCheckResponse.ComponentsEntry
+	70, // 16: aipr.engine.v1.HealthCheckResponse.components:type_name -> aipr.engine.v1.HealthCheckResponse.ComponentsEntry
 	33, // 17: aipr.engine.v1.DiagnosticsResponse.memory:type_name -> aipr.engine.v1.MemoryStats
 	34, // 18: aipr.engine.v1.DiagnosticsResponse.indices:type_name -> aipr.engine.v1.IndexInfo
-	55, // 19: aipr.engine.v1.DiagnosticsResponse.config:type_name -> aipr.engine.v1.DiagnosticsResponse.ConfigEntry
+	71, // 19: aipr.engine.v1.DiagnosticsResponse.config:type_name -> aipr.engine.v1.DiagnosticsResponse.ConfigEntry
 	3,  // 20: aipr.engine.v1.StorageConfigRequest.provider:type_name -> aipr.engine.v1.StorageProvider
 	5,  // 21: aipr.engine.v1.MetricValueProto.type:type_name -> aipr.engine.v1.MetricValueProto.MetricType
 	39, // 22: aipr.engine.v1.MetricValueProto.histogram:type_name -> aipr.engine.v1.HistogramProto
-	56, // 23: aipr.engine.v1.EngineMetricsSnapshot.metrics:type_name -> aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
-	57, // 24: aipr.engine.v1.EngineMetricsSnapshot.index_sizes_bytes:type_name -> aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
-	58, // 25: aipr.engine.v1.IngestAssetRequest.metadata:type_name -> aipr.engine.v1.IngestAssetRequest.MetadataEntry
+	72, // 23: aipr.engine.v1.EngineMetricsSnapshot.metrics:type_name -> aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry
+	73, // 24: aipr.engine.v1.EngineMetricsSnapshot.index_sizes_bytes:type_name -> aipr.engine.v1.EngineMetricsSnapshot.IndexSizesBytesEntry
+	74, // 25: aipr.engine.v1.IngestAssetRequest.metadata:type_name -> aipr.engine.v1.IngestAssetRequest.MetadataEntry
 	4,  // 26: aipr.engine.v1.IngestAssetRequest.typed_asset_type:type_name -> aipr.engine.v1.AssetType
 	4,  // 27: aipr.engine.v1.IngestAssetResponse.detected_type:type_name -> aipr.engine.v1.AssetType
 	47, // 28: aipr.engine.v1.GetMultimodalConfigResponse.modalities:type_name -> aipr.engine.v1.ModalityModelConfig
-	38, // 29: aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry.value:type_name -> aipr.engine.v1.MetricValueProto
-	6,  // 30: aipr.engine.v1.EngineService.IndexRepository:input_type -> aipr.engine.v1.IndexRequest
-	6,  // 31: aipr.engine.v1.EngineService.IndexRepositoryStream:input_type -> aipr.engine.v1.IndexRequest
-	8,  // 32: aipr.engine.v1.EngineService.IncrementalIndex:input_type -> aipr.engine.v1.IncrementalIndexRequest
-	11, // 33: aipr.engine.v1.EngineService.GetIndexStats:input_type -> aipr.engine.v1.IndexStatsRequest
-	14, // 34: aipr.engine.v1.EngineService.DeleteIndex:input_type -> aipr.engine.v1.DeleteIndexRequest
-	16, // 35: aipr.engine.v1.EngineService.Search:input_type -> aipr.engine.v1.SearchRequest
-	16, // 36: aipr.engine.v1.EngineService.SearchStream:input_type -> aipr.engine.v1.SearchRequest
-	21, // 37: aipr.engine.v1.EngineService.BuildReviewContext:input_type -> aipr.engine.v1.ReviewContextRequest
-	21, // 38: aipr.engine.v1.EngineService.BuildReviewContextStream:input_type -> aipr.engine.v1.ReviewContextRequest
-	26, // 39: aipr.engine.v1.EngineService.RunHeuristics:input_type -> aipr.engine.v1.HeuristicsRequest
-	35, // 40: aipr.engine.v1.EngineService.ConfigureStorage:input_type -> aipr.engine.v1.StorageConfigRequest
-	29, // 41: aipr.engine.v1.EngineService.HealthCheck:input_type -> aipr.engine.v1.HealthCheckRequest
-	31, // 42: aipr.engine.v1.EngineService.GetDiagnostics:input_type -> aipr.engine.v1.DiagnosticsRequest
-	41, // 43: aipr.engine.v1.EngineService.GetEmbedStats:input_type -> aipr.engine.v1.EmbedStatsRequest
-	43, // 44: aipr.engine.v1.EngineService.GetFileContent:input_type -> aipr.engine.v1.FileContentRequest
-	45, // 45: aipr.engine.v1.EngineService.IngestAsset:input_type -> aipr.engine.v1.IngestAssetRequest
-	48, // 46: aipr.engine.v1.EngineService.GetMultimodalConfig:input_type -> aipr.engine.v1.GetMultimodalConfigRequest
-	50, // 47: aipr.engine.v1.EngineService.ConfigureMultimodal:input_type -> aipr.engine.v1.ConfigureMultimodalRequest
-	50, // 48: aipr.engine.v1.EngineService.DownloadModel:input_type -> aipr.engine.v1.ConfigureMultimodalRequest
-	37, // 49: aipr.engine.v1.EngineService.StreamEngineMetrics:input_type -> aipr.engine.v1.EngineMetricsRequest
-	9,  // 50: aipr.engine.v1.EngineService.IndexRepository:output_type -> aipr.engine.v1.IndexResponse
-	10, // 51: aipr.engine.v1.EngineService.IndexRepositoryStream:output_type -> aipr.engine.v1.IndexProgressUpdate
-	9,  // 52: aipr.engine.v1.EngineService.IncrementalIndex:output_type -> aipr.engine.v1.IndexResponse
-	12, // 53: aipr.engine.v1.EngineService.GetIndexStats:output_type -> aipr.engine.v1.IndexStatsResponse
-	15, // 54: aipr.engine.v1.EngineService.DeleteIndex:output_type -> aipr.engine.v1.DeleteIndexResponse
-	18, // 55: aipr.engine.v1.EngineService.Search:output_type -> aipr.engine.v1.SearchResponse
-	19, // 56: aipr.engine.v1.EngineService.SearchStream:output_type -> aipr.engine.v1.ContextChunk
-	22, // 57: aipr.engine.v1.EngineService.BuildReviewContext:output_type -> aipr.engine.v1.ReviewContextResponse
-	23, // 58: aipr.engine.v1.EngineService.BuildReviewContextStream:output_type -> aipr.engine.v1.PREmbedProgressUpdate
-	27, // 59: aipr.engine.v1.EngineService.RunHeuristics:output_type -> aipr.engine.v1.HeuristicsResponse
-	36, // 60: aipr.engine.v1.EngineService.ConfigureStorage:output_type -> aipr.engine.v1.StorageConfigResponse
-	30, // 61: aipr.engine.v1.EngineService.HealthCheck:output_type -> aipr.engine.v1.HealthCheckResponse
-	32, // 62: aipr.engine.v1.EngineService.GetDiagnostics:output_type -> aipr.engine.v1.DiagnosticsResponse
-	42, // 63: aipr.engine.v1.EngineService.GetEmbedStats:output_type -> aipr.engine.v1.EmbedStatsResponse
-	44, // 64: aipr.engine.v1.EngineService.GetFileContent:output_type -> aipr.engine.v1.FileContentResponse
-	46, // 65: aipr.engine.v1.EngineService.IngestAsset:output_type -> aipr.engine.v1.IngestAssetResponse
-	49, // 66: aipr.engine.v1.EngineService.GetMultimodalConfig:output_type -> aipr.engine.v1.GetMultimodalConfigResponse
-	51, // 67: aipr.engine.v1.EngineService.ConfigureMultimodal:output_type -> aipr.engine.v1.ConfigureMultimodalResponse
-	52, // 68: aipr.engine.v1.EngineService.DownloadModel:output_type -> aipr.engine.v1.ModelDownloadProgress
-	40, // 69: aipr.engine.v1.EngineService.StreamEngineMetrics:output_type -> aipr.engine.v1.EngineMetricsSnapshot
-	50, // [50:70] is the sub-list for method output_type
-	30, // [30:50] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	55, // 29: aipr.engine.v1.RepoManifestResponse.manifest:type_name -> aipr.engine.v1.RepoManifestProto
+	2,  // 30: aipr.engine.v1.RepoManifestProto.repo_type:type_name -> aipr.engine.v1.RepoType
+	56, // 31: aipr.engine.v1.RepoManifestProto.targets:type_name -> aipr.engine.v1.BuildTargetProto
+	75, // 32: aipr.engine.v1.RepoManifestProto.module_to_files:type_name -> aipr.engine.v1.RepoManifestProto.ModuleToFilesEntry
+	60, // 33: aipr.engine.v1.CrossRepoDepsResponse.dependencies:type_name -> aipr.engine.v1.CrossRepoDependency
+	63, // 34: aipr.engine.v1.BuildDepGraphResponse.nodes:type_name -> aipr.engine.v1.DepGraphNode
+	64, // 35: aipr.engine.v1.BuildDepGraphResponse.edges:type_name -> aipr.engine.v1.DepGraphEdge
+	2,  // 36: aipr.engine.v1.DepGraphNode.repo_type:type_name -> aipr.engine.v1.RepoType
+	76, // 37: aipr.engine.v1.DepGraphNode.metadata:type_name -> aipr.engine.v1.DepGraphNode.MetadataEntry
+	77, // 38: aipr.engine.v1.DepGraphEdge.metadata:type_name -> aipr.engine.v1.DepGraphEdge.MetadataEntry
+	17, // 39: aipr.engine.v1.FederatedSearchRequest.config:type_name -> aipr.engine.v1.SearchConfig
+	67, // 40: aipr.engine.v1.FederatedSearchResponse.chunks:type_name -> aipr.engine.v1.FederatedContextChunk
+	68, // 41: aipr.engine.v1.FederatedSearchResponse.metrics:type_name -> aipr.engine.v1.FederatedSearchMetrics
+	19, // 42: aipr.engine.v1.FederatedContextChunk.chunk:type_name -> aipr.engine.v1.ContextChunk
+	78, // 43: aipr.engine.v1.FederatedSearchMetrics.per_repo_time_ms:type_name -> aipr.engine.v1.FederatedSearchMetrics.PerRepoTimeMsEntry
+	79, // 44: aipr.engine.v1.FederatedSearchMetrics.per_repo_results:type_name -> aipr.engine.v1.FederatedSearchMetrics.PerRepoResultsEntry
+	38, // 45: aipr.engine.v1.EngineMetricsSnapshot.MetricsEntry.value:type_name -> aipr.engine.v1.MetricValueProto
+	57, // 46: aipr.engine.v1.RepoManifestProto.ModuleToFilesEntry.value:type_name -> aipr.engine.v1.ModuleFiles
+	6,  // 47: aipr.engine.v1.EngineService.IndexRepository:input_type -> aipr.engine.v1.IndexRequest
+	6,  // 48: aipr.engine.v1.EngineService.IndexRepositoryStream:input_type -> aipr.engine.v1.IndexRequest
+	8,  // 49: aipr.engine.v1.EngineService.IncrementalIndex:input_type -> aipr.engine.v1.IncrementalIndexRequest
+	11, // 50: aipr.engine.v1.EngineService.GetIndexStats:input_type -> aipr.engine.v1.IndexStatsRequest
+	14, // 51: aipr.engine.v1.EngineService.DeleteIndex:input_type -> aipr.engine.v1.DeleteIndexRequest
+	16, // 52: aipr.engine.v1.EngineService.Search:input_type -> aipr.engine.v1.SearchRequest
+	16, // 53: aipr.engine.v1.EngineService.SearchStream:input_type -> aipr.engine.v1.SearchRequest
+	21, // 54: aipr.engine.v1.EngineService.BuildReviewContext:input_type -> aipr.engine.v1.ReviewContextRequest
+	21, // 55: aipr.engine.v1.EngineService.BuildReviewContextStream:input_type -> aipr.engine.v1.ReviewContextRequest
+	26, // 56: aipr.engine.v1.EngineService.RunHeuristics:input_type -> aipr.engine.v1.HeuristicsRequest
+	35, // 57: aipr.engine.v1.EngineService.ConfigureStorage:input_type -> aipr.engine.v1.StorageConfigRequest
+	29, // 58: aipr.engine.v1.EngineService.HealthCheck:input_type -> aipr.engine.v1.HealthCheckRequest
+	31, // 59: aipr.engine.v1.EngineService.GetDiagnostics:input_type -> aipr.engine.v1.DiagnosticsRequest
+	41, // 60: aipr.engine.v1.EngineService.GetEmbedStats:input_type -> aipr.engine.v1.EmbedStatsRequest
+	43, // 61: aipr.engine.v1.EngineService.GetFileContent:input_type -> aipr.engine.v1.FileContentRequest
+	45, // 62: aipr.engine.v1.EngineService.IngestAsset:input_type -> aipr.engine.v1.IngestAssetRequest
+	48, // 63: aipr.engine.v1.EngineService.GetMultimodalConfig:input_type -> aipr.engine.v1.GetMultimodalConfigRequest
+	50, // 64: aipr.engine.v1.EngineService.ConfigureMultimodal:input_type -> aipr.engine.v1.ConfigureMultimodalRequest
+	50, // 65: aipr.engine.v1.EngineService.DownloadModel:input_type -> aipr.engine.v1.ConfigureMultimodalRequest
+	37, // 66: aipr.engine.v1.EngineService.StreamEngineMetrics:input_type -> aipr.engine.v1.EngineMetricsRequest
+	53, // 67: aipr.engine.v1.CrossRepoService.GetRepoManifest:input_type -> aipr.engine.v1.RepoManifestRequest
+	58, // 68: aipr.engine.v1.CrossRepoService.GetCrossRepoDependencies:input_type -> aipr.engine.v1.CrossRepoDepsRequest
+	61, // 69: aipr.engine.v1.CrossRepoService.BuildDependencyGraph:input_type -> aipr.engine.v1.BuildDepGraphRequest
+	65, // 70: aipr.engine.v1.CrossRepoService.FederatedSearch:input_type -> aipr.engine.v1.FederatedSearchRequest
+	65, // 71: aipr.engine.v1.CrossRepoService.FederatedSearchStream:input_type -> aipr.engine.v1.FederatedSearchRequest
+	9,  // 72: aipr.engine.v1.EngineService.IndexRepository:output_type -> aipr.engine.v1.IndexResponse
+	10, // 73: aipr.engine.v1.EngineService.IndexRepositoryStream:output_type -> aipr.engine.v1.IndexProgressUpdate
+	9,  // 74: aipr.engine.v1.EngineService.IncrementalIndex:output_type -> aipr.engine.v1.IndexResponse
+	12, // 75: aipr.engine.v1.EngineService.GetIndexStats:output_type -> aipr.engine.v1.IndexStatsResponse
+	15, // 76: aipr.engine.v1.EngineService.DeleteIndex:output_type -> aipr.engine.v1.DeleteIndexResponse
+	18, // 77: aipr.engine.v1.EngineService.Search:output_type -> aipr.engine.v1.SearchResponse
+	19, // 78: aipr.engine.v1.EngineService.SearchStream:output_type -> aipr.engine.v1.ContextChunk
+	22, // 79: aipr.engine.v1.EngineService.BuildReviewContext:output_type -> aipr.engine.v1.ReviewContextResponse
+	23, // 80: aipr.engine.v1.EngineService.BuildReviewContextStream:output_type -> aipr.engine.v1.PREmbedProgressUpdate
+	27, // 81: aipr.engine.v1.EngineService.RunHeuristics:output_type -> aipr.engine.v1.HeuristicsResponse
+	36, // 82: aipr.engine.v1.EngineService.ConfigureStorage:output_type -> aipr.engine.v1.StorageConfigResponse
+	30, // 83: aipr.engine.v1.EngineService.HealthCheck:output_type -> aipr.engine.v1.HealthCheckResponse
+	32, // 84: aipr.engine.v1.EngineService.GetDiagnostics:output_type -> aipr.engine.v1.DiagnosticsResponse
+	42, // 85: aipr.engine.v1.EngineService.GetEmbedStats:output_type -> aipr.engine.v1.EmbedStatsResponse
+	44, // 86: aipr.engine.v1.EngineService.GetFileContent:output_type -> aipr.engine.v1.FileContentResponse
+	46, // 87: aipr.engine.v1.EngineService.IngestAsset:output_type -> aipr.engine.v1.IngestAssetResponse
+	49, // 88: aipr.engine.v1.EngineService.GetMultimodalConfig:output_type -> aipr.engine.v1.GetMultimodalConfigResponse
+	51, // 89: aipr.engine.v1.EngineService.ConfigureMultimodal:output_type -> aipr.engine.v1.ConfigureMultimodalResponse
+	52, // 90: aipr.engine.v1.EngineService.DownloadModel:output_type -> aipr.engine.v1.ModelDownloadProgress
+	40, // 91: aipr.engine.v1.EngineService.StreamEngineMetrics:output_type -> aipr.engine.v1.EngineMetricsSnapshot
+	54, // 92: aipr.engine.v1.CrossRepoService.GetRepoManifest:output_type -> aipr.engine.v1.RepoManifestResponse
+	59, // 93: aipr.engine.v1.CrossRepoService.GetCrossRepoDependencies:output_type -> aipr.engine.v1.CrossRepoDepsResponse
+	62, // 94: aipr.engine.v1.CrossRepoService.BuildDependencyGraph:output_type -> aipr.engine.v1.BuildDepGraphResponse
+	66, // 95: aipr.engine.v1.CrossRepoService.FederatedSearch:output_type -> aipr.engine.v1.FederatedSearchResponse
+	67, // 96: aipr.engine.v1.CrossRepoService.FederatedSearchStream:output_type -> aipr.engine.v1.FederatedContextChunk
+	72, // [72:97] is the sub-list for method output_type
+	47, // [47:72] is the sub-list for method input_type
+	47, // [47:47] is the sub-list for extension type_name
+	47, // [47:47] is the sub-list for extension extendee
+	0,  // [0:47] is the sub-list for field type_name
 }
 
 func init() { file_engine_proto_init() }
@@ -4999,9 +6315,9 @@ func file_engine_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_engine_proto_rawDesc), len(file_engine_proto_rawDesc)),
 			NumEnums:      6,
-			NumMessages:   53,
+			NumMessages:   74,
 			NumExtensions: 0,
-			NumServices:   1,
+			NumServices:   2,
 		},
 		GoTypes:           file_engine_proto_goTypes,
 		DependencyIndexes: file_engine_proto_depIdxs,

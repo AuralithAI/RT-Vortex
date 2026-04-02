@@ -18,6 +18,7 @@
  */
 
 #include "engine_service_impl.h"
+#include "cross_repo_service_impl.h"
 #include "engine_api.h"
 #include "logging.h"
 #include "version.h"
@@ -1152,6 +1153,9 @@ void runServer(const ServerConfig& config) {
     // Create service implementation
     aipr::server::EngineServiceImpl service(std::move(engine));
     
+    // Create cross-repo service (shares the same Engine instance, non-owning)
+    aipr::server::CrossRepoServiceImpl cross_repo_service(service.getEngine());
+    
     // Enable gRPC reflection for debugging
     grpc::reflection::InitProtoReflectionServerBuilderPlugin();
     
@@ -1165,8 +1169,9 @@ void runServer(const ServerConfig& config) {
     auto credentials = buildCredentials(config);
     builder.AddListeningPort(server_address, credentials);
     
-    // Register service
+    // Register services
     builder.RegisterService(&service);
+    builder.RegisterService(&cross_repo_service);
     
     // Set server options
     builder.SetMaxReceiveMessageSize(64 * 1024 * 1024);  // 64 MB max message

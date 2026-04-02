@@ -646,3 +646,190 @@ message ModelDownloadProgress {
     bool success = 7;
     string error = 8;
 }
+
+// ============================================================================
+// Cross-Repo Service
+//
+// A SEPARATE service for all cross-repo operations. This is intentionally NOT
+// added to EngineService to maintain single-repo isolation guarantees.
+// The Go server handles authorization via crossrepo.Authorizer BEFORE calling
+// any of these RPCs.
+// ============================================================================
+
+service CrossRepoService {
+    // Dependency Graph ─────────────────────────────────────────
+
+    // GetRepoManifest returns the structural manifest for a single repo
+    // (build system, primary language, modules, repo type). The engine already
+    // computes this during indexing; this RPC exposes it read-only.
+    rpc GetRepoManifest(RepoManifestRequest) returns (RepoManifestResponse);
+
+    // GetCrossRepoDependencies resolves inter-repo import/dependency edges.
+    // Given a source repo, returns all symbols or packages that reference
+    // artifacts belonging to other repos in the same org.
+    rpc GetCrossRepoDependencies(CrossRepoDepsRequest) returns (CrossRepoDepsResponse);
+
+    // BuildDependencyGraph constructs the full org-level dependency graph
+    // across all linked repos. Heavy operation — intended for background jobs.
+    rpc BuildDependencyGraph(BuildDepGraphRequest) returns (BuildDepGraphResponse);
+
+    // Federated Search ─────────────────────────────────────────
+
+    // FederatedSearch fans out a query across multiple repo indices and returns
+    // merged, score-normalized results. The Go server pre-filters the target
+    // repo list through crossrepo.Authorizer. This is a SEPARATE RPC from
+    // EngineService.Search which operates on a single repo.
+    rpc FederatedSearch(FederatedSearchRequest) returns (FederatedSearchResponse);
+
+    // FederatedSearchStream is the streaming variant of FederatedSearch.
+    // Chunks are streamed as they are found across repos, ordered by score.
+    rpc FederatedSearchStream(FederatedSearchRequest) returns (stream FederatedContextChunk);
+}
+
+// ============================================================================
+// Cross-Repo: Manifest Messages
+// ============================================================================
+
+message RepoManifestRequest {
+    string repo_id = 1;
+}
+
+message RepoManifestResponse {
+    bool found = 1;
+    RepoManifestProto manifest = 2;
+}
+
+// Mirrors the C++ RepoManifest struct from hierarchy_builder.h.
+message RepoManifestProto {
+    string repo_id = 1;
+    string repo_root = 2;
+    string primary_language = 3;
+    string build_system = 4;
+    RepoType repo_type = 5;
+    repeated BuildTargetProto targets = 6;
+    map<string, ModuleFiles> module_to_files = 7;
+}
+
+message BuildTargetProto {
+    string name = 1;
+    string type = 2;         // "library", "executable", "module", "image", "package"
+    repeated string source_globs = 3;
+}
+
+// Wrapper for repeated strings inside a map value.
+message ModuleFiles {
+    repeated string files = 1;
+}
+
+// ============================================================================
+// Cross-Repo: Dependency Graph Messages
+// ============================================================================
+
+message CrossRepoDepsRequest {
+    string source_repo_id = 1;
+    // Optionally restrict to specific target repos (empty = check all linked).
+    repeated string target_repo_ids = 2;
+    // Maximum dependency depth (0 = direct only, 1 = transitive one hop, etc.).
+    uint32 max_depth = 3;
+}
+
+message CrossRepoDepsResponse {
+    repeated CrossRepoDependency dependencies = 1;
+    uint32 total_edges = 2;
+}
+
+// A single cross-repo dependency edge.
+message CrossRepoDependency {
+    string source_repo_id = 1;
+    string source_file = 2;           // Relative file path in source repo
+    string source_symbol = 3;         // Import/require statement or symbol name
+    string target_repo_id = 4;
+    string target_file = 5;           // Resolved file in target repo (may be empty)
+    string target_symbol = 6;         // Resolved symbol in target repo
+    string dependency_type = 7;       // "import", "package", "submodule", "api_call"
+    float confidence = 8;             // 0.0-1.0 match confidence
+}
+
+message BuildDepGraphRequest {
+    string org_id = 1;
+    // Repo IDs to include in the graph (empty = all linked repos in org).
+    repeated string repo_ids = 2;
+    // Whether to re-scan all repos or use cached manifests.
+    bool force_rescan = 3;
+}
+
+message BuildDepGraphResponse {
+    bool success = 1;
+    string message = 2;
+    uint32 repos_scanned = 3;
+    uint32 total_nodes = 4;           // repos + modules
+    uint32 total_edges = 5;           // dependency edges
+    repeated DepGraphNode nodes = 6;
+    repeated DepGraphEdge edges = 7;
+}
+
+// A node in the org-level dependency graph.
+message DepGraphNode {
+    string id = 1;                    // Unique node ID
+    string repo_id = 2;
+    string label = 3;                 // Repo name or module name
+    string node_type = 4;             // "repo", "module", "package"
+    string language = 5;
+    RepoType repo_type = 6;
+    map<string, string> metadata = 7;
+}
+
+// An edge in the org-level dependency graph.
+message DepGraphEdge {
+    string source_node_id = 1;
+    string target_node_id = 2;
+    string edge_type = 3;             // "depends_on", "imports", "submodule_of"
+    float weight = 4;                 // Edge strength (number of references)
+    map<string, string> metadata = 5;
+}
+
+// ============================================================================
+// Cross-Repo: Federated Search Messages
+// ============================================================================
+
+message FederatedSearchRequest {
+    // The query text.
+    string query = 1;
+    // Repo IDs to search across. The Go server has already filtered these
+    // through crossrepo.Authorizer — the engine trusts this list.
+    repeated string repo_ids = 2;
+    // Optional symbols from the current diff context.
+    repeated string touched_symbols = 3;
+    // Search configuration (applied to each repo's index).
+    SearchConfig config = 4;
+    // Maximum total results across all repos.
+    uint32 max_total_results = 5;
+    // Concurrency budget: max repos to search in parallel (0 = engine default).
+    uint32 max_concurrent = 6;
+    // Score normalization strategy: "min_max", "z_score", "none".
+    string score_normalization = 7;
+}
+
+message FederatedSearchResponse {
+    repeated FederatedContextChunk chunks = 1;
+    FederatedSearchMetrics metrics = 2;
+}
+
+// A context chunk with repo attribution.
+message FederatedContextChunk {
+    string repo_id = 1;              // Which repo this chunk came from
+    string repo_name = 2;            // Human-readable repo name
+    ContextChunk chunk = 3;          // The actual content
+    float normalized_score = 4;      // Score after cross-repo normalization
+    float raw_score = 5;             // Original per-repo score
+}
+
+message FederatedSearchMetrics {
+    uint32 repos_searched = 1;
+    uint32 repos_failed = 2;         // Repos where search errored (partial results)
+    uint32 total_candidates = 3;     // Sum across all repos
+    uint64 total_search_time_ms = 4; // Wall-clock time for the entire fan-out
+    map<string, uint64> per_repo_time_ms = 5;   // Per-repo search latency
+    map<string, uint32> per_repo_results = 6;   // Per-repo result count
+    string normalization_used = 7;   // Which normalization was applied
+}
