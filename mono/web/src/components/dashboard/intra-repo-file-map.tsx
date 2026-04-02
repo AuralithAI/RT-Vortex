@@ -23,8 +23,6 @@ import {
   type Node,
   type Edge,
   type NodeProps,
-  type NodeMouseHandler,
-  type EdgeMouseHandler,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -603,8 +601,8 @@ function FileMapCanvas({
   }, [kgNodes, kgEdges, visibleNodeTypes, visibleEdgeTypes, setNodes, setEdges]);
 
   // Handlers
-  const onNodeClick: NodeMouseHandler = useCallback(
-    (_evt: React.MouseEvent, node: Node<FileNodeData>) => {
+  const onNodeClick = useCallback(
+    (_evt: React.MouseEvent, node: Node) => {
       const kgNode = nodeMap.get(node.id);
       if (!kgNode) return;
       setSelectedEdge(null);
@@ -618,7 +616,7 @@ function FileMapCanvas({
     [nodeMap, edgeLookup],
   );
 
-  const onEdgeClick: EdgeMouseHandler = useCallback(
+  const onEdgeClick = useCallback(
     (_evt: React.MouseEvent, edge: Edge) => {
       const kgEdge = (edge.data as { kgEdge?: KGEdge })?.kgEdge;
       if (!kgEdge) return;
