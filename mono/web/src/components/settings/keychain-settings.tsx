@@ -5,6 +5,7 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle,
   XCircle,
@@ -25,7 +26,7 @@ import {
   Fingerprint,
   HardDrive,
 } from "lucide-react";
-import { useKeychainStatus, useKeychainSecrets, useKeychainAuditLog } from "@/lib/api/queries";
+import { useKeychainStatus, useKeychainSecrets, useKeychainAuditLog, queryKeys } from "@/lib/api/queries";
 import {
   useInitKeychain,
   usePutKeychainSecret,
@@ -67,6 +68,7 @@ export function KeychainSettings() {
 
   const initKeychain = useInitKeychain();
   const rotateKeys = useRotateKeychainKeys();
+  const qc = useQueryClient();
 
   const [recoveryPhrase, setRecoveryPhrase] = useState<string | null>(null);
   const [showRecoveryDialog, setShowRecoveryDialog] = useState(false);
@@ -85,6 +87,13 @@ export function KeychainSettings() {
     });
   }, [initKeychain]);
 
+  const handleCloseRecoveryDialog = useCallback(() => {
+    setShowRecoveryDialog(false);
+    setRecoveryPhrase(null);
+    // Ensure status is fresh after the user has acknowledged the phrase.
+    qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
+  }, [qc]);
+
   const handleCopyPhrase = useCallback(() => {
     if (!recoveryPhrase) return;
     navigator.clipboard.writeText(recoveryPhrase).then(() => {
@@ -99,25 +108,29 @@ export function KeychainSettings() {
     });
   }, [rotateKeys]);
 
-  if (statusLoading) {
-    return (
-      <Card className="max-w-3xl">
-        <CardHeader>
-          <Skeleton className="h-6 w-48" />
-          <Skeleton className="h-4 w-96" />
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Skeleton className="h-40 w-full" />
-        </CardContent>
-      </Card>
-    );
-  }
+  // ── Determine which content to render based on state ──────────────────
 
-  // ── Not initialized — Setup Screen ──────────────────────────────────────
+  const isInitialized = status?.initialized ?? false;
 
-  if (!status?.initialized) {
-    return (
-      <>
+  // ── Single Return ─────────────────────────────────────────────────────
+  // All dialogs live outside the conditional content so they are never
+  // unmounted by a status transition. This eliminates race conditions
+  // between query invalidation and dialog visibility.
+
+  return (
+    <>
+      {/* ── Conditional Main Content ─────────────────────────────────── */}
+      {statusLoading ? (
+        <Card className="max-w-3xl">
+          <CardHeader>
+            <Skeleton className="h-6 w-48" />
+            <Skeleton className="h-4 w-96" />
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Skeleton className="h-40 w-full" />
+          </CardContent>
+        </Card>
+      ) : !isInitialized ? (
         <Card className="max-w-3xl">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -187,222 +200,205 @@ export function KeychainSettings() {
             )}
           </CardContent>
         </Card>
-
-        {/* Recovery phrase dialog (shown after init) */}
-        <RecoveryPhraseDialog
-          open={showRecoveryDialog}
-          phrase={recoveryPhrase}
-          copied={copied}
-          onCopy={handleCopyPhrase}
-          onClose={() => {
-            setShowRecoveryDialog(false);
-            setRecoveryPhrase(null);
-          }}
-        />
-
-        {/* Recover from phrase dialog */}
-        <RecoverFromPhraseDialog
-          open={showRecoverInput}
-          onClose={() => setShowRecoverInput(false)}
-        />
-      </>
-    );
-  }
-
-  // ── Initialized — Main Vault UI ─────────────────────────────────────────
-
-  return (
-    <>
-      <div className="space-y-4 max-w-3xl">
-        {/* ── Security Dashboard Card ────────────────────────────────── */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-5 w-5 text-emerald-500" />
-              Secure Vault
-            </CardTitle>
-            <CardDescription>
-              Your encrypted vault is active. Secrets are protected with AES-256-GCM
-              envelope encryption — each secret has its own data encryption key.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <SecurityStatCard
-                icon={<ShieldCheck className="h-4 w-4 text-emerald-500" />}
-                label="Status"
-                value="Active"
-                valueClassName="text-emerald-600 dark:text-emerald-400"
-              />
-              <SecurityStatCard
-                icon={<KeyRound className="h-4 w-4 text-blue-500" />}
-                label="Secrets"
-                value={String(status.secret_count)}
-              />
-              <SecurityStatCard
-                icon={<RefreshCw className="h-4 w-4 text-violet-500" />}
-                label="Key Version"
-                value={`v${status.key_version}`}
-              />
-              <SecurityStatCard
-                icon={<Lock className="h-4 w-4 text-amber-500" />}
-                label="Encryption"
-                value="AES-256"
-              />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* ── Secrets Card ───────────────────────────────────────────── */}
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-base">Stored Secrets</CardTitle>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowAddSecret(true)}
-              >
-                <Plus className="mr-1 h-3.5 w-3.5" />
-                Add Secret
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {secretsLoading ? (
-              <div className="space-y-2">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <Skeleton key={i} className="h-14 w-full" />
-                ))}
+      ) : (
+        <div className="space-y-4 max-w-3xl">
+          {/* ── Security Dashboard Card ──────────────────────────────── */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-emerald-500" />
+                Secure Vault
+              </CardTitle>
+              <CardDescription>
+                Your encrypted vault is active. Secrets are protected with AES-256-GCM
+                envelope encryption — each secret has its own data encryption key.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <SecurityStatCard
+                  icon={<ShieldCheck className="h-4 w-4 text-emerald-500" />}
+                  label="Status"
+                  value="Active"
+                  valueClassName="text-emerald-600 dark:text-emerald-400"
+                />
+                <SecurityStatCard
+                  icon={<KeyRound className="h-4 w-4 text-blue-500" />}
+                  label="Secrets"
+                  value={String(status.secret_count)}
+                />
+                <SecurityStatCard
+                  icon={<RefreshCw className="h-4 w-4 text-violet-500" />}
+                  label="Key Version"
+                  value={`v${status.key_version}`}
+                />
+                <SecurityStatCard
+                  icon={<Lock className="h-4 w-4 text-amber-500" />}
+                  label="Encryption"
+                  value="AES-256"
+                />
               </div>
-            ) : !secrets?.length ? (
-              <div className="rounded-lg border border-dashed p-8 text-center">
-                <Lock className="mx-auto h-8 w-8 text-muted-foreground/40" />
-                <p className="mt-2 text-sm text-muted-foreground">
-                  No secrets stored yet. Add API keys, tokens, or passwords to
-                  keep them encrypted in your vault.
+            </CardContent>
+          </Card>
+
+          {/* ── Secrets Card ─────────────────────────────────────────── */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base">Stored Secrets</CardTitle>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowAddSecret(true)}
+                >
+                  <Plus className="mr-1 h-3.5 w-3.5" />
+                  Add Secret
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {secretsLoading ? (
+                <div className="space-y-2">
+                  {Array.from({ length: 3 }).map((_, i) => (
+                    <Skeleton key={i} className="h-14 w-full" />
+                  ))}
+                </div>
+              ) : !secrets?.length ? (
+                <div className="rounded-lg border border-dashed p-8 text-center">
+                  <Lock className="mx-auto h-8 w-8 text-muted-foreground/40" />
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    No secrets stored yet. Add API keys, tokens, or passwords to
+                    keep them encrypted in your vault.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {secrets.map((secret: KeychainSecretListEntry) => (
+                    <SecretRow key={secret.name} secret={secret} />
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* ── Vault Management Card ────────────────────────────────── */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Vault Management</CardTitle>
+              <CardDescription>
+                Rotate encryption keys, recover your vault, or view the access audit log.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowRotateConfirm(true)}
+                  disabled={rotateKeys.isPending}
+                >
+                  {rotateKeys.isPending ? (
+                    <>
+                      <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                      Rotating…
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                      Rotate Keys
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowRecoverInput(true)}
+                >
+                  <Unlock className="mr-1 h-3.5 w-3.5" />
+                  Recover from Phrase
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowAuditLog(!showAuditLog)}
+                >
+                  <Clock className="mr-1 h-3.5 w-3.5" />
+                  {showAuditLog ? "Hide" : "View"} Audit Log
+                </Button>
+              </div>
+              {rotateKeys.isSuccess && (
+                <p className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
+                  <CheckCircle className="h-3.5 w-3.5" />
+                  Keys rotated successfully — all secrets re-encrypted
                 </p>
+              )}
+              {rotateKeys.isError && (
+                <ErrorBanner message="Key rotation failed. Please try again." />
+              )}
+
+              {/* ── Inline Audit Log ─────────────────────────────────── */}
+              {showAuditLog && (
+                <AuditLogPanel entries={auditLog} isLoading={auditLoading} />
+              )}
+            </CardContent>
+          </Card>
+
+          {/* ── Encryption Details Card ──────────────────────────────── */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Fingerprint className="h-4 w-4" />
+                Encryption Details
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <FeatureCard
+                  icon={<Fingerprint className="h-4 w-4 text-violet-500" />}
+                  title="BIP39 Recovery"
+                  description="12-word seed phrase you control — back it up safely"
+                />
+                <FeatureCard
+                  icon={<Lock className="h-4 w-4 text-blue-500" />}
+                  title="Envelope Encryption"
+                  description="Per-secret DEK wrapped by master key via HKDF-SHA256"
+                />
+                <FeatureCard
+                  icon={<HardDrive className="h-4 w-4 text-emerald-500" />}
+                  title="Zero-Knowledge Server"
+                  description="Server stores ciphertext only — never sees plaintext"
+                />
               </div>
-            ) : (
-              <div className="space-y-2">
-                {secrets.map((secret: KeychainSecretListEntry) => (
-                  <SecretRow key={secret.name} secret={secret} />
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
-        {/* ── Vault Management Card ──────────────────────────────────── */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Vault Management</CardTitle>
-            <CardDescription>
-              Rotate encryption keys, recover your vault, or view the access audit log.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowRotateConfirm(true)}
-                disabled={rotateKeys.isPending}
-              >
-                {rotateKeys.isPending ? (
-                  <>
-                    <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                    Rotating…
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="mr-1 h-3.5 w-3.5" />
-                    Rotate Keys
-                  </>
-                )}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowRecoverInput(true)}
-              >
-                <Unlock className="mr-1 h-3.5 w-3.5" />
-                Recover from Phrase
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowAuditLog(!showAuditLog)}
-              >
-                <Clock className="mr-1 h-3.5 w-3.5" />
-                {showAuditLog ? "Hide" : "View"} Audit Log
-              </Button>
-            </div>
-            {rotateKeys.isSuccess && (
-              <p className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400">
-                <CheckCircle className="h-3.5 w-3.5" />
-                Keys rotated successfully — all secrets re-encrypted
-              </p>
-            )}
-            {rotateKeys.isError && (
-              <ErrorBanner message="Key rotation failed. Please try again." />
-            )}
+      {/* ── Dialogs (always mounted — never torn down by state changes) ── */}
 
-            {/* ── Inline Audit Log ───────────────────────────────────── */}
-            {showAuditLog && (
-              <AuditLogPanel entries={auditLog} isLoading={auditLoading} />
-            )}
-          </CardContent>
-        </Card>
+      <RecoveryPhraseDialog
+        open={showRecoveryDialog}
+        phrase={recoveryPhrase}
+        copied={copied}
+        onCopy={handleCopyPhrase}
+        onClose={handleCloseRecoveryDialog}
+      />
 
-        {/* ── Encryption Details Card ────────────────────────────────── */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base flex items-center gap-2">
-              <Fingerprint className="h-4 w-4" />
-              Encryption Details
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <FeatureCard
-                icon={<Fingerprint className="h-4 w-4 text-violet-500" />}
-                title="BIP39 Recovery"
-                description="12-word seed phrase you control — back it up safely"
-              />
-              <FeatureCard
-                icon={<Lock className="h-4 w-4 text-blue-500" />}
-                title="Envelope Encryption"
-                description="Per-secret DEK wrapped by master key via HKDF-SHA256"
-              />
-              <FeatureCard
-                icon={<HardDrive className="h-4 w-4 text-emerald-500" />}
-                title="Zero-Knowledge Server"
-                description="Server stores ciphertext only — never sees plaintext"
-              />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      <RecoverFromPhraseDialog
+        open={showRecoverInput}
+        onClose={() => setShowRecoverInput(false)}
+      />
 
-      {/* Add secret dialog */}
       <AddSecretDialog
         open={showAddSecret}
         onClose={() => setShowAddSecret(false)}
       />
 
-      {/* Rotate confirmation dialog */}
       <RotateKeysDialog
         open={showRotateConfirm}
         isPending={rotateKeys.isPending}
         onConfirm={handleRotate}
         onClose={() => setShowRotateConfirm(false)}
-      />
-
-      {/* Recover from phrase */}
-      <RecoverFromPhraseDialog
-        open={showRecoverInput}
-        onClose={() => setShowRecoverInput(false)}
       />
     </>
   );
