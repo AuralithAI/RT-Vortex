@@ -60,10 +60,14 @@ var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`xox[bpras]-[0-9A-Za-z\-]+`),
 }
 
+// VaultFactory returns a per-user SecretStore for the given user ID.
+// MCP tokens are stored per-user via the keychain.
+type VaultFactory func(userID uuid.UUID) vault.SecretStore
+
 type Service struct {
 	repo     *store.MCPRepository
 	registry *ProviderRegistry
-	vault    *vault.FileVault
+	vaultFor VaultFactory
 	rdb      *redis.Client
 	cfg      config.MCPConfig
 }
@@ -71,17 +75,25 @@ type Service struct {
 func NewService(
 	repo *store.MCPRepository,
 	registry *ProviderRegistry,
-	v *vault.FileVault,
+	vf VaultFactory,
 	rdb *redis.Client,
 	cfg config.MCPConfig,
 ) *Service {
 	return &Service{
 		repo:     repo,
 		registry: registry,
-		vault:    v,
+		vaultFor: vf,
 		rdb:      rdb,
 		cfg:      cfg,
 	}
+}
+
+// userVault returns the per-user SecretStore for the given connection's owner.
+func (s *Service) userVault(userID uuid.UUID) vault.SecretStore {
+	if s.vaultFor == nil {
+		return nil
+	}
+	return s.vaultFor(userID)
 }
 
 type ExecuteRequest struct {
@@ -218,15 +230,20 @@ func (s *Service) GetConnection(ctx context.Context, id uuid.UUID) (*store.MCPCo
 }
 
 func (s *Service) CreateConnection(ctx context.Context, conn *store.MCPConnection, accessToken, refreshToken string) error {
+	uv := s.userVault(conn.UserID)
+	if uv == nil {
+		return fmt.Errorf("keychain not available for user %s", conn.UserID)
+	}
+
 	vaultKey := fmt.Sprintf("mcp:%s:%s:access", conn.Provider, conn.ID)
-	if err := s.vault.Set(vaultKey, accessToken); err != nil {
+	if err := uv.Set(vaultKey, accessToken); err != nil {
 		return fmt.Errorf("vault write failed: %w", err)
 	}
 	conn.VaultKey = vaultKey
 
 	if refreshToken != "" {
 		refreshKey := fmt.Sprintf("mcp:%s:%s:refresh", conn.Provider, conn.ID)
-		if err := s.vault.Set(refreshKey, refreshToken); err != nil {
+		if err := uv.Set(refreshKey, refreshToken); err != nil {
 			return fmt.Errorf("vault write failed: %w", err)
 		}
 		conn.RefreshVaultKey = refreshKey
@@ -234,9 +251,9 @@ func (s *Service) CreateConnection(ctx context.Context, conn *store.MCPConnectio
 
 	conn.Status = "active"
 	if err := s.repo.CreateConnection(ctx, conn); err != nil {
-		_ = s.vault.Delete(vaultKey)
+		_ = uv.Delete(vaultKey)
 		if conn.RefreshVaultKey != "" {
-			_ = s.vault.Delete(conn.RefreshVaultKey)
+			_ = uv.Delete(conn.RefreshVaultKey)
 		}
 		return err
 	}
@@ -251,11 +268,13 @@ func (s *Service) DeleteConnection(ctx context.Context, id uuid.UUID) error {
 		return err
 	}
 
-	if conn.VaultKey != "" {
-		_ = s.vault.Delete(conn.VaultKey)
-	}
-	if conn.RefreshVaultKey != "" {
-		_ = s.vault.Delete(conn.RefreshVaultKey)
+	if uv := s.userVault(conn.UserID); uv != nil {
+		if conn.VaultKey != "" {
+			_ = uv.Delete(conn.VaultKey)
+		}
+		if conn.RefreshVaultKey != "" {
+			_ = uv.Delete(conn.RefreshVaultKey)
+		}
 	}
 
 	if s.rdb != nil {
@@ -329,7 +348,13 @@ func (s *Service) refreshExpiring(ctx context.Context) {
 			continue
 		}
 
-		refreshToken, err := s.vault.Get(conn.RefreshVaultKey)
+		uv := s.userVault(conn.UserID)
+		if uv == nil {
+			slog.Warn("mcp: keychain unavailable for user", "connection_id", conn.ID, "user_id", conn.UserID)
+			continue
+		}
+
+		refreshToken, err := uv.Get(conn.RefreshVaultKey)
 		if err != nil || refreshToken == "" {
 			slog.Warn("mcp: missing refresh token", "connection_id", conn.ID, "provider", conn.Provider)
 			continue
@@ -343,14 +368,14 @@ func (s *Service) refreshExpiring(ctx context.Context) {
 		}
 
 		newVaultKey := fmt.Sprintf("mcp:%s:%s:access", conn.Provider, conn.ID)
-		if err := s.vault.Set(newVaultKey, newAccess); err != nil {
+		if err := uv.Set(newVaultKey, newAccess); err != nil {
 			slog.Error("mcp: vault write failed during refresh", "error", err)
 			continue
 		}
 
 		newRefreshKey := conn.RefreshVaultKey
 		if newRefresh != "" {
-			if err := s.vault.Set(newRefreshKey, newRefresh); err != nil {
+			if err := uv.Set(newRefreshKey, newRefresh); err != nil {
 				slog.Error("mcp: vault write failed during refresh (refresh token)", "error", err)
 			}
 		}
@@ -377,7 +402,12 @@ func (s *Service) resolveToken(ctx context.Context, conn *store.MCPConnection) (
 		}
 	}
 
-	token, err := s.vault.Get(conn.VaultKey)
+	uv := s.userVault(conn.UserID)
+	if uv == nil {
+		return "", fmt.Errorf("keychain not available for user %s", conn.UserID)
+	}
+
+	token, err := uv.Get(conn.VaultKey)
 	if err != nil {
 		return "", fmt.Errorf("vault read failed for key %s: %w", conn.VaultKey, err)
 	}

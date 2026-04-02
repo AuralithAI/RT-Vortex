@@ -32,7 +32,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/swarm"
 	swarmauth "github.com/AuralithAI/rtvortex-server/internal/swarm/auth"
 	"github.com/AuralithAI/rtvortex-server/internal/tracing"
-	"github.com/AuralithAI/rtvortex-server/internal/vault"
+	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
 	"github.com/AuralithAI/rtvortex-server/internal/webhookq"
 	"github.com/AuralithAI/rtvortex-server/internal/ws"
@@ -82,8 +82,8 @@ type Dependencies struct {
 	// Multimodal assets
 	AssetRepo *store.AssetRepository
 
-	// File Vault — shared vault for per-user secret storage
-	Vault *vault.FileVault
+	// Keychain — production-grade encrypted secret storage
+	KeychainService *keychain.Service
 
 	// VCS Platform Config — per-user non-secret VCS settings (URLs, usernames)
 	VCSPlatformRepo *store.VCSPlatformRepo
@@ -180,7 +180,7 @@ func (s *Server) setupRouter() {
 		ChatRepo:        s.deps.ChatRepo,
 		ChatService:     s.deps.ChatService,
 		AssetRepo:       s.deps.AssetRepo,
-		Vault:           s.deps.Vault,
+		KeychainService: s.deps.KeychainService,
 		VCSPlatformRepo: s.deps.VCSPlatformRepo,
 	}
 	if s.deps.MetricsCollector != nil {
@@ -354,6 +354,28 @@ func (s *Server) setupRouter() {
 				r.Post("/platforms/{platform}/test", h.TestVCSPlatform)
 				r.Post("/platforms/{platform}/check-clone", h.CheckClonePermission)
 				r.Get("/token-capabilities", h.ListVCSTokenCapabilities)
+			})
+
+			// Keychain — encrypted per-user secret vault
+			r.Route("/keychain", func(r chi.Router) {
+				// Standard CRUD operations use the default "api" rate limit.
+				r.Get("/status", h.GetKeychainStatus)
+				r.Get("/secrets", h.ListKeychainSecrets)
+				r.Put("/secrets", h.PutKeychainSecret)
+				r.Get("/secret", h.GetKeychainSecret)
+				r.Delete("/secret", h.DeleteKeychainSecret)
+				r.Post("/sync", h.SyncKeychainSecrets)
+				r.Get("/audit", h.ListKeychainAuditLog)
+
+				// Sensitive operations get a stricter rate limit to prevent
+				// brute-force attacks on recovery phrases and abuse of init/rotate.
+				r.Group(func(r chi.Router) {
+					r.Use(session.RateLimitMiddleware(s.deps.RateLimiter, "keychain_sensitive"))
+					r.Post("/init", h.InitKeychain)
+					r.Post("/rotate", h.RotateKeychainKeys)
+					r.Post("/recover", h.RecoverKeychain)
+					r.Post("/refresh-recovery", h.RefreshRecovery)
+				})
 			})
 
 			// MCP Integrations (connected apps: Slack, MS365, Gmail, Discord)

@@ -56,6 +56,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/swarm"
 	swarmauth "github.com/AuralithAI/rtvortex-server/internal/swarm/auth"
 	"github.com/AuralithAI/rtvortex-server/internal/vault"
+	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
 
 	// Import platform packages to trigger init() factory registration.
@@ -394,21 +395,26 @@ func main() {
 		},
 	)
 
-	// File vault — persists API keys entered via the dashboard across restarts.
-	// Uses the same AES-256-GCM key as token encryption.
-	vaultPath := filepath.Join(env.ConfigDir, ".vault.enc")
-	var vaultOpts []vault.FileVaultOption
+	// Keychain — production-grade encrypted per-user secret storage.
+	// Uses the same server encryption key as the TokenEncryptor,
+	// normalized to 64-char hex for the keychain KEK.
+	var keychainSvc *keychain.Service
 	if cfg.Auth.EncryptionKey != "" {
-		vaultOpts = append(vaultOpts, vault.WithEncryptionKey(cfg.Auth.EncryptionKey))
-	}
-	fileVault, err := vault.NewFileVault(vaultPath, vaultOpts...)
-	if err != nil {
-		slog.Warn("File vault init failed — API keys will not persist", "error", err)
-	} else {
-		llmRegistry.SetVault(fileVault)
-		loaded := llmRegistry.LoadFromVault()
-		if loaded > 0 {
-			slog.Info("Loaded API keys from vault", "count", loaded)
+		serverKeyHex := cfg.Auth.EncryptionKey
+		if len(serverKeyHex) != 64 {
+			// Key is raw bytes or non-hex — hash to get a deterministic 256-bit key.
+			h := sha256.Sum256([]byte(cfg.Auth.EncryptionKey))
+			serverKeyHex = hex.EncodeToString(h[:])
+		}
+		kcStore := keychain.NewStore(db.Pool)
+		kcSvc, kcErr := keychain.NewService(kcStore, redisClient.Client(), keychain.ServiceConfig{
+			ServerEncryptionKey: serverKeyHex,
+		})
+		if kcErr != nil {
+			slog.Warn("Keychain service init failed — keychain will be unavailable", "error", kcErr)
+		} else {
+			keychainSvc = kcSvc
+			slog.Info("Keychain service initialized (encrypted per-user secret store)")
 		}
 	}
 
@@ -456,9 +462,15 @@ func main() {
 		"routes", len(llmRegistry.GetRoutes()),
 	)
 
-	// VCS resolver — resolves credentials dynamically from vault/DB per repo
-	vcsResolver := vcs.NewResolver(db.Pool, vault.NewVCSVaultAdapter(fileVault))
-	slog.Info("VCS resolver initialised (credentials resolved per-repo from vault)")
+	// VCS resolver — resolves credentials dynamically from keychain per repo.
+	var vcsVaultReader vcs.VaultReader
+	if keychainSvc != nil {
+		kcAdapter := vault.NewKeychainAdapter(keychainSvc)
+		dbResolver := vault.NewDBUserIDResolver(db.Pool)
+		vcsVaultReader = vault.NewVCSKeychainAdapter(kcAdapter, dbResolver)
+	}
+	vcsResolver := vcs.NewResolver(db.Pool, vcsVaultReader)
+	slog.Info("VCS resolver initialised (credentials resolved per-repo from keychain)")
 
 	// Review pipeline
 	reviewPipeline := review.NewPipeline(reviewRepo, repoRepo, llmRegistry, vcsResolver, engineClient, review.PipelineConfig{
@@ -521,11 +533,16 @@ func main() {
 		MaxRequests: 60,
 		Window:      1 * time.Minute,
 	})
+	rateLimiter.Configure("keychain_sensitive", session.RateLimitConfig{
+		MaxRequests: 5,
+		Window:      1 * time.Minute,
+	})
 	slog.Info("Rate limiter configured",
 		"api_user", "100/min",
 		"api_org", "500/min",
 		"auth", "20/min",
 		"webhook", "60/min",
+		"keychain_sensitive", "5/min",
 	)
 
 	// Audit logger (security event tracking)
@@ -623,7 +640,14 @@ func main() {
 	mcpRegistry.Register(mcpproviders.NewHubSpotProvider())
 	mcpRegistry.Register(mcpproviders.NewSalesforceProvider())
 	mcpRegistry.Register(mcpproviders.NewTwilioProvider())
-	mcpService := mcp.NewService(mcpRepo, mcpRegistry, fileVault, redisClient.Client(), cfg.MCP)
+	// MCP vault factory: per-user keychain for token storage.
+	var mcpVaultFactory mcp.VaultFactory
+	if keychainSvc != nil {
+		mcpVaultFactory = func(userID uuid.UUID) vault.SecretStore {
+			return keychainSvc.ForUser(userID)
+		}
+	}
+	mcpService := mcp.NewService(mcpRepo, mcpRegistry, mcpVaultFactory, redisClient.Client(), cfg.MCP)
 	go mcpService.StartRefreshLoop(ctx)
 	swarmHandler.MCPSvc = mcpService
 	slog.Info("MCP integrations initialized",
@@ -702,7 +726,7 @@ func main() {
 		ChatRepo:         chatRepo,
 		ChatService:      chatService,
 		AssetRepo:        assetRepo,
-		Vault:            fileVault,
+		KeychainService:  keychainSvc,
 		VCSPlatformRepo:  vcsPlatformRepo,
 		MetricsCollector: metricsCollector,
 

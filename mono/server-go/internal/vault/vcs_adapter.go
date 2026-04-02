@@ -6,15 +6,15 @@ import (
 
 // ── VCS Vault Adapter ───────────────────────────────────────────────────────
 
-// VCSVaultAdapter adapts a FileVault to the vcs.VaultReader interface so that
+// VCSVaultAdapter adapts a SecretStore to the vcs.VaultReader interface so that
 // the VCS resolver can read per-user secrets without importing the vault
 // package directly.
 type VCSVaultAdapter struct {
-	inner *FileVault
+	inner SecretStore
 }
 
 // NewVCSVaultAdapter creates a vault adapter for the VCS resolver.
-func NewVCSVaultAdapter(v *FileVault) *VCSVaultAdapter {
+func NewVCSVaultAdapter(v SecretStore) *VCSVaultAdapter {
 	return &VCSVaultAdapter{inner: v}
 }
 

@@ -5,7 +5,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./client";
 import { queryKeys } from "./queries";
-import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute, MultimodalUpdateRequest } from "@/types/api";
+import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute, MultimodalUpdateRequest, KeychainPutSecretRequest, KeychainRecoverRequest, KeychainSyncRequest } from "@/types/api";
 
 // ── Assets ──────────────────────────────────────────────────────────────────
 
@@ -424,5 +424,82 @@ export function useSimulateCustomConnection() {
   return useMutation({
     mutationFn: (body: Parameters<typeof api.integrations.simulateCustomConnection>[0]) =>
       api.integrations.simulateCustomConnection(body),
+  });
+}
+
+// ── Keychain Vault ──────────────────────────────────────────────────────────
+
+export function useInitKeychain() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.keychain.init(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
+    },
+  });
+}
+
+export function usePutKeychainSecret() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: KeychainPutSecretRequest) => api.keychain.putSecret(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keychainSecrets });
+      qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
+    },
+  });
+}
+
+export function useDeleteKeychainSecret() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => api.keychain.deleteSecret(name),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keychainSecrets });
+      qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
+    },
+  });
+}
+
+export function useRotateKeychainKeys() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.keychain.rotateKeys(),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
+      qc.invalidateQueries({ queryKey: queryKeys.keychainSecrets });
+    },
+  });
+}
+
+export function useRecoverKeychain() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: KeychainRecoverRequest) => api.keychain.recover(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
+      qc.invalidateQueries({ queryKey: queryKeys.keychainSecrets });
+    },
+  });
+}
+
+export function useRefreshRecovery() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: KeychainRecoverRequest) => api.keychain.refreshRecovery(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
+    },
+  });
+}
+
+export function useSyncKeychain() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (data: KeychainSyncRequest) => api.keychain.sync(data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.keychainSecrets });
+      qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
+    },
   });
 }

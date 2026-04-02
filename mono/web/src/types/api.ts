@@ -791,3 +791,64 @@ export interface MCPSimulateResult {
   data?: Record<string, unknown>;
   error?: string;
 }
+
+// ── Keychain Vault ──────────────────────────────────────────────────────────
+
+export interface KeychainStatus {
+  initialized: boolean;
+  key_version: number;
+  secret_count: number;
+}
+
+export interface KeychainInitResponse {
+  recovery_phrase: string;
+}
+
+export interface KeychainSecret {
+  name: string;
+  value: string;
+}
+
+export interface KeychainSecretListEntry {
+  name: string;
+  version: number;
+  category?: string;
+  updated_at: string;
+}
+
+export interface KeychainPutSecretRequest {
+  name: string;
+  value: string;
+  category?: string;
+  metadata?: string;
+}
+
+export interface KeychainRecoverRequest {
+  recovery_phrase: string;
+}
+
+export interface KeychainAuditLogEntry {
+  id: string;
+  action: string;
+  secret_name?: string;
+  ip_addr?: string;
+  user_agent?: string;
+  created_at: string;
+}
+
+export interface KeychainSyncRequest {
+  client_versions: Record<string, number>;
+}
+
+export interface KeychainSyncVersionEntry {
+  name: string;
+  version: number;
+  category?: string;
+  updated_at: string;
+}
+
+export interface KeychainSyncResponse {
+  updated: KeychainSyncVersionEntry[];
+  deleted: string[];
+  server_versions: Record<string, number>;
+}

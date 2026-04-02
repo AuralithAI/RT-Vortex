@@ -36,6 +36,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/store"
 	"github.com/AuralithAI/rtvortex-server/internal/validation"
 	"github.com/AuralithAI/rtvortex-server/internal/vault"
+	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
 	"github.com/AuralithAI/rtvortex-server/internal/webhookq"
 )
@@ -69,7 +70,7 @@ type Handler struct {
 	ChatRepo         *store.ChatRepository
 	ChatService      *chat.Service
 	AssetRepo        *store.AssetRepository    // multimodal asset persistence (repo_assets)
-	Vault            *vault.FileVault          // shared file vault — user-scoped via vault token
+	KeychainService  *keychain.Service         // encrypted keychain — primary secret store for all per-user secrets
 	VCSPlatformRepo  *store.VCSPlatformRepo    // per-user VCS platform config (URLs, usernames)
 	MetricsCollector *engine.MetricsCollector  // engine metrics stream consumer
 	EmbedCache       *engine.EmbedCacheService // Redis-backed L2 embedding cache
@@ -77,6 +78,15 @@ type Handler struct {
 	// Runtime embedding configuration — guarded by embedMu.
 	embedMu     sync.RWMutex
 	embedConfig embeddingRuntimeConfig
+}
+
+// userVaultFor returns a per-user SecretStore backed by the keychain.
+// Returns nil if the keychain service is not available.
+func (h *Handler) userVaultFor(userID uuid.UUID) vault.SecretStore {
+	if h.KeychainService != nil {
+		return h.KeychainService.ForUser(userID)
+	}
+	return nil
 }
 
 // embeddingRuntimeConfig holds the user-selected embedding configuration.
@@ -1081,29 +1091,24 @@ func (h *Handler) TriggerIndex(w http.ResponseWriter, r *http.Request) {
 		engineCfg.EmbeddingAPIKey = ec.APIKey
 	}
 
-	// ── Resolve VCS clone token from the user's vault ───────────────────
+	// ── Resolve VCS clone token from the user's keychain ────────────────
 	// The C++ engine uses this to authenticate `git clone` for private repos.
 	// Token is resolved server-side and passed transiently — never persisted.
 	platform := repo.Platform
 	if platform == "" && repo.CloneURL != "" {
-		// Auto-detect platform from clone URL for repos registered without an
-		// explicit platform field. Enables token lookup for self-hosted instances.
 		platform = detectPlatformFromURL(repo.CloneURL)
 	}
-	if h.Vault != nil && platform != "" {
+	if platform != "" {
 		userID, ok := auth.UserIDFromContext(r.Context())
 		if ok {
-			user, userErr := h.UserRepo.GetByID(r.Context(), userID)
-			if userErr == nil && user.VaultToken != "" {
-				userVault := vault.NewUserScopedVault(h.Vault, user.VaultToken)
-				// Look up the platform-specific token key.
+			if uv := h.userVaultFor(userID); uv != nil {
 				tokenKey := "vcs." + platform + ".token"
 				if platform == "azure_devops" {
 					tokenKey = "vcs.azure_devops.pat"
 				}
-				if cloneToken, _ := userVault.Get(tokenKey); cloneToken != "" {
+				if cloneToken, _ := uv.Get(tokenKey); cloneToken != "" {
 					engineCfg.CloneToken = cloneToken
-					slog.Info("resolved VCS clone token from vault",
+					slog.Info("resolved VCS clone token from keychain",
 						"platform", platform, "repo_id", repoID,
 						"token_len", len(cloneToken))
 				}
@@ -1154,17 +1159,15 @@ func (h *Handler) ListBranches(w http.ResponseWriter, r *http.Request) {
 	if platform == "" && repo.CloneURL != "" {
 		platform = detectPlatformFromURL(repo.CloneURL)
 	}
-	if h.Vault != nil && platform != "" {
+	if platform != "" {
 		userID, ok := auth.UserIDFromContext(r.Context())
 		if ok {
-			user, userErr := h.UserRepo.GetByID(r.Context(), userID)
-			if userErr == nil && user.VaultToken != "" {
-				userVault := vault.NewUserScopedVault(h.Vault, user.VaultToken)
+			if uv := h.userVaultFor(userID); uv != nil {
 				tokenKey := "vcs." + platform + ".token"
 				if platform == "azure_devops" {
 					tokenKey = "vcs.azure_devops.pat"
 				}
-				cloneToken, _ = userVault.Get(tokenKey)
+				cloneToken, _ = uv.Get(tokenKey)
 			}
 		}
 	}
@@ -1513,6 +1516,15 @@ func (h *Handler) ConfigureLLMProvider(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "failed to update API key")
 			return
 		}
+		// Persist the key in the user's keychain for cross-restart survival.
+		if uid, ok := auth.UserIDFromContext(r.Context()); ok {
+			if uv := h.userVaultFor(uid); uv != nil {
+				vaultKey := fmt.Sprintf("llm.%s.api_key", providerName)
+				if err := uv.Set(vaultKey, req.APIKey); err != nil {
+					slog.Warn("failed to persist LLM API key in keychain", "provider", providerName, "error", err)
+				}
+			}
+		}
 	}
 	if req.Model != "" {
 		h.LLMRegistry.UpdateModel(providerName, req.Model)
@@ -1686,9 +1698,13 @@ func (h *Handler) GetEmbeddingsConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check vault for dedicated embedding API keys.
+	var userVault vault.SecretStore
+	if uid, ok := auth.UserIDFromContext(r.Context()); ok {
+		userVault = h.userVaultFor(uid)
+	}
 	embedKeySet := func(provider string) bool {
-		if h.Vault != nil {
-			if key, err := h.Vault.Get("embed_key." + provider); err == nil && key != "" {
+		if userVault != nil {
+			if key, err := userVault.Get("embed_key." + provider); err == nil && key != "" {
 				return true
 			}
 		}
@@ -1819,20 +1835,25 @@ func (h *Handler) UpdateEmbeddingsConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Resolve API key: dedicated embedding key → vault → LLM registry fallback.
+	// Resolve API key: dedicated embedding key → keychain → LLM registry fallback.
 	apiKey := req.APIKey
 
-	// If the user provided a new API key, store it in the vault.
-	if apiKey != "" && h.Vault != nil && req.Provider != "" {
-		if err := h.Vault.Set("embed_key."+req.Provider, apiKey); err != nil {
-			slog.Warn("failed to store embedding API key in vault", "provider", req.Provider, "error", err)
+	var uv vault.SecretStore
+	if uid, ok := auth.UserIDFromContext(r.Context()); ok {
+		uv = h.userVaultFor(uid)
+	}
+
+	// If the user provided a new API key, store it in the keychain.
+	if apiKey != "" && uv != nil && req.Provider != "" {
+		if err := uv.Set("embed_key."+req.Provider, apiKey); err != nil {
+			slog.Warn("failed to store embedding API key in keychain", "provider", req.Provider, "error", err)
 		}
 	}
 
-	// If no key was provided, try vault first, then LLM registry.
+	// If no key was provided, try keychain first, then LLM registry.
 	if apiKey == "" && req.Provider != "" {
-		if h.Vault != nil {
-			if key, err := h.Vault.Get("embed_key." + req.Provider); err == nil && key != "" {
+		if uv != nil {
+			if key, err := uv.Get("embed_key." + req.Provider); err == nil && key != "" {
 				apiKey = key
 			}
 		}
@@ -1891,12 +1912,14 @@ func (h *Handler) TestEmbeddingProvider(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Resolve API key from request → vault → LLM registry.
+	// Resolve API key from request → keychain → LLM registry.
 	apiKey := req.APIKey
 	if apiKey == "" && req.Provider != "" {
-		if h.Vault != nil {
-			if key, err := h.Vault.Get("embed_key." + req.Provider); err == nil && key != "" {
-				apiKey = key
+		if uid, ok := auth.UserIDFromContext(r.Context()); ok {
+			if uv := h.userVaultFor(uid); uv != nil {
+				if key, err := uv.Get("embed_key." + req.Provider); err == nil && key != "" {
+					apiKey = key
+				}
 			}
 		}
 		if apiKey == "" {
@@ -2017,9 +2040,11 @@ func (h *Handler) CheckEmbeddingCredits(w http.ResponseWriter, r *http.Request) 
 	// Resolve API key.
 	apiKey := req.APIKey
 	if apiKey == "" && req.Provider != "" {
-		if h.Vault != nil {
-			if key, err := h.Vault.Get("embed_key." + req.Provider); err == nil && key != "" {
-				apiKey = key
+		if uid, ok := auth.UserIDFromContext(r.Context()); ok {
+			if uv := h.userVaultFor(uid); uv != nil {
+				if key, err := uv.Get("embed_key." + req.Provider); err == nil && key != "" {
+					apiKey = key
+				}
 			}
 		}
 		if apiKey == "" {
