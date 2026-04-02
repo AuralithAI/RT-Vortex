@@ -14,6 +14,7 @@
 #define AIPR_CROSS_REPO_SERVICE_IMPL_H
 
 #include "engine_api.h"
+#include "hierarchy_builder.h"
 #include "engine.grpc.pb.h"
 
 #include <grpcpp/grpcpp.h>

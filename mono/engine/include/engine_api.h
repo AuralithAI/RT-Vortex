@@ -112,6 +112,8 @@ struct AIPR_API ContextChunk {
     std::string content;
     std::string language;
     std::vector<std::string> symbols;
+    std::vector<std::string> dependencies;
+    std::string type;
     float relevance_score = 0.0f;
 };
 
@@ -298,7 +300,43 @@ public:
      * Repo clones live at  <storage_path>/repos/<repo_id>.
      */
     virtual std::string getStoragePath() const { return ""; }
-    
+
+    /**
+     * Get the local filesystem path for a cloned repository.
+     *
+     * Returns  <storage_path>/repos/<repo_id>  if it exists on disk,
+     * or an empty string when the repo has never been indexed / cloned.
+     *
+     * Used by CrossRepoServiceImpl to locate repo roots for manifest
+     * building and dependency scanning.
+     *
+     * @param repo_id  Repository identifier
+     * @return Absolute local path, or "" if not found
+     */
+    virtual std::string getRepoPath(const std::string& repo_id) const {
+        (void)repo_id;
+        return "";
+    }
+
+    /**
+     * Retrieve all indexed code chunks for a repository.
+     *
+     * Returns the raw TMS CodeChunk objects stored in LTM.  This is used
+     * by CrossRepoServiceImpl to inspect import/dependency edges for
+     * cross-repo dependency graph construction.
+     *
+     * The default implementation returns an empty vector — override in
+     * EngineImpl which has access to the TMS internals.
+     *
+     * @param repo_id  Repository identifier
+     * @return Vector of all code chunks indexed for this repo
+     */
+    virtual std::vector<ContextChunk> getCodeChunksForRepo(
+        const std::string& repo_id) const {
+        (void)repo_id;
+        return {};
+    }
+
     /**
      * Run self-diagnostics
      */

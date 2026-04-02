@@ -122,7 +122,7 @@ grpc::Status CrossRepoServiceImpl::GetCrossRepoDependencies(
     uint32_t edge_count = 0;
 
     // Get all indexed chunks from the source repo to extract imports.
-    auto source_chunks = engine_->getChunksForRepo(source_repo_id);
+    auto source_chunks = engine_->getCodeChunksForRepo(source_repo_id);
 
     for (const auto& chunk : source_chunks) {
         for (const auto& dep : chunk.dependencies) {
@@ -237,7 +237,7 @@ grpc::Status CrossRepoServiceImpl::BuildDependencyGraph(
     // Build cross-repo dependency edges using chunk imports.
     uint32_t dep_edge_count = 0;
     for (const auto& [source_rid, source_manifest] : manifests) {
-        auto chunks = engine_->getChunksForRepo(source_rid);
+        auto chunks = engine_->getCodeChunksForRepo(source_rid);
         for (const auto& chunk : chunks) {
             for (const auto& dep : chunk.dependencies) {
                 for (const auto& [target_rid, target_manifest] : manifests) {
@@ -460,25 +460,23 @@ CrossRepoServiceImpl::PerRepoResult CrossRepoServiceImpl::searchSingleRepo(
     auto start = std::chrono::steady_clock::now();
 
     try {
-        // Build a single-repo search request for the Engine.
-        SearchQuery query;
-        query.repo_id = repo_id;
-        query.query = request.query();
+        // Determine top_k from request config.
+        size_t top_k = 20;
+        if (request.has_config() && request.config().top_k() > 0) {
+            top_k = static_cast<size_t>(request.config().top_k());
+        }
+
+        // Build the query string — combine the text query with touched symbols
+        // for better retrieval coverage.
+        std::string query_text = request.query();
         for (const auto& sym : request.touched_symbols()) {
-            query.touched_symbols.push_back(sym);
-        }
-        if (request.has_config()) {
-            query.top_k = request.config().top_k() > 0 ? request.config().top_k() : 20;
-            query.lexical_weight = request.config().lexical_weight();
-            query.vector_weight = request.config().vector_weight();
-            query.graph_expand_depth = request.config().graph_expand_depth();
-        } else {
-            query.top_k = 20;
+            if (!query_text.empty()) query_text += " ";
+            query_text += sym;
         }
 
-        auto search_result = engine_->search(query);
+        auto search_results = engine_->search(repo_id, query_text, top_k);
 
-        for (const auto& chunk : search_result.chunks) {
+        for (const auto& chunk : search_results) {
             aipr::engine::v1::FederatedContextChunk fc;
             fc.set_repo_id(repo_id);
             // repo_name will be filled by the Go server (it has the DB).
@@ -492,11 +490,11 @@ CrossRepoServiceImpl::PerRepoResult CrossRepoServiceImpl::searchSingleRepo(
             for (const auto& sym : chunk.symbols) {
                 c->add_symbols(sym);
             }
-            c->set_relevance_score(static_cast<float>(chunk.importance_score));
+            c->set_relevance_score(chunk.relevance_score);
             c->set_chunk_type(chunk.type);
 
-            fc.set_raw_score(static_cast<float>(chunk.importance_score));
-            fc.set_normalized_score(static_cast<float>(chunk.importance_score));  // pre-normalization
+            fc.set_raw_score(chunk.relevance_score);
+            fc.set_normalized_score(chunk.relevance_score);  // pre-normalization
 
             result.chunks.push_back(std::move(fc));
         }

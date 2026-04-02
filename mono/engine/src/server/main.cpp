@@ -575,7 +575,7 @@ std::shared_ptr<grpc::ServerCredentials> buildCredentials(const ServerConfig& co
 // Signal Handling
 //=============================================================================
 
-void signalHandler(int signal) {
+void signalHandler(int /*signal*/) {
     // Signal handlers must be async-signal-safe.
     // Only set the flag here — do NOT call g_server->Shutdown() from the
     // signal handler, as it causes a mutex deadlock with server->Wait().

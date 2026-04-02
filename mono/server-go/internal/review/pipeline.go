@@ -43,7 +43,7 @@ type Pipeline struct {
 	llmRegistry       *llm.Registry
 	vcsResolver       *vcs.Resolver
 	engineClient      *engine.Client
-	crossRepoEnricher *crossrepo.PipelineEnricher // nil = cross-repo disabled
+	crossRepoEnricher *crossrepo.PipelineEnricher // optional; nil when no linked repos are configured
 	config            PipelineConfig
 	onProgress        ProgressFunc
 }

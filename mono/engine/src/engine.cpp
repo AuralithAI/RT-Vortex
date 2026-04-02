@@ -187,6 +187,8 @@ static ContextChunk toContextChunk(const tms::RetrievedChunk& rc) {
     cc.content        = rc.chunk.content;
     cc.language       = rc.chunk.language;
     cc.symbols        = rc.chunk.symbols;
+    cc.dependencies   = rc.chunk.dependencies;
+    cc.type           = rc.chunk.type;
     cc.relevance_score = rc.combined_score;
     return cc;
 }
@@ -366,6 +368,47 @@ public:
 
     std::string getStoragePath() const override {
         return config_.storage_path;
+    }
+
+    // =========================================================================
+    // Cross-Repo helpers (used by CrossRepoServiceImpl)
+    // =========================================================================
+
+    std::string getRepoPath(const std::string& repo_id) const override {
+        std::string path = config_.storage_path + "/repos/" + repo_id;
+        if (fs::exists(path)) return path;
+        return "";
+    }
+
+    std::vector<ContextChunk> getCodeChunksForRepo(
+        const std::string& repo_id) const override
+    {
+        // Retrieve all TMS code chunks for this repo and convert to
+        // the public ContextChunk type.
+        auto& ltm = const_cast<tms::LTMFaiss&>(tms_->ltm());
+        auto stats = ltm.getStats();
+        auto it = stats.chunks_per_repo.find(repo_id);
+        if (it == stats.chunks_per_repo.end() || it->second == 0) {
+            return {};
+        }
+
+        // Use TMS search with a broad query to retrieve all chunks.
+        // The repo_filter ensures we only get chunks from this repo.
+        // We ask for a large top_k to get as many as possible.
+        tms::TMSQuery tms_q;
+        tms_q.query_text  = "*";
+        tms_q.repo_filter = repo_id;
+        tms_q.session_id  = "cross_repo_scan_" + repo_id;
+
+        tms::TMSResponse resp = tms_->forward(tms_q);
+
+        std::vector<ContextChunk> results;
+        results.reserve(resp.attention_output.fused_chunks.size());
+
+        for (const auto& rc : resp.attention_output.fused_chunks) {
+            results.push_back(toContextChunk(rc));
+        }
+        return results;
     }
 
     // =========================================================================

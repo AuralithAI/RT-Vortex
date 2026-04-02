@@ -887,6 +887,7 @@ if(AIPR_BUILD_SERVER)
     set(SERVER_SOURCES
         src/server/main.cpp
         src/server/engine_service_impl.cpp
+        src/server/cross_repo_service_impl.cpp
         ${PROTO_GENERATED_SRCS}
     )
     
