@@ -1,8 +1,10 @@
 package review
 
-import "github.com/AuralithAI/rtvortex-server/internal/vcs"
-import "github.com/AuralithAI/rtvortex-server/internal/model"
-import "github.com/AuralithAI/rtvortex-server/internal/crossrepo"
+import (
+	"github.com/AuralithAI/rtvortex-server/internal/crossrepo"
+	"github.com/AuralithAI/rtvortex-server/internal/model"
+	"github.com/AuralithAI/rtvortex-server/internal/vcs"
+)
 
 // ── Exported test helpers ───────────────────────────────────────────────────
 // These wrappers expose unexported functions for unit testing.

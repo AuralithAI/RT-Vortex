@@ -102,7 +102,7 @@ func NewPipelineEnricher(
 	}
 	return &PipelineEnricher{
 		federatedSearch: federatedSearch,
-		repoLinkRepo:   repoLinkRepo,
+		repoLinkRepo:    repoLinkRepo,
 		config:          config,
 	}
 }
