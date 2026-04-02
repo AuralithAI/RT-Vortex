@@ -367,8 +367,14 @@ export const orgs = {
 // ── Repositories ────────────────────────────────────────────────────────────
 
 export const repos = {
-  list: (p?: PaginationParams) =>
-    request<PaginatedResponse<Repo>>(`/api/v1/repos${qs(p)}`),
+  list: (p?: PaginationParams & { org_id?: string }) => {
+    const base = qs(p);
+    const orgPart = p?.org_id ? `org_id=${encodeURIComponent(p.org_id)}` : "";
+    if (!base && !orgPart) return request<PaginatedResponse<Repo>>("/api/v1/repos");
+    if (!orgPart) return request<PaginatedResponse<Repo>>(`/api/v1/repos${base}`);
+    const sep = base ? "&" : "?";
+    return request<PaginatedResponse<Repo>>(`/api/v1/repos${base}${sep}${orgPart}`);
+  },
 
   get: (id: string) =>
     request<Repo>(`/api/v1/repos/${id}`),

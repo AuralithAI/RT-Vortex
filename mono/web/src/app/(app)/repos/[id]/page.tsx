@@ -58,6 +58,7 @@ import { formatDate, timeAgo } from "@/lib/utils";
 import { CrossRepoLinks } from "@/components/dashboard/cross-repo-links";
 import { CrossRepoDeps } from "@/components/dashboard/cross-repo-deps";
 import { CrossRepoSearch } from "@/components/dashboard/cross-repo-search";
+import { CrossRepoDepGraph } from "@/components/dashboard/cross-repo-dep-graph";
 
 export default function RepoDetailPage({
   params,
@@ -552,7 +553,8 @@ export default function RepoDetailPage({
       <PullRequestList repoId={id} />
 
       {/* ── Cross-Repo Observatory ───────────────────────────────────────── */}
-      <CrossRepoLinks repoId={id} />
+      <CrossRepoLinks repoId={id} orgId={repo.org_id} />
+      <CrossRepoDepGraph repoId={id} />
       <CrossRepoDeps repoId={id} />
       <CrossRepoSearch repoId={id} />
 

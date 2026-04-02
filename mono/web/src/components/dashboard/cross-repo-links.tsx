@@ -4,7 +4,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Link2,
   Plus,
@@ -14,7 +14,7 @@ import {
   Clock,
   Pencil,
 } from "lucide-react";
-import { useCrossRepoLinks } from "@/lib/api/queries";
+import { useCrossRepoLinks, useOrgRepos } from "@/lib/api/queries";
 import {
   useCreateCrossRepoLink,
   useUpdateCrossRepoLink,
@@ -23,7 +23,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import type { Repo, ShareProfile } from "@/types/api";
 import {
   Table,
   TableBody,
@@ -50,7 +52,6 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { useUIStore } from "@/lib/stores/ui";
 import { timeAgo } from "@/lib/utils";
-import type { ShareProfile } from "@/types/api";
 
 const shareProfileVariant: Record<
   ShareProfile,
@@ -71,9 +72,10 @@ const shareProfileDesc: Record<ShareProfile, string> = {
 
 interface CrossRepoLinksProps {
   repoId: string;
+  orgId?: string;
 }
 
-export function CrossRepoLinks({ repoId }: CrossRepoLinksProps) {
+export function CrossRepoLinks({ repoId, orgId }: CrossRepoLinksProps) {
   const { data, isLoading } = useCrossRepoLinks(repoId);
   const createLink = useCreateCrossRepoLink();
   const updateLink = useUpdateCrossRepoLink();
@@ -91,6 +93,24 @@ export function CrossRepoLinks({ repoId }: CrossRepoLinksProps) {
   const [editLinkId, setEditLinkId] = useState("");
   const [editProfile, setEditProfile] = useState<ShareProfile>("metadata");
   const [editLabel, setEditLabel] = useState("");
+
+  // Fetch repos in the same org for the searchable dropdown
+  const { data: orgRepos } = useOrgRepos(orgId ?? "", !!orgId && createOpen);
+
+  // Build combobox options: exclude the current repo and already-linked repos
+  const repoOptions: ComboboxOption[] = useMemo(() => {
+    if (!orgRepos?.data) return [];
+    const linkedTargetIds = new Set(
+      (data?.links ?? []).map((l: { target_repo_id: string }) => l.target_repo_id),
+    );
+    return orgRepos.data
+      .filter((r: Repo) => r.id !== repoId && !linkedTargetIds.has(r.id))
+      .map((r: Repo) => ({
+        value: r.id,
+        label: r.full_name || r.name,
+        description: `${r.platform} · ${r.default_branch}`,
+      }));
+  }, [orgRepos?.data, repoId, data?.links]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -280,14 +300,29 @@ export function CrossRepoLinks({ repoId }: CrossRepoLinksProps) {
           <form onSubmit={handleCreate} className="space-y-4">
             <div className="space-y-2">
               <label className="text-sm font-medium">
-                Target Repository ID
+                Target Repository
               </label>
-              <Input
-                placeholder="UUID of the target repo"
-                value={targetRepoId}
-                onChange={(e) => setTargetRepoId(e.target.value)}
-                required
-              />
+              {orgId && repoOptions.length > 0 ? (
+                <Combobox
+                  options={repoOptions}
+                  value={targetRepoId}
+                  onValueChange={setTargetRepoId}
+                  placeholder="Select a repository…"
+                  searchPlaceholder="Search repos…"
+                  emptyMessage="No available repositories found."
+                />
+              ) : orgId ? (
+                <div className="rounded-md border border-dashed px-3 py-4 text-center text-sm text-muted-foreground">
+                  No other repos in this organization to link to.
+                </div>
+              ) : (
+                <Input
+                  placeholder="UUID of the target repo"
+                  value={targetRepoId}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setTargetRepoId(e.target.value)}
+                  required
+                />
+              )}
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Share Profile</label>

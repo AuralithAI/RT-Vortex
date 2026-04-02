@@ -124,6 +124,16 @@ export function useRepos(params?: PaginationParams) {
   });
 }
 
+/** List repositories within a specific organization. */
+export function useOrgRepos(orgId: string, enabled = true) {
+  const params = { limit: 200, offset: 0, org_id: orgId };
+  return useQuery({
+    queryKey: ["orgs", orgId, "repos"] as const,
+    queryFn: () => api.repos.list(params),
+    enabled: !!orgId && enabled,
+  });
+}
+
 export function useRepo(id: string) {
   return useQuery({
     queryKey: queryKeys.repo(id),
