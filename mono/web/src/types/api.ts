@@ -852,3 +852,200 @@ export interface KeychainSyncResponse {
   deleted: string[];
   server_versions: Record<string, number>;
 }
+
+// ── Cross-Repo Observatory ──────────────────────────────────────────────────
+
+/** Share profile controlling data exposure from target to source repo. */
+export type ShareProfile = "full" | "symbols" | "metadata" | "none";
+
+/** A directed link between two repos within the same org. */
+export interface RepoLink {
+  id: string;
+  org_id: string;
+  source_repo_id: string;
+  target_repo_id: string;
+  share_profile: ShareProfile;
+  label?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** RepoLink with human-readable repo names for display. */
+export interface RepoLinkWithNames extends RepoLink {
+  source_repo_name: string;
+  target_repo_name: string;
+}
+
+/** Audit entry for a cross-repo link mutation. */
+export interface RepoLinkEvent {
+  id: string;
+  link_id?: string;
+  org_id: string;
+  source_repo_id: string;
+  target_repo_id: string;
+  action: string;
+  actor_id?: string;
+  metadata?: Record<string, unknown>;
+  created_at: string;
+}
+
+/** Paginated list of links. */
+export interface RepoLinksResponse {
+  links: RepoLinkWithNames[];
+  total: number;
+}
+
+/** Paginated org-level link list. */
+export interface OrgLinksResponse {
+  links: RepoLinkWithNames[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/** Link events list response. */
+export interface LinkEventsResponse {
+  events: RepoLinkEvent[];
+  total: number;
+}
+
+/** Request to create a cross-repo link. */
+export interface CreateLinkRequest {
+  target_repo_id: string;
+  share_profile: ShareProfile;
+  label?: string;
+}
+
+/** Request to update a cross-repo link. */
+export interface UpdateLinkRequest {
+  share_profile?: ShareProfile;
+  label?: string;
+}
+
+/** Structural manifest for a single repo. */
+export interface RepoManifest {
+  found: boolean;
+  repo_id: string;
+  repo_root: string;
+  primary_language: string;
+  build_system: string;
+  repo_type: string;
+  targets: BuildTarget[];
+  module_to_files: Record<string, string[]>;
+}
+
+export interface BuildTarget {
+  name: string;
+  type: string;
+  source_globs: string[];
+}
+
+/** A single cross-repo dependency edge. */
+export interface CrossRepoDependency {
+  source_repo_id: string;
+  source_file: string;
+  source_symbol: string;
+  target_repo_id: string;
+  target_file: string;
+  target_symbol: string;
+  dependency_type: string;
+  confidence: number;
+}
+
+/** Response from the dependencies endpoint. */
+export interface GetDependenciesResponse {
+  dependencies: CrossRepoDependency[];
+  total_edges: number;
+  repos_authorized: number;
+  repos_denied: number;
+  duration: number;
+}
+
+/** A node in the org-level dependency graph. */
+export interface DepGraphNode {
+  id: string;
+  repo_id: string;
+  label: string;
+  node_type: string;
+  language: string;
+  repo_type: string;
+  metadata?: Record<string, string>;
+}
+
+/** An edge in the org-level dependency graph. */
+export interface DepGraphEdge {
+  source_node_id: string;
+  target_node_id: string;
+  edge_type: string;
+  weight: number;
+  metadata?: Record<string, string>;
+}
+
+/** Response from the build-graph endpoint. */
+export interface BuildGraphResponse {
+  success: boolean;
+  message: string;
+  repos_scanned: number;
+  total_nodes: number;
+  total_edges: number;
+  nodes: DepGraphNode[];
+  edges: DepGraphEdge[];
+  duration: number;
+}
+
+/** Request to build the org-level dependency graph. */
+export interface BuildGraphRequest {
+  repo_ids?: string[];
+  force_rescan?: boolean;
+}
+
+/** A context chunk with cross-repo attribution. */
+export interface FederatedChunk {
+  repo_id: string;
+  repo_name: string;
+  chunk: {
+    id: string;
+    file_path: string;
+    start_line: number;
+    end_line: number;
+    content: string;
+    language: string;
+    symbols: string[];
+    relevance_score: number;
+    chunk_type: string;
+  };
+  normalized_score: number;
+  raw_score: number;
+}
+
+/** Metrics about a federated search execution. */
+export interface FederatedSearchMetrics {
+  repos_searched: number;
+  repos_failed: number;
+  total_candidates: number;
+  total_search_time_ms: number;
+  per_repo_time_ms: Record<string, number>;
+  per_repo_results: Record<string, number>;
+  normalization_used: string;
+}
+
+/** Response from the federated search endpoint. */
+export interface FederatedSearchResponse {
+  chunks: FederatedChunk[];
+  metrics?: FederatedSearchMetrics;
+  repos_authorized: number;
+  repos_denied: number;
+  denied_reasons?: Record<string, string>;
+  total_duration: number;
+}
+
+/** Request for federated search. */
+export interface FederatedSearchRequest {
+  query: string;
+  touched_symbols?: string[];
+  top_k?: number;
+  max_total_results?: number;
+  max_concurrent?: number;
+  score_normalization?: string;
+}

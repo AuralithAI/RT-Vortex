@@ -5,7 +5,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "./client";
 import { queryKeys } from "./queries";
-import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute, MultimodalUpdateRequest, KeychainPutSecretRequest, KeychainRecoverRequest, KeychainSyncRequest } from "@/types/api";
+import type { User, Org, EmbeddingsUpdateRequest, EmbeddingTestRequest, AgentRoute, MultimodalUpdateRequest, KeychainPutSecretRequest, KeychainRecoverRequest, KeychainSyncRequest, CreateLinkRequest, UpdateLinkRequest, FederatedSearchRequest, BuildGraphRequest, ShareProfile } from "@/types/api";
 
 // ── Assets ──────────────────────────────────────────────────────────────────
 
@@ -500,6 +500,71 @@ export function useSyncKeychain() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.keychainSecrets });
       qc.invalidateQueries({ queryKey: queryKeys.keychainStatus });
+    },
+  });
+}
+
+// ── Cross-Repo Observatory ──────────────────────────────────────────────────
+
+/** Create a cross-repo link from a source repo. */
+export function useCreateCrossRepoLink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, data }: { repoId: string; data: CreateLinkRequest }) =>
+      api.crossRepo.createLink(repoId, data),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.crossRepoLinks(repoId) });
+    },
+  });
+}
+
+/** Update a cross-repo link's share profile / label. */
+export function useUpdateCrossRepoLink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      repoId,
+      linkId,
+      data,
+    }: {
+      repoId: string;
+      linkId: string;
+      data: UpdateLinkRequest;
+    }) => api.crossRepo.updateLink(repoId, linkId, data),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.crossRepoLinks(repoId) });
+    },
+  });
+}
+
+/** Delete a cross-repo link. */
+export function useDeleteCrossRepoLink() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, linkId }: { repoId: string; linkId: string }) =>
+      api.crossRepo.deleteLink(repoId, linkId),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.crossRepoLinks(repoId) });
+    },
+  });
+}
+
+/** Execute a federated search across linked repos. */
+export function useFederatedSearch() {
+  return useMutation({
+    mutationFn: ({ repoId, data }: { repoId: string; data: FederatedSearchRequest }) =>
+      api.crossRepo.federatedSearch(repoId, data),
+  });
+}
+
+/** Build the org-level dependency graph. */
+export function useBuildGraph() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ orgId, data }: { orgId: string; data: BuildGraphRequest }) =>
+      api.crossRepo.buildGraph(orgId, data),
+    onSuccess: (_data, { orgId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.orgCrossRepoLinks(orgId) });
     },
   });
 }

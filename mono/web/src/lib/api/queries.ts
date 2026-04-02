@@ -51,6 +51,20 @@ export const queryKeys = {
   keychainStatus: ["keychain", "status"] as const,
   keychainSecrets: ["keychain", "secrets"] as const,
   keychainAuditLog: ["keychain", "audit"] as const,
+
+  // Cross-Repo Observatory
+  crossRepoLinks: (repoId: string) =>
+    ["repos", repoId, "cross-repo", "links"] as const,
+  crossRepoLinkEvents: (repoId: string, linkId: string) =>
+    ["repos", repoId, "cross-repo", "links", linkId, "events"] as const,
+  crossRepoManifest: (repoId: string) =>
+    ["repos", repoId, "cross-repo", "manifest"] as const,
+  crossRepoDeps: (repoId: string) =>
+    ["repos", repoId, "cross-repo", "dependencies"] as const,
+  orgCrossRepoLinks: (orgId: string) =>
+    ["orgs", orgId, "cross-repo", "links"] as const,
+  orgCrossRepoEvents: (orgId: string) =>
+    ["orgs", orgId, "cross-repo", "events"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -402,3 +416,59 @@ export const benchmarkKeys = {
   run: (id: string) => ["benchmark", "runs", id] as const,
   ratings: ["benchmark", "ratings"] as const,
 } as const;
+
+// ── Cross-Repo Observatory ──────────────────────────────────────────────────
+
+/** All links for a repo (source or target). */
+export function useCrossRepoLinks(repoId: string) {
+  return useQuery({
+    queryKey: queryKeys.crossRepoLinks(repoId),
+    queryFn: () => api.crossRepo.listLinks(repoId),
+    enabled: !!repoId,
+  });
+}
+
+/** Audit events for a specific link. */
+export function useCrossRepoLinkEvents(repoId: string, linkId: string) {
+  return useQuery({
+    queryKey: queryKeys.crossRepoLinkEvents(repoId, linkId),
+    queryFn: () => api.crossRepo.listLinkEvents(repoId, linkId),
+    enabled: !!repoId && !!linkId,
+  });
+}
+
+/** Structural manifest for a repo. */
+export function useCrossRepoManifest(repoId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.crossRepoManifest(repoId),
+    queryFn: () => api.crossRepo.getManifest(repoId),
+    enabled: !!repoId && enabled,
+  });
+}
+
+/** Cross-repo dependency edges from a source repo. */
+export function useCrossRepoDeps(repoId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.crossRepoDeps(repoId),
+    queryFn: () => api.crossRepo.getDependencies(repoId),
+    enabled: !!repoId && enabled,
+  });
+}
+
+/** All links within an organization. */
+export function useOrgCrossRepoLinks(orgId: string) {
+  return useQuery({
+    queryKey: queryKeys.orgCrossRepoLinks(orgId),
+    queryFn: () => api.crossRepo.listOrgLinks(orgId),
+    enabled: !!orgId,
+  });
+}
+
+/** All link events within an organization. */
+export function useOrgCrossRepoEvents(orgId: string) {
+  return useQuery({
+    queryKey: queryKeys.orgCrossRepoEvents(orgId),
+    queryFn: () => api.crossRepo.listOrgEvents(orgId),
+    enabled: !!orgId,
+  });
+}
