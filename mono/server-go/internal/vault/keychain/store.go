@@ -393,6 +393,26 @@ func (s *Store) ListAuditLog(ctx context.Context, userID uuid.UUID, limit int) (
 	})
 }
 
+// FindUsersWithSecretPrefix returns distinct user IDs that have at least one
+// secret whose name starts with the given prefix (e.g. "llm."). Used at
+// startup to discover which users have persisted LLM API keys so the server
+// can rehydrate the in-memory LLM registry without waiting for a UI request.
+func (s *Store) FindUsersWithSecretPrefix(ctx context.Context, prefix string) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT DISTINCT user_id FROM keychain_secrets WHERE name LIKE $1`,
+		prefix+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (uuid.UUID, error) {
+		var uid uuid.UUID
+		err := row.Scan(&uid)
+		return uid, err
+	})
+}
+
 // ── Auth Challenge Storage ──────────────────────────────────────────────────
 
 // StoreAuthKeyVerifier saves the HMAC of a fixed challenge so the server can

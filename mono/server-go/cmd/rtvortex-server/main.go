@@ -424,9 +424,30 @@ func main() {
 		llmRegistry.SetPrimary(cfg.LLM.Primary)
 	}
 
+	// ── Startup rehydration ─────────────────────────────────────────────
+	// Load any previously-persisted LLM API keys, model choices, and routes
+	// from the keychain. This is essential for background services (review
+	// pipeline, chat, swarm) that run without an HTTP request context.
+	if keychainSvc != nil {
+		ctx := context.Background()
+		userIDs, findErr := keychainSvc.FindUsersWithLLMKeys(ctx)
+		if findErr != nil {
+			slog.Warn("startup: failed to find users with LLM keys", "error", findErr)
+		} else if len(userIDs) > 0 {
+			// Use the first user's keychain as the registry vault.
+			// In single-tenant / small-team setups this is the admin user.
+			uid := userIDs[0]
+			userVault := keychainSvc.ForUser(uid)
+			llmRegistry.SetVault(userVault)
+			loaded := llmRegistry.LoadFromVault()
+			slog.Info("startup: rehydrated LLM providers from keychain",
+				"user", uid, "loaded", loaded)
+		}
+	}
+
 	// Apply role-based model routing from config.
-	// Priority: UI routes (vault) > XML routes > smart defaults.
-	// LoadFromVault() above already restored any UI-configured routes.
+	// Priority: UI routes (vault/keychain) > XML routes > smart defaults.
+	// LoadFromVault() above restores any UI-configured routes from keychain.
 	if len(llmRegistry.GetRoutes()) > 0 {
 		// Vault-persisted routes (configured by the user in the UI) take
 		// highest priority — they represent the user's most recent explicit
