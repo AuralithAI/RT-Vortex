@@ -148,6 +148,25 @@ public:
     std::vector<KGNode> nodesByFilePath(const std::string& file_path,
                                         const std::string& repo_id) const;
 
+    /**
+     * Top N nodes by degree (number of connected edges) for a repo.
+     * Uses a single SQL JOIN — does NOT load all nodes into memory.
+     * Optionally filtered by node_types (empty = all).
+     */
+    std::vector<KGNode> getTopNodesByDegree(
+        const std::string& repo_id,
+        size_t limit,
+        const std::vector<std::string>& node_types = {}) const;
+
+    /**
+     * All edges where BOTH src_id and dst_id are in @p node_ids, for a repo.
+     * Optionally filtered by edge_types (empty = all).
+     */
+    std::vector<KGEdge> getEdgesBetweenNodes(
+        const std::string& repo_id,
+        const std::unordered_set<std::string>& node_ids,
+        const std::vector<std::string>& edge_types = {}) const;
+
     // ── Statistics ──────────────────────────────────────────────────────
 
     size_t nodeCount(const std::string& repo_id = "") const;

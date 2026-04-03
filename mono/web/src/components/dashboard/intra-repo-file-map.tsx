@@ -38,6 +38,8 @@ import {
   ChevronDown,
   Filter,
   AlertTriangle,
+  Cpu,
+  Monitor,
 } from "lucide-react";
 import { useRepoFileMap } from "@/lib/api/queries";
 import { Badge } from "@/components/ui/badge";
@@ -53,6 +55,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { KGNode, KGEdge } from "@/types/api";
+import { WebGLGraphCanvas } from "./webgl-graph-canvas";
+
+/**
+ * Node count threshold for switching from React Flow (DOM-based) to
+ * cosmos.gl (WebGL/GPU-based) rendering.  Below this count React Flow
+ * provides nicer DOM labels; above it the O(n²) force layout and DOM
+ * overhead become prohibitive.
+ */
+const WEBGL_THRESHOLD = 500;
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -392,9 +403,26 @@ function EdgeDetailPanel({
 // ── Layout helpers ──────────────────────────────────────────────────────────
 
 /**
- * Simple layered layout — groups nodes by "depth" (distance from root nodes
- * with no incoming edges) and arranges them in columns. This avoids an
- * external dagre dependency while producing a readable left-to-right flow.
+ * Extract the directory portion of a file path (everything up to the last /).
+ * If no slash is found, returns "(root)".
+ */
+function dirOf(filePath: string): string {
+  if (!filePath) return "(root)";
+  const idx = filePath.lastIndexOf("/");
+  return idx > 0 ? filePath.slice(0, idx) : "(root)";
+}
+
+/**
+ * Force-directed layout with directory clustering.
+ *
+ * 1. Groups nodes by directory path.
+ * 2. Places each directory cluster at a radial position around the center.
+ * 3. Runs a simple spring-force simulation (repulsion between all nodes,
+ *    attraction along edges, and a gentle pull toward directory center)
+ *    so the graph spreads out organically.
+ *
+ * This produces a much more readable layout than a rigid BFS grid,
+ * especially for repos with hundreds or thousands of file nodes.
  */
 function layoutGraph(
   kgNodes: KGNode[],
@@ -425,83 +453,121 @@ function layoutGraph(
     inEdgeMap.get(e.dst_id)!.push(e);
   }
 
-  // BFS layering from root nodes (in-degree 0)
-  const depth = new Map<string, number>();
-  const roots = filteredNodes.filter(
-    (n) => !inEdgeMap.has(n.id) || inEdgeMap.get(n.id)!.length === 0,
-  );
-
-  // If no clear roots, pick the first few nodes
-  if (roots.length === 0 && filteredNodes.length > 0) {
-    roots.push(...filteredNodes.slice(0, Math.min(5, filteredNodes.length)));
+  // ── Directory-clustered initial positions ──────────────────────────
+  const dirGroups = new Map<string, KGNode[]>();
+  for (const n of filteredNodes) {
+    const dir = dirOf(n.file_path);
+    if (!dirGroups.has(dir)) dirGroups.set(dir, []);
+    dirGroups.get(dir)!.push(n);
   }
 
-  const queue: string[] = [];
-  for (const r of roots) {
-    depth.set(r.id, 0);
-    queue.push(r.id);
-  }
+  const dirs = [...dirGroups.keys()].sort();
+  const numDirs = dirs.length;
 
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    const d = depth.get(id)!;
-    const outEdges = outEdgeMap.get(id) ?? [];
-    for (const e of outEdges) {
-      if (!depth.has(e.dst_id)) {
-        depth.set(e.dst_id, d + 1);
-        queue.push(e.dst_id);
+  // Place each directory cluster at a radial position around center
+  const CANVAS = Math.max(800, Math.sqrt(filteredNodes.length) * 120);
+  const CX = CANVAS / 2;
+  const CY = CANVAS / 2;
+  const RADIUS = CANVAS * 0.35;
+
+  // Position map: node-id → {x, y}
+  const pos = new Map<string, { x: number; y: number }>();
+
+  dirs.forEach((dir, dirIdx) => {
+    const angle = (2 * Math.PI * dirIdx) / Math.max(numDirs, 1);
+    const clusterCx = CX + RADIUS * Math.cos(angle);
+    const clusterCy = CY + RADIUS * Math.sin(angle);
+    const members = dirGroups.get(dir)!;
+    // Spread members in a small grid within the cluster
+    const cols = Math.max(1, Math.ceil(Math.sqrt(members.length)));
+    const CELL = 180;
+    members.forEach((n, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      pos.set(n.id, {
+        x: clusterCx + (col - cols / 2) * CELL + (Math.random() - 0.5) * 20,
+        y: clusterCy + (row - cols / 2) * CELL + (Math.random() - 0.5) * 20,
+      });
+    });
+  });
+
+  // ── Force simulation (30 iterations) ──────────────────────────────
+  // Keep it lightweight — this runs synchronously on every filter change.
+  const ITERATIONS = filteredNodes.length > 500 ? 15 : 30;
+  const REPULSION = 8000;
+  const ATTRACTION = 0.004;
+  const DAMPING = 0.9;
+  const vel = new Map<string, { vx: number; vy: number }>();
+  for (const n of filteredNodes) vel.set(n.id, { vx: 0, vy: 0 });
+
+  for (let iter = 0; iter < ITERATIONS; iter++) {
+    // Repulsion between all pairs (only for nodes < 2000 — otherwise skip)
+    if (filteredNodes.length <= 2000) {
+      for (let i = 0; i < filteredNodes.length; i++) {
+        for (let j = i + 1; j < filteredNodes.length; j++) {
+          const a = pos.get(filteredNodes[i].id)!;
+          const b = pos.get(filteredNodes[j].id)!;
+          const dx = a.x - b.x;
+          const dy = a.y - b.y;
+          const distSq = dx * dx + dy * dy + 1;
+          const force = REPULSION / distSq;
+          const fx = (dx / Math.sqrt(distSq)) * force;
+          const fy = (dy / Math.sqrt(distSq)) * force;
+          vel.get(filteredNodes[i].id)!.vx += fx;
+          vel.get(filteredNodes[i].id)!.vy += fy;
+          vel.get(filteredNodes[j].id)!.vx -= fx;
+          vel.get(filteredNodes[j].id)!.vy -= fy;
+        }
       }
+    }
+
+    // Attraction along edges
+    for (const e of filteredEdges) {
+      const a = pos.get(e.src_id);
+      const b = pos.get(e.dst_id);
+      if (!a || !b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const fx = dx * ATTRACTION;
+      const fy = dy * ATTRACTION;
+      vel.get(e.src_id)!.vx += fx;
+      vel.get(e.src_id)!.vy += fy;
+      vel.get(e.dst_id)!.vx -= fx;
+      vel.get(e.dst_id)!.vy -= fy;
+    }
+
+    // Apply velocities
+    for (const n of filteredNodes) {
+      const v = vel.get(n.id)!;
+      const p = pos.get(n.id)!;
+      p.x += v.vx;
+      p.y += v.vy;
+      v.vx *= DAMPING;
+      v.vy *= DAMPING;
     }
   }
 
-  // Assign depth 0 to any remaining unvisited nodes
-  for (const n of filteredNodes) {
-    if (!depth.has(n.id)) depth.set(n.id, 0);
-  }
-
-  // Group by depth layer
-  const layers = new Map<number, KGNode[]>();
-  for (const n of filteredNodes) {
-    const d = depth.get(n.id)!;
-    if (!layers.has(d)) layers.set(d, []);
-    layers.get(d)!.push(n);
-  }
-
-  const COL_GAP = 280;
-  const ROW_GAP = 90;
-
-  const nodes: Node<FileNodeData>[] = [];
-  const sortedLayers = [...layers.keys()].sort((a, b) => a - b);
-
-  for (const layerIdx of sortedLayers) {
-    const layerNodes = layers.get(layerIdx)!;
-    // Sort within layer by name for stability
-    layerNodes.sort((a, b) => a.name.localeCompare(b.name));
-
-    layerNodes.forEach((kgNode, rowIdx) => {
-      const outDegree = (outEdgeMap.get(kgNode.id) ?? []).length;
-      const inDegree = (inEdgeMap.get(kgNode.id) ?? []).length;
-
-      nodes.push({
-        id: kgNode.id,
-        type: "fileNode",
-        position: {
-          x: layerIdx * COL_GAP + 40,
-          y: rowIdx * ROW_GAP + 30,
-        },
-        data: {
-          kgId: kgNode.id,
-          name: kgNode.name,
-          filePath: kgNode.file_path,
-          nodeType: kgNode.node_type,
-          language: kgNode.language,
-          metadata: kgNode.metadata,
-          outDegree,
-          inDegree,
-        },
-      });
-    });
-  }
+  // ── Build React Flow nodes ─────────────────────────────────────────
+  const nodes: Node<FileNodeData>[] = filteredNodes.map((kgNode) => {
+    const outDegree = (outEdgeMap.get(kgNode.id) ?? []).length;
+    const inDegree = (inEdgeMap.get(kgNode.id) ?? []).length;
+    const p = pos.get(kgNode.id)!;
+    return {
+      id: kgNode.id,
+      type: "fileNode",
+      position: { x: Math.round(p.x), y: Math.round(p.y) },
+      data: {
+        kgId: kgNode.id,
+        name: kgNode.name,
+        filePath: kgNode.file_path,
+        nodeType: kgNode.node_type,
+        language: kgNode.language,
+        metadata: kgNode.metadata,
+        outDegree,
+        inDegree,
+      },
+    };
+  });
 
   // Edges — disable animations when graph is large (> 100 edges)
   const animateEdges = filteredEdges.length <= 100;
@@ -768,8 +834,8 @@ function FileMapCanvas({
           <Panel position="bottom-center">
             <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              Showing {kgNodes.length} of {totalNodes} nodes (top by
-              connectivity). Use filters to narrow down.
+              Showing top {kgNodes.length} of {totalNodes} by connectivity.
+              Use filters or switch to &quot;Files only&quot; to narrow down.
             </div>
           </Panel>
         )}
@@ -795,23 +861,96 @@ function FileMapCanvas({
 // ── Exported Component ──────────────────────────────────────────────────────
 
 export function IntraRepoFileMap({ repoId }: IntraRepoFileMapProps) {
-  const { data, isLoading, error } = useRepoFileMap(repoId);
+  const [showSymbols, setShowSymbols] = useState(false);
+
+  // When files-only, request file_summary nodes with no cap.
+  // When symbols mode, request all node types (engine decides default cap).
+  const nodeTypes = showSymbols ? undefined : ["file_summary"];
+  const maxNodes = showSymbols ? 500 : 0;
+
+  const { data, isLoading, error } = useRepoFileMap(
+    repoId,
+    true,
+    maxNodes,
+    nodeTypes,
+  );
 
   const hasData =
     data && (data.nodes?.length > 0 || data.edges?.length > 0);
 
+  // Auto-select renderer based on node count; allow manual override.
+  const autoWebGL = hasData ? data!.nodes.length > WEBGL_THRESHOLD : false;
+  const [rendererOverride, setRendererOverride] = useState<
+    "auto" | "reactflow" | "webgl"
+  >("auto");
+  const useWebGL =
+    rendererOverride === "webgl" ||
+    (rendererOverride === "auto" && autoWebGL);
+
+  const badgeLabel = hasData
+    ? showSymbols
+      ? `${data!.total_nodes} symbols · ${data!.total_edges} edges`
+      : `${data!.total_nodes} files · ${data!.total_edges} edges`
+    : "";
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
-          <Share2 className="h-4 w-4" />
-          Internal File Map
-          {hasData && (
-            <Badge variant="secondary" className="ml-1 text-xs">
-              {data!.total_nodes} nodes · {data!.total_edges} edges
-            </Badge>
-          )}
-        </CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Share2 className="h-4 w-4" />
+            Internal File Map
+            {hasData && (
+              <Badge variant="secondary" className="ml-1 text-xs">
+                {badgeLabel}
+              </Badge>
+            )}
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            {/* Renderer toggle */}
+            {hasData && (
+              <Button
+                variant={useWebGL ? "secondary" : "outline"}
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
+                title={
+                  useWebGL
+                    ? "Using GPU renderer (WebGL) — click to switch to DOM renderer"
+                    : "Using DOM renderer (React Flow) — click to switch to GPU renderer"
+                }
+                onClick={() => {
+                  if (rendererOverride === "auto") {
+                    // Toggle away from auto
+                    setRendererOverride(autoWebGL ? "reactflow" : "webgl");
+                  } else if (rendererOverride === "webgl") {
+                    setRendererOverride("reactflow");
+                  } else {
+                    setRendererOverride("webgl");
+                  }
+                }}
+              >
+                {useWebGL ? (
+                  <Cpu className="h-3 w-3" />
+                ) : (
+                  <Monitor className="h-3 w-3" />
+                )}
+                {useWebGL ? "GPU" : "DOM"}
+              </Button>
+            )}
+            {/* Symbol toggle */}
+            {hasData && (
+              <Button
+                variant={showSymbols ? "secondary" : "outline"}
+                size="sm"
+                className="h-7 gap-1.5 text-xs"
+                onClick={() => setShowSymbols((s) => !s)}
+              >
+                <Layers className="h-3 w-3" />
+                {showSymbols ? "Files only" : "Show symbols"}
+              </Button>
+            )}
+          </div>
+        </div>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -832,6 +971,13 @@ export function IntraRepoFileMap({ repoId }: IntraRepoFileMapProps) {
               to generate the knowledge graph.
             </p>
           </div>
+        ) : useWebGL ? (
+          <WebGLGraphCanvas
+            kgNodes={data!.nodes}
+            kgEdges={data!.edges}
+            truncated={data!.truncated ?? false}
+            totalNodes={data!.total_nodes}
+          />
         ) : (
           <ReactFlowProvider>
             <FileMapCanvas

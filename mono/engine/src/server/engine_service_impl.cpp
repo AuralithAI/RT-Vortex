@@ -845,7 +845,7 @@ grpc::Status EngineServiceImpl::GetRepoFileMap(
             request->edge_types().begin(), request->edge_types().end());
 
         size_t max_nodes = request->max_nodes();
-        if (max_nodes == 0) max_nodes = 300; // server default cap
+        // 0 = no cap — the Go server already applies a hard ceiling (5000).
 
         auto file_map = engine_->getRepoFileMap(
             request->repo_id(), node_types, edge_types, max_nodes);

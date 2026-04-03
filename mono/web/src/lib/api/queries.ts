@@ -459,10 +459,15 @@ export function useCrossRepoManifest(repoId: string, enabled = true) {
 }
 
 /** Intra-repo file dependency graph from the knowledge graph. */
-export function useRepoFileMap(repoId: string, enabled = true, maxNodes = 300) {
+export function useRepoFileMap(
+  repoId: string,
+  enabled = true,
+  maxNodes = 0,
+  nodeTypes?: string[],
+) {
   return useQuery({
-    queryKey: [...queryKeys.fileMap(repoId), maxNodes],
-    queryFn: () => api.repos.fileMap(repoId, undefined, undefined, maxNodes),
+    queryKey: [...queryKeys.fileMap(repoId), maxNodes, nodeTypes ?? "all"],
+    queryFn: () => api.repos.fileMap(repoId, nodeTypes, undefined, maxNodes),
     enabled: !!repoId && enabled,
     staleTime: 5 * 60 * 1000, // 5 min — KG data doesn't change often
   });

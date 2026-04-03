@@ -1032,77 +1032,34 @@ public:
         auto* kg = tms_->knowledgeGraph();
         if (!kg || !kg->isOpen()) return result;
 
-        // Build filter sets (empty = accept all)
-        std::unordered_set<std::string> nt_filter(node_types.begin(), node_types.end());
-        std::unordered_set<std::string> et_filter(edge_types.begin(), edge_types.end());
+        // Get total counts cheaply (indexed COUNT(*))
+        const size_t full_node_count = kg->nodeCount(repo_id);
 
-        // Fetch all nodes for the repo
-        auto raw_nodes = kg->getNodes(repo_id);
+        // Use the SQL-based top-N query — never loads more than max_nodes
+        // into memory, regardless of how large the repo's KG is.
+        auto top_nodes = kg->getTopNodesByDegree(repo_id, max_nodes, node_types);
 
-        // Filter by node type first
-        std::vector<decltype(raw_nodes)::value_type> filtered_raw;
-        for (auto& n : raw_nodes) {
-            if (!nt_filter.empty() && nt_filter.find(n.node_type) == nt_filter.end())
-                continue;
-            filtered_raw.push_back(std::move(n));
-        }
+        result.truncated = (top_nodes.size() < full_node_count && max_nodes > 0);
 
-        // Track total before capping
-        const size_t full_node_count = filtered_raw.size();
-
-        // If we need to cap, rank nodes by connectivity (degree) so the
-        // most-connected nodes survive.  This keeps the graph useful.
-        if (max_nodes > 0 && filtered_raw.size() > max_nodes) {
-            // Quick degree count from neighbors()
-            std::unordered_map<std::string, size_t> degree;
-            for (const auto& n : filtered_raw) {
-                auto edges = kg->neighbors(n.id);
-                degree[n.id] = edges.size();
-            }
-            // Partial sort: keep top max_nodes by degree
-            std::partial_sort(
-                filtered_raw.begin(),
-                filtered_raw.begin() + static_cast<ptrdiff_t>(max_nodes),
-                filtered_raw.end(),
-                [&](const auto& a, const auto& b) {
-                    return degree[a.id] > degree[b.id];
-                });
-            filtered_raw.resize(max_nodes);
-            result.truncated = true;
-        }
-
-        // Build final node list + id set for edge filtering
+        // Build node ID set for edge filtering
         std::unordered_set<std::string> node_id_set;
-        for (const auto& n : filtered_raw) {
+        for (const auto& n : top_nodes) {
             result.nodes.push_back({
                 n.id, n.node_type, n.name, n.file_path, n.language, n.metadata
             });
             node_id_set.insert(n.id);
         }
 
-        // Fetch edges by iterating over nodes and getting neighbors
-        // Use a set to deduplicate edges (since neighbors() returns edges from both sides)
-        std::unordered_set<int64_t> seen_edge_ids;
-        for (const auto& n : result.nodes) {
-            auto edges = kg->neighbors(n.id);
-            for (const auto& e : edges) {
-                if (e.repo_id != repo_id) continue;
-                if (!et_filter.empty() && et_filter.find(e.edge_type) == et_filter.end())
-                    continue;
-                // Only include edges where both endpoints survived the cap
-                if (node_id_set.find(e.src_id) == node_id_set.end() ||
-                    node_id_set.find(e.dst_id) == node_id_set.end())
-                    continue;
-                if (seen_edge_ids.insert(e.id).second) {
-                    FileMapEdge fe;
-                    fe.id        = e.id;
-                    fe.src_id    = e.src_id;
-                    fe.dst_id    = e.dst_id;
-                    fe.edge_type = e.edge_type;
-                    fe.weight    = e.weight;
-                    result.edges.push_back(std::move(fe));
-                }
-            }
+        // Fetch only edges connecting the surviving node set — single SQL query
+        auto edges = kg->getEdgesBetweenNodes(repo_id, node_id_set, edge_types);
+        for (auto& e : edges) {
+            FileMapEdge fe;
+            fe.id        = e.id;
+            fe.src_id    = e.src_id;
+            fe.dst_id    = e.dst_id;
+            fe.edge_type = e.edge_type;
+            fe.weight    = e.weight;
+            result.edges.push_back(std::move(fe));
         }
 
         result.total_nodes = full_node_count;

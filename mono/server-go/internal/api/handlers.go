@@ -1326,15 +1326,17 @@ func (h *Handler) GetRepoFileMap(w http.ResponseWriter, r *http.Request) {
 	nodeTypes := r.URL.Query()["node_type"]
 	edgeTypes := r.URL.Query()["edge_type"]
 
-	// Parse optional max_nodes cap (default 300, max 500)
-	var maxNodes uint32 = 300
+	// Parse optional max_nodes cap.
+	// 0 = no cap (engine returns all matching nodes — safe when node_type filter is used).
+	// Default when not specified: 0 (no cap). Hard max: 5000.
+	var maxNodes uint32 = 0
 	if v := r.URL.Query().Get("max_nodes"); v != "" {
-		if n, parseErr := strconv.ParseUint(v, 10, 32); parseErr == nil && n > 0 {
+		if n, parseErr := strconv.ParseUint(v, 10, 32); parseErr == nil {
 			maxNodes = uint32(n)
-			if maxNodes > 500 {
-				maxNodes = 500
-			}
 		}
+	}
+	if maxNodes > 5000 {
+		maxNodes = 5000
 	}
 
 	fileMap, err := h.EngineClient.GetRepoFileMap(r.Context(), repoID.String(), nodeTypes, edgeTypes, maxNodes)
