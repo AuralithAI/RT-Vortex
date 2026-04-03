@@ -5526,7 +5526,10 @@ type RepoFileMapRequest struct {
 	NodeTypes []string `protobuf:"bytes,2,rep,name=node_types,json=nodeTypes,proto3" json:"node_types,omitempty"`
 	// Optional: filter by edge types (e.g. ["IMPORTS", "CONTAINS", "REFERENCES"]).
 	// Empty means all edge types.
-	EdgeTypes     []string `protobuf:"bytes,3,rep,name=edge_types,json=edgeTypes,proto3" json:"edge_types,omitempty"`
+	EdgeTypes []string `protobuf:"bytes,3,rep,name=edge_types,json=edgeTypes,proto3" json:"edge_types,omitempty"`
+	// Maximum number of nodes to return (0 = server default, typically 300).
+	// Nodes are ranked by connectivity — most-connected survive the cap.
+	MaxNodes      uint32 `protobuf:"varint,4,opt,name=max_nodes,json=maxNodes,proto3" json:"max_nodes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5582,12 +5585,20 @@ func (x *RepoFileMapRequest) GetEdgeTypes() []string {
 	return nil
 }
 
+func (x *RepoFileMapRequest) GetMaxNodes() uint32 {
+	if x != nil {
+		return x.MaxNodes
+	}
+	return 0
+}
+
 type RepoFileMapResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Nodes         []*KGNodeProto         `protobuf:"bytes,1,rep,name=nodes,proto3" json:"nodes,omitempty"`
 	Edges         []*KGEdgeProto         `protobuf:"bytes,2,rep,name=edges,proto3" json:"edges,omitempty"`
-	TotalNodes    uint32                 `protobuf:"varint,3,opt,name=total_nodes,json=totalNodes,proto3" json:"total_nodes,omitempty"`
-	TotalEdges    uint32                 `protobuf:"varint,4,opt,name=total_edges,json=totalEdges,proto3" json:"total_edges,omitempty"`
+	TotalNodes    uint32                 `protobuf:"varint,3,opt,name=total_nodes,json=totalNodes,proto3" json:"total_nodes,omitempty"` // total before capping
+	TotalEdges    uint32                 `protobuf:"varint,4,opt,name=total_edges,json=totalEdges,proto3" json:"total_edges,omitempty"` // edges in response
+	Truncated     bool                   `protobuf:"varint,5,opt,name=truncated,proto3" json:"truncated,omitempty"`                     // true when response was capped
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5648,6 +5659,13 @@ func (x *RepoFileMapResponse) GetTotalEdges() uint32 {
 		return x.TotalEdges
 	}
 	return 0
+}
+
+func (x *RepoFileMapResponse) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
 }
 
 type KGNodeProto struct {
@@ -6338,20 +6356,22 @@ const file_engine_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\x04R\x05value:\x028\x01\x1aA\n" +
 	"\x13PerRepoResultsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\"k\n" +
+	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\"\x88\x01\n" +
 	"\x12RepoFileMapRequest\x12\x17\n" +
 	"\arepo_id\x18\x01 \x01(\tR\x06repoId\x12\x1d\n" +
 	"\n" +
 	"node_types\x18\x02 \x03(\tR\tnodeTypes\x12\x1d\n" +
 	"\n" +
-	"edge_types\x18\x03 \x03(\tR\tedgeTypes\"\xbd\x01\n" +
+	"edge_types\x18\x03 \x03(\tR\tedgeTypes\x12\x1b\n" +
+	"\tmax_nodes\x18\x04 \x01(\rR\bmaxNodes\"\xdb\x01\n" +
 	"\x13RepoFileMapResponse\x121\n" +
 	"\x05nodes\x18\x01 \x03(\v2\x1b.aipr.engine.v1.KGNodeProtoR\x05nodes\x121\n" +
 	"\x05edges\x18\x02 \x03(\v2\x1b.aipr.engine.v1.KGEdgeProtoR\x05edges\x12\x1f\n" +
 	"\vtotal_nodes\x18\x03 \x01(\rR\n" +
 	"totalNodes\x12\x1f\n" +
 	"\vtotal_edges\x18\x04 \x01(\rR\n" +
-	"totalEdges\"\xbc\x01\n" +
+	"totalEdges\x12\x1c\n" +
+	"\ttruncated\x18\x05 \x01(\bR\ttruncated\"\xbc\x01\n" +
 	"\vKGNodeProto\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tnode_type\x18\x02 \x01(\tR\bnodeType\x12\x12\n" +
