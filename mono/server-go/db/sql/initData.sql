@@ -912,9 +912,18 @@ CREATE INDEX IF NOT EXISTS idx_repo_links_source ON repo_links(source_repo_id);
 CREATE INDEX IF NOT EXISTS idx_repo_links_target ON repo_links(target_repo_id);
 CREATE INDEX IF NOT EXISTS idx_repo_links_org    ON repo_links(org_id);
 
-ALTER TABLE repo_links
-    ADD CONSTRAINT chk_repo_links_no_self_link
-    CHECK (source_repo_id != target_repo_id);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'chk_repo_links_no_self_link'
+          AND table_name = 'repo_links'
+    ) THEN
+        ALTER TABLE repo_links
+            ADD CONSTRAINT chk_repo_links_no_self_link
+            CHECK (source_repo_id != target_repo_id);
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS repo_link_events (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),

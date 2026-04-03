@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 
 	"github.com/AuralithAI/rtvortex-server/internal/audit"
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
@@ -225,7 +226,17 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Exchange code for token.
-	token, err := provider.Exchange(ctx, code)
+	// Some providers (e.g., X/Twitter) use PKCE and need the original state
+	// to retrieve the code_verifier. Use the stateful exchange when available.
+	var token *oauth2.Token
+	type stateExchanger interface {
+		ExchangeWithState(ctx context.Context, code, state string) (*oauth2.Token, error)
+	}
+	if se, ok := provider.(stateExchanger); ok {
+		token, err = se.ExchangeWithState(ctx, code, state)
+	} else {
+		token, err = provider.Exchange(ctx, code)
+	}
 	if err != nil {
 		slog.Error("OAuth token exchange failed", "provider", providerName, "error", err)
 		writeError(w, http.StatusBadGateway, "failed to exchange OAuth code")
