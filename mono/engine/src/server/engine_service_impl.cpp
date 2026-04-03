@@ -844,8 +844,11 @@ grpc::Status EngineServiceImpl::GetRepoFileMap(
         std::vector<std::string> edge_types(
             request->edge_types().begin(), request->edge_types().end());
 
+        size_t max_nodes = request->max_nodes();
+        if (max_nodes == 0) max_nodes = 300; // server default cap
+
         auto file_map = engine_->getRepoFileMap(
-            request->repo_id(), node_types, edge_types);
+            request->repo_id(), node_types, edge_types, max_nodes);
 
         for (const auto& n : file_map.nodes) {
             auto* proto_node = response->add_nodes();
@@ -870,6 +873,7 @@ grpc::Status EngineServiceImpl::GetRepoFileMap(
 
         response->set_total_nodes(static_cast<uint32_t>(file_map.total_nodes));
         response->set_total_edges(static_cast<uint32_t>(file_map.total_edges));
+        response->set_truncated(file_map.truncated);
 
         return grpc::Status::OK;
 

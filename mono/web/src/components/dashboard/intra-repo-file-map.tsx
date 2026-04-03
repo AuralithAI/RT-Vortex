@@ -37,6 +37,7 @@ import {
   Share2,
   ChevronDown,
   Filter,
+  AlertTriangle,
 } from "lucide-react";
 import { useRepoFileMap } from "@/lib/api/queries";
 import { Badge } from "@/components/ui/badge";
@@ -502,20 +503,21 @@ function layoutGraph(
     });
   }
 
-  // Edges
+  // Edges — disable animations when graph is large (> 100 edges)
+  const animateEdges = filteredEdges.length <= 100;
   const edges: Edge[] = filteredEdges.map((kgEdge) => {
     const color = getEdgeColor(kgEdge.edge_type);
     return {
       id: `e-${kgEdge.src_id}-${kgEdge.dst_id}-${kgEdge.edge_type}`,
       source: kgEdge.src_id,
       target: kgEdge.dst_id,
-      animated: kgEdge.edge_type.toUpperCase() === "IMPORTS",
+      animated: animateEdges && kgEdge.edge_type.toUpperCase() === "IMPORTS",
       style: {
         stroke: color,
         strokeWidth: Math.min(1 + kgEdge.weight * 0.5, 4),
       },
       markerEnd: { type: MarkerType.ArrowClosed, color },
-      label: kgEdge.edge_type,
+      label: filteredEdges.length <= 200 ? kgEdge.edge_type : undefined,
       labelStyle: { fontSize: 9, fill: color },
       data: { kgEdge },
     };
@@ -529,9 +531,13 @@ function layoutGraph(
 function FileMapCanvas({
   kgNodes,
   kgEdges,
+  truncated,
+  totalNodes,
 }: {
   kgNodes: KGNode[];
   kgEdges: KGEdge[];
+  truncated: boolean;
+  totalNodes: number;
 }) {
   // Discover available node / edge types
   const availableNodeTypes = useMemo(
@@ -756,6 +762,17 @@ function FileMapCanvas({
             </DropdownMenuContent>
           </DropdownMenu>
         </Panel>
+
+        {/* Truncation warning */}
+        {truncated && (
+          <Panel position="bottom-center">
+            <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              Showing {kgNodes.length} of {totalNodes} nodes (top by
+              connectivity). Use filters to narrow down.
+            </div>
+          </Panel>
+        )}
       </ReactFlow>
 
       {/* Detail overlays */}
@@ -820,6 +837,8 @@ export function IntraRepoFileMap({ repoId }: IntraRepoFileMapProps) {
             <FileMapCanvas
               kgNodes={data!.nodes}
               kgEdges={data!.edges}
+              truncated={data!.truncated ?? false}
+              totalNodes={data!.total_nodes}
             />
           </ReactFlowProvider>
         )}

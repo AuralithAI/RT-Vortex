@@ -1024,7 +1024,8 @@ public:
     RepoFileMap getRepoFileMap(
         const std::string& repo_id,
         const std::vector<std::string>& node_types,
-        const std::vector<std::string>& edge_types) override
+        const std::vector<std::string>& edge_types,
+        size_t max_nodes) override
     {
         RepoFileMap result;
 
@@ -1037,12 +1038,46 @@ public:
 
         // Fetch all nodes for the repo
         auto raw_nodes = kg->getNodes(repo_id);
-        for (const auto& n : raw_nodes) {
+
+        // Filter by node type first
+        std::vector<decltype(raw_nodes)::value_type> filtered_raw;
+        for (auto& n : raw_nodes) {
             if (!nt_filter.empty() && nt_filter.find(n.node_type) == nt_filter.end())
                 continue;
+            filtered_raw.push_back(std::move(n));
+        }
+
+        // Track total before capping
+        const size_t full_node_count = filtered_raw.size();
+
+        // If we need to cap, rank nodes by connectivity (degree) so the
+        // most-connected nodes survive.  This keeps the graph useful.
+        if (max_nodes > 0 && filtered_raw.size() > max_nodes) {
+            // Quick degree count from neighbors()
+            std::unordered_map<std::string, size_t> degree;
+            for (const auto& n : filtered_raw) {
+                auto edges = kg->neighbors(n.id);
+                degree[n.id] = edges.size();
+            }
+            // Partial sort: keep top max_nodes by degree
+            std::partial_sort(
+                filtered_raw.begin(),
+                filtered_raw.begin() + static_cast<ptrdiff_t>(max_nodes),
+                filtered_raw.end(),
+                [&](const auto& a, const auto& b) {
+                    return degree[a.id] > degree[b.id];
+                });
+            filtered_raw.resize(max_nodes);
+            result.truncated = true;
+        }
+
+        // Build final node list + id set for edge filtering
+        std::unordered_set<std::string> node_id_set;
+        for (const auto& n : filtered_raw) {
             result.nodes.push_back({
                 n.id, n.node_type, n.name, n.file_path, n.language, n.metadata
             });
+            node_id_set.insert(n.id);
         }
 
         // Fetch edges by iterating over nodes and getting neighbors
@@ -1053,6 +1088,10 @@ public:
             for (const auto& e : edges) {
                 if (e.repo_id != repo_id) continue;
                 if (!et_filter.empty() && et_filter.find(e.edge_type) == et_filter.end())
+                    continue;
+                // Only include edges where both endpoints survived the cap
+                if (node_id_set.find(e.src_id) == node_id_set.end() ||
+                    node_id_set.find(e.dst_id) == node_id_set.end())
                     continue;
                 if (seen_edge_ids.insert(e.id).second) {
                     FileMapEdge fe;
@@ -1066,7 +1105,7 @@ public:
             }
         }
 
-        result.total_nodes = result.nodes.size();
+        result.total_nodes = full_node_count;
         result.total_edges = result.edges.size();
         return result;
     }

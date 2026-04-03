@@ -407,10 +407,11 @@ export const repos = {
   branches: (id: string) =>
     request<{ branches: string[]; default_branch: string; count: number }>(`/api/v1/repos/${id}/branches`),
 
-  fileMap: (id: string, nodeTypes?: string[], edgeTypes?: string[]) => {
+  fileMap: (id: string, nodeTypes?: string[], edgeTypes?: string[], maxNodes?: number) => {
     const params = new URLSearchParams();
     nodeTypes?.forEach((t) => params.append("node_type", t));
     edgeTypes?.forEach((t) => params.append("edge_type", t));
+    if (maxNodes && maxNodes > 0) params.set("max_nodes", String(maxNodes));
     const q = params.toString();
     return request<RepoFileMap>(`/api/v1/repos/${id}/file-map${q ? `?${q}` : ""}`);
   },

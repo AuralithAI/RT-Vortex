@@ -1101,10 +1101,11 @@ type RepoFileMap struct {
 	Edges      []KGEdge `json:"edges"`
 	TotalNodes uint32   `json:"total_nodes"`
 	TotalEdges uint32   `json:"total_edges"`
+	Truncated  bool     `json:"truncated"`
 }
 
 // GetRepoFileMap retrieves the intra-repo file/symbol dependency map from the KG.
-func (c *Client) GetRepoFileMap(ctx context.Context, repoID string, nodeTypes, edgeTypes []string) (*RepoFileMap, error) {
+func (c *Client) GetRepoFileMap(ctx context.Context, repoID string, nodeTypes, edgeTypes []string, maxNodes uint32) (*RepoFileMap, error) {
 	ctx, cancel := c.ctx(ctx)
 	defer cancel()
 
@@ -1112,6 +1113,7 @@ func (c *Client) GetRepoFileMap(ctx context.Context, repoID string, nodeTypes, e
 		RepoId:    repoID,
 		NodeTypes: nodeTypes,
 		EdgeTypes: edgeTypes,
+		MaxNodes:  maxNodes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("get repo file map: %w", err)
@@ -1120,6 +1122,7 @@ func (c *Client) GetRepoFileMap(ctx context.Context, repoID string, nodeTypes, e
 	result := &RepoFileMap{
 		TotalNodes: resp.TotalNodes,
 		TotalEdges: resp.TotalEdges,
+		Truncated:  resp.Truncated,
 	}
 	for _, n := range resp.Nodes {
 		result.Nodes = append(result.Nodes, KGNode{

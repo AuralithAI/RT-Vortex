@@ -404,14 +404,16 @@ public:
     struct RepoFileMap {
         std::vector<FileMapNode> nodes;
         std::vector<FileMapEdge> edges;
-        size_t total_nodes = 0;
-        size_t total_edges = 0;
+        size_t total_nodes = 0;    // total before capping
+        size_t total_edges = 0;    // total before capping
+        bool   truncated   = false;
     };
     virtual RepoFileMap getRepoFileMap(
         const std::string& repo_id,
         const std::vector<std::string>& node_types = {},
-        const std::vector<std::string>& edge_types = {}) {
-        (void)repo_id; (void)node_types; (void)edge_types;
+        const std::vector<std::string>& edge_types = {},
+        size_t max_nodes = 300) {
+        (void)repo_id; (void)node_types; (void)edge_types; (void)max_nodes;
         return {};
     }
     

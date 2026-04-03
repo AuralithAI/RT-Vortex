@@ -1326,7 +1326,18 @@ func (h *Handler) GetRepoFileMap(w http.ResponseWriter, r *http.Request) {
 	nodeTypes := r.URL.Query()["node_type"]
 	edgeTypes := r.URL.Query()["edge_type"]
 
-	fileMap, err := h.EngineClient.GetRepoFileMap(r.Context(), repoID.String(), nodeTypes, edgeTypes)
+	// Parse optional max_nodes cap (default 300, max 500)
+	var maxNodes uint32 = 300
+	if v := r.URL.Query().Get("max_nodes"); v != "" {
+		if n, parseErr := strconv.ParseUint(v, 10, 32); parseErr == nil && n > 0 {
+			maxNodes = uint32(n)
+			if maxNodes > 500 {
+				maxNodes = 500
+			}
+		}
+	}
+
+	fileMap, err := h.EngineClient.GetRepoFileMap(r.Context(), repoID.String(), nodeTypes, edgeTypes, maxNodes)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get file map: "+err.Error())
 		return

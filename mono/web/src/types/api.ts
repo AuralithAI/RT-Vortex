@@ -1079,4 +1079,6 @@ export interface RepoFileMap {
   edges: KGEdge[];
   total_nodes: number;
   total_edges: number;
+  /** True when the server capped the response (more nodes exist in the KG). */
+  truncated: boolean;
 }

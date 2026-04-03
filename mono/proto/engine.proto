@@ -849,13 +849,17 @@ message RepoFileMapRequest {
     // Optional: filter by edge types (e.g. ["IMPORTS", "CONTAINS", "REFERENCES"]).
     // Empty means all edge types.
     repeated string edge_types = 3;
+    // Maximum number of nodes to return (0 = server default, typically 300).
+    // Nodes are ranked by connectivity — most-connected survive the cap.
+    uint32 max_nodes = 4;
 }
 
 message RepoFileMapResponse {
     repeated KGNodeProto nodes = 1;
     repeated KGEdgeProto edges = 2;
-    uint32 total_nodes = 3;
-    uint32 total_edges = 4;
+    uint32 total_nodes = 3;           // total before capping
+    uint32 total_edges = 4;           // edges in response
+    bool   truncated = 5;             // true when response was capped
 }
 
 message KGNodeProto {
