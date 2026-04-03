@@ -17,6 +17,7 @@ const NODE_META: Record<
   { icon: typeof FileCode; label: string; accent: string; dot: string }
 > = {
   file: { icon: FileCode, label: "File", accent: "text-blue-400", dot: "#3b82f6" },
+  file_summary: { icon: FileCode, label: "File", accent: "text-blue-400", dot: "#3b82f6" },
   function: { icon: FunctionSquare, label: "Function", accent: "text-amber-400", dot: "#f59e0b" },
   class: { icon: Box, label: "Class", accent: "text-violet-400", dot: "#8b5cf6" },
   module: { icon: Layers, label: "Module", accent: "text-emerald-400", dot: "#10b981" },
@@ -52,7 +53,8 @@ interface GraphTooltipProps {
 export function GraphTooltip({ node, x, y, inDegree, outDegree }: GraphTooltipProps) {
   const m = meta(node.node_type);
   const Icon = m.icon;
-  const label = useMemo(() => shortName(node.name), [node.name]);
+  const rawName = node.name || node.file_path?.split("/").pop() || node.id;
+  const label = useMemo(() => shortName(rawName), [rawName]);
 
   return (
     <div
@@ -98,7 +100,7 @@ export function SelectionPanel({ node, inEdges, outEdges, nodeMap, onClose, onNa
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-1.5 min-w-0">
           <Icon className={`h-4 w-4 shrink-0 ${m.accent}`} />
-          <h4 className="text-xs font-semibold truncate">{node.name}</h4>
+          <h4 className="text-xs font-semibold truncate">{node.name || node.file_path?.split("/").pop() || node.id}</h4>
         </div>
         <button onClick={onClose} className="rounded-sm p-0.5 hover:bg-muted shrink-0">
           <X className="h-3.5 w-3.5" />
@@ -174,7 +176,7 @@ function EdgeList({
                 {e.edge_type}
               </Badge>
               <ArrowRight className="h-2.5 w-2.5 shrink-0 text-muted-foreground/50" />
-              <span className="truncate">{n?.name ?? nId.slice(0, 12)}</span>
+              <span className="truncate">{n?.name || n?.file_path?.split("/").pop() || nId.slice(0, 12)}</span>
             </button>
           );
         })}

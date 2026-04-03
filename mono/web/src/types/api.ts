@@ -1075,8 +1075,8 @@ export interface KGEdge {
 
 /** Response from GET /repos/{id}/file-map. */
 export interface RepoFileMap {
-  nodes: KGNode[];
-  edges: KGEdge[];
+  nodes: KGNode[] | null;
+  edges: KGEdge[] | null;
   total_nodes: number;
   total_edges: number;
   /** True when the server capped the response (more nodes exist in the KG). */

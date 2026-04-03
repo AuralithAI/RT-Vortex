@@ -1032,14 +1032,19 @@ public:
         auto* kg = tms_->knowledgeGraph();
         if (!kg || !kg->isOpen()) return result;
 
-        // Get total counts cheaply (indexed COUNT(*))
-        const size_t full_node_count = kg->nodeCount(repo_id);
-
         // Use the SQL-based top-N query — never loads more than max_nodes
         // into memory, regardless of how large the repo's KG is.
         auto top_nodes = kg->getTopNodesByDegree(repo_id, max_nodes, node_types);
 
-        result.truncated = (top_nodes.size() < full_node_count && max_nodes > 0);
+        // When a node_type filter is active, nodeCount() returns the global
+        // count across ALL types which is misleading.  Instead, use the
+        // returned set size as the total when no limit was applied (max_nodes == 0),
+        // since getTopNodesByDegree already returned every matching node.
+        const size_t total_matching = (max_nodes == 0)
+            ? top_nodes.size()
+            : kg->nodeCount(repo_id);  // only meaningful without type filter
+
+        result.truncated = (top_nodes.size() < total_matching && max_nodes > 0);
 
         // Build node ID set for edge filtering
         std::unordered_set<std::string> node_id_set;
@@ -1052,6 +1057,15 @@ public:
 
         // Fetch only edges connecting the surviving node set — single SQL query
         auto edges = kg->getEdgesBetweenNodes(repo_id, node_id_set, edge_types);
+
+        // When only file_summary nodes are requested, there are typically no
+        // direct edges between them.  Infer file-to-file edges by aggregating
+        // the underlying symbol-level edges that cross file boundaries.
+        bool is_file_only = (node_types.size() == 1 && node_types[0] == "file_summary");
+        if (edges.empty() && is_file_only && !node_id_set.empty()) {
+            edges = kg->inferFileEdges(repo_id, node_id_set);
+        }
+
         for (auto& e : edges) {
             FileMapEdge fe;
             fe.id        = e.id;
@@ -1062,7 +1076,7 @@ public:
             result.edges.push_back(std::move(fe));
         }
 
-        result.total_nodes = full_node_count;
+        result.total_nodes = total_matching;
         result.total_edges = result.edges.size();
         return result;
     }

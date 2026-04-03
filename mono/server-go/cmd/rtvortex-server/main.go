@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -252,12 +253,19 @@ func main() {
 	if cfg.Server.TLS.Enabled {
 		scheme = "https"
 	}
-	// Use configured host for OAuth callback URLs; fall back to "localhost".
-	serverHost := cfg.Server.Host
-	if serverHost == "" || serverHost == "0.0.0.0" || serverHost == "::" {
-		serverHost = "localhost"
+	// Use OAUTH_BASE_URL if set — this is the externally-reachable URL that
+	// OAuth providers will redirect back to. Required when the server binds
+	// to 0.0.0.0 but is accessed via a real hostname/IP.
+	serverBase := os.Getenv("OAUTH_BASE_URL")
+	if serverBase == "" {
+		serverHost := cfg.Server.Host
+		if serverHost == "" || serverHost == "0.0.0.0" || serverHost == "::" {
+			serverHost = "localhost"
+		}
+		serverBase = fmt.Sprintf("%s://%s:%d", scheme, serverHost, cfg.Server.Port)
 	}
-	serverBase := fmt.Sprintf("%s://%s:%d", scheme, serverHost, cfg.Server.Port)
+	// Strip trailing slash if present.
+	serverBase = strings.TrimRight(serverBase, "/")
 	for name, p := range cfg.Auth.Providers {
 		callbackPath := p.CallbackPath
 		if callbackPath == "" {

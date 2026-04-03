@@ -23,6 +23,7 @@ import {
   type Node,
   type Edge,
   type NodeProps,
+  type ColorMode,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
@@ -86,6 +87,15 @@ const NODE_TYPE_STYLES: Record<
   }
 > = {
   file: {
+    bg: "bg-blue-50 dark:bg-blue-950/40",
+    border: "border-blue-300 dark:border-blue-700",
+    text: "text-blue-700 dark:text-blue-300",
+    dot: "#3b82f6",
+    mini: "rgb(59,130,246)",
+    icon: FileCode,
+    label: "File",
+  },
+  file_summary: {
     bg: "bg-blue-50 dark:bg-blue-950/40",
     border: "border-blue-300 dark:border-blue-700",
     text: "text-blue-700 dark:text-blue-300",
@@ -175,8 +185,9 @@ interface FileNodeData {
 function FileNode({ data }: NodeProps<Node<FileNodeData>>) {
   const style = getNodeStyle(data.nodeType);
   const Icon = style.icon;
+  const rawName = data.name || data.filePath?.split("/").pop() || "unnamed";
   const shortName =
-    data.name.length > 28 ? "…" + data.name.slice(-27) : data.name;
+    rawName.length > 28 ? "…" + rawName.slice(-27) : rawName;
 
   return (
     <div
@@ -252,7 +263,7 @@ function NodeDetailPanel({
         <div className="flex items-center gap-1.5">
           <Icon className={`h-4 w-4 ${style.text}`} />
           <h4 className="text-xs font-semibold truncate max-w-[220px]">
-            {info.node.name}
+            {info.node.name || info.node.file_path?.split("/").pop() || info.node.id}
           </h4>
         </div>
         <button
@@ -301,7 +312,7 @@ function NodeDetailPanel({
                     {e.edge_type}
                   </Badge>
                   <span className="truncate">
-                    {src?.name ?? e.src_id.slice(0, 12)}
+                    {src?.name || src?.file_path?.split("/").pop() || e.src_id.slice(0, 12)}
                   </span>
                 </div>
               );
@@ -337,7 +348,7 @@ function NodeDetailPanel({
                     {e.edge_type}
                   </Badge>
                   <span className="truncate">
-                    {dst?.name ?? e.dst_id.slice(0, 12)}
+                    {dst?.name || dst?.file_path?.split("/").pop() || e.dst_id.slice(0, 12)}
                   </span>
                 </div>
               );
@@ -378,11 +389,11 @@ function EdgeDetailPanel({
         <div className="flex items-center gap-1">
           <FileCode className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span className="truncate font-medium">
-            {info.srcNode?.name ?? info.edge.src_id.slice(0, 12)}
+            {info.srcNode?.name || info.srcNode?.file_path?.split("/").pop() || info.edge.src_id.slice(0, 12)}
           </span>
           <ArrowRight className="h-3 w-3 shrink-0 text-muted-foreground" />
           <span className="truncate font-medium">
-            {info.dstNode?.name ?? info.edge.dst_id.slice(0, 12)}
+            {info.dstNode?.name || info.dstNode?.file_path?.split("/").pop() || info.edge.dst_id.slice(0, 12)}
           </span>
         </div>
         <div className="flex items-center gap-2 text-muted-foreground">
@@ -623,6 +634,19 @@ function FileMapCanvas({
     () => new Set(availableEdgeTypes),
   );
 
+  // ── Listen for dark/light theme changes ─────────────────────────────
+  const [colorMode, setColorMode] = useState<ColorMode>(() =>
+    typeof document !== "undefined" && document.documentElement.classList.contains("dark") ? "dark" : "light"
+  );
+  useEffect(() => {
+    const el = document.documentElement;
+    const observer = new MutationObserver(() =>
+      setColorMode(el.classList.contains("dark") ? "dark" : "light")
+    );
+    observer.observe(el, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
+  }, []);
+
   // Build lookup map
   const nodeMap = useMemo(() => {
     const m = new Map<string, KGNode>();
@@ -734,6 +758,7 @@ function FileMapCanvas({
           setSelectedEdge(null);
         }}
         nodeTypes={nodeTypes}
+        colorMode={colorMode}
         fitView
         fitViewOptions={{ padding: 0.25 }}
         proOptions={{ hideAttribution: true }}
@@ -834,7 +859,7 @@ function FileMapCanvas({
           <Panel position="bottom-center">
             <div className="flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-              Showing top {kgNodes.length} of {totalNodes} by connectivity.
+              Showing {kgNodes.length} of {totalNodes} nodes — server capped response.
               Use filters or switch to &quot;Files only&quot; to narrow down.
             </div>
           </Panel>
@@ -864,9 +889,9 @@ export function IntraRepoFileMap({ repoId }: IntraRepoFileMapProps) {
   const [showSymbols, setShowSymbols] = useState(false);
 
   // When files-only, request file_summary nodes with no cap.
-  // When symbols mode, request all node types (engine decides default cap).
+  // When symbols mode, request all node types with no cap (engine hard-limits to 5000).
   const nodeTypes = showSymbols ? undefined : ["file_summary"];
-  const maxNodes = showSymbols ? 500 : 0;
+  const maxNodes = 0;
 
   const { data, isLoading, error } = useRepoFileMap(
     repoId,
@@ -876,10 +901,10 @@ export function IntraRepoFileMap({ repoId }: IntraRepoFileMapProps) {
   );
 
   const hasData =
-    data && (data.nodes?.length > 0 || data.edges?.length > 0);
+    data && ((data.nodes?.length ?? 0) > 0 || (data.edges?.length ?? 0) > 0);
 
   // Auto-select renderer based on node count; allow manual override.
-  const autoWebGL = hasData ? data!.nodes.length > WEBGL_THRESHOLD : false;
+  const autoWebGL = hasData ? (data!.nodes?.length ?? 0) > WEBGL_THRESHOLD : false;
   const [rendererOverride, setRendererOverride] = useState<
     "auto" | "reactflow" | "webgl"
   >("auto");
@@ -889,8 +914,8 @@ export function IntraRepoFileMap({ repoId }: IntraRepoFileMapProps) {
 
   const badgeLabel = hasData
     ? showSymbols
-      ? `${data!.total_nodes} symbols · ${data!.total_edges} edges`
-      : `${data!.total_nodes} files · ${data!.total_edges} edges`
+      ? `${(data!.nodes?.length ?? 0).toLocaleString()} symbols · ${(data!.edges?.length ?? 0).toLocaleString()} edges`
+      : `${(data!.nodes?.length ?? 0).toLocaleString()} files · ${(data!.edges?.length ?? 0).toLocaleString()} edges`
     : "";
 
   return (
@@ -973,16 +998,16 @@ export function IntraRepoFileMap({ repoId }: IntraRepoFileMapProps) {
           </div>
         ) : useWebGL ? (
           <WebGLGraphCanvas
-            kgNodes={data!.nodes}
-            kgEdges={data!.edges}
+            kgNodes={data!.nodes ?? []}
+            kgEdges={data!.edges ?? []}
             truncated={data!.truncated ?? false}
             totalNodes={data!.total_nodes}
           />
         ) : (
           <ReactFlowProvider>
             <FileMapCanvas
-              kgNodes={data!.nodes}
-              kgEdges={data!.edges}
+              kgNodes={data!.nodes ?? []}
+              kgEdges={data!.edges ?? []}
               truncated={data!.truncated ?? false}
               totalNodes={data!.total_nodes}
             />

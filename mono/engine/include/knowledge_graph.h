@@ -167,6 +167,16 @@ public:
         const std::unordered_set<std::string>& node_ids,
         const std::vector<std::string>& edge_types = {}) const;
 
+    /**
+     * Infer file-level edges from symbol-level edges.
+     * Returns synthetic IMPORTS edges between file_summary nodes by
+     * joining symbol edges with their parent file paths.
+     * Each edge weight = number of underlying symbol edges.
+     */
+    std::vector<KGEdge> inferFileEdges(
+        const std::string& repo_id,
+        const std::unordered_set<std::string>& file_node_ids) const;
+
     // ── Statistics ──────────────────────────────────────────────────────
 
     size_t nodeCount(const std::string& repo_id = "") const;
