@@ -18,10 +18,20 @@ Strategies:
     best answer.  Costs one extra LLM call but produces the most reliable
     result.
 
+    **MULTI_JUDGE_PANEL** — Send every provider's response to 3+ independent
+    LLM judges (GPT, Claude, Gemini, Grok) in parallel via the probe endpoint.
+    Each judge independently evaluates and scores all candidate responses.
+    Their verdicts are then compared:
+    - If ≥2/3 judges agree on the winner → high confidence, use that winner.
+    - If judges disagree → use weighted scoring across all judge verdicts.
+    Eliminates single-model bias that plagues GPT_AS_JUDGE.
+
     **AUTO** — Automatically choose the strategy based on the responses:
     - If only 1 successful response → PICK_BEST
     - If responses agree (high overlap) → PICK_BEST (consensus already exists)
-    - If responses disagree → GPT_AS_JUDGE
+    - If responses disagree + probe available → MULTI_JUDGE_PANEL
+    - If responses disagree + only complete available → GPT_AS_JUDGE
+    - If no LLM available → MAJORITY_VOTE
 
 The engine integrates with :class:`~conversation.SharedConversation` so the
 chosen strategy, winner, and reasoning are recorded in the discussion thread
@@ -30,12 +40,13 @@ and broadcast to the UI.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from .conversation import DiscussionThread, ProviderResponse
@@ -53,6 +64,7 @@ class ConsensusStrategy(str, Enum):
     PICK_BEST = "pick_best"
     MAJORITY_VOTE = "majority_vote"
     GPT_AS_JUDGE = "gpt_as_judge"
+    MULTI_JUDGE_PANEL = "multi_judge_panel"
     AUTO = "auto"
 
 
@@ -76,6 +88,9 @@ class ConsensusResult:
         all_scores: Per-provider scores from the strategy (e.g. overlap
             scores for majority vote, GPT judge scores).
         judge_raw: Raw response from GPT when GPT_AS_JUDGE strategy is used.
+        judge_count: Number of judges used (MULTI_JUDGE_PANEL).
+        judge_agreement: 0.0–1.0 inter-judge agreement (MULTI_JUDGE_PANEL).
+        judge_verdicts: Per-judge verdict details (MULTI_JUDGE_PANEL).
     """
 
     content: str = ""
@@ -86,6 +101,9 @@ class ConsensusResult:
     reasoning: str = ""
     all_scores: dict[str, float] = field(default_factory=dict)
     judge_raw: str = ""
+    judge_count: int = 0
+    judge_agreement: float = 0.0
+    judge_verdicts: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def succeeded(self) -> bool:
@@ -93,7 +111,7 @@ class ConsensusResult:
         return bool(self.content)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "content": self.content,
             "strategy": self.strategy.value,
             "provider": self.provider,
@@ -101,6 +119,57 @@ class ConsensusResult:
             "confidence": round(self.confidence, 4),
             "reasoning": self.reasoning,
             "all_scores": self.all_scores,
+        }
+        if self.judge_count > 0:
+            d["judge_count"] = self.judge_count
+            d["judge_agreement"] = round(self.judge_agreement, 4)
+            d["judge_verdicts"] = self.judge_verdicts
+        return d
+
+
+# ── Judge Verdict (Multi-Judge Panel) ────────────────────────────────────────
+
+
+@dataclass
+class JudgeVerdict:
+    """A single judge's verdict from the Multi-Judge Panel.
+
+    Each judge (a different LLM provider) independently evaluates all
+    candidate responses and picks a winner with scores.
+
+    Attributes:
+        judge_provider: Which LLM provider served as judge (e.g. "anthropic").
+        judge_model: Which model the judge used (e.g. "claude-3").
+        winner: Name of the provider the judge selected, or "synthesis".
+        confidence: The judge's self-reported confidence 0.0–1.0.
+        scores: Per-candidate-provider scores from this judge.
+        reasoning: The judge's explanation.
+        synthesised_answer: If the judge chose synthesis, the merged answer.
+        error: Non-empty if this judge failed (timeout, parse error, etc).
+    """
+
+    judge_provider: str = ""
+    judge_model: str = ""
+    winner: str = ""
+    confidence: float = 0.0
+    scores: dict[str, float] = field(default_factory=dict)
+    reasoning: str = ""
+    synthesised_answer: str = ""
+    error: str = ""
+
+    @property
+    def succeeded(self) -> bool:
+        return not self.error and bool(self.winner)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "judge_provider": self.judge_provider,
+            "judge_model": self.judge_model,
+            "winner": self.winner,
+            "confidence": round(self.confidence, 4),
+            "scores": self.scores,
+            "reasoning": self.reasoning,
+            "error": self.error,
         }
 
 
@@ -198,6 +267,7 @@ class ConsensusEngine:
 
         engine = ConsensusEngine(
             llm_complete=llm_complete,
+            llm_probe=llm_probe,
             go_base_url="http://localhost:8080",
             agent_token="...",
         )
@@ -205,33 +275,44 @@ class ConsensusEngine:
         print(result.content, result.provider, result.confidence)
 
     The engine does NOT require a live LLM connection for PICK_BEST or
-    MAJORITY_VOTE — only GPT_AS_JUDGE makes an LLM call (via the same
-    Go proxy used by agents).
+    MAJORITY_VOTE — only GPT_AS_JUDGE makes a single LLM call, and
+    MULTI_JUDGE_PANEL fans out to multiple LLM judges via the probe endpoint.
     """
 
     def __init__(
         self,
         llm_complete=None,
+        llm_probe=None,
         go_base_url: str = "",
         agent_token: str = "",
         *,
         agreement_threshold: float = 0.6,
+        min_judges: int = 2,
     ):
         """Create a consensus engine.
 
         Args:
-            llm_complete: Async callable for LLM completions (typically
-                :func:`~sdk.go_llm_client.llm_complete`).  Required only
-                for GPT_AS_JUDGE strategy.
+            llm_complete: Async callable for single LLM completions (typically
+                :func:`~sdk.go_llm_client.llm_complete`).  Required for
+                GPT_AS_JUDGE strategy.
+            llm_probe: Async callable for multi-LLM probe (typically
+                :func:`~sdk.go_llm_client.llm_probe`).  Required for
+                MULTI_JUDGE_PANEL strategy.  Sends the judge prompt to all
+                providers in parallel and returns per-provider verdicts.
             go_base_url: Go server base URL for LLM calls.
             agent_token: JWT token for authenticated LLM calls.
             agreement_threshold: Pairwise agreement above this level means
                 responses agree and PICK_BEST is sufficient (AUTO mode).
+            min_judges: Minimum judges required for MULTI_JUDGE_PANEL.
+                If probe returns fewer successful results, falls back to
+                GPT_AS_JUDGE or majority vote.
         """
         self._llm_complete = llm_complete
+        self._llm_probe = llm_probe
         self._go_base_url = go_base_url
         self._agent_token = agent_token
         self._agreement_threshold = agreement_threshold
+        self._min_judges = max(2, min_judges)
 
     async def run(
         self,
@@ -269,6 +350,8 @@ class ConsensusEngine:
             return self._majority_vote(successful)
         elif strategy == ConsensusStrategy.GPT_AS_JUDGE:
             return await self._gpt_as_judge(thread.topic, successful)
+        elif strategy == ConsensusStrategy.MULTI_JUDGE_PANEL:
+            return await self._multi_judge_panel(thread.topic, successful)
         else:
             # Fallback — should never reach here.
             return self._pick_best(successful)
@@ -279,8 +362,9 @@ class ConsensusEngine:
         Rules:
         1. Single response → PICK_BEST (nothing to compare).
         2. High pairwise agreement → PICK_BEST (they already agree).
-        3. Multiple disagreeing responses + LLM available → GPT_AS_JUDGE.
-        4. Multiple disagreeing responses, no LLM → MAJORITY_VOTE.
+        3. Multiple disagreeing responses + probe available → MULTI_JUDGE_PANEL.
+        4. Multiple disagreeing responses + only complete → GPT_AS_JUDGE.
+        5. Multiple disagreeing responses, no LLM → MAJORITY_VOTE.
         """
         if len(responses) <= 1:
             return ConsensusStrategy.PICK_BEST
@@ -294,6 +378,10 @@ class ConsensusEngine:
 
         if agreement >= self._agreement_threshold:
             return ConsensusStrategy.PICK_BEST
+
+        # Prefer multi-judge panel (eliminates single-model bias).
+        if self._llm_probe is not None:
+            return ConsensusStrategy.MULTI_JUDGE_PANEL
 
         if self._llm_complete is not None:
             return ConsensusStrategy.GPT_AS_JUDGE
@@ -497,4 +585,324 @@ class ConsensusEngine:
             reasoning=reasoning,
             all_scores=all_scores,
             judge_raw=content,
+        )
+
+    # ── Multi-Judge Panel ────────────────────────────────────────────────
+
+    async def _multi_judge_panel(
+        self,
+        topic: str,
+        responses: list["ProviderResponse"],
+    ) -> ConsensusResult:
+        """Send all responses to multiple independent LLM judges in parallel.
+
+        Uses ``llm_probe`` to fan out the judge prompt to GPT, Claude,
+        Gemini, Grok, etc.  Each judge independently evaluates every
+        candidate response and returns a structured verdict.
+
+        The verdicts are then aggregated:
+        - **Winner voting**: Each judge votes for a winner.  If ≥2/3 agree,
+          we use that winner with boosted confidence.
+        - **Score averaging**: Per-provider scores are averaged across all
+          judges, giving a bias-resistant composite score.
+        - **Synthesis check**: If any judge synthesises and the judges
+          disagree on a winner, we use the synthesis with the highest
+          confidence.
+
+        Falls back to ``_gpt_as_judge`` if probe is unavailable or returns
+        fewer than ``min_judges`` successful verdicts, and to
+        ``_majority_vote`` if all LLM calls fail.
+        """
+        if self._llm_probe is None:
+            logger.warning("Consensus: MULTI_JUDGE_PANEL requested but no llm_probe — falling back")
+            if self._llm_complete is not None:
+                return await self._gpt_as_judge(topic, responses)
+            return self._majority_vote(responses)
+
+        user_prompt = _build_judge_user_prompt(topic, responses)
+
+        logger.info(
+            "Consensus: calling multi-judge panel for %d provider responses",
+            len(responses),
+        )
+
+        try:
+            probe_resp = await self._llm_probe(
+                messages=[
+                    {"role": "system", "content": _JUDGE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                go_base_url=self._go_base_url,
+                agent_token=self._agent_token,
+                agent_role="consensus_judge",
+            )
+        except Exception as e:
+            logger.error("Consensus: multi-judge probe call failed: %s", e)
+            if self._llm_complete is not None:
+                result = await self._gpt_as_judge(topic, responses)
+                result.reasoning = (
+                    f"Multi-judge probe failed ({e}); fell back to single GPT judge. "
+                    + result.reasoning
+                )
+                return result
+            result = self._majority_vote(responses)
+            result.reasoning = (
+                f"Multi-judge probe failed ({e}); fell back to majority vote. "
+                + result.reasoning
+            )
+            return result
+
+        # Parse each judge's verdict.
+        verdicts = self._parse_probe_verdicts(probe_resp, responses)
+        successful_verdicts = [v for v in verdicts if v.succeeded]
+
+        logger.info(
+            "Consensus: multi-judge panel returned %d/%d successful verdicts",
+            len(successful_verdicts), len(verdicts),
+        )
+
+        if len(successful_verdicts) < self._min_judges:
+            logger.warning(
+                "Consensus: only %d judges succeeded (min=%d) — falling back",
+                len(successful_verdicts), self._min_judges,
+            )
+            if self._llm_complete is not None:
+                result = await self._gpt_as_judge(topic, responses)
+                result.reasoning = (
+                    f"Multi-judge panel had only {len(successful_verdicts)} "
+                    f"successful verdicts (min={self._min_judges}); "
+                    f"fell back to single GPT judge. " + result.reasoning
+                )
+                return result
+            result = self._majority_vote(responses)
+            result.reasoning = (
+                f"Multi-judge panel had only {len(successful_verdicts)} "
+                f"successful verdicts; fell back to majority vote. "
+                + result.reasoning
+            )
+            return result
+
+        # Aggregate verdicts.
+        return self._aggregate_judge_verdicts(successful_verdicts, responses)
+
+    def _parse_probe_verdicts(
+        self,
+        probe_resp: Any,
+        responses: list["ProviderResponse"],
+    ) -> list[JudgeVerdict]:
+        """Parse each judge's response from the probe into JudgeVerdict objects."""
+        import json
+
+        verdicts: list[JudgeVerdict] = []
+        results = getattr(probe_resp, "results", [])
+
+        for result in results:
+            provider = getattr(result, "provider", "unknown")
+            model = getattr(result, "model", "")
+            content = getattr(result, "content", "")
+            error = getattr(result, "error", "")
+
+            if error:
+                verdicts.append(JudgeVerdict(
+                    judge_provider=provider,
+                    judge_model=model,
+                    error=error,
+                ))
+                continue
+
+            if not content:
+                verdicts.append(JudgeVerdict(
+                    judge_provider=provider,
+                    judge_model=model,
+                    error="empty response",
+                ))
+                continue
+
+            # Parse JSON from the judge response.
+            try:
+                cleaned = content.strip()
+                if cleaned.startswith("```"):
+                    lines = cleaned.split("\n")
+                    cleaned = "\n".join(
+                        lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
+                    )
+                judge_data = json.loads(cleaned)
+            except json.JSONDecodeError:
+                verdicts.append(JudgeVerdict(
+                    judge_provider=provider,
+                    judge_model=model,
+                    error=f"non-JSON response: {content[:100]}",
+                ))
+                continue
+
+            scores = {}
+            raw_scores = judge_data.get("scores", {})
+            for r in responses:
+                scores[r.provider] = float(raw_scores.get(r.provider, 0.0))
+
+            verdicts.append(JudgeVerdict(
+                judge_provider=provider,
+                judge_model=model,
+                winner=judge_data.get("winner", ""),
+                confidence=float(judge_data.get("confidence", 0.5)),
+                scores=scores,
+                reasoning=judge_data.get("reasoning", ""),
+                synthesised_answer=judge_data.get("synthesised_answer", ""),
+            ))
+
+        return verdicts
+
+    def _aggregate_judge_verdicts(
+        self,
+        verdicts: list[JudgeVerdict],
+        responses: list["ProviderResponse"],
+    ) -> ConsensusResult:
+        """Aggregate multiple judge verdicts into a single consensus result.
+
+        Aggregation rules:
+        1. **Winner voting** — count which provider each judge selected.
+           If ≥ (2/3 of judges) agree on the same winner, that's the pick
+           with boosted confidence.
+        2. **Score averaging** — average each provider's score across all
+           judges for a bias-resistant composite ranking.
+        3. **Synthesis handling** — if any judge synthesised and judges
+           disagree on winner, use the highest-confidence synthesis.
+        4. **Tiebreak** — if no clear majority, pick the provider with the
+           highest average composite score.
+        """
+        num_judges = len(verdicts)
+        quorum = max(2, (num_judges * 2 + 2) // 3)  # ceiling of 2/3
+
+        # 1. Winner voting.
+        winner_votes: Counter[str] = Counter()
+        for v in verdicts:
+            if v.winner and v.winner != "synthesis":
+                winner_votes[v.winner] += 1
+
+        # 2. Composite score averaging.
+        provider_names = [r.provider for r in responses]
+        composite_scores: dict[str, float] = {p: 0.0 for p in provider_names}
+        for v in verdicts:
+            for p in provider_names:
+                composite_scores[p] += v.scores.get(p, 0.0)
+        for p in provider_names:
+            composite_scores[p] /= num_judges
+
+        # Round scores.
+        composite_scores = {p: round(s, 4) for p, s in composite_scores.items()}
+
+        # 3. Average confidence across judges.
+        avg_confidence = sum(v.confidence for v in verdicts) / num_judges
+
+        # 4. Determine winner.
+        majority_winner = ""
+        if winner_votes:
+            top_winner, top_count = winner_votes.most_common(1)[0]
+            if top_count >= quorum:
+                majority_winner = top_winner
+
+        # Compute judge agreement (fraction agreeing on top winner).
+        judge_agreement = 0.0
+        if winner_votes:
+            top_count = winner_votes.most_common(1)[0][1]
+            judge_agreement = top_count / num_judges
+
+        # Build verdict dicts for the result.
+        verdict_dicts = [v.to_dict() for v in verdicts]
+
+        # Check for synthesis from any judge.
+        best_synthesis = ""
+        best_synthesis_confidence = 0.0
+        for v in verdicts:
+            if v.winner == "synthesis" and v.synthesised_answer:
+                if v.confidence > best_synthesis_confidence:
+                    best_synthesis = v.synthesised_answer
+                    best_synthesis_confidence = v.confidence
+
+        if majority_winner:
+            # Strong agreement — use the majority winner.
+            winner_resp = None
+            for r in responses:
+                if r.provider == majority_winner:
+                    winner_resp = r
+                    break
+            if winner_resp is None:
+                winner_resp = responses[0]
+
+            # Boost confidence when judges agree.
+            boosted_confidence = min(1.0, avg_confidence + 0.1 * judge_agreement)
+
+            judge_names = [v.judge_provider for v in verdicts]
+            reasoning = (
+                f"Multi-judge panel ({num_judges} judges: {', '.join(judge_names)}) "
+                f"— {winner_votes[majority_winner]}/{num_judges} judges selected "
+                f"{majority_winner} (agreement={judge_agreement:.2f})."
+            )
+
+            return ConsensusResult(
+                content=winner_resp.content,
+                strategy=ConsensusStrategy.MULTI_JUDGE_PANEL,
+                provider=winner_resp.provider,
+                model=winner_resp.model,
+                confidence=round(boosted_confidence, 4),
+                reasoning=reasoning,
+                all_scores=composite_scores,
+                judge_count=num_judges,
+                judge_agreement=judge_agreement,
+                judge_verdicts=verdict_dicts,
+            )
+
+        # No majority — check if synthesis is available.
+        if best_synthesis:
+            judge_names = [v.judge_provider for v in verdicts]
+            reasoning = (
+                f"Multi-judge panel ({num_judges} judges: {', '.join(judge_names)}) "
+                f"disagreed on winner (agreement={judge_agreement:.2f}); "
+                f"using best synthesis."
+            )
+            return ConsensusResult(
+                content=best_synthesis,
+                strategy=ConsensusStrategy.MULTI_JUDGE_PANEL,
+                provider="consensus",
+                model="multi-judge-synthesis",
+                confidence=round(best_synthesis_confidence * 0.9, 4),  # slight penalty for disagreement
+                reasoning=reasoning,
+                all_scores=composite_scores,
+                judge_count=num_judges,
+                judge_agreement=judge_agreement,
+                judge_verdicts=verdict_dicts,
+            )
+
+        # No majority, no synthesis — use highest composite-scored provider.
+        best_provider = max(composite_scores, key=lambda p: composite_scores[p])
+        winner_resp = None
+        for r in responses:
+            if r.provider == best_provider:
+                winner_resp = r
+                break
+        if winner_resp is None:
+            winner_resp = responses[0]
+
+        # Lower confidence when judges disagree.
+        penalised_confidence = max(0.1, avg_confidence * judge_agreement) if judge_agreement > 0 else 0.3
+
+        judge_names = [v.judge_provider for v in verdicts]
+        reasoning = (
+            f"Multi-judge panel ({num_judges} judges: {', '.join(judge_names)}) "
+            f"disagreed (agreement={judge_agreement:.2f}); "
+            f"selected {best_provider} by highest composite score "
+            f"({composite_scores[best_provider]:.3f})."
+        )
+
+        return ConsensusResult(
+            content=winner_resp.content,
+            strategy=ConsensusStrategy.MULTI_JUDGE_PANEL,
+            provider=winner_resp.provider,
+            model=winner_resp.model,
+            confidence=round(penalised_confidence, 4),
+            reasoning=reasoning,
+            all_scores=composite_scores,
+            judge_count=num_judges,
+            judge_agreement=judge_agreement,
+            judge_verdicts=verdict_dicts,
         )

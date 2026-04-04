@@ -1104,14 +1104,16 @@ func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var evt struct {
-		ThreadID   string             `json:"thread_id"`
-		Strategy   string             `json:"strategy"`   // "pick_best", "majority_vote", "gpt_as_judge"
-		Provider   string             `json:"provider"`   // winning provider or "consensus"
-		Model      string             `json:"model"`
-		Confidence float64            `json:"confidence"`
-		Reasoning  string             `json:"reasoning"`
-		Scores     map[string]float64 `json:"scores,omitempty"`
-		LatencyMs  int64              `json:"latency_ms,omitempty"` // consensus decision time
+		ThreadID       string             `json:"thread_id"`
+		Strategy       string             `json:"strategy"`   // "pick_best", "majority_vote", "gpt_as_judge", "multi_judge_panel"
+		Provider       string             `json:"provider"`   // winning provider or "consensus"
+		Model          string             `json:"model"`
+		Confidence     float64            `json:"confidence"`
+		Reasoning      string             `json:"reasoning"`
+		Scores         map[string]float64 `json:"scores,omitempty"`
+		LatencyMs      int64              `json:"latency_ms,omitempty"`      // consensus decision time
+		JudgeCount     int                `json:"judge_count,omitempty"`     // multi-judge panel: number of judges
+		JudgeAgreement float64            `json:"judge_agreement,omitempty"` // multi-judge panel: inter-judge agreement 0.0-1.0
 	}
 	if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
 		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
@@ -1129,6 +1131,8 @@ func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
 		"strategy", evt.Strategy,
 		"provider", evt.Provider,
 		"confidence", evt.Confidence,
+		"judge_count", evt.JudgeCount,
+		"judge_agreement", evt.JudgeAgreement,
 	)
 
 	// Record consensus metrics.
@@ -1139,6 +1143,12 @@ func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
 	SwarmConsensusConfidence.WithLabelValues(evt.Strategy).Observe(evt.Confidence)
 	if evt.LatencyMs > 0 {
 		SwarmConsensusLatency.WithLabelValues(evt.Strategy).Observe(float64(evt.LatencyMs) / 1000.0)
+	}
+
+	// Record multi-judge panel metrics when applicable.
+	if evt.JudgeCount > 0 {
+		SwarmConsensusJudgeCount.WithLabelValues(evt.Strategy).Observe(float64(evt.JudgeCount))
+		SwarmConsensusJudgeAgreement.WithLabelValues(evt.Strategy).Observe(evt.JudgeAgreement)
 	}
 
 	// Broadcast to WebSocket subscribers.
@@ -1154,6 +1164,10 @@ func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		if evt.Scores != nil {
 			data["scores"] = evt.Scores
+		}
+		if evt.JudgeCount > 0 {
+			data["judge_count"] = evt.JudgeCount
+			data["judge_agreement"] = evt.JudgeAgreement
 		}
 		h.WS.BroadcastDiscussionEvent(taskID, "consensus_result", data)
 	}

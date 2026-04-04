@@ -173,7 +173,7 @@ var (
 		Namespace: swarmNS,
 		Subsystem: swarmSub,
 		Name:      "consensus_runs_total",
-		Help:      "Total consensus engine runs by strategy (pick_best, majority_vote, gpt_as_judge).",
+		Help:      "Total consensus engine runs by strategy (pick_best, majority_vote, gpt_as_judge, multi_judge_panel).",
 	}, []string{"strategy"})
 
 	// SwarmConsensusWinnerTotal counts which provider won consensus by strategy.
@@ -200,6 +200,24 @@ var (
 		Name:      "consensus_latency_seconds",
 		Help:      "Time taken for consensus engine runs by strategy.",
 		Buckets:   []float64{0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30},
+	}, []string{"strategy"})
+
+	// SwarmConsensusJudgeCount observes how many judges participated in multi-judge panel runs.
+	SwarmConsensusJudgeCount = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "consensus_judge_count",
+		Help:      "Number of judges in multi-judge panel consensus runs.",
+		Buckets:   []float64{1, 2, 3, 4, 5, 6, 7, 8},
+	}, []string{"strategy"})
+
+	// SwarmConsensusJudgeAgreement observes inter-judge agreement in multi-judge panel runs.
+	SwarmConsensusJudgeAgreement = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "consensus_judge_agreement",
+		Help:      "Inter-judge agreement (0.0-1.0) in multi-judge panel consensus runs.",
+		Buckets:   []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0},
 	}, []string{"strategy"})
 
 	// SwarmRAGCallsTotal counts RAG calls (engine searches) from agents.

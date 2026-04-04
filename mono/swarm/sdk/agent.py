@@ -99,11 +99,13 @@ class Agent:
         """Lazy-initialised consensus engine.
 
         Creates the engine on first access with the agent's LLM credentials,
-        so GPT_AS_JUDGE can make an LLM call via the Go proxy.
+        so GPT_AS_JUDGE can make an LLM call via the Go proxy and
+        MULTI_JUDGE_PANEL can fan out to all providers via the probe endpoint.
         """
         if self._consensus_engine is None:
             self._consensus_engine = ConsensusEngine(
                 llm_complete=llm_complete,
+                llm_probe=llm_probe,
                 go_base_url=self.config.go_base_url,
                 agent_token=self.token or "",
             )
@@ -461,17 +463,22 @@ class Agent:
         # Broadcast consensus result to Go → Prometheus + WebSocket.
         if self.conversation and hasattr(self.conversation, '_go') and self.conversation._go:
             try:
+                event_payload: dict[str, Any] = {
+                    "thread_id": thread_id,
+                    "strategy": result.strategy.value,
+                    "provider": result.provider,
+                    "model": result.model,
+                    "confidence": result.confidence,
+                    "reasoning": result.reasoning,
+                    "scores": result.all_scores,
+                }
+                # Include multi-judge panel metadata when available.
+                if result.judge_count > 0:
+                    event_payload["judge_count"] = result.judge_count
+                    event_payload["judge_agreement"] = result.judge_agreement
                 await self.conversation._go.post_consensus_event(
                     self.conversation.task_id,
-                    {
-                        "thread_id": thread_id,
-                        "strategy": result.strategy.value,
-                        "provider": result.provider,
-                        "model": result.model,
-                        "confidence": result.confidence,
-                        "reasoning": result.reasoning,
-                        "scores": result.all_scores,
-                    },
+                    event_payload,
                 )
             except Exception as e:
                 logger.debug("Failed to broadcast consensus result: %s", e)

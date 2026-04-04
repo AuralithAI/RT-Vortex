@@ -1,18 +1,21 @@
-"""Phase 5 tests — Consensus Engine.
+"""Phase 5 tests — Consensus Engine + Multi-Judge Panel.
 
 Covers:
-- ConsensusStrategy enum values
-- ConsensusResult dataclass and serialisation
+- ConsensusStrategy enum values (including MULTI_JUDGE_PANEL)
+- ConsensusResult dataclass and serialisation (including judge fields)
+- JudgeVerdict dataclass
 - Token overlap utilities (_tokenise, _jaccard, pairwise_agreement)
 - GPT-as-judge prompt construction
 - ConsensusEngine.run() with all strategies:
   - PICK_BEST: single response, multiple responses
   - MAJORITY_VOTE: scoring, tie-breaking
   - GPT_AS_JUDGE: success, fallback on failure, JSON parsing
-  - AUTO: strategy selection logic
+  - MULTI_JUDGE_PANEL: majority agreement, disagreement, fallbacks,
+    synthesis, score-based tiebreak, probe failures, verdict parsing
+  - AUTO: strategy selection logic (prefers MULTI_JUDGE_PANEL over GPT_AS_JUDGE)
 - Agent.run_consensus() integration with DiscussionThread
-- Agent.consensus_engine lazy initialisation
-- Go client post_consensus_event()
+- Agent.consensus_engine lazy initialisation (with llm_probe)
+- Go client post_consensus_event() (including judge_count/judge_agreement)
 """
 
 import json
@@ -23,6 +26,7 @@ from mono.swarm.consensus import (
     ConsensusEngine,
     ConsensusResult,
     ConsensusStrategy,
+    JudgeVerdict,
     _build_judge_user_prompt,
     _jaccard,
     _tokenise,
@@ -68,11 +72,13 @@ class TestConsensusStrategy:
         assert ConsensusStrategy.PICK_BEST.value == "pick_best"
         assert ConsensusStrategy.MAJORITY_VOTE.value == "majority_vote"
         assert ConsensusStrategy.GPT_AS_JUDGE.value == "gpt_as_judge"
+        assert ConsensusStrategy.MULTI_JUDGE_PANEL.value == "multi_judge_panel"
         assert ConsensusStrategy.AUTO.value == "auto"
 
     def test_string_enum(self):
         assert str(ConsensusStrategy.PICK_BEST) == "ConsensusStrategy.PICK_BEST"
         assert ConsensusStrategy("pick_best") == ConsensusStrategy.PICK_BEST
+        assert ConsensusStrategy("multi_judge_panel") == ConsensusStrategy.MULTI_JUDGE_PANEL
 
 
 # ── ConsensusResult ──────────────────────────────────────────────────────────
@@ -118,6 +124,35 @@ class TestConsensusResult:
         result = ConsensusResult(content="x", judge_raw="raw output")
         d = result.to_dict()
         assert "judge_raw" not in d
+
+    def test_to_dict_with_judge_panel_fields(self):
+        """Multi-judge panel fields included when judge_count > 0."""
+        result = ConsensusResult(
+            content="answer",
+            strategy=ConsensusStrategy.MULTI_JUDGE_PANEL,
+            provider="grok",
+            confidence=0.9,
+            judge_count=3,
+            judge_agreement=0.6667,
+            judge_verdicts=[
+                {"judge_provider": "openai", "winner": "grok"},
+                {"judge_provider": "anthropic", "winner": "grok"},
+                {"judge_provider": "grok", "winner": "anthropic"},
+            ],
+        )
+        d = result.to_dict()
+        assert d["strategy"] == "multi_judge_panel"
+        assert d["judge_count"] == 3
+        assert d["judge_agreement"] == 0.6667
+        assert len(d["judge_verdicts"]) == 3
+
+    def test_to_dict_without_judge_panel_fields(self):
+        """Multi-judge fields excluded when judge_count == 0."""
+        result = ConsensusResult(content="x")
+        d = result.to_dict()
+        assert "judge_count" not in d
+        assert "judge_agreement" not in d
+        assert "judge_verdicts" not in d
 
 
 # ── Token Overlap Utilities ──────────────────────────────────────────────────
@@ -510,8 +545,47 @@ class TestAutoStrategy:
         assert result.strategy == ConsensusStrategy.PICK_BEST
 
     @pytest.mark.asyncio
-    async def test_auto_disagreement_with_llm_uses_judge(self):
-        """When responses disagree and LLM is available, AUTO uses GPT_AS_JUDGE."""
+    async def test_auto_disagreement_with_probe_uses_multi_judge(self):
+        """When responses disagree and probe is available, AUTO uses MULTI_JUDGE_PANEL."""
+        # Build a mock probe that returns 3 judge verdicts.
+        def _make_probe_resp():
+            return MagicMock(
+                results=[
+                    MagicMock(provider="openai", model="gpt-4o", content=json.dumps({
+                        "winner": "grok", "confidence": 0.85,
+                        "scores": {"grok": 0.85, "anthropic": 0.65},
+                        "reasoning": "Grok was more correct.", "synthesised_answer": "",
+                    }), error=""),
+                    MagicMock(provider="anthropic", model="claude-3", content=json.dumps({
+                        "winner": "grok", "confidence": 0.80,
+                        "scores": {"grok": 0.80, "anthropic": 0.70},
+                        "reasoning": "Grok answer is better.", "synthesised_answer": "",
+                    }), error=""),
+                    MagicMock(provider="grok", model="grok-3", content=json.dumps({
+                        "winner": "grok", "confidence": 0.90,
+                        "scores": {"grok": 0.90, "anthropic": 0.60},
+                        "reasoning": "Grok clearly wins.", "synthesised_answer": "",
+                    }), error=""),
+                ],
+            )
+
+        mock_probe = AsyncMock(return_value=_make_probe_resp())
+        engine = ConsensusEngine(
+            llm_complete=AsyncMock(), llm_probe=mock_probe,
+            agreement_threshold=0.9,
+        )
+
+        thread = _make_thread(
+            _make_response("grok", content="Use approach alpha with method X"),
+            _make_response("anthropic", content="Use approach beta with technique Y"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.AUTO)
+        assert result.strategy == ConsensusStrategy.MULTI_JUDGE_PANEL
+        mock_probe.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_auto_disagreement_with_only_complete_uses_gpt_judge(self):
+        """When responses disagree and only llm_complete available, AUTO uses GPT_AS_JUDGE."""
         judge_response = {
             "choices": [{
                 "message": {
@@ -526,7 +600,7 @@ class TestAutoStrategy:
             }],
         }
         mock_llm = AsyncMock(return_value=judge_response)
-        engine = ConsensusEngine(llm_complete=mock_llm, agreement_threshold=0.9)
+        engine = ConsensusEngine(llm_complete=mock_llm, llm_probe=None, agreement_threshold=0.9)
 
         thread = _make_thread(
             _make_response("grok", content="Use approach alpha with method X"),
@@ -539,13 +613,446 @@ class TestAutoStrategy:
     @pytest.mark.asyncio
     async def test_auto_disagreement_without_llm_uses_vote(self):
         """When responses disagree and no LLM, AUTO falls back to MAJORITY_VOTE."""
-        engine = ConsensusEngine(llm_complete=None, agreement_threshold=0.9)
+        engine = ConsensusEngine(llm_complete=None, llm_probe=None, agreement_threshold=0.9)
         thread = _make_thread(
             _make_response("grok", content="Completely different approach one"),
             _make_response("anthropic", content="Totally unrelated approach two"),
         )
         result = await engine.run(thread, ConsensusStrategy.AUTO)
         assert result.strategy == ConsensusStrategy.MAJORITY_VOTE
+
+
+# ── JudgeVerdict ─────────────────────────────────────────────────────────────
+
+
+class TestJudgeVerdict:
+    def test_basic_construction(self):
+        v = JudgeVerdict(
+            judge_provider="openai",
+            judge_model="gpt-4o",
+            winner="grok",
+            confidence=0.9,
+            scores={"grok": 0.9, "anthropic": 0.7},
+            reasoning="Grok answer was better.",
+        )
+        assert v.succeeded
+        assert v.winner == "grok"
+        assert v.judge_provider == "openai"
+
+    def test_failed_verdict(self):
+        v = JudgeVerdict(judge_provider="openai", error="timeout")
+        assert not v.succeeded
+
+    def test_empty_winner_not_succeeded(self):
+        v = JudgeVerdict(judge_provider="openai", winner="")
+        assert not v.succeeded
+
+    def test_to_dict(self):
+        v = JudgeVerdict(
+            judge_provider="anthropic",
+            judge_model="claude-3",
+            winner="grok",
+            confidence=0.85,
+            scores={"grok": 0.85},
+            reasoning="Best answer.",
+        )
+        d = v.to_dict()
+        assert d["judge_provider"] == "anthropic"
+        assert d["winner"] == "grok"
+        assert d["confidence"] == 0.85
+        assert "error" in d
+
+
+# ── ConsensusEngine — MULTI_JUDGE_PANEL ──────────────────────────────────────
+
+
+def _make_judge_probe_response(verdicts: list[dict]) -> MagicMock:
+    """Build a mock ProbeResponse with judge verdicts.
+
+    Each dict in verdicts has: provider, model, winner, confidence, scores,
+    reasoning, synthesised_answer, error (all optional).
+    """
+    results = []
+    for v in verdicts:
+        error = v.get("error", "")
+        content = ""
+        if not error:
+            content = json.dumps({
+                "winner": v.get("winner", ""),
+                "confidence": v.get("confidence", 0.5),
+                "scores": v.get("scores", {}),
+                "reasoning": v.get("reasoning", ""),
+                "synthesised_answer": v.get("synthesised_answer", ""),
+            })
+        results.append(MagicMock(
+            provider=v.get("provider", "unknown"),
+            model=v.get("model", ""),
+            content=content,
+            error=error,
+        ))
+    return MagicMock(results=results)
+
+
+class TestMultiJudgePanel:
+    """Tests for the MULTI_JUDGE_PANEL consensus strategy."""
+
+    @pytest.mark.asyncio
+    async def test_majority_agreement(self):
+        """When 2/3 judges agree on the same winner, that winner is selected."""
+        probe_resp = _make_judge_probe_response([
+            {"provider": "openai", "model": "gpt-4o", "winner": "grok",
+             "confidence": 0.9, "scores": {"grok": 0.9, "anthropic": 0.6}},
+            {"provider": "anthropic", "model": "claude-3", "winner": "grok",
+             "confidence": 0.85, "scores": {"grok": 0.85, "anthropic": 0.7}},
+            {"provider": "grok", "model": "grok-3", "winner": "anthropic",
+             "confidence": 0.8, "scores": {"grok": 0.7, "anthropic": 0.8}},
+        ])
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(llm_probe=mock_probe)
+
+        thread = _make_thread(
+            _make_response("grok", "grok-3", "Grok answer"),
+            _make_response("anthropic", "claude", "Claude answer"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+
+        assert result.strategy == ConsensusStrategy.MULTI_JUDGE_PANEL
+        assert result.provider == "grok"
+        assert result.content == "Grok answer"
+        assert result.judge_count == 3
+        assert result.judge_agreement > 0.5
+        assert result.confidence > 0.7
+        assert len(result.judge_verdicts) == 3
+        # Composite scores should be averaged across judges.
+        assert "grok" in result.all_scores
+        assert "anthropic" in result.all_scores
+        mock_probe.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_unanimous_agreement(self):
+        """When all 3 judges agree, confidence is highest."""
+        probe_resp = _make_judge_probe_response([
+            {"provider": "openai", "winner": "grok",
+             "confidence": 0.95, "scores": {"grok": 0.95, "anthropic": 0.5}},
+            {"provider": "anthropic", "winner": "grok",
+             "confidence": 0.9, "scores": {"grok": 0.9, "anthropic": 0.55}},
+            {"provider": "grok", "winner": "grok",
+             "confidence": 0.92, "scores": {"grok": 0.92, "anthropic": 0.52}},
+        ])
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(llm_probe=mock_probe)
+
+        thread = _make_thread(
+            _make_response("grok", content="Grok answer"),
+            _make_response("anthropic", content="Claude answer"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+
+        assert result.provider == "grok"
+        assert result.judge_agreement == 1.0
+        assert result.confidence > 0.9  # boosted by perfect agreement
+
+    @pytest.mark.asyncio
+    async def test_all_judges_disagree_uses_composite_score(self):
+        """When no majority, pick the provider with the highest composite score."""
+        probe_resp = _make_judge_probe_response([
+            {"provider": "openai", "winner": "grok",
+             "confidence": 0.7, "scores": {"grok": 0.8, "anthropic": 0.6, "gemini": 0.5}},
+            {"provider": "anthropic", "winner": "anthropic",
+             "confidence": 0.7, "scores": {"grok": 0.5, "anthropic": 0.85, "gemini": 0.6}},
+            {"provider": "grok", "winner": "gemini",
+             "confidence": 0.7, "scores": {"grok": 0.6, "anthropic": 0.5, "gemini": 0.9}},
+        ])
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(llm_probe=mock_probe)
+
+        thread = _make_thread(
+            _make_response("grok", content="Grok answer"),
+            _make_response("anthropic", content="Claude answer"),
+            _make_response("gemini", content="Gemini answer"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+
+        assert result.strategy == ConsensusStrategy.MULTI_JUDGE_PANEL
+        # Each judge picks different winner, composite score decides.
+        # grok: (0.8+0.5+0.6)/3 = 0.633, anthropic: (0.6+0.85+0.5)/3 = 0.65, gemini: (0.5+0.6+0.9)/3 = 0.667
+        assert result.provider == "gemini"
+        assert result.judge_agreement < 0.5  # low agreement
+        assert result.confidence < 0.5  # penalised for disagreement
+
+    @pytest.mark.asyncio
+    async def test_synthesis_when_judges_disagree(self):
+        """When judges disagree and one synthesises, use the synthesis."""
+        probe_resp = _make_judge_probe_response([
+            {"provider": "openai", "winner": "grok",
+             "confidence": 0.7, "scores": {"grok": 0.8, "anthropic": 0.6}},
+            {"provider": "anthropic", "winner": "synthesis",
+             "confidence": 0.85, "scores": {"grok": 0.7, "anthropic": 0.7},
+             "synthesised_answer": "Best of both: use hashmap with tree fallback."},
+            {"provider": "grok", "winner": "anthropic",
+             "confidence": 0.75, "scores": {"grok": 0.65, "anthropic": 0.8}},
+        ])
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(llm_probe=mock_probe)
+
+        thread = _make_thread(
+            _make_response("grok", content="Use a hashmap"),
+            _make_response("anthropic", content="Use a tree"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+
+        assert result.provider == "consensus"
+        assert "Best of both" in result.content
+        assert "disagree" in result.reasoning.lower()
+
+    @pytest.mark.asyncio
+    async def test_probe_failure_fallback_to_gpt_judge(self):
+        """If the probe call fails, fall back to GPT_AS_JUDGE."""
+        mock_probe = AsyncMock(side_effect=Exception("network error"))
+        judge_resp = {
+            "choices": [{"message": {"content": json.dumps({
+                "winner": "grok", "confidence": 0.8,
+                "scores": {"grok": 0.8}, "reasoning": "Best.", "synthesised_answer": "",
+            })}}],
+        }
+        mock_complete = AsyncMock(return_value=judge_resp)
+        engine = ConsensusEngine(llm_complete=mock_complete, llm_probe=mock_probe)
+
+        thread = _make_thread(
+            _make_response("grok", content="Answer A"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+        assert "fell back" in result.reasoning.lower()
+        assert "single GPT judge" in result.reasoning
+
+    @pytest.mark.asyncio
+    async def test_probe_failure_no_complete_fallback_to_majority(self):
+        """If probe fails and no llm_complete, fall back to majority vote."""
+        mock_probe = AsyncMock(side_effect=Exception("timeout"))
+        engine = ConsensusEngine(llm_complete=None, llm_probe=mock_probe)
+
+        thread = _make_thread(
+            _make_response("grok", content="Answer A"),
+            _make_response("anthropic", content="Answer B"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+        assert "fell back to majority vote" in result.reasoning.lower()
+
+    @pytest.mark.asyncio
+    async def test_no_probe_available_fallback_to_gpt_judge(self):
+        """If no llm_probe is set, fall back to GPT_AS_JUDGE."""
+        judge_resp = {
+            "choices": [{"message": {"content": json.dumps({
+                "winner": "grok", "confidence": 0.8,
+                "scores": {"grok": 0.8}, "reasoning": "Best.", "synthesised_answer": "",
+            })}}],
+        }
+        mock_complete = AsyncMock(return_value=judge_resp)
+        engine = ConsensusEngine(llm_complete=mock_complete, llm_probe=None)
+
+        thread = _make_thread(_make_response("grok", content="Answer"))
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+        assert result.strategy == ConsensusStrategy.GPT_AS_JUDGE
+
+    @pytest.mark.asyncio
+    async def test_no_probe_no_complete_fallback_to_majority(self):
+        """If neither probe nor complete is available, fall to majority vote."""
+        engine = ConsensusEngine(llm_complete=None, llm_probe=None)
+        thread = _make_thread(
+            _make_response("a", content="X"),
+            _make_response("b", content="Y"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+        assert result.strategy == ConsensusStrategy.MAJORITY_VOTE
+
+    @pytest.mark.asyncio
+    async def test_too_few_successful_judges_fallback(self):
+        """If fewer than min_judges succeed, fall back."""
+        probe_resp = _make_judge_probe_response([
+            {"provider": "openai", "winner": "grok",
+             "confidence": 0.9, "scores": {"grok": 0.9}},
+            {"provider": "anthropic", "error": "rate limited"},
+            {"provider": "grok", "error": "timeout"},
+        ])
+        mock_probe = AsyncMock(return_value=probe_resp)
+        judge_resp = {
+            "choices": [{"message": {"content": json.dumps({
+                "winner": "grok", "confidence": 0.8,
+                "scores": {"grok": 0.8}, "reasoning": "OK.", "synthesised_answer": "",
+            })}}],
+        }
+        mock_complete = AsyncMock(return_value=judge_resp)
+        engine = ConsensusEngine(
+            llm_complete=mock_complete, llm_probe=mock_probe, min_judges=2,
+        )
+
+        thread = _make_thread(_make_response("grok", content="Answer"))
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+        assert "only 1 successful verdicts" in result.reasoning.lower()
+
+    @pytest.mark.asyncio
+    async def test_malformed_json_from_one_judge(self):
+        """If one judge returns non-JSON, it's excluded; remaining judges still work."""
+        results = [
+            MagicMock(provider="openai", model="gpt-4o", content="Not valid JSON", error=""),
+            MagicMock(provider="anthropic", model="claude-3", content=json.dumps({
+                "winner": "grok", "confidence": 0.85,
+                "scores": {"grok": 0.85, "anthropic": 0.6},
+                "reasoning": "Grok wins.", "synthesised_answer": "",
+            }), error=""),
+            MagicMock(provider="grok", model="grok-3", content=json.dumps({
+                "winner": "grok", "confidence": 0.9,
+                "scores": {"grok": 0.9, "anthropic": 0.5},
+                "reasoning": "Grok is best.", "synthesised_answer": "",
+            }), error=""),
+        ]
+        probe_resp = MagicMock(results=results)
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(llm_probe=mock_probe, min_judges=2)
+
+        thread = _make_thread(
+            _make_response("grok", content="Grok answer"),
+            _make_response("anthropic", content="Claude answer"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+
+        # 2 out of 3 judges succeeded — still enough.
+        assert result.strategy == ConsensusStrategy.MULTI_JUDGE_PANEL
+        assert result.provider == "grok"
+        assert result.judge_count == 2  # only successful verdicts counted
+
+    @pytest.mark.asyncio
+    async def test_probe_called_with_judge_role(self):
+        """Probe should be called with agent_role='consensus_judge'."""
+        probe_resp = _make_judge_probe_response([
+            {"provider": "openai", "winner": "grok", "confidence": 0.8, "scores": {"grok": 0.8}},
+            {"provider": "anthropic", "winner": "grok", "confidence": 0.8, "scores": {"grok": 0.8}},
+        ])
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(
+            llm_probe=mock_probe,
+            go_base_url="http://test:8080",
+            agent_token="jwt-123",
+        )
+
+        thread = _make_thread(_make_response("grok", content="Answer"))
+        await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+
+        call_kwargs = mock_probe.call_args.kwargs
+        assert call_kwargs["agent_role"] == "consensus_judge"
+        assert call_kwargs["go_base_url"] == "http://test:8080"
+        assert call_kwargs["agent_token"] == "jwt-123"
+        # System prompt should mention "judge".
+        messages = mock_probe.call_args.kwargs.get("messages") or mock_probe.call_args[0][0]
+        assert "judge" in messages[0]["content"].lower()
+
+    @pytest.mark.asyncio
+    async def test_composite_scores_averaged(self):
+        """Composite scores should be the average across all judges."""
+        probe_resp = _make_judge_probe_response([
+            {"provider": "openai", "winner": "grok",
+             "confidence": 0.8, "scores": {"grok": 0.9, "anthropic": 0.6}},
+            {"provider": "anthropic", "winner": "grok",
+             "confidence": 0.8, "scores": {"grok": 0.7, "anthropic": 0.8}},
+        ])
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(llm_probe=mock_probe)
+
+        thread = _make_thread(
+            _make_response("grok", content="Grok answer"),
+            _make_response("anthropic", content="Claude answer"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+
+        # grok: (0.9 + 0.7) / 2 = 0.8, anthropic: (0.6 + 0.8) / 2 = 0.7
+        assert abs(result.all_scores["grok"] - 0.8) < 0.01
+        assert abs(result.all_scores["anthropic"] - 0.7) < 0.01
+
+    @pytest.mark.asyncio
+    async def test_two_judges_minimum(self):
+        """Two judges is enough for a valid panel."""
+        probe_resp = _make_judge_probe_response([
+            {"provider": "openai", "winner": "grok",
+             "confidence": 0.85, "scores": {"grok": 0.85}},
+            {"provider": "anthropic", "winner": "grok",
+             "confidence": 0.9, "scores": {"grok": 0.9}},
+        ])
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(llm_probe=mock_probe, min_judges=2)
+
+        thread = _make_thread(_make_response("grok", content="Answer"))
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+        assert result.strategy == ConsensusStrategy.MULTI_JUDGE_PANEL
+        assert result.judge_count == 2
+
+    @pytest.mark.asyncio
+    async def test_four_judges_quorum(self):
+        """With 4 judges, quorum is ceil(4*2/3) = 3, so 3/4 agreement needed."""
+        probe_resp = _make_judge_probe_response([
+            {"provider": "openai", "winner": "grok",
+             "confidence": 0.8, "scores": {"grok": 0.8, "anthropic": 0.6}},
+            {"provider": "anthropic", "winner": "grok",
+             "confidence": 0.85, "scores": {"grok": 0.85, "anthropic": 0.65}},
+            {"provider": "grok", "winner": "grok",
+             "confidence": 0.9, "scores": {"grok": 0.9, "anthropic": 0.5}},
+            {"provider": "gemini", "winner": "anthropic",
+             "confidence": 0.75, "scores": {"grok": 0.6, "anthropic": 0.75}},
+        ])
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(llm_probe=mock_probe)
+
+        thread = _make_thread(
+            _make_response("grok", content="Grok answer"),
+            _make_response("anthropic", content="Claude answer"),
+        )
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+
+        # 3/4 judges agree on grok → quorum met (3 >= ceil(4*2/3) = 3).
+        assert result.provider == "grok"
+        assert result.judge_agreement == 0.75
+
+    @pytest.mark.asyncio
+    async def test_markdown_fenced_json_from_judge(self):
+        """Judges that return JSON wrapped in markdown fences are still parsed."""
+        raw_json = json.dumps({
+            "winner": "grok", "confidence": 0.88,
+            "scores": {"grok": 0.88}, "reasoning": "Good.", "synthesised_answer": "",
+        })
+        results = [
+            MagicMock(provider="openai", model="gpt-4o",
+                     content=f"```json\n{raw_json}\n```", error=""),
+            MagicMock(provider="anthropic", model="claude-3",
+                     content=raw_json, error=""),
+        ]
+        probe_resp = MagicMock(results=results)
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(llm_probe=mock_probe)
+
+        thread = _make_thread(_make_response("grok", content="Answer"))
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+        assert result.provider == "grok"
+        assert result.judge_count == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_response_from_judge(self):
+        """A judge returning empty content is treated as a failure."""
+        probe_resp = _make_judge_probe_response([
+            {"provider": "openai", "winner": "grok",
+             "confidence": 0.85, "scores": {"grok": 0.85}},
+            {"provider": "anthropic", "winner": "grok",
+             "confidence": 0.9, "scores": {"grok": 0.9}},
+        ])
+        # Add an empty-content judge.
+        probe_resp.results.append(MagicMock(
+            provider="grok", model="grok-3", content="", error="",
+        ))
+        mock_probe = AsyncMock(return_value=probe_resp)
+        engine = ConsensusEngine(llm_probe=mock_probe, min_judges=2)
+
+        thread = _make_thread(_make_response("grok", content="Answer"))
+        result = await engine.run(thread, ConsensusStrategy.MULTI_JUDGE_PANEL)
+        # Empty response judge excluded; still have 2 successful.
+        assert result.judge_count == 2
 
 
 # ── Agent.run_consensus() integration ────────────────────────────────────────
@@ -571,6 +1078,13 @@ class TestAgentConsensusIntegration:
         assert isinstance(engine, ConsensusEngine)
         # Second access returns same instance.
         assert agent.consensus_engine is engine
+
+    def test_consensus_engine_has_probe(self):
+        """Lazy-init engine should have llm_probe set for multi-judge panel."""
+        agent = self._make_agent()
+        engine = agent.consensus_engine
+        assert engine._llm_probe is not None
+        assert engine._llm_complete is not None
 
     @pytest.mark.asyncio
     async def test_run_consensus_with_discussion_thread(self):
@@ -692,6 +1206,44 @@ class TestAgentConsensusIntegration:
         assert payload["thread_id"] == "disc-999"
         assert "strategy" in payload
         assert "confidence" in payload
+
+    @pytest.mark.asyncio
+    async def test_run_consensus_broadcasts_judge_panel_metadata(self):
+        """Multi-judge panel metadata is included in Go event broadcast."""
+        agent = self._make_agent()
+
+        # Set up a mock engine that returns a multi-judge result.
+        probe_resp_mock = _make_judge_probe_response([
+            {"provider": "openai", "winner": "grok",
+             "confidence": 0.85, "scores": {"grok": 0.85}},
+            {"provider": "anthropic", "winner": "grok",
+             "confidence": 0.9, "scores": {"grok": 0.9}},
+        ])
+        mock_probe = AsyncMock(return_value=probe_resp_mock)
+        agent._consensus_engine = ConsensusEngine(llm_probe=mock_probe, min_judges=2)
+
+        mock_conv = MagicMock()
+        mock_conv.get_discussion = MagicMock(return_value=None)
+        mock_conv.synthesise_discussion = AsyncMock()
+        mock_conv.task_id = "task-777"
+        mock_go = AsyncMock()
+        mock_conv._go = mock_go
+        agent.conversation = mock_conv
+
+        probe_resp = ProbeResponse(
+            results=[ProbeResultItem(provider="grok", content="Answer")],
+            providers=1, successes=1,
+        )
+        probe_resp._discussion_thread_id = "disc-panel"
+
+        result = await agent.run_consensus(probe_resp, strategy=ConsensusStrategy.MULTI_JUDGE_PANEL)
+        assert result.strategy == ConsensusStrategy.MULTI_JUDGE_PANEL
+
+        mock_go.post_consensus_event.assert_awaited_once()
+        payload = mock_go.post_consensus_event.call_args[0][1]
+        assert payload["strategy"] == "multi_judge_panel"
+        assert payload["judge_count"] == 2
+        assert "judge_agreement" in payload
 
 
 # ── Go Client ────────────────────────────────────────────────────────────────
