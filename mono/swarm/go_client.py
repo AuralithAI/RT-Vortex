@@ -265,6 +265,30 @@ class GoClient:
             except Exception:
                 pass  # Best-effort — don't fail the agent if WS broadcast fails.
 
+    async def post_discussion_event(self, task_id: str, event: dict) -> None:
+        """Post a discussion thread lifecycle event for WebSocket broadcast.
+
+        The Go server receives the event and broadcasts it as a
+        ``swarm_discussion`` WebSocket event so the frontend can render
+        multi-model comparison panels in real time.
+
+        Args:
+            task_id: Task UUID.
+            event: Dict with ``event`` key (``"thread_opened"``,
+                ``"provider_response"``, ``"thread_completed"``,
+                ``"thread_synthesised"``) and event-specific payload fields.
+        """
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.post(
+                    f"{self.base_url}/internal/swarm/tasks/{task_id}/discussion",
+                    headers=self._headers(),
+                    json=event,
+                )
+                resp.raise_for_status()
+            except Exception:
+                pass  # Best-effort — don't fail the agent if WS broadcast fails.
+
     # ── MTM (Medium-Term Memory) endpoints ───────────────────────────────
 
     async def mtm_store(

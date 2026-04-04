@@ -156,6 +156,16 @@ var (
 		Buckets:   []float64{1, 2, 3, 4, 5, 6, 7, 8},
 	})
 
+	// ── Discussion Protocol metrics (Phase 4) ─────────────────────────
+
+	// SwarmDiscussionEventsTotal counts discussion thread lifecycle events.
+	SwarmDiscussionEventsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "discussion_events_total",
+		Help:      "Total multi-LLM discussion thread events by type.",
+	}, []string{"event"})
+
 	// SwarmRAGCallsTotal counts RAG calls (engine searches) from agents.
 	SwarmRAGCallsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: swarmNS,

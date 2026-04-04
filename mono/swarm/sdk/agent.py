@@ -230,8 +230,11 @@ class Agent:
         - Synthesise a combined answer from multiple perspectives
         - Use GPT (always last) as the final judge
 
-        If a :attr:`conversation` is attached, each provider's response is
-        broadcast so the UI can show the multi-model comparison.
+        If a :attr:`conversation` is attached, the probe is wrapped in a
+        :class:`DiscussionThread` (Phase 4) so the UI can render a structured
+        multi-model comparison panel.  Each provider's response is added to
+        the thread, and the thread is marked complete when all providers
+        have responded.
 
         Args:
             messages: Full message history to send to all providers.
@@ -258,6 +261,23 @@ class Agent:
             self.agent_id, num_models or -1, self.role, action_type or "all",
         )
 
+        # Extract the topic from the last user message for the discussion thread.
+        topic = ""
+        for m in reversed(messages):
+            if m.get("role") == "user" and m.get("content"):
+                topic = m["content"][:200]
+                break
+
+        # Open a discussion thread if conversation is attached (Phase 4).
+        discussion_thread = None
+        if self.conversation:
+            discussion_thread = await self.conversation.open_discussion(
+                agent_id=self.agent_id,
+                agent_role=self.role,
+                topic=topic or "multi-LLM probe",
+                action_type=action_type,
+            )
+
         probe_resp = await llm_probe(
             messages=messages,
             tools=tools,
@@ -269,24 +289,37 @@ class Agent:
             num_models=num_models,
         )
 
-        # Broadcast each provider's response to the shared conversation.
-        if self.conversation:
-            for result in probe_resp.successful_results:
-                await self.conversation.append_thinking(
-                    agent_id=self.agent_id,
-                    agent_role=self.role,
-                    content=(
-                        f"[{result.provider}/{result.model}] "
-                        f"({result.latency_ms}ms): {result.content}"
-                    ),
+        # Record each provider's response in the discussion thread.
+        if self.conversation and discussion_thread:
+            for result in probe_resp.results:
+                await self.conversation.add_discussion_response(
+                    thread_id=discussion_thread.thread_id,
+                    provider=result.provider,
+                    model=result.model,
+                    content=result.content,
+                    latency_ms=result.latency_ms,
+                    finish_reason=result.finish_reason,
+                    token_usage=result.usage,
+                    error=result.error,
                 )
 
+            # Mark the discussion as complete.
+            await self.conversation.complete_discussion(
+                discussion_thread.thread_id,
+            )
+
+        # Store the thread_id on the response for downstream use.
+        probe_resp._discussion_thread_id = (
+            discussion_thread.thread_id if discussion_thread else ""
+        )
+
         logger.info(
-            "Agent %s probe complete: %d/%d providers succeeded in %dms",
+            "Agent %s probe complete: %d/%d providers succeeded in %dms (thread=%s)",
             self.agent_id,
             probe_resp.successes,
             probe_resp.providers,
             probe_resp.total_ms,
+            discussion_thread.thread_id if discussion_thread else "none",
         )
 
         return probe_resp
@@ -297,6 +330,10 @@ class Agent:
         Default strategy: return the first successful result (highest-priority
         provider).  Subclasses can override this for more sophisticated
         selection (e.g. longest response, consensus voting, GPT-as-judge).
+
+        If a conversation is attached and the probe has a discussion thread,
+        the selection is recorded as the discussion synthesis so the UI and
+        other agents can see which answer was chosen.
 
         Args:
             probe_resp: The response from :meth:`probe_and_gather`.
@@ -313,6 +350,35 @@ class Agent:
             )
             return best.content
         return ""
+
+    async def pick_best_and_synthesise(self, probe_resp: ProbeResponse) -> str:
+        """Select the best probe result and record it as discussion synthesis.
+
+        Like :meth:`pick_best_probe_result` but also calls
+        :meth:`SharedConversation.synthesise_discussion` so the choice is
+        broadcast to the UI and persisted in the conversation log.
+
+        Args:
+            probe_resp: The response from :meth:`probe_and_gather`.
+
+        Returns:
+            The content string from the best provider, or empty string.
+        """
+        content = self.pick_best_probe_result(probe_resp)
+        if not content:
+            return ""
+
+        best = probe_resp.best_result
+        thread_id = getattr(probe_resp, "_discussion_thread_id", "")
+
+        if self.conversation and thread_id and best:
+            await self.conversation.synthesise_discussion(
+                thread_id=thread_id,
+                content=content,
+                provider=best.provider,
+            )
+
+        return content
 
     def build_system_prompt(self, task: Task) -> str:
         """Override in subclass to provide role-specific system prompt."""

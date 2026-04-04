@@ -1017,6 +1017,82 @@ func (h *Handler) AgentMessage(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
+// ── Multi-LLM Discussion Protocol ──────────────────────────────────────────
+
+// DiscussionEvent handles POST /internal/swarm/tasks/{id}/discussion.
+// Python agents post discussion thread lifecycle events here (opened, provider
+// response, completed, synthesised). Go broadcasts them via WebSocket so the
+// browser UI can render multi-model comparison panels in real time.
+func (h *Handler) DiscussionEvent(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "id")
+	if taskID == "" {
+		http.Error(w, `{"error":"missing task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	var evt struct {
+		Event             string                 `json:"event"`               // "thread_opened", "provider_response", "thread_completed", "thread_synthesised"
+		ThreadID          string                 `json:"thread_id,omitempty"` // required for all except thread_opened (where it's inside thread)
+		Thread            map[string]interface{} `json:"thread,omitempty"`    // full thread dict on thread_opened
+		Response          map[string]interface{} `json:"response,omitempty"`  // provider response on provider_response
+		Synthesis         string                 `json:"synthesis,omitempty"`
+		SynthesisProvider string                 `json:"synthesis_provider,omitempty"`
+		ProviderCount     int                    `json:"provider_count,omitempty"`
+		SuccessCount      int                    `json:"success_count,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if evt.Event == "" {
+		http.Error(w, `{"error":"event field is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("swarm discussion event",
+		"task_id", taskID,
+		"event", evt.Event,
+		"thread_id", evt.ThreadID,
+	)
+
+	// Record discussion metrics.
+	SwarmDiscussionEventsTotal.WithLabelValues(evt.Event).Inc()
+
+	// Broadcast to WebSocket subscribers.
+	if h.WS != nil {
+		data := map[string]interface{}{
+			"event": evt.Event,
+		}
+		// Include all non-zero fields.
+		if evt.ThreadID != "" {
+			data["thread_id"] = evt.ThreadID
+		}
+		if evt.Thread != nil {
+			data["thread"] = evt.Thread
+		}
+		if evt.Response != nil {
+			data["response"] = evt.Response
+		}
+		if evt.Synthesis != "" {
+			data["synthesis"] = evt.Synthesis
+		}
+		if evt.SynthesisProvider != "" {
+			data["synthesis_provider"] = evt.SynthesisProvider
+		}
+		if evt.ProviderCount > 0 {
+			data["provider_count"] = evt.ProviderCount
+		}
+		if evt.SuccessCount > 0 {
+			data["success_count"] = evt.SuccessCount
+		}
+		h.WS.BroadcastDiscussionEvent(taskID, evt.Event, data)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
 // ── VCS Proxy ───────────────────────────────────────────────────────────────
 
 // VCSReadFile handles POST /internal/swarm/vcs/read-file.

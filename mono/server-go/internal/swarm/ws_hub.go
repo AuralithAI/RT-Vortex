@@ -84,3 +84,19 @@ func (h *WSHub) BroadcastPlanEvent(taskID string, eventType string, payload map[
 		Timestamp: time.Now(),
 	})
 }
+
+// BroadcastDiscussionEvent sends a multi-LLM discussion event.
+// Events: "thread_opened", "provider_response", "thread_completed", "thread_synthesised".
+func (h *WSHub) BroadcastDiscussionEvent(taskID string, eventType string, payload map[string]interface{}) {
+	slog.Debug("swarm ws discussion event", "type", eventType, "task_id", taskID, "payload", payload)
+	if h.hub == nil {
+		return
+	}
+	h.hub.BroadcastSwarm(ws.SwarmEvent{
+		Type:      "swarm_discussion",
+		TaskID:    taskID,
+		Event:     eventType,
+		Data:      payload,
+		Timestamp: time.Now(),
+	})
+}

@@ -329,8 +329,19 @@ class TestAgentProbe:
 
     @pytest.mark.asyncio
     async def test_probe_and_gather_broadcasts_to_conversation(self):
+        """Phase 4 upgraded probe_and_gather to use DiscussionThread instead
+        of raw append_thinking.  Verify the discussion lifecycle is driven."""
         agent = self._make_agent()
         mock_conv = AsyncMock()
+
+        # open_discussion must return a mock thread with a thread_id
+        from unittest.mock import MagicMock
+        mock_thread = MagicMock()
+        mock_thread.thread_id = "disc-001"
+        mock_conv.open_discussion = AsyncMock(return_value=mock_thread)
+        mock_conv.add_discussion_response = AsyncMock()
+        mock_conv.complete_discussion = AsyncMock()
+
         agent.conversation = mock_conv
 
         mock_probe_resp = ProbeResponse(
@@ -350,8 +361,14 @@ class TestAgentProbe:
                 messages=[{"role": "user", "content": "test"}],
             )
 
-        # Should broadcast 2 successful results (not the failed anthropic).
-        assert mock_conv.append_thinking.call_count == 2
+        # Discussion thread should be opened once.
+        mock_conv.open_discussion.assert_awaited_once()
+
+        # All 3 results (including the failure) are recorded in the thread.
+        assert mock_conv.add_discussion_response.await_count == 3
+
+        # Thread is marked complete.
+        mock_conv.complete_discussion.assert_awaited_once_with("disc-001")
 
     @pytest.mark.asyncio
     async def test_probe_and_gather_with_action_type(self):

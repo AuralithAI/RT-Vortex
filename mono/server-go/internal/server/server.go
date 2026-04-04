@@ -510,6 +510,7 @@ func (s *Server) setupRouter() {
 				r.Post("/tasks/{id}/declare-size", sh.DeclareTeamSize)
 				r.Post("/tasks/{id}/contribution", sh.RecordContribution)
 				r.Post("/tasks/{id}/agent-message", sh.AgentMessage)
+				r.Post("/tasks/{id}/discussion", sh.DiscussionEvent)
 				r.Post("/heartbeat/{id}", sh.Heartbeat)
 
 				// Memory hierarchy.
