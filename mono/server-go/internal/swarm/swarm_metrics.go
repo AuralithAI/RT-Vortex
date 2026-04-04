@@ -116,6 +116,45 @@ var (
 		Name:      "llm_tokens_total",
 		Help:      "Total tokens used by swarm agents through the LLM proxy.",
 	}, []string{"type"}) // prompt, completion
+)
+
+// ── Multi-LLM Probe Metrics ────────────────────────────────────────────────
+
+var (
+	// SwarmProbeCallsTotal counts multi-LLM probe requests by outcome.
+	SwarmProbeCallsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "probe_calls_total",
+		Help:      "Total multi-LLM probe calls by status (ok, error, all_failed).",
+	}, []string{"status"})
+
+	// SwarmProbeWallTime observes the total wall-clock time for a probe (all providers).
+	SwarmProbeWallTime = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "probe_wall_time_seconds",
+		Help:      "Wall-clock time for a multi-LLM probe (all providers in parallel).",
+		Buckets:   []float64{1, 2, 5, 10, 20, 30, 60, 120},
+	})
+
+	// SwarmProbeProviderLatency observes per-provider latency within a probe.
+	SwarmProbeProviderLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "probe_provider_latency_seconds",
+		Help:      "Per-provider latency within a multi-LLM probe.",
+		Buckets:   []float64{0.5, 1, 2, 5, 10, 20, 30, 60},
+	}, []string{"provider", "status"})
+
+	// SwarmProbeProviderCount observes how many providers were probed per request.
+	SwarmProbeProviderCount = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "probe_provider_count",
+		Help:      "Number of providers probed per multi-LLM request.",
+		Buckets:   []float64{1, 2, 3, 4, 5, 6, 7, 8},
+	})
 
 	// SwarmRAGCallsTotal counts RAG calls (engine searches) from agents.
 	SwarmRAGCallsTotal = promauto.NewCounter(prometheus.CounterOpts{

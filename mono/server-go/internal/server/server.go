@@ -547,6 +547,7 @@ func (s *Server) setupRouter() {
 				// LLM proxy.
 				if s.deps.SwarmLLMProxy != nil {
 					r.Post("/llm/complete", s.deps.SwarmLLMProxy.HandleComplete)
+					r.Post("/llm/probe", s.deps.SwarmLLMProxy.HandleProbe)
 				}
 			})
 		})
