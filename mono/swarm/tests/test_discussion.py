@@ -1,4 +1,4 @@
-"""Tests for the multi-LLM Discussion Protocol (Phase 4).
+"""Tests for the multi-LLM Discussion Protocol.
 
 These are unit tests — they mock the Go client and test:
 - DiscussionThread lifecycle (open → responses → complete → synthesise)

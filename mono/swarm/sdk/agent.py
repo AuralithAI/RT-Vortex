@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from ..agents_config import get_config, _read_version
+from ..consensus import ConsensusEngine, ConsensusResult, ConsensusStrategy
 from .go_llm_client import llm_complete, llm_probe, ProbeResponse, ProbeResultItem
 from .loop import agent_loop
 from .tool import ToolDef
@@ -91,6 +92,22 @@ class Agent:
         self.conversation: SharedConversation | None = None
         self.workspace: VirtualWorkspace | None = None
         self.memory: AgentMemory | None = None
+        self._consensus_engine: ConsensusEngine | None = None
+
+    @property
+    def consensus_engine(self) -> ConsensusEngine:
+        """Lazy-initialised consensus engine.
+
+        Creates the engine on first access with the agent's LLM credentials,
+        so GPT_AS_JUDGE can make an LLM call via the Go proxy.
+        """
+        if self._consensus_engine is None:
+            self._consensus_engine = ConsensusEngine(
+                llm_complete=llm_complete,
+                go_base_url=self.config.go_base_url,
+                agent_token=self.token or "",
+            )
+        return self._consensus_engine
 
     async def register(self) -> None:
         """Register with Go and obtain a short-lived agent JWT.
@@ -328,12 +345,8 @@ class Agent:
         """Select the best content from a multi-LLM probe response.
 
         Default strategy: return the first successful result (highest-priority
-        provider).  Subclasses can override this for more sophisticated
-        selection (e.g. longest response, consensus voting, GPT-as-judge).
-
-        If a conversation is attached and the probe has a discussion thread,
-        the selection is recorded as the discussion synthesis so the UI and
-        other agents can see which answer was chosen.
+        provider).  For more sophisticated selection, use
+        :meth:`run_consensus` which supports majority vote and GPT-as-judge.
 
         Args:
             probe_resp: The response from :meth:`probe_and_gather`.
@@ -379,6 +392,91 @@ class Agent:
             )
 
         return content
+
+    async def run_consensus(
+        self,
+        probe_resp: ProbeResponse,
+        strategy: ConsensusStrategy = ConsensusStrategy.AUTO,
+    ) -> ConsensusResult:
+        """Run the consensus engine on a multi-LLM probe response.
+
+        This is the Phase 5 upgrade to :meth:`pick_best_and_synthesise`.
+        Instead of always picking the first successful result, it applies
+        the chosen strategy (auto, pick-best, majority-vote, or GPT-as-judge)
+        to select or synthesise the best answer.
+
+        The result is recorded as the discussion synthesis in the conversation
+        so the UI and other agents can see both the strategy and reasoning.
+
+        Args:
+            probe_resp: The response from :meth:`probe_and_gather`.
+            strategy: Consensus strategy. ``AUTO`` picks the best strategy
+                based on how much the providers agree.
+
+        Returns:
+            A :class:`ConsensusResult` with the final answer, confidence,
+            and reasoning.
+        """
+        thread_id = getattr(probe_resp, "_discussion_thread_id", "")
+
+        # If a conversation is attached, use the DiscussionThread for richer input.
+        thread = None
+        if self.conversation and thread_id:
+            thread = self.conversation.get_discussion(thread_id)
+
+        if thread:
+            result = await self.consensus_engine.run(thread, strategy)
+        else:
+            # No discussion thread — build a lightweight one from the probe response.
+            from ..conversation import DiscussionThread, ProviderResponse as PResp
+            temp_thread = DiscussionThread(
+                agent_id=self.agent_id,
+                agent_role=self.role,
+                topic="multi-LLM probe",
+            )
+            for r in probe_resp.results:
+                temp_thread.add_response(PResp(
+                    provider=r.provider,
+                    model=r.model,
+                    content=r.content,
+                    latency_ms=r.latency_ms,
+                    error=r.error,
+                ))
+            temp_thread.complete()
+            result = await self.consensus_engine.run(temp_thread, strategy)
+
+        logger.info(
+            "Agent %s consensus: strategy=%s provider=%s confidence=%.2f",
+            self.agent_id, result.strategy.value, result.provider, result.confidence,
+        )
+
+        # Record the synthesis in the conversation.
+        if self.conversation and thread_id and result.succeeded:
+            await self.conversation.synthesise_discussion(
+                thread_id=thread_id,
+                content=result.content,
+                provider=result.provider,
+            )
+
+        # Broadcast consensus result to Go → Prometheus + WebSocket.
+        if self.conversation and hasattr(self.conversation, '_go') and self.conversation._go:
+            try:
+                await self.conversation._go.post_consensus_event(
+                    self.conversation.task_id,
+                    {
+                        "thread_id": thread_id,
+                        "strategy": result.strategy.value,
+                        "provider": result.provider,
+                        "model": result.model,
+                        "confidence": result.confidence,
+                        "reasoning": result.reasoning,
+                        "scores": result.all_scores,
+                    },
+                )
+            except Exception as e:
+                logger.debug("Failed to broadcast consensus result: %s", e)
+
+        return result
 
     def build_system_prompt(self, task: Task) -> str:
         """Override in subclass to provide role-specific system prompt."""

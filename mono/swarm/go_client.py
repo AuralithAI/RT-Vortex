@@ -289,6 +289,29 @@ class GoClient:
             except Exception:
                 pass  # Best-effort — don't fail the agent if WS broadcast fails.
 
+    async def post_consensus_event(self, task_id: str, event: dict) -> None:
+        """Post a consensus engine result for WebSocket broadcast.
+
+        The Go server records Prometheus metrics (strategy, winner, confidence)
+        and broadcasts the consensus outcome as a ``swarm_discussion``
+        WebSocket event (sub-type ``consensus_result``).
+
+        Args:
+            task_id: Task UUID.
+            event: Dict with ``strategy``, ``provider``, ``confidence``,
+                ``reasoning``, ``scores``, etc.
+        """
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.post(
+                    f"{self.base_url}/internal/swarm/tasks/{task_id}/consensus",
+                    headers=self._headers(),
+                    json=event,
+                )
+                resp.raise_for_status()
+            except Exception:
+                pass  # Best-effort — don't fail the agent if WS broadcast fails.
+
     # ── MTM (Medium-Term Memory) endpoints ───────────────────────────────
 
     async def mtm_store(

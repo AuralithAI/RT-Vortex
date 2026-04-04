@@ -329,7 +329,7 @@ class TestAgentProbe:
 
     @pytest.mark.asyncio
     async def test_probe_and_gather_broadcasts_to_conversation(self):
-        """Phase 4 upgraded probe_and_gather to use DiscussionThread instead
+        """Upgraded probe_and_gather to use DiscussionThread instead
         of raw append_thinking.  Verify the discussion lifecycle is driven."""
         agent = self._make_agent()
         mock_conv = AsyncMock()

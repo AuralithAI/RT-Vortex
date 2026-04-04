@@ -156,7 +156,7 @@ var (
 		Buckets:   []float64{1, 2, 3, 4, 5, 6, 7, 8},
 	})
 
-	// ── Discussion Protocol metrics (Phase 4) ─────────────────────────
+	// ── Discussion Protocol metrics ─────────────────────────
 
 	// SwarmDiscussionEventsTotal counts discussion thread lifecycle events.
 	SwarmDiscussionEventsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
@@ -165,6 +165,42 @@ var (
 		Name:      "discussion_events_total",
 		Help:      "Total multi-LLM discussion thread events by type.",
 	}, []string{"event"})
+
+	// ── Consensus Engine metrics ─────────────────────────────
+
+	// SwarmConsensusRunsTotal counts consensus engine runs by strategy.
+	SwarmConsensusRunsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "consensus_runs_total",
+		Help:      "Total consensus engine runs by strategy (pick_best, majority_vote, gpt_as_judge).",
+	}, []string{"strategy"})
+
+	// SwarmConsensusWinnerTotal counts which provider won consensus by strategy.
+	SwarmConsensusWinnerTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "consensus_winner_total",
+		Help:      "Which provider won consensus, by strategy.",
+	}, []string{"strategy", "provider"})
+
+	// SwarmConsensusConfidence observes consensus confidence scores.
+	SwarmConsensusConfidence = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "consensus_confidence",
+		Help:      "Confidence score distribution per consensus strategy.",
+		Buckets:   []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0},
+	}, []string{"strategy"})
+
+	// SwarmConsensusLatency observes the time taken for consensus runs.
+	SwarmConsensusLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "consensus_latency_seconds",
+		Help:      "Time taken for consensus engine runs by strategy.",
+		Buckets:   []float64{0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30},
+	}, []string{"strategy"})
 
 	// SwarmRAGCallsTotal counts RAG calls (engine searches) from agents.
 	SwarmRAGCallsTotal = promauto.NewCounter(prometheus.CounterOpts{

@@ -1093,6 +1093,75 @@ func (h *Handler) DiscussionEvent(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
+// ConsensusEvent handles POST /internal/swarm/tasks/{id}/consensus.
+// The Python consensus engine fires this after deciding on a final answer so
+// the Go server can record metrics and broadcast the outcome to the UI.
+func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "id")
+	if taskID == "" {
+		http.Error(w, `{"error":"missing task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	var evt struct {
+		ThreadID   string             `json:"thread_id"`
+		Strategy   string             `json:"strategy"`   // "pick_best", "majority_vote", "gpt_as_judge"
+		Provider   string             `json:"provider"`   // winning provider or "consensus"
+		Model      string             `json:"model"`
+		Confidence float64            `json:"confidence"`
+		Reasoning  string             `json:"reasoning"`
+		Scores     map[string]float64 `json:"scores,omitempty"`
+		LatencyMs  int64              `json:"latency_ms,omitempty"` // consensus decision time
+	}
+	if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if evt.Strategy == "" {
+		http.Error(w, `{"error":"strategy field is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("swarm consensus event",
+		"task_id", taskID,
+		"thread_id", evt.ThreadID,
+		"strategy", evt.Strategy,
+		"provider", evt.Provider,
+		"confidence", evt.Confidence,
+	)
+
+	// Record consensus metrics.
+	SwarmConsensusRunsTotal.WithLabelValues(evt.Strategy).Inc()
+	if evt.Provider != "" {
+		SwarmConsensusWinnerTotal.WithLabelValues(evt.Strategy, evt.Provider).Inc()
+	}
+	SwarmConsensusConfidence.WithLabelValues(evt.Strategy).Observe(evt.Confidence)
+	if evt.LatencyMs > 0 {
+		SwarmConsensusLatency.WithLabelValues(evt.Strategy).Observe(float64(evt.LatencyMs) / 1000.0)
+	}
+
+	// Broadcast to WebSocket subscribers.
+	if h.WS != nil {
+		data := map[string]interface{}{
+			"event":      "consensus_result",
+			"thread_id":  evt.ThreadID,
+			"strategy":   evt.Strategy,
+			"provider":   evt.Provider,
+			"model":      evt.Model,
+			"confidence": evt.Confidence,
+			"reasoning":  evt.Reasoning,
+		}
+		if evt.Scores != nil {
+			data["scores"] = evt.Scores
+		}
+		h.WS.BroadcastDiscussionEvent(taskID, "consensus_result", data)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
 // ── VCS Proxy ───────────────────────────────────────────────────────────────
 
 // VCSReadFile handles POST /internal/swarm/vcs/read-file.
