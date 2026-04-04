@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from ..agents_config import get_config, _read_version
+from .go_llm_client import llm_complete, llm_probe, ProbeResponse, ProbeResultItem
 from .loop import agent_loop
 from .tool import ToolDef
 
@@ -205,6 +206,113 @@ class Agent:
             if t.name == name:
                 return await t.fn(**args)
         raise ValueError(f"Unknown tool: {name}")
+
+    # ── Multi-LLM Probe ─────────────────────────────────────────────────
+
+    async def probe_and_gather(
+        self,
+        messages: list[dict],
+        *,
+        action_type: str = "",
+        num_models: int = 0,
+        tools: list[dict] | None = None,
+        max_tokens: int | None = None,
+    ) -> ProbeResponse:
+        """Probe multiple LLMs in parallel and return all responses.
+
+        This is the agent-level entry point for Perplexity-style multi-LLM
+        querying.  The agent sends the same messages to all providers in its
+        role's priority matrix, and each provider's response is returned
+        separately.
+
+        The agent (or a future consensus engine) can then:
+        - Pick the best single response
+        - Synthesise a combined answer from multiple perspectives
+        - Use GPT (always last) as the final judge
+
+        If a :attr:`conversation` is attached, each provider's response is
+        broadcast so the UI can show the multi-model comparison.
+
+        Args:
+            messages: Full message history to send to all providers.
+            action_type: Optional filter (e.g. "reasoning", "code_gen").
+            num_models: Max providers to query. 0 = all in priority matrix.
+            tools: Optional tool schemas (same tools sent to all providers).
+            max_tokens: Max tokens per provider completion.
+
+        Returns:
+            A :class:`ProbeResponse` with per-provider results in priority order.
+
+        Raises:
+            RuntimeError: If the agent has not been registered yet.
+            httpx.HTTPStatusError: On non-2xx response from the Go server.
+        """
+        if not self.token:
+            raise RuntimeError(
+                f"Agent {self.agent_id} must be registered before probing. "
+                "Call await agent.register() first."
+            )
+
+        logger.info(
+            "Agent %s probing %d models (role=%s, action=%s)",
+            self.agent_id, num_models or -1, self.role, action_type or "all",
+        )
+
+        probe_resp = await llm_probe(
+            messages=messages,
+            tools=tools,
+            max_tokens=max_tokens,
+            go_base_url=self.config.go_base_url,
+            agent_token=self.token,
+            agent_role=self.role,
+            action_type=action_type,
+            num_models=num_models,
+        )
+
+        # Broadcast each provider's response to the shared conversation.
+        if self.conversation:
+            for result in probe_resp.successful_results:
+                await self.conversation.append_thinking(
+                    agent_id=self.agent_id,
+                    agent_role=self.role,
+                    content=(
+                        f"[{result.provider}/{result.model}] "
+                        f"({result.latency_ms}ms): {result.content}"
+                    ),
+                )
+
+        logger.info(
+            "Agent %s probe complete: %d/%d providers succeeded in %dms",
+            self.agent_id,
+            probe_resp.successes,
+            probe_resp.providers,
+            probe_resp.total_ms,
+        )
+
+        return probe_resp
+
+    def pick_best_probe_result(self, probe_resp: ProbeResponse) -> str:
+        """Select the best content from a multi-LLM probe response.
+
+        Default strategy: return the first successful result (highest-priority
+        provider).  Subclasses can override this for more sophisticated
+        selection (e.g. longest response, consensus voting, GPT-as-judge).
+
+        Args:
+            probe_resp: The response from :meth:`probe_and_gather`.
+
+        Returns:
+            The content string from the best provider, or an empty string
+            if all providers failed.
+        """
+        best = probe_resp.best_result
+        if best:
+            logger.debug(
+                "Agent %s picked probe result from %s/%s (%dms)",
+                self.agent_id, best.provider, best.model, best.latency_ms,
+            )
+            return best.content
+        return ""
 
     def build_system_prompt(self, task: Task) -> str:
         """Override in subclass to provide role-specific system prompt."""
