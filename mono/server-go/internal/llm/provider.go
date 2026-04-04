@@ -164,23 +164,32 @@ type ModelRoute struct {
 	Model    string `json:"model,omitempty"` // optional model override, e.g. "claude-sonnet-4-20250514"
 }
 
+// ProviderPriority is a single entry in the per-role multi-LLM priority matrix.
+type ProviderPriority struct {
+	Provider    string   `json:"provider"`               // provider name
+	Model       string   `json:"model,omitempty"`        // optional model override
+	ActionTypes []string `json:"action_types,omitempty"` // if set, only used for these action types
+}
+
 // Registry manages configured LLM providers with fallback ordering.
 type Registry struct {
-	providers map[string]Provider
-	meta      map[string]ProviderMeta
-	primary   string
-	fallbacks []string
-	vault     SecretStore           // optional — if set, API keys are persisted
-	routes    map[string]ModelRoute // role → preferred provider/model
-	timeout   time.Duration         // LLM request timeout passed to re-created providers
+	providers      map[string]Provider
+	meta           map[string]ProviderMeta
+	primary        string
+	fallbacks      []string
+	vault          SecretStore                   // optional — if set, API keys are persisted
+	routes         map[string]ModelRoute         // role → preferred provider/model (legacy single-route)
+	priorityMatrix map[string][]ProviderPriority // role → ordered list of providers (multi-LLM)
+	timeout        time.Duration                 // LLM request timeout passed to re-created providers
 }
 
 // NewRegistry creates an empty LLM provider registry.
 func NewRegistry() *Registry {
 	return &Registry{
-		providers: make(map[string]Provider),
-		meta:      make(map[string]ProviderMeta),
-		routes:    make(map[string]ModelRoute),
+		providers:      make(map[string]Provider),
+		meta:           make(map[string]ProviderMeta),
+		routes:         make(map[string]ModelRoute),
+		priorityMatrix: make(map[string][]ProviderPriority),
 	}
 }
 
@@ -191,6 +200,108 @@ func NewRegistry() *Registry {
 func (r *Registry) SetRoutes(routes map[string]ModelRoute) {
 	r.routes = routes
 	r.persistRoutes()
+}
+
+// SetPriorityMatrix configures the multi-LLM priority matrix from config.
+// Each role maps to an ordered list of providers to probe in parallel.
+func (r *Registry) SetPriorityMatrix(matrix map[string][]ProviderPriority) {
+	r.priorityMatrix = matrix
+	slog.Info("llm: priority matrix configured", "roles", len(matrix))
+}
+
+// GetPriorityMatrix returns the current priority matrix.
+func (r *Registry) GetPriorityMatrix() map[string][]ProviderPriority {
+	out := make(map[string][]ProviderPriority, len(r.priorityMatrix))
+	for k, v := range r.priorityMatrix {
+		cp := make([]ProviderPriority, len(v))
+		copy(cp, v)
+		out[k] = cp
+	}
+	return out
+}
+
+// PriorityOrder returns an ordered list of provider/model pairs to probe for the
+// given agent role and optional action type. If a priority matrix is configured
+// for this role, it is used; otherwise falls back to the legacy single-route.
+//
+// The list is filtered to only include configured, healthy providers.
+// If numModels > 0, at most that many providers are returned.
+// GPT/OpenAI is always placed last (enforced at config load time, verified here).
+func (r *Registry) PriorityOrder(role, actionType string, numModels int) []RouteEntry {
+	// Try the priority matrix first.
+	if matrix, ok := r.priorityMatrix[role]; ok && len(matrix) > 0 {
+		entries := r.matrixToRouteEntries(matrix, actionType)
+		if numModels > 0 && len(entries) > numModels {
+			entries = entries[:numModels]
+		}
+		return entries
+	}
+
+	// No priority matrix — build from legacy route + fallbacks.
+	internal := r.routeOrder(&CompletionRequest{AgentRole: role})
+	out := make([]RouteEntry, len(internal))
+	for i, e := range internal {
+		out[i] = RouteEntry{Provider: e.provider, Model: e.model}
+	}
+	return out
+}
+
+// matrixToRouteEntries converts priority matrix entries to RouteEntries,
+// filtering by action type and skipping unconfigured providers.
+func (r *Registry) matrixToRouteEntries(matrix []ProviderPriority, actionType string) []RouteEntry {
+	entries := make([]RouteEntry, 0, len(matrix))
+
+	for _, pp := range matrix {
+		// Skip if action type filtering is active and doesn't match.
+		if actionType != "" && len(pp.ActionTypes) > 0 {
+			if !containsStr(pp.ActionTypes, actionType) {
+				continue
+			}
+		}
+
+		// Skip providers that aren't registered.
+		if _, ok := r.providers[pp.Provider]; !ok {
+			continue
+		}
+
+		// Skip unconfigured providers (no API key when one is required).
+		if m, mOK := r.meta[pp.Provider]; mOK && m.RequiresKey && !m.Configured {
+			slog.Debug("llm: priority matrix skipping unconfigured provider",
+				"provider", pp.Provider)
+			continue
+		}
+
+		entries = append(entries, RouteEntry{Provider: pp.Provider, Model: pp.Model})
+	}
+
+	return entries
+}
+
+// ConfiguredProviderCount returns the number of providers that are currently
+// registered and configured (have API keys or don't need them).
+func (r *Registry) ConfiguredProviderCount() int {
+	count := 0
+	for name := range r.providers {
+		if m, ok := r.meta[name]; ok {
+			if !m.RequiresKey || m.Configured {
+				count++
+			}
+		} else {
+			// No meta — assume configured (e.g. custom provider).
+			count++
+		}
+	}
+	return count
+}
+
+// containsStr checks if a string slice contains a value.
+func containsStr(ss []string, target string) bool {
+	for _, s := range ss {
+		if s == target {
+			return true
+		}
+	}
+	return false
 }
 
 // persistRoutes writes the current routes to the vault as a JSON blob.
@@ -617,6 +728,12 @@ func (r *Registry) Complete(ctx context.Context, req *CompletionRequest) (*Compl
 type routeEntry struct {
 	provider string
 	model    string
+}
+
+// RouteEntry is the exported version of routeEntry, returned by PriorityOrder.
+type RouteEntry struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model,omitempty"`
 }
 
 // routeOrder determines the provider try-order for a request.

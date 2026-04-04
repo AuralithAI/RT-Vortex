@@ -254,3 +254,219 @@ func TestErrorConstants(t *testing.T) {
 		t.Error("expected non-nil ErrStreamNotSupported")
 	}
 }
+
+// ── Priority Matrix Tests ───────────────────────────────────────────────────
+
+func newConfiguredRegistry(names ...string) *llm.Registry {
+	r := llm.NewRegistry()
+	for _, name := range names {
+		requiresKey := name != "ollama"
+		r.RegisterWithMeta(
+			&mockProvider{name: name, healthy: true},
+			llm.ProviderMeta{
+				DisplayName: name,
+				Configured:  true,
+				RequiresKey: requiresKey,
+				APIKey:      "test-key",
+			},
+		)
+	}
+	return r
+}
+
+func TestRegistry_SetPriorityMatrix(t *testing.T) {
+	r := newConfiguredRegistry("grok", "anthropic", "gemini", "openai")
+	matrix := map[string][]llm.ProviderPriority{
+		"orchestrator": {
+			{Provider: "grok", Model: "grok-3"},
+			{Provider: "anthropic", Model: "claude-sonnet-4-20250514"},
+			{Provider: "gemini", Model: "gemini-2.5-pro"},
+			{Provider: "openai", Model: "gpt-4o"},
+		},
+	}
+	r.SetPriorityMatrix(matrix)
+
+	got := r.GetPriorityMatrix()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 role in matrix, got %d", len(got))
+	}
+	entries, ok := got["orchestrator"]
+	if !ok {
+		t.Fatal("expected orchestrator in matrix")
+	}
+	if len(entries) != 4 {
+		t.Fatalf("expected 4 entries, got %d", len(entries))
+	}
+	if entries[0].Provider != "grok" {
+		t.Errorf("expected first provider grok, got %s", entries[0].Provider)
+	}
+}
+
+func TestRegistry_PriorityOrder_WithMatrix(t *testing.T) {
+	r := newConfiguredRegistry("grok", "anthropic", "gemini", "openai")
+	matrix := map[string][]llm.ProviderPriority{
+		"senior_dev": {
+			{Provider: "anthropic", Model: "claude-sonnet-4-20250514"},
+			{Provider: "grok", Model: "grok-3"},
+			{Provider: "gemini"},
+			{Provider: "openai", Model: "gpt-4o"},
+		},
+	}
+	r.SetPriorityMatrix(matrix)
+
+	order := r.PriorityOrder("senior_dev", "", 0)
+	if len(order) != 4 {
+		t.Fatalf("expected 4 entries, got %d", len(order))
+	}
+	// Verify order matches matrix
+	expected := []string{"anthropic", "grok", "gemini", "openai"}
+	for i, name := range expected {
+		if order[i].Provider != name {
+			t.Errorf("position %d: expected %s, got %s", i, name, order[i].Provider)
+		}
+	}
+}
+
+func TestRegistry_PriorityOrder_NumModelsLimit(t *testing.T) {
+	r := newConfiguredRegistry("grok", "anthropic", "gemini", "openai")
+	matrix := map[string][]llm.ProviderPriority{
+		"qa": {
+			{Provider: "grok"},
+			{Provider: "anthropic"},
+			{Provider: "gemini"},
+			{Provider: "openai"},
+		},
+	}
+	r.SetPriorityMatrix(matrix)
+
+	order := r.PriorityOrder("qa", "", 2)
+	if len(order) != 2 {
+		t.Fatalf("expected 2 entries (limited), got %d", len(order))
+	}
+	if order[0].Provider != "grok" {
+		t.Errorf("expected grok first, got %s", order[0].Provider)
+	}
+}
+
+func TestRegistry_PriorityOrder_ActionTypeFilter(t *testing.T) {
+	r := newConfiguredRegistry("grok", "anthropic", "openai")
+	matrix := map[string][]llm.ProviderPriority{
+		"architect": {
+			{Provider: "grok", ActionTypes: []string{"reasoning", "architecture"}},
+			{Provider: "anthropic", ActionTypes: []string{"code_gen", "refactor"}},
+			{Provider: "openai"},
+		},
+	}
+	r.SetPriorityMatrix(matrix)
+
+	// Request reasoning — should get grok + openai (anthropic filtered out)
+	order := r.PriorityOrder("architect", "reasoning", 0)
+	if len(order) != 2 {
+		t.Fatalf("expected 2 entries for reasoning, got %d", len(order))
+	}
+	if order[0].Provider != "grok" {
+		t.Errorf("expected grok first, got %s", order[0].Provider)
+	}
+	if order[1].Provider != "openai" {
+		t.Errorf("expected openai last, got %s", order[1].Provider)
+	}
+
+	// Request code_gen — should get anthropic + openai (grok filtered out)
+	order = r.PriorityOrder("architect", "code_gen", 0)
+	if len(order) != 2 {
+		t.Fatalf("expected 2 entries for code_gen, got %d", len(order))
+	}
+	if order[0].Provider != "anthropic" {
+		t.Errorf("expected anthropic first for code_gen, got %s", order[0].Provider)
+	}
+}
+
+func TestRegistry_PriorityOrder_FallsBackToLegacy(t *testing.T) {
+	r := newConfiguredRegistry("anthropic", "openai")
+	r.SetRoutes(map[string]llm.ModelRoute{
+		"security": {Provider: "anthropic", Model: "claude-sonnet-4-20250514"},
+	})
+
+	// No priority matrix for "security" — should fallback to legacy route
+	order := r.PriorityOrder("security", "", 0)
+	if len(order) == 0 {
+		t.Fatal("expected non-empty order from legacy fallback")
+	}
+	if order[0].Provider != "anthropic" {
+		t.Errorf("expected anthropic first from legacy route, got %s", order[0].Provider)
+	}
+}
+
+func TestRegistry_PriorityOrder_SkipsUnconfigured(t *testing.T) {
+	r := llm.NewRegistry()
+	// Register grok as configured, gemini as unconfigured (no API key)
+	r.RegisterWithMeta(
+		&mockProvider{name: "grok", healthy: true},
+		llm.ProviderMeta{DisplayName: "Grok", Configured: true, RequiresKey: true, APIKey: "key"},
+	)
+	r.RegisterWithMeta(
+		&mockProvider{name: "gemini", healthy: true},
+		llm.ProviderMeta{DisplayName: "Gemini", Configured: false, RequiresKey: true},
+	)
+	r.RegisterWithMeta(
+		&mockProvider{name: "openai", healthy: true},
+		llm.ProviderMeta{DisplayName: "OpenAI", Configured: true, RequiresKey: true, APIKey: "key"},
+	)
+
+	matrix := map[string][]llm.ProviderPriority{
+		"test_role": {
+			{Provider: "grok"},
+			{Provider: "gemini"},
+			{Provider: "openai"},
+		},
+	}
+	r.SetPriorityMatrix(matrix)
+
+	order := r.PriorityOrder("test_role", "", 0)
+	if len(order) != 2 {
+		t.Fatalf("expected 2 entries (gemini skipped), got %d", len(order))
+	}
+	for _, e := range order {
+		if e.Provider == "gemini" {
+			t.Error("gemini should have been skipped (unconfigured)")
+		}
+	}
+}
+
+func TestRegistry_ConfiguredProviderCount(t *testing.T) {
+	r := llm.NewRegistry()
+	r.RegisterWithMeta(
+		&mockProvider{name: "a", healthy: true},
+		llm.ProviderMeta{Configured: true, RequiresKey: true, APIKey: "k"},
+	)
+	r.RegisterWithMeta(
+		&mockProvider{name: "b", healthy: true},
+		llm.ProviderMeta{Configured: false, RequiresKey: true},
+	)
+	r.RegisterWithMeta(
+		&mockProvider{name: "c", healthy: true},
+		llm.ProviderMeta{Configured: true, RequiresKey: false},
+	)
+
+	count := r.ConfiguredProviderCount()
+	if count != 2 {
+		t.Errorf("expected 2 configured providers, got %d", count)
+	}
+}
+
+func TestRegistry_GetPriorityMatrix_IsCopy(t *testing.T) {
+	r := newConfiguredRegistry("grok", "openai")
+	matrix := map[string][]llm.ProviderPriority{
+		"test": {{Provider: "grok"}, {Provider: "openai"}},
+	}
+	r.SetPriorityMatrix(matrix)
+
+	got := r.GetPriorityMatrix()
+	// Mutate the returned copy — should not affect the registry
+	got["test"][0].Provider = "MUTATED"
+
+	got2 := r.GetPriorityMatrix()
+	if got2["test"][0].Provider != "grok" {
+		t.Error("GetPriorityMatrix should return a copy, but mutation leaked through")
+	}
+}

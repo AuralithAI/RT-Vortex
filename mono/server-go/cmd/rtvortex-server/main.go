@@ -492,6 +492,29 @@ func main() {
 		"routes", len(llmRegistry.GetRoutes()),
 	)
 
+	// Apply multi-LLM priority matrix from config.
+	// The priority matrix maps each agent role to an ordered list of providers
+	// to probe in parallel (Phase 2+). GPT/OpenAI is always last.
+	if len(cfg.LLM.PriorityMatrix) > 0 {
+		matrix := make(map[string][]llm.ProviderPriority, len(cfg.LLM.PriorityMatrix))
+		for role, entries := range cfg.LLM.PriorityMatrix {
+			pp := make([]llm.ProviderPriority, len(entries))
+			for i, e := range entries {
+				pp[i] = llm.ProviderPriority{
+					Provider:    e.Provider,
+					Model:       e.Model,
+					ActionTypes: e.ActionTypes,
+				}
+			}
+			matrix[role] = pp
+		}
+		llmRegistry.SetPriorityMatrix(matrix)
+		slog.Info("LLM multi-model priority matrix configured",
+			"roles", len(matrix),
+			"configured_providers", llmRegistry.ConfiguredProviderCount(),
+		)
+	}
+
 	// VCS resolver — resolves credentials dynamically from keychain per repo.
 	var vcsVaultReader vcs.VaultReader
 	if keychainSvc != nil {
