@@ -23,23 +23,38 @@ A platform-neutral PR review engine with connectors for GitHub, GitLab, Bitbucke
 
 ## Overview
 
-RTVortex is a two-component system that uses LLMs and static analysis to automatically review pull requests:
+RTVortex is a multi-component system that uses LLMs, multi-agent swarms, and static analysis to automatically review pull requests:
 
 ```
 Clients (Webhooks, CLI, Web UI, SDKs)
          │
          ▼  REST / WebSocket (port 8080)
-┌────────────────────────────┐
-│  RTVortexGo API Server     │  Go 1.24, chi router, 32+ endpoints
-│  (auth, orchestration,     │  OAuth2, JWT, rate limiting, audit
-│   LLM, webhooks)           │  Prometheus, WebSocket, SSE streaming
-└────────┬───────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  RTVortexGo API Server          Go 1.24, chi router, 60+ endpoints
+│                                                                 │
+│  Auth / OAuth2      Review Pipeline (12 steps)                  │
+│  Encrypted Vault    Agent Swarm (9 roles, ELO, teams)           │
+│  Per-User Keychain  Cross-Repo Observatory (links, fed search)  │
+│  RAG Chat           PR Sync / Tracking                          │
+│  MCP Integrations   Benchmark Runner                            │
+│  LLM Registry (5)   Prometheus / WebSocket / SSE                │
+└────────┬────────────────────────────────────────────────────────┘
          │  gRPC (port 50051)
-┌────────▼───────────────────┐
-│  RTVortex C++ Engine       │  C++17, 16K+ lines
-│  (indexing, retrieval,     │  FAISS, tree-sitter, ONNX
-│   heuristics, TMS)         │  Hybrid search, AST parsing
-└────────────────────────────┘
+┌────────▼────────────────────────────────────────────────────────┐
+│  RTVortex C++ Engine       C++17, 16K+ lines                    │
+│  FAISS vector search       tree-sitter AST (8 languages)        │
+│  ONNX local embeddings     Knowledge Graph (SQLite WAL)         │
+│  Hybrid search (lex+vec)   File-level edge inference             │
+│  Heuristic analysis        Cross-repo manifests + dep graph     │
+└─────────────────────────────────────────────────────────────────┘
+         ▲
+         │  gRPC + Redis Streams
+┌────────┴────────────────────────────────────────────────────────┐
+│  Python Agent Swarm (optional)                                  │
+│  9 specialized agents: orchestrator, architect, senior_dev,     │
+│  junior_dev, qa, security, docs, ops, ui_ux                     │
+│  HITL plan gates · MCP tool calls · PR auto-creation            │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ## Features
@@ -48,27 +63,79 @@ Clients (Webhooks, CLI, Web UI, SDKs)
 - **Platform Agnostic**: GitHub, GitLab, Bitbucket, and Azure DevOps (cloud & self-hosted)
 - **CI/CD Integration**: GitHub Actions, GitLab CI, Jenkins, Bitbucket Pipelines, Azure Pipelines
 - **High Performance**: C++ engine for code indexing and analysis via gRPC
-- **LLM Powered**: OpenAI, Anthropic, and Ollama with SSE streaming support
+- **LLM Powered**: OpenAI, Anthropic, Gemini, Grok (xAI), and Ollama with SSE streaming support
 - **Multi-Cloud Storage**: Local, AWS S3, GCS, Azure Blob, OCI Object Storage, MinIO
 - **Real-Time Updates**: WebSocket progress streaming for review status
-- **Security**: AES-256-GCM token encryption, JWT auth, OAuth2 (6 providers), rate limiting
+- **Security**: Per-user encrypted keychain (BIP39 recovery), AES-256-GCM vault, JWT auth, OAuth2 (6 providers), rate limiting
 - **Self-Hostable**: Deploy on your infrastructure with full control
 - **TLS/mTLS Support**: Secure gRPC communication with included dev certificates
 - **API Documentation**: Full OpenAPI 3.0 spec at `/api/v1/docs/openapi.yaml`
 - **Unified Configuration**: XML config (`rtserverprops.xml`) drives server settings; VCS credentials are configured per-user via the dashboard UI
 
+### Agent Swarm
+- **Multi-Agent Review**: 9 specialized AI agents (Orchestrator, Architect, Senior Dev, Junior Dev, QA, Security, Docs, Ops, UI/UX) collaborate on reviews
+- **ELO Rating System**: Agents are scored via human feedback; auto-promotion and demotion across tiers
+- **Team Formation**: Dynamic on-demand teams with max 5 concurrent teams, warm pool support
+- **Task Pipeline**: `submitted → planning → plan_review → implementing → self_review → diff_review → pr_creating → completed`
+- **Human-in-the-Loop (HITL)**: Plan review gates, memory annotations, and feedback collection
+- **PR Auto-Creation**: Agents can create pull requests on VCS platforms from task output
+- **MCP Tool Integration**: Agents call external tools via Model Context Protocol (Jira, Slack, Linear, custom templates)
+- **WebSocket Live Feed**: Real-time agent activity, task progress, and thinking logs streamed to the dashboard
+
+### Encrypted Vault & Keychain
+- **Per-User Keychain**: Each user gets an isolated encrypted secret store with derived encryption keys
+- **BIP39 Recovery**: 12-word mnemonic phrase for keychain recovery — shown once at creation, never stored server-side
+- **Server KEK**: Server-side Key Encryption Key wraps per-user master keys (HSM / KMS ready)
+- **LLM Key Management**: API keys, model preferences, and agent routes persisted in keychain, rehydrated at startup
+- **VCS Token Storage**: OAuth tokens and webhook secrets stored in the encrypted vault per-user
+- **Pluggable Backend**: File-based AES-256-GCM vault for dev; swap in HashiCorp Vault, AWS Secrets Manager, or GCP Secret Manager for production
+
+### Cross-Repo Observatory
+- **Repo Linking**: Directed links between repositories within an org with share profiles (`full`, `symbols`, `metadata`, `none`)
+- **Federated Search**: Query across linked repos with authorization enforcement — results merged and score-normalized
+- **Dependency Graph**: Structural manifests and cross-repo dependency edges visualized as an org-level build graph
+- **Pipeline Enrichment**: Cross-repo context automatically injected into the review pipeline for better reviews
+- **Audit Trail**: All link mutations (create, update, delete) are audit-logged with user attribution
+
+### Knowledge Graph Visualization
+- **Intra-Repo File Map**: Interactive graph of how files depend on each other — IMPORTS, REFERENCES, CALLS, CONTAINS edges
+- **WebGL Renderer (cosmos.gl)**: GPU-accelerated rendering for repos with 500+ nodes — handles thousands of files smoothly
+- **DOM Renderer (React Flow)**: Rich interactive DOM nodes for smaller repos with full dark/light mode support
+- **Language-Based Coloring**: File nodes colored by programming language (22 language palette)
+- **Cluster Labels**: Directory-level cluster labels rendered at centroids (Cosmograph-style)
+- **File-Level Edge Inference**: When viewing files-only mode, the engine synthesizes file-to-file edges from underlying symbol-level edges via SQL aggregation
+- **Auto Renderer Selection**: Automatically switches between DOM and WebGL based on node count, with manual override
+
+### RAG Chat
+- **Codebase Q&A**: Ask questions about any indexed repo — retrieves relevant code via the C++ engine, synthesizes answers with LLM
+- **Conversation Memory**: Multi-turn conversations with configurable history window
+- **SSE Streaming**: Real-time streamed responses with citations to specific files and line numbers
+- **Zero-Cost Retrieval**: Code search is free (C++ engine); only the final LLM synthesis costs tokens
+
+### PR Sync & Tracking
+- **Background Discovery**: Periodically polls all connected VCS platforms for open PRs
+- **Pre-Embedding**: Optionally pre-embeds PR diffs so reviews start instantly
+- **Stale Detection**: Marks PRs not seen in 24h as stale
+- **Status Tracking**: `open → embedded → reviewed → merged/closed` lifecycle with WebSocket progress
+
 ### Ingestion Pipeline (TMS)
 - **Batched Streaming**: Processes repositories in 5,000-file batches — indexes 130 GB / 9.5M-chunk repos at ~5 GB RSS
 - **Parallel ONNX Embedding**: Multiple ONNX sessions run concurrently (auto-tunes to `cores/4` workers), saturating all available CPU cores
 - **Hierarchical Chunking**: File-summary chunks with structural context (module path, imports, exports) for better retrieval
-- **Knowledge Graph**: SQLite-backed IMPORTS / CALLS / CONTAINS edge graph extracted from parsed code
+- **Knowledge Graph**: SQLite-backed IMPORTS / CALLS / CONTAINS / REFERENCES edge graph with file-level inference
 - **Memory Accounts**: Classifies chunks into dev / ops / security / history accounts for targeted retrieval
 - **Confidence Gate**: Zero-LLM fast path — high-confidence retrievals skip the LLM round-trip entirely
 
+### Benchmarking
+- **Automated Evaluation**: Run review and swarm pipelines against curated benchmark datasets
+- **ELO Comparison**: Compare single-agent vs. swarm modes with ELO-based scoring
+- **Metrics Collection**: LLM calls, token usage, latency, and comment quality tracking
+
 ### Observability
-- **Prometheus Metrics**: 20+ counters, histograms, and gauges across both components
+- **Prometheus Metrics**: 25+ counters, histograms, and gauges across all components
 - **Real-Time Metrics Dashboard**: Live engine metrics (FAISS status, MiniLM readiness, embedding throughput, LLM avoidance rate) via SSE
 - **Structured Logging**: JSON-structured logs with request tracing
+- **Swarm Metrics**: Active teams, agents, task queue depth, ELO distributions
 
 ### Repository Management
 - **Web UI**: Index / reindex / reclone controls with branch selector and confirmation dialogs
@@ -439,7 +506,7 @@ See [docs/setup.md](docs/setup.md) for complete integration guides.
 | Document | Description |
 |----------|-------------|
 | [Setup Guide](docs/setup.md) | Prerequisites, building, configuration, TLS, distribution |
-| [Architecture](docs/architecture.md) | System design, C++ engine, deployment models, scaling |
+| [Architecture](docs/architecture.md) | System design, C++ engine, swarm, cross-repo, vault, deployment |
 | [Go Server Architecture](docs/go-server-architecture.md) | Go server internals, packages, data flow, middleware |
 
 ## License

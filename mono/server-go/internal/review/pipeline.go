@@ -17,6 +17,8 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/model"
 	"github.com/AuralithAI/rtvortex-server/internal/store"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
+
+	"github.com/AuralithAI/rtvortex-server/internal/crossrepo"
 )
 
 // ── Pipeline ────────────────────────────────────────────────────────────────
@@ -36,13 +38,14 @@ type ProgressFunc func(reviewID uuid.UUID, step string, stepIndex, totalSteps in
 
 // Pipeline orchestrates the end-to-end PR review workflow.
 type Pipeline struct {
-	reviewRepo   *store.ReviewRepository
-	repoRepo     *store.RepositoryRepo
-	llmRegistry  *llm.Registry
-	vcsResolver  *vcs.Resolver
-	engineClient *engine.Client
-	config       PipelineConfig
-	onProgress   ProgressFunc
+	reviewRepo        *store.ReviewRepository
+	repoRepo          *store.RepositoryRepo
+	llmRegistry       *llm.Registry
+	vcsResolver       *vcs.Resolver
+	engineClient      *engine.Client
+	crossRepoEnricher *crossrepo.PipelineEnricher // optional; nil when no linked repos are configured
+	config            PipelineConfig
+	onProgress        ProgressFunc
 }
 
 // NewPipeline creates a review pipeline.
@@ -78,7 +81,15 @@ func (p *Pipeline) SetProgressFunc(fn ProgressFunc) {
 	p.onProgress = fn
 }
 
-const totalPipelineSteps = 14
+// SetCrossRepoEnricher injects the cross-repo pipeline enricher.
+// When set, the pipeline will run federated search across linked repos
+// after engine context building and include cross-repo context
+// in the LLM prompt.
+func (p *Pipeline) SetCrossRepoEnricher(enricher *crossrepo.PipelineEnricher) {
+	p.crossRepoEnricher = enricher
+}
+
+const totalPipelineSteps = 15
 
 // emitProgress calls the registered progress callback, if any.
 func (p *Pipeline) emitProgress(reviewID uuid.UUID, step string, stepIndex int, status, message string, meta map[string]interface{}) {
@@ -217,47 +228,77 @@ func (p *Pipeline) Execute(ctx context.Context, req Request) (*Result, error) {
 		p.emitProgress(rev.ID, "engine_context", 8, "completed", "Engine not connected — skipping", nil)
 	}
 
-	// 9. Run engine heuristics (pattern-based checks — zero LLM cost).
+	// 9. Cross-repo context enrichment (federated search across linked repos).
+	var crossRepoCtx *crossrepo.CrossRepoContext
+	if p.crossRepoEnricher != nil && contextPack != nil {
+		p.emitProgress(rev.ID, "cross_repo_enrich", 9, "started", "Searching linked repositories for cross-repo context", nil)
+
+		// Extract touched symbol names for the federated search query.
+		var touchedSymbolNames []string
+		for _, sym := range contextPack.TouchedSymbols {
+			touchedSymbolNames = append(touchedSymbolNames, sym.QualifiedName)
+		}
+
+		crossRepoCtx = p.crossRepoEnricher.Enrich(ctx, req.TriggeredBy, req.RepoID, touchedSymbolNames, pr.Title)
+
+		if crossRepoCtx != nil && !crossRepoCtx.Empty {
+			p.emitProgress(rev.ID, "cross_repo_enrich", 9, "completed",
+				fmt.Sprintf("Cross-repo: %d chunks from %d linked repos (%s)",
+					len(crossRepoCtx.Chunks), crossRepoCtx.ReposSearched, crossRepoCtx.Duration.Round(time.Millisecond)),
+				map[string]interface{}{
+					"cross_repo_chunks":   len(crossRepoCtx.Chunks),
+					"repos_searched":      crossRepoCtx.ReposSearched,
+					"repos_denied":        crossRepoCtx.ReposDenied,
+					"cross_repo_duration": crossRepoCtx.Duration.Milliseconds(),
+				})
+		} else {
+			p.emitProgress(rev.ID, "cross_repo_enrich", 9, "completed", "No cross-repo context available", nil)
+		}
+	} else {
+		p.emitProgress(rev.ID, "cross_repo_enrich", 9, "completed", "Cross-repo enrichment not configured — skipping", nil)
+	}
+
+	// 10. Run engine heuristics (pattern-based checks — zero LLM cost).
 	if p.engineClient != nil {
-		p.emitProgress(rev.ID, "engine_heuristics", 9, "started", "Running heuristic checks", nil)
+		p.emitProgress(rev.ID, "engine_heuristics", 10, "started", "Running heuristic checks", nil)
 		findings, heurErr := p.engineClient.RunHeuristics(ctx, combinedDiff, nil)
 		if heurErr != nil {
 			slog.Warn("heuristic checks failed", "error", heurErr)
-			p.emitProgress(rev.ID, "engine_heuristics", 9, "completed", "Heuristics unavailable", nil)
+			p.emitProgress(rev.ID, "engine_heuristics", 10, "completed", "Heuristics unavailable", nil)
 		} else {
 			heuristicComments = convertHeuristicFindings(findings)
-			p.emitProgress(rev.ID, "engine_heuristics", 9, "completed",
+			p.emitProgress(rev.ID, "engine_heuristics", 10, "completed",
 				fmt.Sprintf("Found %d heuristic issues (no LLM cost)", len(heuristicComments)),
 				map[string]interface{}{"heuristic_count": len(heuristicComments)})
 		}
 	} else {
-		p.emitProgress(rev.ID, "engine_heuristics", 9, "completed", "Engine not connected — skipping", nil)
+		p.emitProgress(rev.ID, "engine_heuristics", 10, "completed", "Engine not connected — skipping", nil)
 	}
 
-	// 10. Build LLM prompt and get review (with engine context for reduced token usage).
-	p.emitProgress(rev.ID, "analyze_files", 10, "started", fmt.Sprintf("Analyzing %d files with LLM", len(filtered)), nil)
-	comments, err := p.analyzeFilesWithContext(ctx, pr, filtered, contextPack)
+	// 11. Build LLM prompt and get review (with engine + cross-repo context).
+	p.emitProgress(rev.ID, "analyze_files", 11, "started", fmt.Sprintf("Analyzing %d files with LLM", len(filtered)), nil)
+	comments, err := p.analyzeFilesWithContext(ctx, pr, filtered, contextPack, crossRepoCtx)
 	if err != nil {
-		p.emitProgress(rev.ID, "analyze_files", 10, "failed", err.Error(), nil)
+		p.emitProgress(rev.ID, "analyze_files", 11, "failed", err.Error(), nil)
 		p.failReview(ctx, rev.ID, err)
 		return &Result{ReviewID: rev.ID, Status: model.ReviewStatusFailed, Error: err}, nil
 	}
 	// Merge heuristic comments (engine-generated, zero LLM cost)
 	comments = append(comments, heuristicComments...)
-	p.emitProgress(rev.ID, "analyze_files", 10, "completed", fmt.Sprintf("Generated %d comments (%d from engine, %d from LLM)", len(comments), len(heuristicComments), len(comments)-len(heuristicComments)), map[string]interface{}{"comments_count": len(comments), "heuristic_count": len(heuristicComments)})
+	p.emitProgress(rev.ID, "analyze_files", 11, "completed", fmt.Sprintf("Generated %d comments (%d from engine, %d from LLM)", len(comments), len(heuristicComments), len(comments)-len(heuristicComments)), map[string]interface{}{"comments_count": len(comments), "heuristic_count": len(heuristicComments)})
 
-	// 11. Persist comments.
-	p.emitProgress(rev.ID, "persist_comments", 11, "started", "Saving comments to database", nil)
+	// 12. Persist comments.
+	p.emitProgress(rev.ID, "persist_comments", 12, "started", "Saving comments to database", nil)
 	for _, c := range comments {
 		c.ReviewID = rev.ID
 		if err := p.reviewRepo.CreateComment(ctx, c); err != nil {
 			slog.Error("failed to persist comment", "error", err, "file", c.FilePath)
 		}
 	}
-	p.emitProgress(rev.ID, "persist_comments", 11, "completed", fmt.Sprintf("Saved %d comments", len(comments)), nil)
+	p.emitProgress(rev.ID, "persist_comments", 12, "completed", fmt.Sprintf("Saved %d comments", len(comments)), nil)
 
-	// 12. Post comments to VCS.
-	p.emitProgress(rev.ID, "post_comments", 12, "started", "Posting comments to VCS", nil)
+	// 13. Post comments to VCS.
+	p.emitProgress(rev.ID, "post_comments", 13, "started", "Posting comments to VCS", nil)
 	for _, c := range comments {
 		vcComment := &vcs.ReviewCommentRequest{
 			Body:     fmt.Sprintf("**[%s] %s** — %s\n\n%s", c.Severity, c.Category, c.Title, c.Body),
@@ -273,29 +314,35 @@ func (p *Pipeline) Execute(ctx context.Context, req Request) (*Result, error) {
 			slog.Error("failed to post comment to VCS", "error", err, "file", c.FilePath, "line", c.LineNumber)
 		}
 	}
-	p.emitProgress(rev.ID, "post_comments", 10, "completed", "Comments posted to VCS", nil)
+	p.emitProgress(rev.ID, "post_comments", 13, "completed", "Comments posted to VCS", nil)
 
-	// 13. Post summary.
-	p.emitProgress(rev.ID, "post_summary", 13, "started", "Posting review summary", nil)
+	// 14. Post summary.
+	p.emitProgress(rev.ID, "post_summary", 14, "started", "Posting review summary", nil)
 	summary := p.buildSummary(pr, comments, time.Since(start))
 	if err := platform.PostReviewSummary(ctx, repo.Owner, repo.Name, req.PRNumber, summary); err != nil {
 		slog.Error("failed to post review summary", "error", err)
 	}
-	p.emitProgress(rev.ID, "post_summary", 13, "completed", "Summary posted", nil)
+	p.emitProgress(rev.ID, "post_summary", 14, "completed", "Summary posted", nil)
 
-	// 14. Mark completed.
-	p.emitProgress(rev.ID, "mark_completed", 14, "started", "Finalizing review", nil)
+	// 15. Mark completed.
+	p.emitProgress(rev.ID, "mark_completed", 15, "started", "Finalizing review", nil)
 	duration := time.Since(start)
+	crossRepoChunks := 0
+	if crossRepoCtx != nil {
+		crossRepoChunks = len(crossRepoCtx.Chunks)
+	}
 	meta := map[string]interface{}{
-		"duration_ms":     duration.Milliseconds(),
-		"files_reviewed":  len(filtered),
-		"comments_count":  len(comments),
-		"heuristic_count": len(heuristicComments),
-		"engine_context":  contextPack != nil,
+		"duration_ms":        duration.Milliseconds(),
+		"files_reviewed":     len(filtered),
+		"comments_count":     len(comments),
+		"heuristic_count":    len(heuristicComments),
+		"engine_context":     contextPack != nil,
+		"cross_repo_chunks":  crossRepoChunks,
+		"cross_repo_enabled": crossRepoCtx != nil && !crossRepoCtx.Empty,
 	}
 	_ = p.reviewRepo.UpdateStatus(ctx, rev.ID, model.ReviewStatusCompleted, meta)
 
-	p.emitProgress(rev.ID, "mark_completed", 14, "completed", fmt.Sprintf("Review completed — %d comments in %s", len(comments), duration.Round(time.Millisecond)), map[string]interface{}{
+	p.emitProgress(rev.ID, "mark_completed", 15, "completed", fmt.Sprintf("Review completed — %d comments in %s", len(comments), duration.Round(time.Millisecond)), map[string]interface{}{
 		"duration_ms": duration.Milliseconds(), "comments_count": len(comments), "files_reviewed": len(filtered),
 	})
 
@@ -385,7 +432,9 @@ func (p *Pipeline) matchesSkipPattern(filename string) bool {
 // When contextPack is non-nil, it enriches the prompt with engine-retrieved
 // code context (related functions, callers, etc.) — this produces more
 // targeted reviews with significantly fewer tokens.
-func (p *Pipeline) analyzeFilesWithContext(ctx context.Context, pr *vcs.PullRequest, files []vcs.DiffFile, contextPack *engine.ContextPack) ([]*model.ReviewComment, error) {
+// When crossRepoCtx is non-nil, cross-repo context from linked repositories
+// is appended to the prompt so the LLM can detect cross-repo breaking changes.
+func (p *Pipeline) analyzeFilesWithContext(ctx context.Context, pr *vcs.PullRequest, files []vcs.DiffFile, contextPack *engine.ContextPack, crossRepoCtx *crossrepo.CrossRepoContext) ([]*model.ReviewComment, error) {
 	provider, ok := p.llmRegistry.Primary()
 	if !ok {
 		return nil, fmt.Errorf("no LLM provider configured")
@@ -396,8 +445,19 @@ func (p *Pipeline) analyzeFilesWithContext(ctx context.Context, pr *vcs.PullRequ
 	// Build engine context lookup for per-file enrichment.
 	fileContextMap := buildFileContextMap(contextPack)
 
+	// Pre-render cross-repo context (shared across all files).
+	crossRepoPromptSection := ""
+	if crossRepoCtx != nil {
+		crossRepoPromptSection = crossRepoCtx.FormatForPrompt()
+	}
+
 	for _, f := range files {
 		prompt := buildEnrichedFileReviewPrompt(pr, f, fileContextMap[f.Filename], contextPack)
+
+		// Append cross-repo context if available.
+		if crossRepoPromptSection != "" {
+			prompt += crossRepoPromptSection
+		}
 
 		llmStart := time.Now()
 		resp, err := provider.Complete(ctx, &llm.CompletionRequest{
@@ -547,11 +607,13 @@ You have access to:
 2. Related code context from the repository's semantic index (functions, classes that call or are called by the changed code)
 3. Touched symbol analysis showing the impact radius of the change
 4. Heuristic warnings from static analysis
+5. Cross-repo context from linked repositories in the same organization (when available)
 
 Use ALL of this context to provide more accurate, context-aware reviews. Focus on:
 - Breaking changes: does this change break callers/dependents shown in the context?
+- Cross-repo impact: does this change break code in OTHER linked repositories?
 - Security vulnerabilities (injection, XSS, auth bypass, secrets)
-- API contract violations: do related functions expect different behavior?
+- API contract violations: do related functions (including in other repos) expect different behavior?
 - Bugs and logic errors, especially considering how callers use this code
 - Performance regressions in hot paths
 - Missing error handling

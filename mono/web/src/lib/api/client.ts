@@ -64,6 +64,19 @@ import type {
   KeychainAuditLogEntry,
   KeychainSyncRequest,
   KeychainSyncResponse,
+  RepoLink,
+  RepoLinksResponse,
+  OrgLinksResponse,
+  LinkEventsResponse,
+  CreateLinkRequest,
+  UpdateLinkRequest,
+  RepoManifest,
+  GetDependenciesResponse,
+  FederatedSearchRequest,
+  FederatedSearchResponse,
+  BuildGraphRequest,
+  BuildGraphResponse,
+  RepoFileMap,
 } from "@/types/api";
 
 // ── Error classes ───────────────────────────────────────────────────────────
@@ -355,8 +368,14 @@ export const orgs = {
 // ── Repositories ────────────────────────────────────────────────────────────
 
 export const repos = {
-  list: (p?: PaginationParams) =>
-    request<PaginatedResponse<Repo>>(`/api/v1/repos${qs(p)}`),
+  list: (p?: PaginationParams & { org_id?: string }) => {
+    const base = qs(p);
+    const orgPart = p?.org_id ? `org_id=${encodeURIComponent(p.org_id)}` : "";
+    if (!base && !orgPart) return request<PaginatedResponse<Repo>>("/api/v1/repos");
+    if (!orgPart) return request<PaginatedResponse<Repo>>(`/api/v1/repos${base}`);
+    const sep = base ? "&" : "?";
+    return request<PaginatedResponse<Repo>>(`/api/v1/repos${base}${sep}${orgPart}`);
+  },
 
   get: (id: string) =>
     request<Repo>(`/api/v1/repos/${id}`),
@@ -387,6 +406,15 @@ export const repos = {
 
   branches: (id: string) =>
     request<{ branches: string[]; default_branch: string; count: number }>(`/api/v1/repos/${id}/branches`),
+
+  fileMap: (id: string, nodeTypes?: string[], edgeTypes?: string[], maxNodes?: number) => {
+    const params = new URLSearchParams();
+    nodeTypes?.forEach((t) => params.append("node_type", t));
+    edgeTypes?.forEach((t) => params.append("edge_type", t));
+    if (maxNodes && maxNodes > 0) params.set("max_nodes", String(maxNodes));
+    const q = params.toString();
+    return request<RepoFileMap>(`/api/v1/repos/${id}/file-map${q ? `?${q}` : ""}`);
+  },
 };
 
 // ── Reviews ─────────────────────────────────────────────────────────────────
@@ -836,7 +864,86 @@ export const keychain = {
     }),
 };
 
+// ── Cross-Repo Observatory ──────────────────────────────────────────────────
+
+const crossRepo = {
+  // ── Link Management (repo-level) ──────────────────────────────────────────
+
+  /** Create a cross-repo link from the given repo. */
+  createLink: (repoId: string, data: CreateLinkRequest) =>
+    request<RepoLink>(`/api/v1/repos/${repoId}/links`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  /** List all links for a repo (as source or target). */
+  listLinks: (repoId: string) =>
+    request<RepoLinksResponse>(`/api/v1/repos/${repoId}/links`),
+
+  /** Get a single link by ID. */
+  getLink: (repoId: string, linkId: string) =>
+    request<RepoLink>(`/api/v1/repos/${repoId}/links/${linkId}`),
+
+  /** Update a link's share profile and/or label. */
+  updateLink: (repoId: string, linkId: string, data: UpdateLinkRequest) =>
+    request<RepoLink>(`/api/v1/repos/${repoId}/links/${linkId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  /** Delete a cross-repo link. */
+  deleteLink: (repoId: string, linkId: string) =>
+    request<{ status: string }>(`/api/v1/repos/${repoId}/links/${linkId}`, {
+      method: "DELETE",
+    }),
+
+  /** List audit events for a specific link. */
+  listLinkEvents: (repoId: string, linkId: string, limit = 50) =>
+    request<LinkEventsResponse>(`/api/v1/repos/${repoId}/links/${linkId}/events?limit=${limit}`),
+
+  // ── Org-level ─────────────────────────────────────────────────────────────
+
+  /** List all links in an organization. */
+  listOrgLinks: (orgId: string, limit = 50, offset = 0) =>
+    request<OrgLinksResponse>(`/api/v1/orgs/${orgId}/links?limit=${limit}&offset=${offset}`),
+
+  /** List all link events in an organization. */
+  listOrgEvents: (orgId: string, limit = 50) =>
+    request<LinkEventsResponse>(`/api/v1/orgs/${orgId}/links/events?limit=${limit}`),
+
+  // ── Graph & Search (repo-level) ───────────────────────────────────────────
+
+  /** Get the structural manifest for a repo. */
+  getManifest: (repoId: string) =>
+    request<RepoManifest>(`/api/v1/repos/${repoId}/cross-repo/manifest`),
+
+  /** Get cross-repo dependencies from a source repo. */
+  getDependencies: (repoId: string, targetRepoIds?: string[], maxDepth?: number) => {
+    const params = new URLSearchParams();
+    if (targetRepoIds?.length) params.set("target_repo_ids", targetRepoIds.join(","));
+    if (maxDepth !== undefined) params.set("max_depth", String(maxDepth));
+    const qs = params.toString();
+    return request<GetDependenciesResponse>(`/api/v1/repos/${repoId}/cross-repo/dependencies${qs ? `?${qs}` : ""}`);
+  },
+
+  /** Execute a federated search across linked repos. */
+  federatedSearch: (repoId: string, data: FederatedSearchRequest) =>
+    request<FederatedSearchResponse>(`/api/v1/repos/${repoId}/cross-repo/search`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  // ── Graph (org-level) ─────────────────────────────────────────────────────
+
+  /** Build the org-level dependency graph. */
+  buildGraph: (orgId: string, data: BuildGraphRequest) =>
+    request<BuildGraphResponse>(`/api/v1/orgs/${orgId}/cross-repo/graph`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+};
+
 // ── Convenience export ──────────────────────────────────────────────────────
 
-const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms, assets, integrations, keychain };
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms, assets, integrations, keychain, crossRepo };
 export default api;

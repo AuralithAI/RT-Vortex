@@ -55,6 +55,11 @@ import {
 import { useUIStore } from "@/lib/stores/ui";
 import { useRouter } from "next/navigation";
 import { formatDate, timeAgo } from "@/lib/utils";
+import { CrossRepoLinks } from "@/components/dashboard/cross-repo-links";
+import { CrossRepoDeps } from "@/components/dashboard/cross-repo-deps";
+import { CrossRepoSearch } from "@/components/dashboard/cross-repo-search";
+import { CrossRepoDepGraph } from "@/components/dashboard/cross-repo-dep-graph";
+import { IntraRepoFileMap } from "@/components/dashboard/intra-repo-file-map";
 
 export default function RepoDetailPage({
   params,
@@ -547,6 +552,15 @@ export default function RepoDetailPage({
 
       {/* Tracked Pull Requests */}
       <PullRequestList repoId={id} />
+
+      {/* ── Intra-Repo File Map (Knowledge Graph) ────────────────────────── */}
+      <IntraRepoFileMap repoId={id} />
+
+      {/* ── Cross-Repo Observatory ───────────────────────────────────────── */}
+      <CrossRepoLinks repoId={id} orgId={repo.org_id} />
+      <CrossRepoDepGraph repoId={id} orgId={repo.org_id} />
+      <CrossRepoDeps repoId={id} />
+      <CrossRepoSearch repoId={id} />
 
       {/* ── Branch Change Warning Dialog ─────────────────────────────────── */}
       <Dialog

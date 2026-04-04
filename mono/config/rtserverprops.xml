@@ -270,7 +270,7 @@
         <provider name="x"
                   client-id="${X_CLIENT_ID:}"
                   client-secret="${X_CLIENT_SECRET:}"
-                  scopes="tweet.read,users.read"/>
+                  scopes="tweet.read,users.read,offline.access"/>
     </auth-providers>
 
     <!-- ===================================================================== -->

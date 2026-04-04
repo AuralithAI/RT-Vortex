@@ -48,6 +48,16 @@ const (
 	ActionMCPDisconnect   = "mcp.disconnect"
 	ActionMCPCall         = "mcp.call"
 	ActionMCPCallFailed   = "mcp.call_failed"
+
+	// Cross-Repo Observatory actions.
+	ActionCrossRepoLinkCreated     = "crossrepo.link_created"
+	ActionCrossRepoLinkUpdated     = "crossrepo.link_updated"
+	ActionCrossRepoLinkDeleted     = "crossrepo.link_deleted"
+	ActionCrossRepoAccessDenied    = "crossrepo.access_denied"
+	ActionCrossRepoAccessGranted   = "crossrepo.access_granted"
+	ActionCrossRepoFederatedSearch = "crossrepo.federated_search"
+	ActionCrossRepoDepGraph        = "crossrepo.dep_graph"
+	ActionCrossRepoManifest        = "crossrepo.manifest"
 )
 
 // ── Logger ──────────────────────────────────────────────────────────────────

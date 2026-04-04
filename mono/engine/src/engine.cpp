@@ -16,6 +16,7 @@
 #include "tms/tms_memory_system.h"
 #include "tms/tms_types.h"
 #include "tms/repo_parser.h"
+#include "knowledge_graph.h"
 #include "tms/embedding_engine.h"
 #include "tms/multimodal_embedder.h"
 #include <nlohmann/json.hpp>
@@ -28,6 +29,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <unordered_set>
 #include <mutex>
 
 // Platform-specific headers for system diagnostics
@@ -187,6 +189,8 @@ static ContextChunk toContextChunk(const tms::RetrievedChunk& rc) {
     cc.content        = rc.chunk.content;
     cc.language       = rc.chunk.language;
     cc.symbols        = rc.chunk.symbols;
+    cc.dependencies   = rc.chunk.dependencies;
+    cc.type           = rc.chunk.type;
     cc.relevance_score = rc.combined_score;
     return cc;
 }
@@ -366,6 +370,47 @@ public:
 
     std::string getStoragePath() const override {
         return config_.storage_path;
+    }
+
+    // =========================================================================
+    // Cross-Repo helpers (used by CrossRepoServiceImpl)
+    // =========================================================================
+
+    std::string getRepoPath(const std::string& repo_id) const override {
+        std::string path = config_.storage_path + "/repos/" + repo_id;
+        if (fs::exists(path)) return path;
+        return "";
+    }
+
+    std::vector<ContextChunk> getCodeChunksForRepo(
+        const std::string& repo_id) const override
+    {
+        // Retrieve all TMS code chunks for this repo and convert to
+        // the public ContextChunk type.
+        auto& ltm = const_cast<tms::LTMFaiss&>(tms_->ltm());
+        auto stats = ltm.getStats();
+        auto it = stats.chunks_per_repo.find(repo_id);
+        if (it == stats.chunks_per_repo.end() || it->second == 0) {
+            return {};
+        }
+
+        // Use TMS search with a broad query to retrieve all chunks.
+        // The repo_filter ensures we only get chunks from this repo.
+        // We ask for a large top_k to get as many as possible.
+        tms::TMSQuery tms_q;
+        tms_q.query_text  = "*";
+        tms_q.repo_filter = repo_id;
+        tms_q.session_id  = "cross_repo_scan_" + repo_id;
+
+        tms::TMSResponse resp = tms_->forward(tms_q);
+
+        std::vector<ContextChunk> results;
+        results.reserve(resp.attention_output.fused_chunks.size());
+
+        for (const auto& rc : resp.attention_output.fused_chunks) {
+            results.push_back(toContextChunk(rc));
+        }
+        return results;
     }
 
     // =========================================================================
@@ -970,6 +1015,70 @@ public:
         }
 
         return stats;
+    }
+
+    // =========================================================================
+    // Knowledge Graph — Intra-Repo File Map
+    // =========================================================================
+
+    RepoFileMap getRepoFileMap(
+        const std::string& repo_id,
+        const std::vector<std::string>& node_types,
+        const std::vector<std::string>& edge_types,
+        size_t max_nodes) override
+    {
+        RepoFileMap result;
+
+        auto* kg = tms_->knowledgeGraph();
+        if (!kg || !kg->isOpen()) return result;
+
+        // Use the SQL-based top-N query — never loads more than max_nodes
+        // into memory, regardless of how large the repo's KG is.
+        auto top_nodes = kg->getTopNodesByDegree(repo_id, max_nodes, node_types);
+
+        // When a node_type filter is active, nodeCount() returns the global
+        // count across ALL types which is misleading.  Instead, use the
+        // returned set size as the total when no limit was applied (max_nodes == 0),
+        // since getTopNodesByDegree already returned every matching node.
+        const size_t total_matching = (max_nodes == 0)
+            ? top_nodes.size()
+            : kg->nodeCount(repo_id);  // only meaningful without type filter
+
+        result.truncated = (top_nodes.size() < total_matching && max_nodes > 0);
+
+        // Build node ID set for edge filtering
+        std::unordered_set<std::string> node_id_set;
+        for (const auto& n : top_nodes) {
+            result.nodes.push_back({
+                n.id, n.node_type, n.name, n.file_path, n.language, n.metadata
+            });
+            node_id_set.insert(n.id);
+        }
+
+        // Fetch only edges connecting the surviving node set — single SQL query
+        auto edges = kg->getEdgesBetweenNodes(repo_id, node_id_set, edge_types);
+
+        // When only file_summary nodes are requested, there are typically no
+        // direct edges between them.  Infer file-to-file edges by aggregating
+        // the underlying symbol-level edges that cross file boundaries.
+        bool is_file_only = (node_types.size() == 1 && node_types[0] == "file_summary");
+        if (edges.empty() && is_file_only && !node_id_set.empty()) {
+            edges = kg->inferFileEdges(repo_id, node_id_set);
+        }
+
+        for (auto& e : edges) {
+            FileMapEdge fe;
+            fe.id        = e.id;
+            fe.src_id    = e.src_id;
+            fe.dst_id    = e.dst_id;
+            fe.edge_type = e.edge_type;
+            fe.weight    = e.weight;
+            result.edges.push_back(std::move(fe));
+        }
+
+        result.total_nodes = total_matching;
+        result.total_edges = result.edges.size();
+        return result;
     }
 
     // =========================================================================

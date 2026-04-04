@@ -18,6 +18,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/benchmark"
 	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
+	"github.com/AuralithAI/rtvortex-server/internal/crossrepo"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
@@ -105,6 +106,12 @@ type Dependencies struct {
 	// MCP — external service integrations (Slack, MS365, Gmail, Discord)
 	MCPService *mcp.Service
 	MCPRepo    *store.MCPRepository
+
+	// Cross-Repo Observatory — centralized authorization and link management
+	CrossRepoAuthorizer   *crossrepo.Authorizer
+	CrossRepoHandler      *crossrepo.Handler
+	CrossRepoGraphHandler *crossrepo.GraphHandler
+	RepoLinkRepo          *store.RepoLinkRepo
 
 	// ServerBase — canonical server URL for constructing OAuth callback URLs.
 	ServerBase string
@@ -243,6 +250,20 @@ func (s *Server) setupRouter() {
 					r.Get("/members", h.ListOrgMembers)
 					r.Post("/members", h.InviteOrgMember)
 					r.Delete("/members/{userID}", h.RemoveOrgMember)
+
+					// Cross-repo links (org-level view)
+					if s.deps.CrossRepoHandler != nil {
+						r.Route("/links", func(r chi.Router) {
+							s.deps.CrossRepoHandler.RegisterOrgRoutes(r)
+						})
+					}
+
+					// Cross-repo graph (org-level operations)
+					if s.deps.CrossRepoGraphHandler != nil {
+						r.Route("/cross-repo", func(r chi.Router) {
+							s.deps.CrossRepoGraphHandler.RegisterOrgRoutes(r)
+						})
+					}
 				})
 			})
 
@@ -257,6 +278,7 @@ func (s *Server) setupRouter() {
 					r.Post("/index", h.TriggerIndex)
 					r.Get("/index/status", h.GetIndexStatus)
 					r.Get("/embed-stats", h.GetEmbedStats)
+					r.Get("/file-map", h.GetRepoFileMap)
 					r.Get("/branches", h.ListBranches)
 					r.Get("/members", h.ListRepoMembers)
 					r.Post("/members", h.AddRepoMember)
@@ -307,6 +329,20 @@ func (s *Server) setupRouter() {
 						r.Get("/{assetID}/content", h.ServeAssetContent)
 						r.Delete("/{assetID}", h.DeleteAsset)
 					})
+
+					// Cross-repo links (repo-level management)
+					if s.deps.CrossRepoHandler != nil {
+						r.Route("/links", func(r chi.Router) {
+							s.deps.CrossRepoHandler.RegisterRoutes(r)
+						})
+					}
+
+					// Cross-repo graph + federated search (repo-level)
+					if s.deps.CrossRepoGraphHandler != nil {
+						r.Route("/cross-repo", func(r chi.Router) {
+							s.deps.CrossRepoGraphHandler.RegisterRepoRoutes(r)
+						})
+					}
 				})
 			})
 

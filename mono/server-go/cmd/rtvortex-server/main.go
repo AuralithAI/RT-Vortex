@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,6 +41,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/benchmark"
 	"github.com/AuralithAI/rtvortex-server/internal/chat"
 	"github.com/AuralithAI/rtvortex-server/internal/config"
+	"github.com/AuralithAI/rtvortex-server/internal/crossrepo"
 	rtcrypto "github.com/AuralithAI/rtvortex-server/internal/crypto"
 	"github.com/AuralithAI/rtvortex-server/internal/engine"
 	"github.com/AuralithAI/rtvortex-server/internal/indexing"
@@ -251,12 +253,19 @@ func main() {
 	if cfg.Server.TLS.Enabled {
 		scheme = "https"
 	}
-	// Use configured host for OAuth callback URLs; fall back to "localhost".
-	serverHost := cfg.Server.Host
-	if serverHost == "" || serverHost == "0.0.0.0" || serverHost == "::" {
-		serverHost = "localhost"
+	// Use OAUTH_BASE_URL if set — this is the externally-reachable URL that
+	// OAuth providers will redirect back to. Required when the server binds
+	// to 0.0.0.0 but is accessed via a real hostname/IP.
+	serverBase := os.Getenv("OAUTH_BASE_URL")
+	if serverBase == "" {
+		serverHost := cfg.Server.Host
+		if serverHost == "" || serverHost == "0.0.0.0" || serverHost == "::" {
+			serverHost = "localhost"
+		}
+		serverBase = fmt.Sprintf("%s://%s:%d", scheme, serverHost, cfg.Server.Port)
 	}
-	serverBase := fmt.Sprintf("%s://%s:%d", scheme, serverHost, cfg.Server.Port)
+	// Strip trailing slash if present.
+	serverBase = strings.TrimRight(serverBase, "/")
 	for name, p := range cfg.Auth.Providers {
 		callbackPath := p.CallbackPath
 		if callbackPath == "" {
@@ -423,9 +432,30 @@ func main() {
 		llmRegistry.SetPrimary(cfg.LLM.Primary)
 	}
 
+	// ── Startup rehydration ─────────────────────────────────────────────
+	// Load any previously-persisted LLM API keys, model choices, and routes
+	// from the keychain. This is essential for background services (review
+	// pipeline, chat, swarm) that run without an HTTP request context.
+	if keychainSvc != nil {
+		ctx := context.Background()
+		userIDs, findErr := keychainSvc.FindUsersWithLLMKeys(ctx)
+		if findErr != nil {
+			slog.Warn("startup: failed to find users with LLM keys", "error", findErr)
+		} else if len(userIDs) > 0 {
+			// Use the first user's keychain as the registry vault.
+			// In single-tenant / small-team setups this is the admin user.
+			uid := userIDs[0]
+			userVault := keychainSvc.ForUser(uid)
+			llmRegistry.SetVault(userVault)
+			loaded := llmRegistry.LoadFromVault()
+			slog.Info("startup: rehydrated LLM providers from keychain",
+				"user", uid, "loaded", loaded)
+		}
+	}
+
 	// Apply role-based model routing from config.
-	// Priority: UI routes (vault) > XML routes > smart defaults.
-	// LoadFromVault() above already restored any UI-configured routes.
+	// Priority: UI routes (vault/keychain) > XML routes > smart defaults.
+	// LoadFromVault() above restores any UI-configured routes from keychain.
 	if len(llmRegistry.GetRoutes()) > 0 {
 		// Vault-persisted routes (configured by the user in the UI) take
 		// highest priority — they represent the user's most recent explicit
@@ -549,6 +579,26 @@ func main() {
 	auditRepo := store.NewAuditRepository(db.Pool)
 	auditLogger := audit.NewLogger(auditRepo)
 	slog.Info("Audit logger initialized")
+
+	// ── Cross-Repo Observatory ──────────────────────────────────────────
+	repoLinkRepo := store.NewRepoLinkRepo(db.Pool)
+	crossRepoAuthorizer := crossrepo.NewAuthorizer(orgRepo, repoRepo, repoLinkRepo, repoMemberRepo)
+	crossRepoHandler := crossrepo.NewHandler(crossRepoAuthorizer, repoLinkRepo, repoRepo, auditLogger)
+
+	depGraphService := crossrepo.NewDepGraphService(crossRepoAuthorizer, engineClient, repoLinkRepo, repoRepo)
+	federatedSearchService := crossrepo.NewFederatedSearchService(crossRepoAuthorizer, engineClient, repoLinkRepo, repoRepo)
+	crossRepoGraphHandler := crossrepo.NewGraphHandler(depGraphService, federatedSearchService, auditLogger)
+
+	// Wire cross-repo enrichment into the review pipeline.
+	crossRepoEnricher := crossrepo.NewPipelineEnricher(federatedSearchService, repoLinkRepo, crossrepo.DefaultEnricherConfig())
+	reviewPipeline.SetCrossRepoEnricher(crossRepoEnricher)
+
+	slog.Info("Cross-Repo Observatory initialized",
+		"authorizer", crossRepoAuthorizer != nil,
+		"handler", crossRepoHandler != nil,
+		"graph_handler", crossRepoGraphHandler != nil,
+		"pipeline_enricher", crossRepoEnricher != nil,
+	)
 
 	// Background scheduler
 	bgScheduler := background.NewScheduler(ctx, engineClient, llmRegistry, indexingService)
@@ -741,6 +791,11 @@ func main() {
 
 		MCPService: mcpService,
 		MCPRepo:    mcpRepo,
+
+		CrossRepoAuthorizer:   crossRepoAuthorizer,
+		CrossRepoHandler:      crossRepoHandler,
+		CrossRepoGraphHandler: crossRepoGraphHandler,
+		RepoLinkRepo:          repoLinkRepo,
 
 		ServerBase: serverBase,
 	}

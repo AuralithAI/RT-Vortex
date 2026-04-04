@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"golang.org/x/oauth2"
 
 	"github.com/AuralithAI/rtvortex-server/internal/audit"
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
@@ -225,7 +226,17 @@ func (h *Handler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Exchange code for token.
-	token, err := provider.Exchange(ctx, code)
+	// Some providers (e.g., X/Twitter) use PKCE and need the original state
+	// to retrieve the code_verifier. Use the stateful exchange when available.
+	var token *oauth2.Token
+	type stateExchanger interface {
+		ExchangeWithState(ctx context.Context, code, state string) (*oauth2.Token, error)
+	}
+	if se, ok := provider.(stateExchanger); ok {
+		token, err = se.ExchangeWithState(ctx, code, state)
+	} else {
+		token, err = provider.Exchange(ctx, code)
+	}
 	if err != nil {
 		slog.Error("OAuth token exchange failed", "provider", providerName, "error", err)
 		writeError(w, http.StatusBadGateway, "failed to exchange OAuth code")
@@ -1306,6 +1317,48 @@ func (h *Handler) GetEmbedStats(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
+// ─── Intra-Repo File Map endpoint ───────────────────────────────────────────
+
+// GetRepoFileMap returns the knowledge graph nodes and edges for a repository.
+// GET /api/v1/repos/{repoID}/file-map
+func (h *Handler) GetRepoFileMap(w http.ResponseWriter, r *http.Request) {
+	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repo ID")
+		return
+	}
+
+	if h.EngineClient == nil {
+		writeError(w, http.StatusServiceUnavailable, "engine not connected")
+		return
+	}
+
+	// Parse optional filter query params
+	nodeTypes := r.URL.Query()["node_type"]
+	edgeTypes := r.URL.Query()["edge_type"]
+
+	// Parse optional max_nodes cap.
+	// 0 = no cap (engine returns all matching nodes — safe when node_type filter is used).
+	// Default when not specified: 0 (no cap). Hard max: 5000.
+	var maxNodes uint32 = 0
+	if v := r.URL.Query().Get("max_nodes"); v != "" {
+		if n, parseErr := strconv.ParseUint(v, 10, 32); parseErr == nil {
+			maxNodes = uint32(n)
+		}
+	}
+	if maxNodes > 5000 {
+		maxNodes = 5000
+	}
+
+	fileMap, err := h.EngineClient.GetRepoFileMap(r.Context(), repoID.String(), nodeTypes, edgeTypes, maxNodes)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to get file map: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, fileMap)
+}
+
 // ─── Review endpoints ───────────────────────────────────────────────────────
 
 // ListReviews returns reviews for a repository, or all user-accessible reviews.
@@ -1443,6 +1496,12 @@ func (h *Handler) ListLLMProviders(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	providerNames := h.LLMRegistry.ListProviders()
 
+	// Lazy-rehydrate: if any provider is not yet configured in the in-memory
+	// registry, check the requesting user's keychain for persisted API keys.
+	// This handles the post-restart case where the keychain has the keys but
+	// the in-memory registry was initialized with env vars only.
+	h.rehydrateLLMFromKeychain(r)
+
 	type providerInfo struct {
 		Name         string   `json:"name"`
 		DisplayName  string   `json:"display_name"`
@@ -1487,6 +1546,62 @@ func (h *Handler) ListLLMProviders(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// rehydrateLLMFromKeychain checks the requesting user's keychain for any
+// persisted LLM API keys that are not yet loaded into the in-memory registry.
+// This covers the post-restart scenario where keys live in the keychain but
+// the registry was initialised from environment variables only.
+// It is intentionally idempotent — once a provider is marked Configured the
+// keychain lookup is skipped.
+func (h *Handler) rehydrateLLMFromKeychain(r *http.Request) {
+	uid, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		return
+	}
+	uv := h.userVaultFor(uid)
+	if uv == nil {
+		return
+	}
+
+	for _, name := range h.LLMRegistry.ListProviders() {
+		meta, hasMeta := h.LLMRegistry.GetMeta(name)
+		if !hasMeta || meta.Configured {
+			continue // already configured (env var or previous rehydration)
+		}
+
+		// Try to restore the API key from keychain.
+		apiKey, err := uv.Get(fmt.Sprintf("llm.%s.api_key", name))
+		if err != nil || apiKey == "" {
+			continue
+		}
+
+		// Apply model and base_url overrides first so ApplyAPIKey re-creates
+		// the provider with the full config. Use vault-free Apply* variants
+		// since the values already live in this user's keychain.
+		if model, e := uv.Get(fmt.Sprintf("llm.%s.model", name)); e == nil && model != "" {
+			h.LLMRegistry.ApplyModel(name, model)
+		}
+		if base, e := uv.Get(fmt.Sprintf("llm.%s.base_url", name)); e == nil && base != "" {
+			h.LLMRegistry.ApplyBaseURL(name, base)
+		}
+
+		// Now set the API key — this marks the provider as Configured.
+		// Use ApplyAPIKey (no vault write-back) since the key already lives
+		// in this user's keychain and the registry vault may belong to a
+		// different user.
+		h.LLMRegistry.ApplyAPIKey(name, apiKey)
+
+		slog.Info("llm: rehydrated provider from keychain",
+			"provider", name, "user", uid)
+	}
+
+	// Restore primary provider choice if stored.
+	if primary, err := uv.Get("llm.primary"); err == nil && primary != "" {
+		if _, exists := h.LLMRegistry.Get(primary); exists {
+			h.LLMRegistry.SetPrimary(primary)
+		}
+	}
+}
+
 // ConfigureLLMProvider updates the API key, model, and/or base URL for a provider at runtime.
 // PUT /api/v1/llm/providers/{provider}
 func (h *Handler) ConfigureLLMProvider(w http.ResponseWriter, r *http.Request) {
@@ -1528,9 +1643,25 @@ func (h *Handler) ConfigureLLMProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Model != "" {
 		h.LLMRegistry.UpdateModel(providerName, req.Model)
+		// Persist model choice to keychain so it survives restarts.
+		if uid, ok := auth.UserIDFromContext(r.Context()); ok {
+			if uv := h.userVaultFor(uid); uv != nil {
+				if err := uv.Set(fmt.Sprintf("llm.%s.model", providerName), req.Model); err != nil {
+					slog.Warn("failed to persist LLM model choice in keychain", "provider", providerName, "error", err)
+				}
+			}
+		}
 	}
 	if req.BaseURL != "" {
 		h.LLMRegistry.UpdateBaseURL(providerName, req.BaseURL)
+		// Persist base URL to keychain so it survives restarts.
+		if uid, ok := auth.UserIDFromContext(r.Context()); ok {
+			if uv := h.userVaultFor(uid); uv != nil {
+				if err := uv.Set(fmt.Sprintf("llm.%s.base_url", providerName), req.BaseURL); err != nil {
+					slog.Warn("failed to persist LLM base URL in keychain", "provider", providerName, "error", err)
+				}
+			}
+		}
 	}
 
 	// Re-check health after configuration.
@@ -1561,6 +1692,14 @@ func (h *Handler) SetPrimaryLLMProvider(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	h.LLMRegistry.SetPrimary(req.Provider)
+
+	// Persist primary choice to the user's keychain.
+	if uid, ok := auth.UserIDFromContext(r.Context()); ok {
+		if uv := h.userVaultFor(uid); uv != nil {
+			_ = uv.Set("llm.primary", req.Provider)
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"primary": req.Provider,
 	})
@@ -1624,6 +1763,16 @@ func (h *Handler) SetLLMRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.LLMRegistry.SetRoutes(routes)
+
+	// Persist routes to the user's keychain as JSON.
+	if uid, ok := auth.UserIDFromContext(r.Context()); ok {
+		if uv := h.userVaultFor(uid); uv != nil {
+			if data, err := json.Marshal(routes); err == nil {
+				_ = uv.Set("llm.routes", string(data))
+			}
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"routes": len(routes),
 		"ok":     true,

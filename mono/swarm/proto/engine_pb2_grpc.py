@@ -135,6 +135,11 @@ class EngineServiceStub(object):
                 request_serializer=engine__pb2.EngineMetricsRequest.SerializeToString,
                 response_deserializer=engine__pb2.EngineMetricsSnapshot.FromString,
                 _registered_method=True)
+        self.GetRepoFileMap = channel.unary_unary(
+                '/aipr.engine.v1.EngineService/GetRepoFileMap',
+                request_serializer=engine__pb2.RepoFileMapRequest.SerializeToString,
+                response_deserializer=engine__pb2.RepoFileMapResponse.FromString,
+                _registered_method=True)
 
 
 class EngineServiceServicer(object):
@@ -272,6 +277,13 @@ class EngineServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetRepoFileMap(self, request, context):
+        """Knowledge Graph — retrieve the intra-repo file/symbol dependency map.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_EngineServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -374,6 +386,11 @@ def add_EngineServiceServicer_to_server(servicer, server):
                     servicer.StreamEngineMetrics,
                     request_deserializer=engine__pb2.EngineMetricsRequest.FromString,
                     response_serializer=engine__pb2.EngineMetricsSnapshot.SerializeToString,
+            ),
+            'GetRepoFileMap': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRepoFileMap,
+                    request_deserializer=engine__pb2.RepoFileMapRequest.FromString,
+                    response_serializer=engine__pb2.RepoFileMapResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -917,6 +934,323 @@ class EngineService(object):
             '/aipr.engine.v1.EngineService/StreamEngineMetrics',
             engine__pb2.EngineMetricsRequest.SerializeToString,
             engine__pb2.EngineMetricsSnapshot.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetRepoFileMap(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aipr.engine.v1.EngineService/GetRepoFileMap',
+            engine__pb2.RepoFileMapRequest.SerializeToString,
+            engine__pb2.RepoFileMapResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+
+class CrossRepoServiceStub(object):
+    """============================================================================
+    Cross-Repo Service
+
+    A SEPARATE service for all cross-repo operations. This is intentionally NOT
+    added to EngineService to maintain single-repo isolation guarantees.
+    The Go server handles authorization via crossrepo.Authorizer BEFORE calling
+    any of these RPCs.
+    ============================================================================
+
+    Dependency Graph ─────────────────────────────────────────
+    """
+
+    def __init__(self, channel):
+        """Constructor.
+
+        Args:
+            channel: A grpc.Channel.
+        """
+        self.GetRepoManifest = channel.unary_unary(
+                '/aipr.engine.v1.CrossRepoService/GetRepoManifest',
+                request_serializer=engine__pb2.RepoManifestRequest.SerializeToString,
+                response_deserializer=engine__pb2.RepoManifestResponse.FromString,
+                _registered_method=True)
+        self.GetCrossRepoDependencies = channel.unary_unary(
+                '/aipr.engine.v1.CrossRepoService/GetCrossRepoDependencies',
+                request_serializer=engine__pb2.CrossRepoDepsRequest.SerializeToString,
+                response_deserializer=engine__pb2.CrossRepoDepsResponse.FromString,
+                _registered_method=True)
+        self.BuildDependencyGraph = channel.unary_unary(
+                '/aipr.engine.v1.CrossRepoService/BuildDependencyGraph',
+                request_serializer=engine__pb2.BuildDepGraphRequest.SerializeToString,
+                response_deserializer=engine__pb2.BuildDepGraphResponse.FromString,
+                _registered_method=True)
+        self.FederatedSearch = channel.unary_unary(
+                '/aipr.engine.v1.CrossRepoService/FederatedSearch',
+                request_serializer=engine__pb2.FederatedSearchRequest.SerializeToString,
+                response_deserializer=engine__pb2.FederatedSearchResponse.FromString,
+                _registered_method=True)
+        self.FederatedSearchStream = channel.unary_stream(
+                '/aipr.engine.v1.CrossRepoService/FederatedSearchStream',
+                request_serializer=engine__pb2.FederatedSearchRequest.SerializeToString,
+                response_deserializer=engine__pb2.FederatedContextChunk.FromString,
+                _registered_method=True)
+
+
+class CrossRepoServiceServicer(object):
+    """============================================================================
+    Cross-Repo Service
+
+    A SEPARATE service for all cross-repo operations. This is intentionally NOT
+    added to EngineService to maintain single-repo isolation guarantees.
+    The Go server handles authorization via crossrepo.Authorizer BEFORE calling
+    any of these RPCs.
+    ============================================================================
+
+    Dependency Graph ─────────────────────────────────────────
+    """
+
+    def GetRepoManifest(self, request, context):
+        """GetRepoManifest returns the structural manifest for a single repo
+        (build system, primary language, modules, repo type). The engine already
+        computes this during indexing; this RPC exposes it read-only.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetCrossRepoDependencies(self, request, context):
+        """GetCrossRepoDependencies resolves inter-repo import/dependency edges.
+        Given a source repo, returns all symbols or packages that reference
+        artifacts belonging to other repos in the same org.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def BuildDependencyGraph(self, request, context):
+        """BuildDependencyGraph constructs the full org-level dependency graph
+        across all linked repos. Heavy operation — intended for background jobs.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def FederatedSearch(self, request, context):
+        """Federated Search ─────────────────────────────────────────
+
+        FederatedSearch fans out a query across multiple repo indices and returns
+        merged, score-normalized results. The Go server pre-filters the target
+        repo list through crossrepo.Authorizer. This is a SEPARATE RPC from
+        EngineService.Search which operates on a single repo.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def FederatedSearchStream(self, request, context):
+        """FederatedSearchStream is the streaming variant of FederatedSearch.
+        Chunks are streamed as they are found across repos, ordered by score.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+
+def add_CrossRepoServiceServicer_to_server(servicer, server):
+    rpc_method_handlers = {
+            'GetRepoManifest': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetRepoManifest,
+                    request_deserializer=engine__pb2.RepoManifestRequest.FromString,
+                    response_serializer=engine__pb2.RepoManifestResponse.SerializeToString,
+            ),
+            'GetCrossRepoDependencies': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetCrossRepoDependencies,
+                    request_deserializer=engine__pb2.CrossRepoDepsRequest.FromString,
+                    response_serializer=engine__pb2.CrossRepoDepsResponse.SerializeToString,
+            ),
+            'BuildDependencyGraph': grpc.unary_unary_rpc_method_handler(
+                    servicer.BuildDependencyGraph,
+                    request_deserializer=engine__pb2.BuildDepGraphRequest.FromString,
+                    response_serializer=engine__pb2.BuildDepGraphResponse.SerializeToString,
+            ),
+            'FederatedSearch': grpc.unary_unary_rpc_method_handler(
+                    servicer.FederatedSearch,
+                    request_deserializer=engine__pb2.FederatedSearchRequest.FromString,
+                    response_serializer=engine__pb2.FederatedSearchResponse.SerializeToString,
+            ),
+            'FederatedSearchStream': grpc.unary_stream_rpc_method_handler(
+                    servicer.FederatedSearchStream,
+                    request_deserializer=engine__pb2.FederatedSearchRequest.FromString,
+                    response_serializer=engine__pb2.FederatedContextChunk.SerializeToString,
+            ),
+    }
+    generic_handler = grpc.method_handlers_generic_handler(
+            'aipr.engine.v1.CrossRepoService', rpc_method_handlers)
+    server.add_generic_rpc_handlers((generic_handler,))
+    server.add_registered_method_handlers('aipr.engine.v1.CrossRepoService', rpc_method_handlers)
+
+
+ # This class is part of an EXPERIMENTAL API.
+class CrossRepoService(object):
+    """============================================================================
+    Cross-Repo Service
+
+    A SEPARATE service for all cross-repo operations. This is intentionally NOT
+    added to EngineService to maintain single-repo isolation guarantees.
+    The Go server handles authorization via crossrepo.Authorizer BEFORE calling
+    any of these RPCs.
+    ============================================================================
+
+    Dependency Graph ─────────────────────────────────────────
+    """
+
+    @staticmethod
+    def GetRepoManifest(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aipr.engine.v1.CrossRepoService/GetRepoManifest',
+            engine__pb2.RepoManifestRequest.SerializeToString,
+            engine__pb2.RepoManifestResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetCrossRepoDependencies(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aipr.engine.v1.CrossRepoService/GetCrossRepoDependencies',
+            engine__pb2.CrossRepoDepsRequest.SerializeToString,
+            engine__pb2.CrossRepoDepsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def BuildDependencyGraph(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aipr.engine.v1.CrossRepoService/BuildDependencyGraph',
+            engine__pb2.BuildDepGraphRequest.SerializeToString,
+            engine__pb2.BuildDepGraphResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def FederatedSearch(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/aipr.engine.v1.CrossRepoService/FederatedSearch',
+            engine__pb2.FederatedSearchRequest.SerializeToString,
+            engine__pb2.FederatedSearchResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def FederatedSearchStream(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_stream(
+            request,
+            target,
+            '/aipr.engine.v1.CrossRepoService/FederatedSearchStream',
+            engine__pb2.FederatedSearchRequest.SerializeToString,
+            engine__pb2.FederatedContextChunk.FromString,
             options,
             channel_credentials,
             insecure,

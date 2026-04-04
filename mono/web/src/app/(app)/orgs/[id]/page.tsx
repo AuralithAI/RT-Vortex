@@ -6,8 +6,8 @@
 
 import { use, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, UserPlus, Trash2 } from "lucide-react";
-import { useOrg, useOrgMembers } from "@/lib/api/queries";
+import { ArrowLeft, UserPlus, Trash2, Link2, ArrowRight, Shield } from "lucide-react";
+import { useOrg, useOrgMembers, useOrgCrossRepoLinks } from "@/lib/api/queries";
 import { useInviteMember, useRemoveMember } from "@/lib/api/mutations";
 import { PageHeader } from "@/components/layout/page-header";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +39,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useUIStore } from "@/lib/stores/ui";
 import { formatDate } from "@/lib/utils";
+import { CrossRepoGraph } from "@/components/dashboard/cross-repo-graph";
 
 export default function OrgDetailPage({
   params,
@@ -255,6 +256,80 @@ export default function OrgDetailPage({
           </Table>
         </CardContent>
       </Card>
+
+      {/* ── Cross-Repo Observatory ───────────────────────────────────────── */}
+      <OrgCrossRepoLinksCard orgId={id} />
+      <CrossRepoGraph orgId={id} />
     </>
+  );
+}
+
+// ── Org-level Cross-Repo Links ──────────────────────────────────────────────
+
+function OrgCrossRepoLinksCard({ orgId }: { orgId: string }) {
+  const { data, isLoading } = useOrgCrossRepoLinks(orgId);
+  const links = data?.links ?? [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Link2 className="h-4 w-4" />
+          Cross-Repo Links ({data?.total ?? 0})
+        </CardTitle>
+        <CardDescription>
+          All repository links within this organization.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-10 w-full" />
+            ))}
+          </div>
+        ) : links.length === 0 ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">
+            No cross-repo links in this organization yet.
+          </p>
+        ) : (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Source → Target</TableHead>
+                <TableHead>Share Profile</TableHead>
+                <TableHead>Label</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {links.map((link) => (
+                <TableRow key={link.id}>
+                  <TableCell>
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="font-medium">
+                        {link.source_repo_name}
+                      </span>
+                      <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                      <span className="font-medium">
+                        {link.target_repo_name}
+                      </span>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant="outline">
+                      <Shield className="mr-1 h-3 w-3" />
+                      {link.share_profile}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {link.label || "—"}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
   );
 }

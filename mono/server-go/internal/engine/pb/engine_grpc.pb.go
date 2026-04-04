@@ -42,6 +42,7 @@ const (
 	EngineService_ConfigureMultimodal_FullMethodName      = "/aipr.engine.v1.EngineService/ConfigureMultimodal"
 	EngineService_DownloadModel_FullMethodName            = "/aipr.engine.v1.EngineService/DownloadModel"
 	EngineService_StreamEngineMetrics_FullMethodName      = "/aipr.engine.v1.EngineService/StreamEngineMetrics"
+	EngineService_GetRepoFileMap_FullMethodName           = "/aipr.engine.v1.EngineService/GetRepoFileMap"
 )
 
 // EngineServiceClient is the client API for EngineService service.
@@ -81,6 +82,8 @@ type EngineServiceClient interface {
 	// Metrics — server-streaming so the Go API server can relay to the dashboard.
 	// The engine pushes a snapshot every interval_ms (default 1000).
 	StreamEngineMetrics(ctx context.Context, in *EngineMetricsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[EngineMetricsSnapshot], error)
+	// Knowledge Graph — retrieve the intra-repo file/symbol dependency map.
+	GetRepoFileMap(ctx context.Context, in *RepoFileMapRequest, opts ...grpc.CallOption) (*RepoFileMapResponse, error)
 }
 
 type engineServiceClient struct {
@@ -336,6 +339,16 @@ func (c *engineServiceClient) StreamEngineMetrics(ctx context.Context, in *Engin
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EngineService_StreamEngineMetricsClient = grpc.ServerStreamingClient[EngineMetricsSnapshot]
 
+func (c *engineServiceClient) GetRepoFileMap(ctx context.Context, in *RepoFileMapRequest, opts ...grpc.CallOption) (*RepoFileMapResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RepoFileMapResponse)
+	err := c.cc.Invoke(ctx, EngineService_GetRepoFileMap_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // EngineServiceServer is the server API for EngineService service.
 // All implementations must embed UnimplementedEngineServiceServer
 // for forward compatibility.
@@ -373,6 +386,8 @@ type EngineServiceServer interface {
 	// Metrics — server-streaming so the Go API server can relay to the dashboard.
 	// The engine pushes a snapshot every interval_ms (default 1000).
 	StreamEngineMetrics(*EngineMetricsRequest, grpc.ServerStreamingServer[EngineMetricsSnapshot]) error
+	// Knowledge Graph — retrieve the intra-repo file/symbol dependency map.
+	GetRepoFileMap(context.Context, *RepoFileMapRequest) (*RepoFileMapResponse, error)
 	mustEmbedUnimplementedEngineServiceServer()
 }
 
@@ -442,6 +457,9 @@ func (UnimplementedEngineServiceServer) DownloadModel(*ConfigureMultimodalReques
 }
 func (UnimplementedEngineServiceServer) StreamEngineMetrics(*EngineMetricsRequest, grpc.ServerStreamingServer[EngineMetricsSnapshot]) error {
 	return status.Error(codes.Unimplemented, "method StreamEngineMetrics not implemented")
+}
+func (UnimplementedEngineServiceServer) GetRepoFileMap(context.Context, *RepoFileMapRequest) (*RepoFileMapResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRepoFileMap not implemented")
 }
 func (UnimplementedEngineServiceServer) mustEmbedUnimplementedEngineServiceServer() {}
 func (UnimplementedEngineServiceServer) testEmbeddedByValue()                       {}
@@ -789,6 +807,24 @@ func _EngineService_StreamEngineMetrics_Handler(srv interface{}, stream grpc.Ser
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type EngineService_StreamEngineMetricsServer = grpc.ServerStreamingServer[EngineMetricsSnapshot]
 
+func _EngineService_GetRepoFileMap_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RepoFileMapRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(EngineServiceServer).GetRepoFileMap(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: EngineService_GetRepoFileMap_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(EngineServiceServer).GetRepoFileMap(ctx, req.(*RepoFileMapRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // EngineService_ServiceDesc is the grpc.ServiceDesc for EngineService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -856,6 +892,10 @@ var EngineService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "ConfigureMultimodal",
 			Handler:    _EngineService_ConfigureMultimodal_Handler,
 		},
+		{
+			MethodName: "GetRepoFileMap",
+			Handler:    _EngineService_GetRepoFileMap_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -881,6 +921,292 @@ var EngineService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StreamEngineMetrics",
 			Handler:       _EngineService_StreamEngineMetrics_Handler,
+			ServerStreams: true,
+		},
+	},
+	Metadata: "engine.proto",
+}
+
+const (
+	CrossRepoService_GetRepoManifest_FullMethodName          = "/aipr.engine.v1.CrossRepoService/GetRepoManifest"
+	CrossRepoService_GetCrossRepoDependencies_FullMethodName = "/aipr.engine.v1.CrossRepoService/GetCrossRepoDependencies"
+	CrossRepoService_BuildDependencyGraph_FullMethodName     = "/aipr.engine.v1.CrossRepoService/BuildDependencyGraph"
+	CrossRepoService_FederatedSearch_FullMethodName          = "/aipr.engine.v1.CrossRepoService/FederatedSearch"
+	CrossRepoService_FederatedSearchStream_FullMethodName    = "/aipr.engine.v1.CrossRepoService/FederatedSearchStream"
+)
+
+// CrossRepoServiceClient is the client API for CrossRepoService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type CrossRepoServiceClient interface {
+	// GetRepoManifest returns the structural manifest for a single repo
+	// (build system, primary language, modules, repo type). The engine already
+	// computes this during indexing; this RPC exposes it read-only.
+	GetRepoManifest(ctx context.Context, in *RepoManifestRequest, opts ...grpc.CallOption) (*RepoManifestResponse, error)
+	// GetCrossRepoDependencies resolves inter-repo import/dependency edges.
+	// Given a source repo, returns all symbols or packages that reference
+	// artifacts belonging to other repos in the same org.
+	GetCrossRepoDependencies(ctx context.Context, in *CrossRepoDepsRequest, opts ...grpc.CallOption) (*CrossRepoDepsResponse, error)
+	// BuildDependencyGraph constructs the full org-level dependency graph
+	// across all linked repos. Heavy operation — intended for background jobs.
+	BuildDependencyGraph(ctx context.Context, in *BuildDepGraphRequest, opts ...grpc.CallOption) (*BuildDepGraphResponse, error)
+	// FederatedSearch fans out a query across multiple repo indices and returns
+	// merged, score-normalized results. The Go server pre-filters the target
+	// repo list through crossrepo.Authorizer. This is a SEPARATE RPC from
+	// EngineService.Search which operates on a single repo.
+	FederatedSearch(ctx context.Context, in *FederatedSearchRequest, opts ...grpc.CallOption) (*FederatedSearchResponse, error)
+	// FederatedSearchStream is the streaming variant of FederatedSearch.
+	// Chunks are streamed as they are found across repos, ordered by score.
+	FederatedSearchStream(ctx context.Context, in *FederatedSearchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FederatedContextChunk], error)
+}
+
+type crossRepoServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewCrossRepoServiceClient(cc grpc.ClientConnInterface) CrossRepoServiceClient {
+	return &crossRepoServiceClient{cc}
+}
+
+func (c *crossRepoServiceClient) GetRepoManifest(ctx context.Context, in *RepoManifestRequest, opts ...grpc.CallOption) (*RepoManifestResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RepoManifestResponse)
+	err := c.cc.Invoke(ctx, CrossRepoService_GetRepoManifest_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *crossRepoServiceClient) GetCrossRepoDependencies(ctx context.Context, in *CrossRepoDepsRequest, opts ...grpc.CallOption) (*CrossRepoDepsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CrossRepoDepsResponse)
+	err := c.cc.Invoke(ctx, CrossRepoService_GetCrossRepoDependencies_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *crossRepoServiceClient) BuildDependencyGraph(ctx context.Context, in *BuildDepGraphRequest, opts ...grpc.CallOption) (*BuildDepGraphResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BuildDepGraphResponse)
+	err := c.cc.Invoke(ctx, CrossRepoService_BuildDependencyGraph_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *crossRepoServiceClient) FederatedSearch(ctx context.Context, in *FederatedSearchRequest, opts ...grpc.CallOption) (*FederatedSearchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(FederatedSearchResponse)
+	err := c.cc.Invoke(ctx, CrossRepoService_FederatedSearch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *crossRepoServiceClient) FederatedSearchStream(ctx context.Context, in *FederatedSearchRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[FederatedContextChunk], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &CrossRepoService_ServiceDesc.Streams[0], CrossRepoService_FederatedSearchStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[FederatedSearchRequest, FederatedContextChunk]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CrossRepoService_FederatedSearchStreamClient = grpc.ServerStreamingClient[FederatedContextChunk]
+
+// CrossRepoServiceServer is the server API for CrossRepoService service.
+// All implementations must embed UnimplementedCrossRepoServiceServer
+// for forward compatibility.
+type CrossRepoServiceServer interface {
+	// GetRepoManifest returns the structural manifest for a single repo
+	// (build system, primary language, modules, repo type). The engine already
+	// computes this during indexing; this RPC exposes it read-only.
+	GetRepoManifest(context.Context, *RepoManifestRequest) (*RepoManifestResponse, error)
+	// GetCrossRepoDependencies resolves inter-repo import/dependency edges.
+	// Given a source repo, returns all symbols or packages that reference
+	// artifacts belonging to other repos in the same org.
+	GetCrossRepoDependencies(context.Context, *CrossRepoDepsRequest) (*CrossRepoDepsResponse, error)
+	// BuildDependencyGraph constructs the full org-level dependency graph
+	// across all linked repos. Heavy operation — intended for background jobs.
+	BuildDependencyGraph(context.Context, *BuildDepGraphRequest) (*BuildDepGraphResponse, error)
+	// FederatedSearch fans out a query across multiple repo indices and returns
+	// merged, score-normalized results. The Go server pre-filters the target
+	// repo list through crossrepo.Authorizer. This is a SEPARATE RPC from
+	// EngineService.Search which operates on a single repo.
+	FederatedSearch(context.Context, *FederatedSearchRequest) (*FederatedSearchResponse, error)
+	// FederatedSearchStream is the streaming variant of FederatedSearch.
+	// Chunks are streamed as they are found across repos, ordered by score.
+	FederatedSearchStream(*FederatedSearchRequest, grpc.ServerStreamingServer[FederatedContextChunk]) error
+	mustEmbedUnimplementedCrossRepoServiceServer()
+}
+
+// UnimplementedCrossRepoServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedCrossRepoServiceServer struct{}
+
+func (UnimplementedCrossRepoServiceServer) GetRepoManifest(context.Context, *RepoManifestRequest) (*RepoManifestResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetRepoManifest not implemented")
+}
+func (UnimplementedCrossRepoServiceServer) GetCrossRepoDependencies(context.Context, *CrossRepoDepsRequest) (*CrossRepoDepsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCrossRepoDependencies not implemented")
+}
+func (UnimplementedCrossRepoServiceServer) BuildDependencyGraph(context.Context, *BuildDepGraphRequest) (*BuildDepGraphResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BuildDependencyGraph not implemented")
+}
+func (UnimplementedCrossRepoServiceServer) FederatedSearch(context.Context, *FederatedSearchRequest) (*FederatedSearchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method FederatedSearch not implemented")
+}
+func (UnimplementedCrossRepoServiceServer) FederatedSearchStream(*FederatedSearchRequest, grpc.ServerStreamingServer[FederatedContextChunk]) error {
+	return status.Error(codes.Unimplemented, "method FederatedSearchStream not implemented")
+}
+func (UnimplementedCrossRepoServiceServer) mustEmbedUnimplementedCrossRepoServiceServer() {}
+func (UnimplementedCrossRepoServiceServer) testEmbeddedByValue()                          {}
+
+// UnsafeCrossRepoServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to CrossRepoServiceServer will
+// result in compilation errors.
+type UnsafeCrossRepoServiceServer interface {
+	mustEmbedUnimplementedCrossRepoServiceServer()
+}
+
+func RegisterCrossRepoServiceServer(s grpc.ServiceRegistrar, srv CrossRepoServiceServer) {
+	// If the following call panics, it indicates UnimplementedCrossRepoServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&CrossRepoService_ServiceDesc, srv)
+}
+
+func _CrossRepoService_GetRepoManifest_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RepoManifestRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CrossRepoServiceServer).GetRepoManifest(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CrossRepoService_GetRepoManifest_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CrossRepoServiceServer).GetRepoManifest(ctx, req.(*RepoManifestRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CrossRepoService_GetCrossRepoDependencies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CrossRepoDepsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CrossRepoServiceServer).GetCrossRepoDependencies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CrossRepoService_GetCrossRepoDependencies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CrossRepoServiceServer).GetCrossRepoDependencies(ctx, req.(*CrossRepoDepsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CrossRepoService_BuildDependencyGraph_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BuildDepGraphRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CrossRepoServiceServer).BuildDependencyGraph(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CrossRepoService_BuildDependencyGraph_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CrossRepoServiceServer).BuildDependencyGraph(ctx, req.(*BuildDepGraphRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CrossRepoService_FederatedSearch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FederatedSearchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CrossRepoServiceServer).FederatedSearch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CrossRepoService_FederatedSearch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CrossRepoServiceServer).FederatedSearch(ctx, req.(*FederatedSearchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _CrossRepoService_FederatedSearchStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(FederatedSearchRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(CrossRepoServiceServer).FederatedSearchStream(m, &grpc.GenericServerStream[FederatedSearchRequest, FederatedContextChunk]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type CrossRepoService_FederatedSearchStreamServer = grpc.ServerStreamingServer[FederatedContextChunk]
+
+// CrossRepoService_ServiceDesc is the grpc.ServiceDesc for CrossRepoService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var CrossRepoService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "aipr.engine.v1.CrossRepoService",
+	HandlerType: (*CrossRepoServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetRepoManifest",
+			Handler:    _CrossRepoService_GetRepoManifest_Handler,
+		},
+		{
+			MethodName: "GetCrossRepoDependencies",
+			Handler:    _CrossRepoService_GetCrossRepoDependencies_Handler,
+		},
+		{
+			MethodName: "BuildDependencyGraph",
+			Handler:    _CrossRepoService_BuildDependencyGraph_Handler,
+		},
+		{
+			MethodName: "FederatedSearch",
+			Handler:    _CrossRepoService_FederatedSearch_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "FederatedSearchStream",
+			Handler:       _CrossRepoService_FederatedSearchStream_Handler,
 			ServerStreams: true,
 		},
 	},

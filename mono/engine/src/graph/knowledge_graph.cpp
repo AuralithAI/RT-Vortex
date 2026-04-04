@@ -836,6 +836,234 @@ std::vector<KGNode> KnowledgeGraph::nodesByFilePath(const std::string& file_path
     return results;
 }
 
+// ── Efficient top-N queries for file-map ───────────────────────────────────
+
+std::vector<KGNode> KnowledgeGraph::getTopNodesByDegree(
+    const std::string& repo_id,
+    size_t limit,
+    const std::vector<std::string>& node_types) const
+{
+    if (!db_) return {};
+
+    // Build SQL dynamically based on whether node_type filters are provided.
+    // Uses a LEFT JOIN to compute degree in a single query with LIMIT.
+    // The degree subquery counts edges where the node is src or dst.
+    std::string sql =
+        "SELECT n.id, n.node_type, n.name, n.file_path, n.language, "
+        "       n.faiss_id, n.repo_id, n.metadata, "
+        "       COALESCE(d.deg, 0) AS degree "
+        "FROM kg_nodes n "
+        "LEFT JOIN ("
+        "  SELECT node_id, COUNT(*) AS deg FROM ("
+        "    SELECT src_id AS node_id FROM kg_edges WHERE repo_id = ?1 "
+        "    UNION ALL "
+        "    SELECT dst_id AS node_id FROM kg_edges WHERE repo_id = ?1 "
+        "  ) GROUP BY node_id"
+        ") d ON d.node_id = n.id "
+        "WHERE n.repo_id = ?1";
+
+    if (!node_types.empty()) {
+        sql += " AND n.node_type IN (";
+        for (size_t i = 0; i < node_types.size(); ++i) {
+            if (i > 0) sql += ",";
+            sql += "?" + std::to_string(static_cast<int>(i) + 2);
+        }
+        sql += ")";
+    }
+
+    sql += " ORDER BY degree DESC";
+
+    // limit == 0 means "no cap — return everything"
+    const int next_param = static_cast<int>(node_types.size()) + 2;
+    if (limit > 0) {
+        sql += " LIMIT ?" + std::to_string(next_param);
+    }
+
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) return {};
+
+    // Bind repo_id as ?1
+    sqlite3_bind_text(stmt, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    // Bind node_type filters
+    for (size_t i = 0; i < node_types.size(); ++i) {
+        sqlite3_bind_text(stmt, static_cast<int>(i) + 2,
+                          node_types[i].c_str(), -1, SQLITE_TRANSIENT);
+    }
+
+    // Bind LIMIT (only when capping)
+    if (limit > 0) {
+        sqlite3_bind_int64(stmt, next_param,
+                           static_cast<int64_t>(limit));
+    }
+
+    std::vector<KGNode> results;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        KGNode n;
+        n.id        = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        n.node_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        n.name      = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        auto fp     = sqlite3_column_text(stmt, 3);
+        n.file_path = fp ? reinterpret_cast<const char*>(fp) : "";
+        auto lang   = sqlite3_column_text(stmt, 4);
+        n.language  = lang ? reinterpret_cast<const char*>(lang) : "";
+        n.faiss_id  = sqlite3_column_int64(stmt, 5);
+        n.repo_id   = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 6));
+        auto meta   = sqlite3_column_text(stmt, 7);
+        n.metadata  = meta ? reinterpret_cast<const char*>(meta) : "";
+        results.push_back(n);
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
+std::vector<KGEdge> KnowledgeGraph::getEdgesBetweenNodes(
+    const std::string& repo_id,
+    const std::unordered_set<std::string>& node_ids,
+    const std::vector<std::string>& edge_types) const
+{
+    if (!db_ || node_ids.empty()) return {};
+
+    // Use a CTE with VALUES to pass node IDs into the query efficiently.
+    // This avoids a temp table for small sets and works well for 300-500 IDs.
+    std::string sql =
+        "WITH target_ids(id) AS (VALUES ";
+    bool first = true;
+    for (const auto& nid : node_ids) {
+        if (!first) sql += ",";
+        sql += "(?)";
+        first = false;
+    }
+    sql += ") "
+           "SELECT e.id, e.src_id, e.dst_id, e.edge_type, e.weight, e.repo_id "
+           "FROM kg_edges e "
+           "WHERE e.repo_id = ? "
+           "  AND e.src_id IN (SELECT id FROM target_ids) "
+           "  AND e.dst_id IN (SELECT id FROM target_ids)";
+
+    if (!edge_types.empty()) {
+        sql += " AND e.edge_type IN (";
+        for (size_t i = 0; i < edge_types.size(); ++i) {
+            if (i > 0) sql += ",";
+            sql += "?";
+        }
+        sql += ")";
+    }
+
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) return {};
+
+    int idx = 1;
+    // Bind node IDs in CTE
+    for (const auto& nid : node_ids) {
+        sqlite3_bind_text(stmt, idx++, nid.c_str(), -1, SQLITE_TRANSIENT);
+    }
+    // Bind repo_id
+    sqlite3_bind_text(stmt, idx++, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+    // Bind edge_type filters
+    for (const auto& et : edge_types) {
+        sqlite3_bind_text(stmt, idx++, et.c_str(), -1, SQLITE_TRANSIENT);
+    }
+
+    std::vector<KGEdge> results;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        KGEdge e;
+        e.id        = sqlite3_column_int64(stmt, 0);
+        e.src_id    = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        e.dst_id    = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        e.edge_type = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 3));
+        e.weight    = sqlite3_column_double(stmt, 4);
+        e.repo_id   = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 5));
+        results.push_back(e);
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
+// ── File-Level Edge Inference ──────────────────────────────────────────────
+
+std::vector<KGEdge> KnowledgeGraph::inferFileEdges(
+    const std::string& repo_id,
+    const std::unordered_set<std::string>& file_node_ids) const
+{
+    if (!db_ || file_node_ids.empty()) return {};
+
+    // Map file_path → file_summary node ID for the returned file nodes.
+    // First, load file_path for each file_summary node.
+    std::unordered_map<std::string, std::string> path_to_id;  // file_path → node_id
+    {
+        std::string sql =
+            "SELECT id, file_path FROM kg_nodes WHERE repo_id = ? "
+            "AND node_type = 'file_summary'";
+        sqlite3_stmt* stmt = nullptr;
+        if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+            sqlite3_bind_text(stmt, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                auto id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                auto fp = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                if (id && fp && file_node_ids.count(id)) {
+                    path_to_id[fp] = id;
+                }
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    if (path_to_id.empty()) return {};
+
+    // Infer file-to-file edges:
+    // For each edge in kg_edges, look up the file_path of the src and dst nodes.
+    // If they belong to different files that are both in our file_node set,
+    // create a synthetic file-level edge.
+    //
+    // SQL: join edges with nodes to get file_paths, group by (src_file, dst_file).
+    std::string sql =
+        "SELECT ns.file_path AS src_fp, nd.file_path AS dst_fp, "
+        "       e.edge_type, COUNT(*) AS cnt "
+        "FROM kg_edges e "
+        "JOIN kg_nodes ns ON ns.id = e.src_id AND ns.repo_id = e.repo_id "
+        "JOIN kg_nodes nd ON nd.id = e.dst_id AND nd.repo_id = e.repo_id "
+        "WHERE e.repo_id = ? "
+        "  AND ns.file_path != nd.file_path "
+        "  AND ns.file_path != '' AND nd.file_path != '' "
+        "GROUP BY ns.file_path, nd.file_path, e.edge_type "
+        "ORDER BY cnt DESC";
+
+    sqlite3_stmt* stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+    if (rc != SQLITE_OK) return {};
+
+    sqlite3_bind_text(stmt, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+
+    std::vector<KGEdge> results;
+    int64_t synthetic_id = -1;  // negative IDs for synthetic edges
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        auto src_fp = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+        auto dst_fp = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+        auto etype  = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 2));
+        int  cnt    = sqlite3_column_int(stmt, 3);
+
+        if (!src_fp || !dst_fp || !etype) continue;
+
+        auto src_it = path_to_id.find(src_fp);
+        auto dst_it = path_to_id.find(dst_fp);
+        if (src_it == path_to_id.end() || dst_it == path_to_id.end()) continue;
+
+        KGEdge e;
+        e.id        = synthetic_id--;
+        e.src_id    = src_it->second;
+        e.dst_id    = dst_it->second;
+        e.edge_type = etype;
+        e.weight    = static_cast<double>(cnt);
+        e.repo_id   = repo_id;
+        results.push_back(e);
+    }
+    sqlite3_finalize(stmt);
+    return results;
+}
+
 // ── Statistics ─────────────────────────────────────────────────────────────
 
 size_t KnowledgeGraph::nodeCount(const std::string& repo_id) const {

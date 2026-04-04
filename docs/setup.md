@@ -26,6 +26,8 @@ Complete guide for local development, CI/CD integration, and distribution.
 | CMake | 3.20+ | Yes | C++ engine build |
 | g++ | 11+ | Yes | C++ compiler |
 | Make | Any | Yes | Unified build controller |
+| Python | 3.11+ | Yes | Agent Swarm runtime |
+| Node.js | 20+ | Optional | Web dashboard build |
 | PostgreSQL | 15+ | Runtime | Database |
 | Redis | 7+ | Runtime | Sessions, rate limiting, cache |
 | Docker | Latest | Optional | Containerized deployment |
@@ -88,6 +90,9 @@ cd RT-AI-PR-Reviewer
 
 # Build everything (C++ engine + Go server + config + ONNX model)
 make
+
+# Install Python dependencies for agent swarm
+pip install -r mono/swarm/requirements.txt
 
 # Edit configuration
 nano rt_home/config/rtserverprops.xml   # Database, LLM, engine settings
@@ -227,6 +232,10 @@ ctest --test-dir build --output-on-failure -C Release
                 model="gpt-4-turbo-preview"/>
         <anthropic api-key="${LLM_ANTHROPIC_API_KEY}"
                    model="claude-3-5-sonnet-20241022"/>
+        <gemini api-key="${LLM_GEMINI_API_KEY}"
+                model="gemini-2.5-pro"/>
+        <grok api-key="${LLM_GROK_API_KEY}"
+              model="grok-3"/>
         <ollama base-url="http://localhost:11434"
                 model="codellama"/>
     </llm>
@@ -238,7 +247,17 @@ ctest --test-dir build --output-on-failure -C Release
     </storage>
 
     <!-- Security -->
-    <security encryption-key="${TOKEN_ENCRYPTION_KEY}"/>
+    <security encryption-key="${TOKEN_ENCRYPTION_KEY}"
+              keychain-kek="${KEYCHAIN_KEK}"/>
+
+    <!-- Agent Swarm -->
+    <swarm enabled="true"
+           max-agents="9"
+           python-path="${SWARM_PYTHON_PATH:mono/swarm/agents}"
+           hitl-timeout="300s"/>
+
+    <!-- Cross-Repo Observatory -->
+    <crossrepo enabled="true"/>
 
     <!-- Logging -->
     <log level="info" format="text"/>
@@ -256,7 +275,12 @@ All XML attributes support `${ENV_VAR:default}` syntax. Key variables:
 | `ENGINE_PORT` | C++ engine port |
 | `LLM_OPENAI_API_KEY` | OpenAI API key |
 | `LLM_ANTHROPIC_API_KEY` | Anthropic API key |
+| `LLM_GEMINI_API_KEY` | Google Gemini API key |
+| `LLM_GROK_API_KEY` | xAI Grok API key |
 | `TOKEN_ENCRYPTION_KEY` | 32-byte hex key for AES-256-GCM |
+| `KEYCHAIN_KEK` | Key-encryption-key for per-user keychain |
+| `SWARM_PYTHON_PATH` | Path to Python swarm agent scripts |
+| `OAUTH_BASE_URL` | Base URL for OAuth callbacks (if behind proxy) |
 
 ### Ingestion Pipeline Tuning
 
@@ -581,6 +605,16 @@ services:
       ENGINE_PORT: 50051
       DATABASE_HOST: postgres
       REDIS_ADDR: redis:6379
+      SWARM_PYTHON_PATH: /app/swarm/agents
+
+  swarm:
+    build: ./mono/swarm
+    depends_on:
+      - server
+    volumes:
+      - ./mono/swarm/agents:/app/agents
+    environment:
+      RTVORTEX_API_URL: http://server:8080
 
   postgres:
     image: postgres:15
@@ -662,7 +696,7 @@ SQL
 ### Initialize Schema
 
 ```bash
-# Apply schema (11 tables)
+# Apply schema (20+ tables)
 psql -U rtvortex -d rtvortex -f rt_home/data/sql/initData.sql
 ```
 
@@ -689,6 +723,16 @@ make db-install   # Both (after building)
 | `webhook_events` | Webhook audit trail |
 | `audit_log` | Security events |
 | `schema_info` | Schema version |
+| `swarm_tasks` | Agent swarm task queue |
+| `swarm_teams` | Swarm team compositions |
+| `swarm_results` | Swarm task outputs |
+| `agent_elo_ratings` | Agent performance ELO scores |
+| `cross_repo_links` | Cross-repo relationship links |
+| `dep_graph_edges` | Dependency graph edges |
+| `chat_sessions` | RAG chat sessions |
+| `chat_messages` | Chat message history |
+| `keychain_entries` | Per-user encrypted keychain secrets |
+| `benchmark_runs` | Benchmark evaluation results |
 
 ---
 
@@ -755,6 +799,21 @@ Add a JWT secret to `rtserverprops.xml` or set `JWT_SECRET` env var. Without it,
 The `encryption-key` in `rtserverprops.xml` must be a 32-byte hex string (64 hex chars). Generate one:
 ```bash
 openssl rand -hex 32
+```
+
+**"Keychain KEK not configured":**
+
+The per-user encrypted keychain requires a key-encryption-key. Set `keychain-kek` in the security config or `KEYCHAIN_KEK` env var:
+```bash
+export KEYCHAIN_KEK=$(openssl rand -hex 32)
+```
+
+**"Swarm agents not found":**
+
+Ensure `SWARM_PYTHON_PATH` points to the agents directory (default: `mono/swarm/agents`) and Python 3.11+ is available:
+```bash
+python3 --version
+ls mono/swarm/agents/
 ```
 
 ### Checking Health

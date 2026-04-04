@@ -889,6 +889,64 @@ CREATE TRIGGER trg_keychain_secrets_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================================================
+-- CROSS-REPO LINKS
+-- ============================================================================
+-- Foundation for the Cross-Repo Observatory: directed repo-to-repo links
+-- with share profiles controlling data exposure scope.
+
+CREATE TABLE IF NOT EXISTS repo_links (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id           UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    source_repo_id   UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    target_repo_id   UUID NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    share_profile    VARCHAR(20) NOT NULL DEFAULT 'metadata'
+        CHECK (share_profile IN ('full', 'symbols', 'metadata', 'none')),
+    label            TEXT NOT NULL DEFAULT '',
+    created_by       UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE(org_id, source_repo_id, target_repo_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_links_source ON repo_links(source_repo_id);
+CREATE INDEX IF NOT EXISTS idx_repo_links_target ON repo_links(target_repo_id);
+CREATE INDEX IF NOT EXISTS idx_repo_links_org    ON repo_links(org_id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.table_constraints
+        WHERE constraint_name = 'chk_repo_links_no_self_link'
+          AND table_name = 'repo_links'
+    ) THEN
+        ALTER TABLE repo_links
+            ADD CONSTRAINT chk_repo_links_no_self_link
+            CHECK (source_repo_id != target_repo_id);
+    END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS repo_link_events (
+    id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    link_id          UUID REFERENCES repo_links(id) ON DELETE SET NULL,
+    org_id           UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    source_repo_id   UUID NOT NULL,
+    target_repo_id   UUID NOT NULL,
+    action           VARCHAR(50) NOT NULL,
+    actor_id         UUID REFERENCES users(id) ON DELETE SET NULL,
+    metadata         JSONB NOT NULL DEFAULT '{}',
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_link_events_link    ON repo_link_events(link_id);
+CREATE INDEX IF NOT EXISTS idx_repo_link_events_org     ON repo_link_events(org_id);
+CREATE INDEX IF NOT EXISTS idx_repo_link_events_created ON repo_link_events(created_at DESC);
+
+DROP TRIGGER IF EXISTS trg_repo_links_updated_at ON repo_links;
+CREATE TRIGGER trg_repo_links_updated_at
+    BEFORE UPDATE ON repo_links
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
 -- Ensures the rtvortex application role has full access to all tables.
@@ -931,6 +989,8 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE user_keychains TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE keychain_secrets TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE keychain_audit_log TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE repo_links TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE repo_link_events TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;

@@ -635,6 +635,13 @@ func (svc *Service) RecoverFromPhrase(ctx context.Context, userID uuid.UUID, phr
 	return nil
 }
 
+// FindUsersWithLLMKeys returns user IDs that have at least one secret whose
+// name starts with "llm." — i.e. users who configured LLM API keys through
+// the dashboard. Used at startup to rehydrate the in-memory LLM registry.
+func (svc *Service) FindUsersWithLLMKeys(ctx context.Context) ([]uuid.UUID, error) {
+	return svc.store.FindUsersWithSecretPrefix(ctx, "llm.")
+}
+
 // ── Compatibility: SecretStore Interface ─────────────────────────────────────
 
 // UserScopedService wraps the Service to provide a per-user view that

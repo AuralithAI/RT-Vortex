@@ -255,6 +255,86 @@ var (
 	}, []string{"result"})
 )
 
+// ── Cross-Repo Observatory Metrics ──────────────────────────────────────────
+
+var (
+	// CrossRepoSearchTotal counts federated cross-repo search requests.
+	CrossRepoSearchTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Subsystem: "crossrepo",
+		Name:      "search_total",
+		Help:      "Total cross-repo federated search requests by status (ok, empty, error).",
+	}, []string{"status"})
+
+	// CrossRepoSearchDuration observes federated search latency.
+	CrossRepoSearchDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: ns,
+		Subsystem: "crossrepo",
+		Name:      "search_duration_seconds",
+		Help:      "Cross-repo federated search duration in seconds.",
+		Buckets:   []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60},
+	})
+
+	// CrossRepoReposSearched tracks how many linked repos are searched per request.
+	CrossRepoReposSearched = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: ns,
+		Subsystem: "crossrepo",
+		Name:      "repos_searched",
+		Help:      "Number of linked repositories searched per federated search request.",
+		Buckets:   []float64{0, 1, 2, 3, 5, 10, 20, 50},
+	})
+
+	// CrossRepoEnrichmentTotal counts pipeline enrichment invocations.
+	CrossRepoEnrichmentTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Subsystem: "crossrepo",
+		Name:      "enrichment_total",
+		Help:      "Total cross-repo pipeline enrichment invocations by result (ok, empty, error).",
+	}, []string{"status"})
+
+	// CrossRepoEnrichmentDuration observes enrichment step latency in the pipeline.
+	CrossRepoEnrichmentDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: ns,
+		Subsystem: "crossrepo",
+		Name:      "enrichment_duration_seconds",
+		Help:      "Cross-repo enrichment step duration in seconds.",
+		Buckets:   []float64{0.1, 0.5, 1, 2, 5, 10, 30},
+	})
+
+	// CrossRepoLinksActive tracks the number of active cross-repo links.
+	CrossRepoLinksActive = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: ns,
+		Subsystem: "crossrepo",
+		Name:      "links_active",
+		Help:      "Number of active cross-repo links (share_profile != none).",
+	})
+
+	// CrossRepoAuthDecisions counts authorization decisions.
+	CrossRepoAuthDecisions = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Subsystem: "crossrepo",
+		Name:      "auth_decisions_total",
+		Help:      "Total cross-repo authorization decisions by result (allow, deny).",
+	}, []string{"result"})
+
+	// CrossRepoGraphBuildTotal counts dep-graph build requests.
+	CrossRepoGraphBuildTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: ns,
+		Subsystem: "crossrepo",
+		Name:      "graph_build_total",
+		Help:      "Total cross-repo dependency graph build requests by status.",
+	}, []string{"status"})
+
+	// CrossRepoGraphBuildDuration observes graph build latency.
+	CrossRepoGraphBuildDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: ns,
+		Subsystem: "crossrepo",
+		Name:      "graph_build_duration_seconds",
+		Help:      "Cross-repo dependency graph build duration in seconds.",
+		Buckets:   []float64{1, 5, 10, 30, 60, 120, 300},
+	})
+)
+
 // ── Recording Helpers ───────────────────────────────────────────────────────
 
 // RecordHTTPRequest records an HTTP request's metrics.
@@ -319,4 +399,42 @@ func RecordKeychainRecovery(result string) {
 // SetKeychainSecretsGauge updates the active secrets gauge.
 func SetKeychainSecretsGauge(count float64) {
 	KeychainSecretsGauge.Set(count)
+}
+
+// ── Cross-Repo Recording Helpers ────────────────────────────────────────────
+
+// RecordCrossRepoSearch records a federated cross-repo search.
+func RecordCrossRepoSearch(status string, reposSearched int, duration time.Duration) {
+	CrossRepoSearchTotal.WithLabelValues(status).Inc()
+	CrossRepoSearchDuration.Observe(duration.Seconds())
+	CrossRepoReposSearched.Observe(float64(reposSearched))
+}
+
+// RecordCrossRepoEnrichment records a pipeline enrichment invocation.
+func RecordCrossRepoEnrichment(status string, reposSearched int, duration time.Duration) {
+	CrossRepoEnrichmentTotal.WithLabelValues(status).Inc()
+	CrossRepoEnrichmentDuration.Observe(duration.Seconds())
+	if reposSearched > 0 {
+		CrossRepoReposSearched.Observe(float64(reposSearched))
+	}
+}
+
+// RecordCrossRepoAuthDecision records an authorization decision.
+func RecordCrossRepoAuthDecision(allowed bool) {
+	if allowed {
+		CrossRepoAuthDecisions.WithLabelValues("allow").Inc()
+	} else {
+		CrossRepoAuthDecisions.WithLabelValues("deny").Inc()
+	}
+}
+
+// RecordCrossRepoGraphBuild records a dependency graph build request.
+func RecordCrossRepoGraphBuild(status string, duration time.Duration) {
+	CrossRepoGraphBuildTotal.WithLabelValues(status).Inc()
+	CrossRepoGraphBuildDuration.Observe(duration.Seconds())
+}
+
+// SetCrossRepoLinksActive updates the active links gauge.
+func SetCrossRepoLinksActive(count float64) {
+	CrossRepoLinksActive.Set(count)
 }

@@ -454,6 +454,39 @@ func (r *Registry) updateAPIKeyInternal(name, apiKey string) bool {
 	return true
 }
 
+// ApplyAPIKey applies an API key to a provider without persisting back to vault.
+// This is the exported counterpart of updateAPIKeyInternal, intended for
+// cross-package callers (e.g. lazy rehydration from the API handler layer)
+// that already own the secret and just need to configure the in-memory provider.
+func (r *Registry) ApplyAPIKey(name, apiKey string) bool {
+	return r.updateAPIKeyInternal(name, apiKey)
+}
+
+// ApplyModel updates the default model for a provider in-memory only, without
+// persisting to vault. Used during rehydration when the value already lives in
+// the caller's keychain.
+func (r *Registry) ApplyModel(name, model string) bool {
+	m, ok := r.meta[name]
+	if !ok {
+		return false
+	}
+	m.DefaultModel = model
+	r.meta[name] = m
+	return true
+}
+
+// ApplyBaseURL updates the base URL for a provider in-memory only, without
+// persisting to vault. Used during rehydration.
+func (r *Registry) ApplyBaseURL(name, baseURL string) bool {
+	m, ok := r.meta[name]
+	if !ok {
+		return false
+	}
+	m.BaseURL = baseURL
+	r.meta[name] = m
+	return true
+}
+
 // splitVaultKey splits a dotted key like "llm.openai.api_key" into parts.
 func splitVaultKey(key string) []string {
 	var parts []string

@@ -108,7 +108,7 @@ func (r *AssetRepository) ListByRepo(ctx context.Context, repoID uuid.UUID, limi
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, repo_id, asset_type, COALESCE(source_url,''), COALESCE(file_name,''),
 		        COALESCE(mime_type,''), size_bytes, chunks_count, status,
-		        COALESCE(error_message,''), COALESCE(metadata,''), created_at
+		        COALESCE(error_message,''), COALESCE(metadata::text,''), created_at
 		 FROM repo_assets WHERE repo_id = $1 ORDER BY created_at DESC LIMIT $2`,
 		repoID, limit,
 	)
@@ -136,7 +136,7 @@ func (r *AssetRepository) GetByID(ctx context.Context, id uuid.UUID) (*Asset, er
 	err := r.pool.QueryRow(ctx,
 		`SELECT id, repo_id, asset_type, COALESCE(source_url,''), COALESCE(file_name,''),
 		        COALESCE(mime_type,''), size_bytes, chunks_count, status,
-		        COALESCE(error_message,''), COALESCE(metadata,''), created_at
+		        COALESCE(error_message,''), COALESCE(metadata::text,''), created_at
 		 FROM repo_assets WHERE id = $1`,
 		id,
 	).Scan(&a.ID, &a.RepoID, &a.AssetType, &a.SourceURL,

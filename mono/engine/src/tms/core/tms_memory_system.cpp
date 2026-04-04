@@ -58,6 +58,13 @@ private:
     aipr::MerkleCache cache_;
 };
 
+// ── Public KnowledgeGraph accessor ─────────────────────────────────────────
+
+aipr::KnowledgeGraph* TMSMemorySystem::knowledgeGraph() {
+    if (kg_handle_) return &kg_handle_->get();
+    return nullptr;
+}
+
 // =============================================================================
 // Constructor / Destructor
 // =============================================================================
