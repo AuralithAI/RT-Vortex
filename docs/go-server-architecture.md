@@ -7,9 +7,9 @@ It replaces the original Java/Spring Boot server with a leaner, statically-compi
 
 **Key stats:**
 - **Language**: Go 1.24
-- **Source files**: 54 `.go` files
-- **Lines of code**: ~14,400 lines
-- **Binary size**: ~20 MB (statically compiled, stripped)
+- **Source files**: 80+ `.go` files
+- **Lines of code**: ~25,000+ lines
+- **Binary size**: ~30 MB (statically compiled, stripped)
 - **Startup time**: <1 second
 - **Dependencies**: 15 direct, no CGo
 
@@ -30,7 +30,7 @@ It replaces the original Java/Spring Boot server with a leaner, statically-compi
 │  ┌──────▼──────┐ ┌─────▼──────┐ ┌─────▼──────┐                      │
 │  │  api/       │ │  ws/       │ │  metrics/  │                      │
 │  │  handlers   │ │  websocket │ │  prom      │                      │
-│  │  (32+ eps)  │ │  hub       │ │  (16)      │                      │
+│  │  (60+ eps)  │ │  hub       │ │  (25+)     │                      │
 │  └──────┬──────┘ └────────────┘ └────────────┘                      │
 │         │                                                           │
 │  ┌──────▼───────────────────────────────────────────────────────┐   │
@@ -38,8 +38,17 @@ It replaces the original Java/Spring Boot server with a leaner, statically-compi
 │  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐      │   │
 │  │  │ review │ │  llm   │ │  vcs   │ │  auth  │ │ engine │      │   │
 │  │  │pipeline│ │registry│ │registry│ │ jwt+   │ │ client │      │   │
-│  │  │(12step)│ │(3 prov)│ │(4 plat)│ │ oauth2 │ │ (grpc) │      │   │
+│  │  │(12step)│ │(5 prov)│ │(4 plat)│ │ oauth2 │ │ (grpc) │      │   │
 │  │  └────────┘ └────────┘ └────────┘ └────────┘ └────────┘      │   │
+│  │  ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐      │   │
+│  │  │ swarm  │ │cross-  │ │ vault/ │ │  chat  │ │  mcp   │      │   │
+│  │  │ teams  │ │ repo   │ │keychain│ │  RAG   │ │ tools  │      │   │
+│  │  │ELO/HITL│ │fed srch│ │ BIP39  │ │  SSE   │ │ custom │      │   │
+│  │  └────────┘ └────────┘ └────────┘ └────────┘ └────────┘      │   │
+│  │  ┌────────┐ ┌────────┐ ┌────────┐                            │   │
+│  │  │prsync  │ │benchmk │ │indexing│                            │   │
+│  │  │PR disc │ │eval    │ │service │                            │   │
+│  │  └────────┘ └────────┘ └────────┘                            │   │
 │  └──────┬──────────┬──────────┬──────────┬──────────┬───────────┘   │
 │         │          │          │          │          │               │
 │  ┌──────▼──────────▼──────────▼──────────▼──────────▼──────────┐    │
@@ -64,32 +73,47 @@ It replaces the original Java/Spring Boot server with a leaner, statically-compi
 ## Dependency Injection
 
 RTVortexGo uses **manual dependency injection** — no DI framework, no reflection, no magic.
-All wiring happens in `main.go` (~460 lines):
+All wiring happens in `main.go` (~800 lines):
 
 ```go
 // Wiring order in main.go:
-1. rtenv.Resolve()           // Find RTVORTEX_HOME
-2. rtlog.Setup(env)          // File + stdout logging
-3. config.Load(opts)         // Parse XML configuration
-4. store.NewPostgresPool()   // PostgreSQL connection
-5. session.NewRedisClient()  // Redis connection
-6. engine.NewPool()          // gRPC connection pool to C++ engine
-7. store.New*Repository()    // Database repositories (5)
-8. engine.NewClient()        // gRPC client wrapper
-9. auth.NewJWTManager()      // JWT token manager
-10. session.NewManager()     // Redis session manager
-11. auth.NewProviderRegistry() // OAuth2 providers (6)
+1.  rtenv.Resolve()              // Find RTVORTEX_HOME
+2.  rtlog.Setup(env)             // File + stdout logging
+3.  config.Load(opts)            // Parse XML configuration
+4.  store.NewPostgresPool()      // PostgreSQL connection
+5.  session.NewRedisClient()     // Redis connection
+6.  engine.NewPool()             // gRPC connection pool to C++ engine
+7.  store.New*Repository()       // Database repositories (10+)
+8.  engine.NewClient()           // gRPC client wrapper
+9.  auth.NewJWTManager()         // JWT token manager
+10. session.NewManager()         // Redis session manager
+11. auth.NewProviderRegistry()   // OAuth2 providers (6)
 12. rtcrypto.NewTokenEncryptor() // AES-256-GCM
-13. llm.NewRegistry()        // LLM providers (OpenAI, Anthropic, Ollama)
-14. vcs.NewPlatformRegistry() // VCS clients (GitHub, GitLab, Bitbucket, Azure)
-15. review.NewPipeline()     // 12-step review pipeline
-16. indexing.NewService()    // Indexing service
-17. ws.NewHub()              // WebSocket hub
-18. session.NewRateLimiter() // Rate limiter (3 categories)
-19. audit.NewLogger()        // Audit logger
-20. background.NewScheduler() // Background job scheduler
-21. server.New(deps)         // Build router with all dependencies
-22. http.Server.ListenAndServe() // Start HTTP server
+13. llm.NewRegistry()            // LLM providers (OpenAI, Anthropic, Gemini, Grok, Ollama)
+14. keychain.NewService()        // Per-user encrypted keychain (BIP39 recovery)
+15. vault.NewFileVault()         // Server-level secret vault
+16. vcs.NewPlatformRegistry()    // VCS clients (GitHub, GitLab, Bitbucket, Azure)
+17. review.NewPipeline()         // 12-step review pipeline
+18. indexing.NewService()        // Indexing service
+19. ws.NewHub()                  // WebSocket hub
+20. session.NewRateLimiter()     // Rate limiter (3 categories)
+21. audit.NewLogger()            // Audit logger
+22. crossrepo.NewAuthorizer()    // Cross-repo access control
+23. crossrepo.NewHandler()       // Cross-repo link management
+24. crossrepo.NewDepGraphService()     // Dependency graph orchestrator
+25. crossrepo.NewFederatedSearchService() // Federated search orchestrator
+26. chat.NewService()            // RAG chat with code citations
+27. prsync.NewWorker()           // Background PR sync worker
+28. swarm.NewTaskManager()       // Swarm task pipeline
+29. swarm.NewTeamManager()       // Swarm team lifecycle
+30. swarm.NewELOService()        // Agent performance scoring
+31. swarm.NewLLMProxy()          // Proxy LLM calls for agents
+32. swarm.NewPRCreator()         // Auto-create PRs from swarm output
+33. mcp.NewService()             // MCP tool integrations
+34. benchmark.NewRunner()        // Benchmark evaluation runner
+35. background.NewScheduler()    // Background job scheduler
+36. server.New(deps)             // Build router with all dependencies
+37. http.Server.ListenAndServe() // Start HTTP server
 ```
 
 All dependencies flow down through the `server.Dependencies` struct:
@@ -115,11 +139,46 @@ type Dependencies struct {
     AuditLogger     *audit.Logger
     WSHub           *ws.Hub
 
+    // Vault & Keychain
+    Vault           *vault.FileVault
+    Keychain        *keychain.Service
+
+    // Cross-Repo Observatory
+    CrossRepoAuth   *crossrepo.Authorizer
+    CrossRepoHandler *crossrepo.Handler
+    DepGraph        *crossrepo.DepGraphService
+    FederatedSearch *crossrepo.FederatedSearchService
+
+    // Agent Swarm
+    TaskManager     *swarm.TaskManager
+    TeamManager     *swarm.TeamManager
+    ELOService      *swarm.ELOService
+    LLMProxy        *swarm.LLMProxy
+    PRCreator       *swarm.PRCreator
+
+    // RAG Chat
+    ChatService     *chat.Service
+
+    // MCP Integrations
+    MCPService      *mcp.Service
+
+    // PR Sync
+    PRSyncWorker    *prsync.Worker
+
+    // Benchmarks
+    BenchmarkRunner *benchmark.Runner
+
+    // Repositories
     UserRepo        *store.UserRepository
     RepoRepo        *store.RepositoryRepo
     ReviewRepo      *store.ReviewRepository
     OrgRepo         *store.OrgRepository
     WebhookRepo     *store.WebhookRepository
+    SwarmRepo       *store.SwarmRepository
+    CrossRepoRepo   *store.CrossRepoRepository
+    ChatRepo        *store.ChatRepository
+    KeychainRepo    *store.KeychainRepository
+    BenchmarkRepo   *store.BenchmarkRepository
 }
 ```
 
@@ -153,6 +212,36 @@ Route groups with additional middleware:
 /api/v1/* (protected)   → auth.Middleware + RateLimitMiddleware("api", 100/min)
 /api/v1/webhooks/*      → RateLimitMiddleware("webhook", 60/min)
 ```
+
+## Package Reference
+
+All Go packages live under `mono/server-go/internal/`:
+
+| Package | Key Files | Purpose |
+|---------|-----------|---------|
+| `auth` | jwt.go, oauth.go, middleware.go, providers.go | JWT management, OAuth2 flows (6 providers), auth middleware |
+| `config` | config.go, xml.go | XML config parsing and auto-discovery |
+| `engine` | client.go, pool.go, proto.go | gRPC client pool for C++ engine |
+| `store` | postgres.go, user.go, repo.go, review.go, … | PostgreSQL repositories, migrations |
+| `session` | redis.go, manager.go, ratelimit.go | Redis sessions, sliding-window rate limiter |
+| `review` | pipeline.go, steps.go | 12-step review pipeline with WS progress |
+| `indexing` | service.go | Repo clone, index, reindex orchestration |
+| `llm` | registry.go, openai.go, anthropic.go, gemini.go, grok.go, ollama.go | 5 LLM provider adapters, streaming, fallback |
+| `vcs` | registry.go, github.go, gitlab.go, bitbucket.go, azure.go | VCS platform abstraction (4 platforms) |
+| `ws` | hub.go, conn.go | WebSocket hub with room-based broadcasting |
+| `audit` | logger.go | Async audit event logging to PostgreSQL |
+| `rtcrypto` | encryptor.go | AES-256-GCM token encryption |
+| `rtenv` | env.go | `RTVORTEX_HOME` resolution |
+| `rtlog` | log.go | Structured logging (file + stdout) |
+| `rtmetrics` | metrics.go, middleware.go | Prometheus metric collectors + HTTP middleware |
+| **`swarm`** | team_manager.go, task_manager.go, elo.go, llm_proxy.go, handler.go, ws_hub.go, pr_creator.go | Agent Swarm: 9-role team lifecycle, ELO scoring, task pipeline, LLM proxying, HITL via WebSocket, PR auto-creation |
+| **`crossrepo`** | handler.go, dep_graph.go, federated_search.go, graph_handler.go, authorizer.go | Cross-Repo Observatory: repo linking, dependency graph, federated code search, KG graph data, access control |
+| **`vault`** | vault.go | Server-level encrypted secret vault (KEK-protected) |
+| **`vault/keychain`** | keychain.go | Per-user encrypted keychain with BIP39 mnemonic recovery |
+| **`chat`** | service.go | RAG chat: codebase Q&A with SSE streaming + code citations |
+| **`mcp`** | service.go, providers/ | MCP tool integrations (Jira, Slack, Linear, custom templates) |
+| **`prsync`** | worker.go | Background PR sync: discovery, pre-embedding, stale detection |
+| **`benchmark`** | runner.go | Automated review evaluation with ELO comparison scoring |
 
 ## Review Pipeline
 
@@ -193,7 +282,7 @@ The review pipeline (`internal/review/pipeline.go`) is a 12-step process with We
 | 6 | Index | Engine (gRPC) | Ensure repo is indexed in C++ engine |
 | 7 | Build Context | Engine (gRPC) | Get relevant code context for changed files |
 | 8 | Prompt | Pipeline | Construct LLM prompt from context + diff |
-| 9 | LLM Call | LLM Provider | Send prompt to OpenAI/Anthropic/Ollama |
+| 9 | LLM Call | LLM Provider | Send prompt to OpenAI/Anthropic/Gemini/Grok/Ollama |
 | 10 | Parse Response | Pipeline | Extract structured comments from LLM output |
 | 11 | Post Comments | VCS Client | Post review comments back to PR |
 | 12 | Record | Store | Save review to PostgreSQL |
@@ -203,25 +292,26 @@ Steps 6 and 7 are gRPC calls to the C++ engine. Step 9 is an HTTP call to the LL
 ## LLM Provider System
 
 ```
-┌────────────────────────────────────────────────────────────────┐
-│  llm.Registry                                                  │
-│                                                                │
-│  ┌──────────────┐  ┌──────────────────┐  ┌──────────────┐      │
-│  │ OpenAI       │  │ Anthropic        │  │ Ollama       │      │
-│  │              │  │                  │  │              │      │
-│  │ Complete()   │  │ Complete()       │  │ Complete()   │      │
-│  │ SSE Stream   │  │ SSE Stream       │  │ NDJSON Stream│      │
-│  │              │  │ (content_block_  │  │              │      │
-│  │ data: {json} │  │  delta events)   │  │ {"response":}│      │
-│  └──────────────┘  └──────────────────┘  └──────────────┘      │
-│                                                                │
-│  Interface:                                                    │
-│    Provider: Name(), Complete(ctx, prompt, model) → string     │
-│    StreamingProvider: StreamComplete(ctx, prompt, model, ch)   │
-│                                                                │
-│  Fallback: primary → fallback on error                         │
-│  Registry: StreamComplete() checks StreamingProvider interface │
-└────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│  llm.Registry                                                              │
+│                                                                            │
+│  ┌──────────┐ ┌───────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐         │
+│  │ OpenAI   │ │ Anthropic │ │ Gemini   │ │ Grok(xAI)│ │ Ollama   │         │
+│  │          │ │           │ │          │ │          │ │          │         │
+│  │Complete()│ │ Complete()│ │Complete()│ │Complete()│ │Complete()│         │
+│  │SSE Stream│ │ SSE Stream│ │SSE Stream│ │SSE Stream│ │NDJSON    │         │
+│  │          │ │ (content_ │ │          │ │          │ │Stream    │         │
+│  │data:{json│ │  block_   │ │data:{json│ │data:{json│ │{"response│         │
+│  │}         │ │  delta)   │ │}         │ │}         │ │":}       │         │
+│  └──────────┘ └───────────┘ └──────────┘ └──────────┘ └──────────┘         │
+│                                                                            │
+│  Interface:                                                                │
+│    Provider: Name(), Complete(ctx, prompt, model) → string                 │
+│    StreamingProvider: StreamComplete(ctx, prompt, model, ch)               │
+│                                                                            │
+│  Fallback: primary → fallback on error                                     │
+│  Registry: StreamComplete() checks StreamingProvider interface             │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Streaming Protocols
@@ -230,6 +320,8 @@ Steps 6 and 7 are gRPC calls to the C++ engine. Step 9 is an HTTP call to the LL
 |----------|----------|--------|-------------|
 | OpenAI | SSE | `data: {"choices":[{"delta":{"content":"..."}}]}` | `content` |
 | Anthropic | SSE | `event: content_block_delta` + `data: {"delta":{"text":"..."}}` | `text` |
+| Gemini | SSE | `data: {"candidates":[{"content":{"parts":[{"text":"..."}]}}]}` | `text` |
+| Grok (xAI) | SSE | `data: {"choices":[{"delta":{"content":"..."}}]}` (OpenAI-compatible) | `content` |
 | Ollama | NDJSON | `{"response":"...", "done":false}` | `response` |
 
 The SSE endpoint at `POST /api/v1/llm/stream` normalizes all formats into:
@@ -395,6 +487,10 @@ The scheduler runs periodic maintenance tasks:
 | Session cleanup | Every 15 min | Evict expired sessions from Redis |
 | LLM health check | Every 60s | Ping LLM providers, update health status |
 | Index job cleanup | Every hour | Remove completed index jobs older than 7 days |
+| PR sync | Every 5 min | Discover new PRs, pre-embed diffs, mark stale PRs |
+| Swarm task reaper | Every 10 min | Time out stalled swarm tasks, recycle agents |
+| ELO recalculation | Every 30 min | Batch recalculate agent ELO ratings |
+| MCP provider health | Every 60s | Ping registered MCP providers (Jira, Slack, Linear) |
 
 ## Graceful Shutdown
 
@@ -402,15 +498,18 @@ The scheduler runs periodic maintenance tasks:
 SIGINT/SIGTERM received
          │
          ▼
-1. Stop accepting new HTTP connections
-2. Wait for in-flight requests (configurable timeout)
-3. Cancel root context
-4. Stop background scheduler
-5. Stop WebSocket hub
-6. Close engine gRPC pool
-7. Close Redis connection
-8. Close PostgreSQL pool
-9. Flush log files
+1.  Stop accepting new HTTP connections
+2.  Wait for in-flight requests (configurable timeout)
+3.  Cancel root context
+4.  Stop PR sync worker
+5.  Drain swarm task queue
+6.  Stop background scheduler
+7.  Stop WebSocket hub
+8.  Close MCP provider connections
+9.  Close engine gRPC pool
+10. Close Redis connection
+11. Close PostgreSQL pool
+12. Flush log files
 ```
 
 ## Configuration Loading
@@ -432,8 +531,16 @@ rtserverprops.xml
 <llm primary="openai">
   <openai api-key="..." .../>
   <anthropic api-key="..." .../>
+  <gemini api-key="..." .../>
+  <grok api-key="..." .../>
+  <ollama base-url="http://localhost:11434" .../>
 </llm>
-<security encryption-key="..."/>
+<security encryption-key="..."
+          keychain-kek="..."/>
+<swarm enabled="true"
+       max-agents="9"
+       python-path="/path/to/swarm/agents"/>
+<crossrepo enabled="true"/>
 ```
 
 Config auto-discovery:

@@ -10,11 +10,18 @@ External Clients (Webhooks, CLI, Web UI, SDKs)
 ┌─────────────────────────────────────────────────────────────────────┐
 │                 Go API Server (RTVortexGo)                          │
 │                                                                     │
-│  REST API     ◄── chi router (32+ endpoints)                        │
-│  WebSocket    ◄── Real-time review progress (coder/websocket)       │
+│  REST API     ◄── chi router (60+ endpoints)                        │
+│  WebSocket    ◄── Real-time review + swarm progress                 │
 │  Webhooks     ◄── GitHub, GitLab, Bitbucket, Azure DevOps           │
 │  Auth         ◄── JWT + OAuth2 (6 providers) + AES-256-GCM          │
-│  Metrics      ◄── Prometheus (16 counters/histograms/gauges)        │
+│  Vault        ◄── Per-user keychain (BIP39 recovery, server KEK)    │
+│  Swarm        ◄── 9-agent teams, ELO scoring, task pipeline         │
+│  Cross-Repo   ◄── Repo links, federated search, dep graph           │
+│  RAG Chat     ◄── Codebase Q&A with citations (SSE streaming)       │
+│  PR Sync      ◄── Background PR discovery + pre-embedding           │
+│  MCP          ◄── Tool integrations (Jira, Slack, Linear, custom)   │
+│  Benchmarks   ◄── Automated review quality evaluation (ELO)         │
+│  Metrics      ◄── Prometheus (25+ counters/histograms/gauges)       │
 │  Background   ◄── Scheduler (cleanup, health checks, indexing)      │
 │  DB Layer     ◄── pgx/v5 → PostgreSQL                               │
 │  Cache        ◄── go-redis/v9 → Redis                               │
@@ -28,6 +35,12 @@ External Clients (Webhooks, CLI, Web UI, SDKs)
                       │  (rtvortex)    │
                       │  gRPC Server   │
                       └────────────────┘
+                               ▲
+                               │ gRPC + Redis Streams
+                      ┌────────┴───────┐
+                      │ Python Agent   │
+                      │ Swarm (opt.)   │
+                      └────────────────┘
 ```
 
 **Port Summary:**
@@ -35,16 +48,19 @@ External Clients (Webhooks, CLI, Web UI, SDKs)
 | Port | Service | Protocol | Access |
 |------|---------|----------|--------|
 | 8080 | Go REST API + WebSocket | HTTP/WS | External |
+| 3000 | Next.js Dashboard | HTTP | External |
 | 50051 | C++ Engine | gRPC | Internal only |
 | 5432 | PostgreSQL | TCP | Internal only |
 | 6379 | Redis | TCP | Internal only |
 
 ## Overview
 
-RTVortex is a two-component system for automated code review powered by LLMs.
+RTVortex is a multi-component system for automated code review powered by LLMs and multi-agent swarms.
 
-1. **C++ Engine (`rtvortex`)** — High-performance gRPC server for code indexing, retrieval, and heuristic analysis
-2. **Go API Server (`RTVortexGo`)** — REST/WebSocket API for webhooks, authentication, orchestration, and LLM integration
+1. **C++ Engine (`rtvortex`)** — High-performance gRPC server for code indexing, retrieval, knowledge graph, and heuristic analysis
+2. **Go API Server (`RTVortexGo`)** — REST/WebSocket API for webhooks, authentication, orchestration, LLM integration, swarm coordination, cross-repo analysis, vault, and chat
+3. **Python Agent Swarm (optional)** — 9 specialized AI agents that collaborate on complex reviews via task pipelines
+4. **Next.js Dashboard** — Web UI for repo management, review history, knowledge graph visualization, swarm monitoring, and settings
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -71,9 +87,16 @@ RTVortex is a two-component system for automated code review powered by LLMs.
 │   │  12. Record review                            │                 │
 │   └───────────────────────┬───────────────────────┘                 │
 │                           │                                         │
+│   ┌───────────┐  ┌────────┴─────┐  ┌──────────┐  ┌──────────┐       │
+│   │  Swarm    │  │  Cross-Repo  │  │  Vault   │  │  RAG     │       │
+│   │  Teams    │  │  Observatory │  │ Keychain │  │  Chat    │       │
+│   │  ELO/HITL │  │  Fed Search  │  │ BIP39    │  │  SSE     │       │
+│   └───────────┘  └──────────────┘  └──────────┘  └──────────┘       │
+│                                                                     │
 │   ┌───────────────────────▼───────────────────────┐                 │
 │   │           Engine Client (gRPC Pool)           │                 │
-│   │  IndexRepository, Search, BuildContext        │                 │
+│   │  IndexRepository, Search, BuildContext,       │                 │
+│   │  GetRepoFileMap, FederatedSearch, Manifest    │                 │
 │   └───────────────────────┬───────────────────────┘                 │
 └───────────────────────────┼─────────────────────────────────────────┘
                             │ gRPC (port 50051)
@@ -90,6 +113,26 @@ RTVortex is a two-component system for automated code review powered by LLMs.
 │   │        TMS (Triune Memory System)             │                 │
 │   │  LTM (FAISS) + STM (Session) + MTM (Patterns) │                 │
 │   └───────────────────────────────────────────────┘                 │
+│   ┌───────────────────────────────────────────────┐                 │
+│   │    Knowledge Graph (SQLite WAL)               │                 │
+│   │  Nodes: file_summary, function, class, module │                 │
+│   │  Edges: IMPORTS, CALLS, CONTAINS, REFERENCES  │                 │
+│   │  inferFileEdges() for file-level aggregation  │                 │
+│   └───────────────────────────────────────────────┘                 │
+└─────────────────────────────────────────────────────────────────────┘
+                            ▲
+                            │ gRPC + Redis Streams
+┌───────────────────────────┴─────────────────────────────────────────┐
+│                    Python Agent Swarm (Optional)                    │
+│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐               │
+│   │Orchestr. │ │Architect │ │Senior Dev│ │Junior Dev│               │
+│   └──────────┘ └──────────┘ └──────────┘ └──────────┘               │
+│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐  │
+│   │    QA    │ │ Security │ │   Docs   │ │   Ops    │ │  UI/UX   │  │
+│   └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘  │
+│                                                                     │
+│   Auth: per-agent JWT    Tasks: Redis Streams + polling             │
+│   LLM: proxied via Go   Feedback: ELO scoring + HITL                │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -97,22 +140,28 @@ RTVortex is a two-component system for automated code review powered by LLMs.
 
 ### Go API Server (`mono/server-go/`)
 
-The Go server handles external API, webhooks, authentication, and LLM orchestration.
+The Go server handles external API, webhooks, authentication, LLM orchestration, swarm coordination, cross-repo analysis, vault, and chat.
 Written in Go 1.24 using `chi/v5` for routing. Single statically-compiled binary (~20MB).
 
 **Key responsibilities:**
-- REST API (32+ endpoints) for users, reviews, repos, orgs, webhooks, LLM, admin
+- REST API (60+ endpoints) for users, reviews, repos, orgs, webhooks, LLM, swarm, chat, cross-repo, vault, MCP, admin
 - OAuth2 authentication (GitHub, GitLab, Google, Microsoft, Bitbucket, LinkedIn)
 - JWT token management with Redis-backed sessions
+- Per-user encrypted keychain with BIP39 recovery phrases
 - 12-step review pipeline coordinating VCS → Engine → LLM → VCS
-- WebSocket real-time review progress streaming
+- Agent swarm infrastructure (9 roles, ELO scoring, task pipeline, HITL gates)
+- Cross-repo observatory (repo linking, federated search, dependency graph)
+- RAG chat with SSE streaming and code citations
+- PR sync worker (background VCS polling, pre-embedding)
+- MCP tool integrations (Jira, Slack, Linear, custom templates)
+- Benchmark runner for review quality evaluation
+- WebSocket real-time review + swarm progress streaming
 - SSE streaming for LLM completions
-- Prometheus metrics (16 metrics across 7 subsystems)
+- Prometheus metrics (25+ metrics across 10+ subsystems)
 - AES-256-GCM encryption for OAuth tokens at rest
 - Redis-backed sliding window rate limiting (per category)
 - Async audit logging for security events
-- Background job scheduler (session cleanup, LLM health, index cleanup)
-- Webhook receivers for all 4 VCS platforms with signature verification
+- Background job scheduler (session cleanup, LLM health, index cleanup, swarm janitor)
 
 See [Go Server Architecture](go-server-architecture.md) for detailed package layout and internals.
 
@@ -148,6 +197,31 @@ See [Go Server Architecture](go-server-architecture.md) for detailed package lay
 | Webhooks | `/api/v1/webhooks/gitlab` | POST | GitLab webhook |
 | Webhooks | `/api/v1/webhooks/bitbucket` | POST | Bitbucket webhook |
 | Webhooks | `/api/v1/webhooks/azure-devops` | POST | Azure DevOps webhook |
+| Chat | `/api/v1/chat/sessions` | GET/POST | Chat session management |
+| Chat | `/api/v1/chat/sessions/{id}/messages` | POST | Send message (SSE streaming response with citations) |
+| Swarm | `/api/v1/swarm/tasks` | GET/POST | List/create swarm tasks |
+| Swarm | `/api/v1/swarm/tasks/{id}` | GET/PUT | Task status, plan approval, cancellation |
+| Swarm | `/api/v1/swarm/tasks/{id}/feedback` | POST | Human feedback (ELO scoring) |
+| Swarm | `/api/v1/swarm/teams` | GET | List active swarm teams |
+| Swarm | `/api/v1/swarm/agents` | GET | List registered agents + ELO scores |
+| Swarm | `/api/v1/swarm/ws` | GET | WebSocket swarm activity feed |
+| Cross-Repo | `/api/v1/repos/{repoID}/links` | GET/POST | Manage cross-repo links |
+| Cross-Repo | `/api/v1/repos/{repoID}/links/{linkID}` | GET/PUT/DELETE | Single link CRUD |
+| Cross-Repo | `/api/v1/repos/{repoID}/cross-repo/manifest` | GET | Repo structural manifest |
+| Cross-Repo | `/api/v1/repos/{repoID}/cross-repo/dependencies` | GET | Cross-repo dependencies |
+| Cross-Repo | `/api/v1/repos/{repoID}/cross-repo/search` | POST | Federated search across linked repos |
+| Cross-Repo | `/api/v1/orgs/{orgID}/cross-repo/graph` | POST | Build org-level dependency graph |
+| File Map | `/api/v1/repos/{repoID}/file-map` | GET | Knowledge graph (nodes + edges for visualization) |
+| Vault | `/api/v1/vault/keychain/status` | GET | Keychain initialization status |
+| Vault | `/api/v1/vault/keychain/init` | POST | Initialize per-user keychain (returns BIP39 phrase) |
+| Vault | `/api/v1/vault/keychain/secrets` | GET/PUT | List/store keychain secrets |
+| Vault | `/api/v1/vault/keychain/recover` | POST | Recover keychain with BIP39 phrase |
+| MCP | `/api/v1/mcp/providers` | GET | List MCP providers + connection status |
+| MCP | `/api/v1/mcp/providers/{name}/connect` | POST | Connect to MCP provider |
+| MCP | `/api/v1/mcp/providers/{name}/test` | POST | Test MCP connection |
+| PR Sync | `/api/v1/repos/{repoID}/prs` | GET | List tracked pull requests |
+| Benchmarks | `/api/v1/benchmarks/run` | POST | Start benchmark evaluation |
+| Benchmarks | `/api/v1/benchmarks/runs/{id}` | GET | Benchmark run results |
 
 ### C++ Engine (`mono/engine/`)
 
@@ -286,7 +360,7 @@ Wraps all engine RPCs into typed Go methods:
 
 ### Database Schema (PostgreSQL)
 
-The Go server manages 11 tables:
+The Go server manages 20+ tables:
 
 | Table | Purpose |
 |-------|---------|
@@ -295,8 +369,21 @@ The Go server manages 11 tables:
 | `organizations` | Multi-tenant organizations |
 | `org_members` | Organization membership + roles |
 | `repositories` | Registered repositories |
+| `repo_members` | Per-repo membership and roles |
 | `reviews` | Review history + results |
 | `review_comments` | Individual review comments |
+| `tracked_pull_requests` | Discovered PRs from VCS platforms (PR sync) |
+| `chat_sessions` | RAG chat conversation sessions |
+| `chat_messages` | Individual chat messages with citations |
+| `repo_links` | Cross-repo directed links (observatory) |
+| `repo_link_events` | Audit trail for link mutations |
+| `swarm_teams` | Active swarm team instances |
+| `swarm_agents` | Registered swarm agents (role, ELO, heartbeat) |
+| `swarm_tasks` | Swarm task queue and lifecycle |
+| `mcp_connections` | Active MCP provider connections |
+| `mcp_call_log` | MCP tool call audit trail |
+| `keychain_keys` | Per-user wrapped master keys (keychain) |
+| `keychain_secrets` | Encrypted per-user secrets |
 | `usage_daily` | Daily usage statistics |
 | `webhook_events` | Received webhook audit trail |
 | `audit_log` | Security event log |
@@ -408,6 +495,193 @@ via the dashboard UI and stored in the encrypted vault.
 | `ENGINE_HOST` | `localhost` | C++ engine hostname |
 | `ENGINE_PORT` | `50051` | C++ engine port |
 | `ENGINE_TLS_ENABLED` | `false` | Enable TLS for gRPC |
+| `OAUTH_BASE_URL` | (derived) | External URL for OAuth callbacks (needed when binding `0.0.0.0`) |
+| `LLM_OPENAI_API_KEY` | — | OpenAI API key |
+| `LLM_ANTHROPIC_API_KEY` | — | Anthropic API key |
+| `LLM_GEMINI_API_KEY` | — | Google Gemini API key |
+| `LLM_GROK_API_KEY` | — | xAI Grok API key |
+| `TOKEN_ENCRYPTION_KEY` | — | 32-byte hex key for AES-256-GCM vault + keychain |
+
+## Agent Swarm
+
+The agent swarm is an **optional** component that enables multi-agent collaborative reviews. Python agents authenticate with per-agent JWTs and communicate through Go, which holds all credentials.
+
+### Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  Go Server (Credential Holder)                                     │
+│                                                                    │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐            │
+│  │ TaskMgr  │  │ TeamMgr  │  │ ELO Svc  │  │ LLMProxy │            │
+│  │ assign   │  │ form/    │  │ score    │  │ proxy    │            │
+│  │ pipeline │  │ disband  │  │ promote  │  │ to LLM   │            │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘            │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐                          │
+│  │ PRCreator│  │ MemorySvc│  │ MCPCaller│                          │
+│  │ auto-PR  │  │ HITL     │  │ tools    │                          │
+│  └──────────┘  └──────────┘  └──────────┘                          │
+└────────────────────────┬───────────────────────────────────────────┘
+                         │  internal API + Redis Streams
+┌────────────────────────▼───────────────────────────────────────────┐
+│  Python Agent Swarm                                                │
+│                                                                    │
+│  9 Specialized Agents:                                             │
+│  ┌─────────────┐ ┌──────────┐ ┌───────────┐ ┌───────────┐          │
+│  │ Orchestrator│ │ Architect│ │ Senior Dev│ │ Junior Dev│          │
+│  └─────────────┘ └──────────┘ └───────────┘ └───────────┘          │
+│  ┌─────────┐ ┌──────────┐ ┌──────┐ ┌──────┐ ┌──────┐               │
+│  │   QA    │ │ Security │ │ Docs │ │  Ops │ │UI/UX │               │
+│  └─────────┘ └──────────┘ └──────┘ └──────┘ └──────┘               │
+│                                                                    │
+│  Auth: X-Service-Secret → per-agent JWT                            │
+│  LLM: all calls proxied through Go (never direct)                  │
+│  Tools: MCP tool calls via Go endpoints                            │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Task Lifecycle
+
+```
+submitted → planning → plan_review (HITL gate) → implementing
+         → self_review → diff_review → pr_creating → completed
+```
+
+- **ELO Scoring**: Agents receive 1-5 human ratings mapped to ELO (K=32, baseline 1200)
+- **Auto-Tier**: Background process promotes/demotes agents based on ELO thresholds
+- **Team Formation**: Dynamic teams (max 5 concurrent), warm pool for instant startup
+- **Janitor**: Background goroutine cleans up idle teams, stale heartbeats, offline agents
+
+## Encrypted Vault & Keychain
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Per-User Keychain                                              │
+│                                                                 │
+│  Master Key ─── wrapped by Server KEK ──► PostgreSQL            │
+│       │                                                         │
+│       ├── Derived Key (encrypt)  ──► encrypt secrets            │
+│       └── Derived Key (HMAC)     ──► integrity check            │
+│                                                                 │
+│  Recovery: 12-word BIP39 phrase → re-derive master key          │
+│  Cache: in-memory derived keys with TTL (30 min default)        │
+│  Eviction: background goroutine purges expired keys             │
+│                                                                 │
+│  Stored Secrets:                                                │
+│    LLM API keys, model preferences, agent routes,               │
+│    VCS tokens, MCP tokens, custom settings                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+- **Server KEK**: Derived from `TOKEN_ENCRYPTION_KEY` — in production use HSM/KMS
+- **Startup Rehydration**: LLM keys, model choices, and routes loaded from keychain at server start
+- **Pluggable Backend**: `vault.SecretStore` interface — file-based for dev, swap in HashiCorp Vault / AWS SM / GCP SM
+
+## Cross-Repo Observatory
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  Org-Level Cross-Repo Graph                                        │
+│                                                                    │
+│    Repo A ──── IMPORTS ────► Repo B                                │
+│      │                        │                                    │
+│      └──── REFERENCES ───────►Repo C                               │
+│                                                                    │
+│  Share Profiles: full | symbols | metadata | none                  │
+│  Authorizer: checks user membership + link share profile           │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Components
+
+| Component | Purpose |
+|-----------|---------|
+| `Authorizer` | Per-link access control based on share profiles and org membership |
+| `Handler` | CRUD for cross-repo links with audit logging |
+| `DepGraphService` | Structural manifests, cross-repo dependency edges, org-level build graph |
+| `FederatedSearchService` | Query across linked repos; merges and score-normalizes results |
+| `GraphHandler` | HTTP endpoints for dependency graph and federated search |
+| `PipelineEnricher` | Injects cross-repo context into the review pipeline |
+
+### Federated Search Flow
+
+```
+1. User queries from Repo A
+2. FederatedSearchService fetches all repos linked to A
+3. Authorizer checks user access + share profile for each
+4. Engine executes parallel searches across authorized repos
+5. Results merged, score-normalized, returned with attribution
+```
+
+## Knowledge Graph Visualization
+
+The dashboard includes an interactive knowledge graph viewer for each indexed repository.
+
+### Renderers
+
+| Renderer | Library | When Used | Features |
+|----------|---------|-----------|----------|
+| **DOM** | @xyflow/react v12 | ≤500 nodes | Rich DOM labels, edge click, detail panels |
+| **WebGL** | cosmos.gl v2 | >500 nodes | GPU-accelerated, 1000s of nodes, cluster labels |
+
+### WebGL Renderer Details
+
+- **Colors**: `setPointColors(Float32Array)` → GPU shader, values normalized 0–1
+- **Language Palette**: 22 language colors for `file_summary` nodes (Python blue, TypeScript teal, Rust copper, etc.)
+- **Simulation**: Cosmograph-like tuning — high repulsion, cluster strength, link spring for tight directory clusters
+- **Cluster Labels**: Directory names rendered at cluster centroids via `spaceToScreenPosition()`
+- **Dark/Light Mode**: MutationObserver watches `<html>` class for theme changes, rebuilds graph
+
+### File-Level Edge Inference (C++ Engine)
+
+When the UI requests `file_summary` nodes only, there are typically no direct edges between them. The engine's `inferFileEdges()` method:
+
+1. JOINs `kg_edges` with `kg_nodes` on both endpoints to get `file_path`
+2. Groups by `(src_file_path, dst_file_path, edge_type)` with `COUNT(*)` as weight
+3. Returns synthetic file-level edges with negative IDs
+4. ~85 lines of SQL, indexed on `repo_id`, `file_path`, `src_id`, `dst_id`
+
+## RAG Chat
+
+```
+User Question → Engine Search (FREE: semantic + lexical + graph)
+                     │
+                     ▼  relevant code chunks
+              Build Prompt (question + context + conversation history)
+                     │
+                     ▼
+              LLM Synthesis (streamed via SSE)
+                     │
+                     ▼
+              Response with citations to files/lines
+```
+
+- **Conversation History**: Configurable window (default 10 messages)
+- **Context Chunks**: Up to 10 code chunks retrieved per question
+- **Zero-Cost Retrieval**: All search is handled by the C++ engine (no LLM tokens)
+- **Temperature**: 0.3 for precise code-focused answers
+
+## PR Sync Worker
+
+Background service that keeps the tracked pull requests table up to date:
+
+| Config | Default | Description |
+|--------|---------|-------------|
+| `SyncInterval` | 5 min | How often to poll VCS platforms |
+| `EmbedInterval` | 2 min | How often to check for PRs needing embedding |
+| `MaxPRsPerRepo` | 200 | Open PRs fetched per repository |
+| `MaxConcurrentSyncs` | 4 | Parallel repo sync workers |
+| `StaleAfter` | 24h | Mark unseen PRs as stale |
+| `EnableEmbedding` | true | Pre-embed PR diffs in the engine |
+
+## MCP Integrations
+
+The Model Context Protocol (MCP) system provides tool integrations for agents and the review pipeline:
+
+- **Built-in Providers**: Jira, Slack, Linear (with OAuth token management via vault)
+- **Custom Templates**: Define custom MCP actions with validation, simulation, and testing
+- **Per-User Tokens**: MCP tokens stored in the per-user keychain via `VaultFactory`
+- **Metrics**: `rtvortex_mcp_calls_total`, `rtvortex_mcp_call_duration_seconds`, `rtvortex_mcp_active_connections`
 
 ## CI/CD Pipelines
 
@@ -421,18 +695,21 @@ via the dashboard UI and stored in the encrypted vault.
 ## Security
 
 - **TLS/mTLS**: Both engine and server support TLS
-- **Authentication**: JWT for REST API, OAuth2 for user login (6 providers)
+- **Authentication**: JWT for REST API, OAuth2 for user login (6 providers), per-agent JWT for swarm
+- **Per-User Keychain**: AES-256-GCM encrypted secrets with BIP39 recovery, server KEK wrapping
 - **Token Encryption**: AES-256-GCM for OAuth tokens stored in PostgreSQL
 - **Rate Limiting**: Redis-backed sliding window (per category: api, auth, webhook)
-- **Audit Logging**: Async fire-and-forget security event logging to PostgreSQL
+- **Audit Logging**: Async fire-and-forget security event logging to PostgreSQL (includes cross-repo link events)
 - **Webhook Verification**: HMAC signature verification for all 4 VCS platforms
+- **Swarm Auth**: Service secret (derived from JWT key) for agent registration; per-agent JWTs for all subsequent calls
+- **Cross-Repo Authorizer**: Share-profile-based access control for cross-repo data exposure
 - **Network Isolation**: Engine doesn't need public access
 
 ## Observability
 
 ### Prometheus Metrics
 
-The Go server exports 16 metrics at `GET /metrics`:
+The Go server exports 25+ metrics at `GET /metrics`:
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -452,6 +729,14 @@ The Go server exports 16 metrics at `GET /metrics`:
 | `rtvortex_ws_messages_sent_total` | Counter | WebSocket messages sent |
 | `rtvortex_auth_events_total` | Counter | Auth events |
 | `rtvortex_rate_limit_rejections_total` | Counter | Rate limit rejections |
+| `rtvortex_swarm_tasks_total` | Counter | Swarm tasks by status |
+| `rtvortex_swarm_active_teams` | Gauge | Currently active swarm teams |
+| `rtvortex_swarm_active_agents` | Gauge | Currently registered agents |
+| `rtvortex_swarm_task_duration_seconds` | Histogram | Task completion time |
+| `rtvortex_swarm_elo_distribution` | Histogram | Agent ELO score distribution |
+| `rtvortex_mcp_calls_total` | Counter | MCP provider calls by provider/action/status |
+| `rtvortex_mcp_call_duration_seconds` | Histogram | MCP call latency |
+| `rtvortex_mcp_active_connections` | Gauge | Active MCP connections by provider |
 
 ### Health Checks
 
