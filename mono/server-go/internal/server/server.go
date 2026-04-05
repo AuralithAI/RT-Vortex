@@ -518,6 +518,11 @@ func (s *Server) setupRouter() {
 				r.Post("/memory/mtm", sh.HandleMTMStore)
 				r.Get("/memory/mtm", sh.HandleMTMRecall)
 
+				// Cross-task consensus insights.
+				r.Post("/memory/insights", sh.HandleInsightStore)
+				r.Get("/memory/insights", sh.HandleInsightRecall)
+				r.Get("/memory/provider-stats", sh.HandleProviderStats)
+
 				// Human-in-the-loop.
 				r.Post("/hitl/ask", sh.HandleHITLAsk)
 
@@ -581,6 +586,9 @@ func (s *Server) setupRouter() {
 
 			// Human-in-the-loop response (user JWT).
 			r.Post("/hitl/respond", sh.HandleHITLRespond)
+
+			// Cross-task consensus insights (user JWT).
+			r.Get("/insights", sh.HandleInsightRecallPublic)
 
 			// WebSocket: real-time swarm task events
 			if s.deps.WSHub != nil {

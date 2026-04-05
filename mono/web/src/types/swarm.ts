@@ -253,3 +253,36 @@ export interface LLMProviderMeta {
   bgColor: string;
   borderColor: string;
 }
+
+/** Insight category for cross-task learning. */
+export type InsightCategory =
+  | "provider_reliability"
+  | "strategy_effectiveness"
+  | "code_pattern"
+  | "provider_agreement"
+  | "quality_signal";
+
+/** A durable cross-task consensus insight. */
+export interface ConsensusInsightData {
+  id: string;
+  repo_id: string;
+  task_id: string;
+  thread_id: string;
+  category: InsightCategory;
+  key: string;
+  insight: string;
+  confidence: number;
+  strategy: string;
+  provider: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Aggregated provider reliability stats from consensus decisions. */
+export interface ProviderReliabilityStatsData {
+  provider: string;
+  win_count: number;
+  total_decisions: number;
+  avg_confidence: number;
+}

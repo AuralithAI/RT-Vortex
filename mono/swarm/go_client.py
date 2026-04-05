@@ -356,6 +356,77 @@ class GoClient:
             data = resp.json()
             return data.get("insights", [])
 
+    # ── Consensus Insights (Cross-Task Learning) endpoints ───────────────
+
+    async def insight_store(
+        self,
+        repo_id: str,
+        task_id: str,
+        thread_id: str,
+        category: str,
+        key: str,
+        insight: str,
+        confidence: float = 0.8,
+        strategy: str = "",
+        provider: str = "",
+        metadata: dict | None = None,
+    ) -> None:
+        """Store a cross-task consensus insight via the Go API."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/memory/insights",
+                headers=self._headers(),
+                json={
+                    "repo_id": repo_id,
+                    "task_id": task_id,
+                    "thread_id": thread_id,
+                    "category": category,
+                    "key": key,
+                    "insight": insight,
+                    "confidence": confidence,
+                    "strategy": strategy,
+                    "provider": provider,
+                    "metadata": metadata or {},
+                },
+            )
+            resp.raise_for_status()
+
+    async def insight_recall(
+        self,
+        repo_id: str,
+        category: str = "",
+        limit: int = 20,
+    ) -> list[dict]:
+        """Recall cross-task consensus insights for a repository."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/memory/insights",
+                headers=self._headers(),
+                params={
+                    "repo_id": repo_id,
+                    "category": category,
+                    "limit": str(limit),
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("insights", [])
+
+    async def provider_stats(
+        self,
+        repo_id: str,
+    ) -> list[dict]:
+        """Get provider reliability stats for a repository."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/memory/provider-stats",
+                headers=self._headers(),
+                params={"repo_id": repo_id},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("stats", [])
+
     # ── HITL (Human-in-the-Loop) endpoints ───────────────────────────────
 
     async def ask_human(

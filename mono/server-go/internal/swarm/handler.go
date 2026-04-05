@@ -1105,8 +1105,8 @@ func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
 
 	var evt struct {
 		ThreadID       string             `json:"thread_id"`
-		Strategy       string             `json:"strategy"`   // "pick_best", "majority_vote", "gpt_as_judge", "multi_judge_panel"
-		Provider       string             `json:"provider"`   // winning provider or "consensus"
+		Strategy       string             `json:"strategy"` // "pick_best", "majority_vote", "gpt_as_judge", "multi_judge_panel"
+		Provider       string             `json:"provider"` // winning provider or "consensus"
 		Model          string             `json:"model"`
 		Confidence     float64            `json:"confidence"`
 		Reasoning      string             `json:"reasoning"`
@@ -1170,6 +1170,28 @@ func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
 			data["judge_agreement"] = evt.JudgeAgreement
 		}
 		h.WS.BroadcastDiscussionEvent(taskID, "consensus_result", data)
+	}
+
+	// Auto-extract cross-task insights from every consensus decision.
+	if h.MemorySvc != nil && h.TaskMgr != nil {
+		go func() {
+			ctx := context.Background()
+			tid, parseErr := uuid.Parse(taskID)
+			if parseErr != nil {
+				return
+			}
+			task, taskErr := h.TaskMgr.GetTask(ctx, tid)
+			if taskErr != nil || task == nil {
+				return
+			}
+			repoID := task.RepoID
+			h.MemorySvc.ExtractAndStoreInsights(
+				ctx, repoID, taskID, evt.ThreadID,
+				evt.Strategy, evt.Provider, evt.Model,
+				evt.Confidence, evt.Scores,
+				evt.JudgeCount, evt.JudgeAgreement,
+			)
+		}()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

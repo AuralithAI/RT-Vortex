@@ -27,6 +27,7 @@ import { AgentChat } from "@/components/swarm/agent-chat";
 import { TaskAgentList } from "@/components/swarm/task-agent-list";
 import { MultiLLMDiscussion } from "@/components/swarm/multi-llm-discussion";
 import { ConsensusResultCard } from "@/components/swarm/consensus-result-card";
+import { InsightMemoryPanel } from "@/components/swarm/insight-memory-panel";
 import { useSwarmEvents } from "@/hooks/use-swarm-events";
 import { useDiscussionEvents } from "@/hooks/use-discussion-events";
 import type { SwarmTask, SwarmDiff, PlanDocument } from "@/types/swarm";
@@ -254,6 +255,9 @@ export default function SwarmTaskDetailPage() {
               ))}
             </div>
           )}
+
+          {/* Cross-Task Insights — learned from past consensus decisions */}
+          <InsightMemoryPanel taskId={params.id} />
 
           {/* Diffs Section */}
           {diffs.length > 0 && (
