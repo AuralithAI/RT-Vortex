@@ -544,3 +544,48 @@ var (
 		Help:      "Total team formation recommendations by complexity label and strategy.",
 	}, []string{"complexity", "strategy"})
 )
+
+// ── Adaptive Probe Tuning Metrics ─────────────────────────────────
+
+var (
+	// SwarmProbeTuningOutcomes counts probe outcomes by role, complexity, and status.
+	SwarmProbeTuningOutcomes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "probe_tuning_outcomes_total",
+		Help:      "Total adaptive probe outcomes by role, complexity label, and status (ok/error).",
+	}, []string{"role", "complexity", "status"})
+
+	// SwarmProbeTuningLatency observes probe latency per role.
+	SwarmProbeTuningLatency = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "probe_tuning_latency_seconds",
+		Help:      "Adaptive probe latency per role.",
+		Buckets:   []float64{0.5, 1, 2, 5, 10, 20, 30, 60, 120},
+	}, []string{"role"})
+
+	// SwarmProbeTuningTokens counts tokens consumed per role through adaptive probes.
+	SwarmProbeTuningTokens = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "probe_tuning_tokens_total",
+		Help:      "Total tokens consumed by adaptive probes per role.",
+	}, []string{"role"})
+
+	// SwarmProbeTuningCostUSD tracks estimated USD cost per role.
+	SwarmProbeTuningCostUSD = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "probe_tuning_cost_usd_total",
+		Help:      "Estimated USD cost of adaptive probes per role.",
+	}, []string{"role"})
+
+	// SwarmProbeTuningAdjustments counts tuning engine adjustments by role and strategy.
+	SwarmProbeTuningAdjustments = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "probe_tuning_adjustments_total",
+		Help:      "Total adaptive probe tuning config adjustments by role and strategy.",
+	}, []string{"role", "strategy"})
+)

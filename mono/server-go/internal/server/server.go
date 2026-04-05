@@ -540,6 +540,10 @@ func (s *Server) setupRouter() {
 				// Team formation (dynamic complexity → team sizing).
 				r.Post("/team-recommend", sh.HandleTeamRecommend)
 
+				// Adaptive probe tuning (config fetch + outcome recording).
+				r.Get("/probe-config", sh.HandleGetProbeConfig)
+				r.Post("/probe-history", sh.HandleRecordProbeHistory)
+
 				// Web fetch proxy (URL fetching for agents).
 				r.Post("/web/fetch", sh.HandleWebFetch)
 
@@ -601,6 +605,13 @@ func (s *Server) setupRouter() {
 
 			// Team formation (user JWT).
 			r.Get("/tasks/{id}/team-formation", sh.HandleGetTeamFormation)
+
+			// Adaptive probe tuning (user JWT).
+			r.Get("/probe-configs", sh.HandleListProbeConfigs)
+			r.Get("/probe-configs/{role}", sh.HandleGetProbeConfigByRole)
+			r.Put("/probe-configs/{role}", sh.HandleUpdateProbeConfig)
+			r.Get("/probe-stats/{role}", sh.HandleGetProbeStats)
+			r.Get("/probe-history", sh.HandleListProbeHistory)
 
 			// Human-in-the-loop response (user JWT).
 			r.Post("/hitl/respond", sh.HandleHITLRespond)

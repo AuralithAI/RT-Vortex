@@ -662,20 +662,22 @@ func main() {
 	swarmMemorySvc := swarm.NewMemoryService(db.Pool)
 	swarmRoleELO := swarm.NewRoleELOService(db.Pool)
 	swarmTeamFormSvc := swarm.NewTeamFormationService(db.Pool, swarmRoleELO)
+	swarmProbeTuningSvc := swarm.NewProbeTuningService(db.Pool, swarmRoleELO)
 
 	swarmHandler := &swarm.Handler{
-		AuthSvc:     swarmAuthSvc,
-		TaskMgr:     swarmTaskMgr,
-		TeamMgr:     swarmTeamMgr,
-		LLMProxy:    swarmLLMProxy,
-		ELO:         swarmELO,
-		RoleELO:     swarmRoleELO,
-		TeamFormSvc: swarmTeamFormSvc,
-		WS:          swarmWSHub,
-		PRCreator:   swarmPRCreator,
-		VCSResolver: vcsResolver,
-		DB:          db.Pool,
-		MemorySvc:   swarmMemorySvc,
+		AuthSvc:        swarmAuthSvc,
+		TaskMgr:        swarmTaskMgr,
+		TeamMgr:        swarmTeamMgr,
+		LLMProxy:       swarmLLMProxy,
+		ELO:            swarmELO,
+		RoleELO:        swarmRoleELO,
+		TeamFormSvc:    swarmTeamFormSvc,
+		ProbeTuningSvc: swarmProbeTuningSvc,
+		WS:             swarmWSHub,
+		PRCreator:      swarmPRCreator,
+		VCSResolver:    vcsResolver,
+		DB:             db.Pool,
+		MemorySvc:      swarmMemorySvc,
 	}
 
 	// Start the swarm task assignment loop.
@@ -697,6 +699,9 @@ func main() {
 	// CI signal poller: auto-ingest PR merge state + CI checks into role ELO.
 	swarmCIPoller := swarm.NewCISignalPoller(db.Pool, vcsResolver, swarmRoleELO, swarmWSHub)
 	go swarmCIPoller.Start(ctx)
+
+	// Adaptive probe tuning: periodic config adjustment based on probe history.
+	go swarmProbeTuningSvc.StartTuningLoop(ctx)
 
 	slog.Info("Swarm agent infrastructure initialized")
 

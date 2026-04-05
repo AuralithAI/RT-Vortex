@@ -783,3 +783,57 @@ class GoClient:
             )
             resp.raise_for_status()
             return resp.json()
+
+    # ── Adaptive Probe Tuning ────────────────────────────────────────────
+
+    async def get_probe_config(
+        self,
+        role: str,
+        repo_id: str = "",
+        action_type: str = "",
+        complexity_label: str = "",
+        tier: str = "",
+    ) -> dict:
+        """Fetch adaptive probe configuration from Go.
+
+        Args:
+            role: Agent role (e.g. "senior_dev").
+            repo_id: Repository ID for repo-specific configs.
+            action_type: Optional action type filter.
+            complexity_label: Task complexity for per-probe enhancement.
+            tier: Agent's ELO tier for per-probe enhancement.
+
+        Returns:
+            ProbeConfig dict with tuned parameters.
+        """
+        params: dict[str, str] = {"role": role}
+        if repo_id:
+            params["repo_id"] = repo_id
+        if action_type:
+            params["action_type"] = action_type
+        if complexity_label:
+            params["complexity_label"] = complexity_label
+        if tier:
+            params["tier"] = tier
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/probe-config",
+                headers=self._headers(),
+                params=params,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def record_probe_history(self, outcome: dict) -> None:
+        """Record a probe outcome in the adaptive tuning history.
+
+        Args:
+            outcome: ProbeOutcome dict with all probe details.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/probe-history",
+                headers=self._headers(),
+                json=outcome,
+            )
+            resp.raise_for_status()

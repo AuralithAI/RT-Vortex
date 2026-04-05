@@ -829,6 +829,10 @@ INSERT INTO schema_info (version, description)
 SELECT 22, 'Add team_formation JSONB column to swarm_tasks for dynamic team formation'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 22);
 
+INSERT INTO schema_info (version, description)
+SELECT 23, 'Add swarm_probe_configs and swarm_probe_history tables for adaptive probe tuning'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 23);
+
 -- ============================================================================
 -- UPDATED_AT TRIGGER
 -- ============================================================================
@@ -1110,6 +1114,82 @@ CREATE TRIGGER trg_swarm_ci_signals_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================================================
+-- SWARM PROBE CONFIGS (Adaptive Probe Tuning)
+-- ============================================================================
+-- Per-(role, repo_id, action_type) tuning parameters for the multi-LLM probe.
+-- The adaptive tuning engine updates these periodically based on observed
+-- probe outcomes.
+
+CREATE TABLE IF NOT EXISTS swarm_probe_configs (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role            TEXT NOT NULL,
+    repo_id         TEXT NOT NULL DEFAULT '',
+    action_type     TEXT NOT NULL DEFAULT '',
+    num_models      INT NOT NULL DEFAULT 3,
+    preferred_providers TEXT[] NOT NULL DEFAULT '{}',
+    excluded_providers  TEXT[] NOT NULL DEFAULT '{}',
+    temperature     DOUBLE PRECISION NOT NULL DEFAULT 0.2,
+    max_tokens      INT NOT NULL DEFAULT 4096,
+    timeout_ms      INT NOT NULL DEFAULT 60000,
+    budget_cap_usd  DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    tokens_spent    BIGINT NOT NULL DEFAULT 0,
+    strategy        TEXT NOT NULL DEFAULT 'adaptive',
+    confidence_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.6,
+    max_retries     INT NOT NULL DEFAULT 1,
+    reasoning       TEXT NOT NULL DEFAULT '',
+    last_tuned_at   TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (role, repo_id, action_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_swarm_probe_cfg_role_repo
+    ON swarm_probe_configs (role, repo_id);
+
+DROP TRIGGER IF EXISTS trg_swarm_probe_configs_updated_at ON swarm_probe_configs;
+CREATE TRIGGER trg_swarm_probe_configs_updated_at
+    BEFORE UPDATE ON swarm_probe_configs
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
+-- SWARM PROBE HISTORY (Adaptive Probe Tuning)
+-- ============================================================================
+-- Append-only log of every probe outcome.  The adaptive tuning engine
+-- consumes recent rows to compute provider statistics and adjust configs.
+
+CREATE TABLE IF NOT EXISTS swarm_probe_history (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role                  TEXT NOT NULL,
+    repo_id               TEXT NOT NULL DEFAULT '',
+    action_type           TEXT NOT NULL DEFAULT '',
+    task_id               TEXT NOT NULL DEFAULT '',
+    providers_queried     TEXT[] NOT NULL DEFAULT '{}',
+    providers_succeeded   TEXT[] NOT NULL DEFAULT '{}',
+    provider_winner       TEXT NOT NULL DEFAULT '',
+    strategy_used         TEXT NOT NULL DEFAULT '',
+    consensus_confidence  DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    provider_latencies    JSONB NOT NULL DEFAULT '{}',
+    provider_tokens       JSONB NOT NULL DEFAULT '{}',
+    total_ms              INT NOT NULL DEFAULT 0,
+    total_tokens          INT NOT NULL DEFAULT 0,
+    estimated_cost_usd    DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    success               BOOLEAN NOT NULL DEFAULT FALSE,
+    complexity_label      TEXT NOT NULL DEFAULT '',
+    num_models_used       INT NOT NULL DEFAULT 0,
+    temperature_used      DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_swarm_probe_hist_role_repo
+    ON swarm_probe_history (role, repo_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_probe_hist_task
+    ON swarm_probe_history (task_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_probe_hist_created
+    ON swarm_probe_history (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_swarm_probe_hist_winner
+    ON swarm_probe_history (provider_winner);
+
+-- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
 -- Ensures the rtvortex application role has full access to all tables.
@@ -1158,6 +1238,8 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE swarm_role_elo TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_role_elo_history TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_ci_signals TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_probe_configs TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_probe_history TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;

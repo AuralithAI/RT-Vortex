@@ -428,3 +428,67 @@ export interface TeamFormationData {
   strategy: FormationStrategy;
   created_at: string;
 }
+
+// ─── Adaptive Probe Tuning Types ──────────────────────────────────
+
+/** Strategy for how probe parameters are determined. */
+export type ProbeStrategy = "adaptive" | "static" | "aggressive";
+
+/** Per-role adaptive probe configuration. */
+export interface ProbeConfigData {
+  id: string;
+  role: string;
+  repo_id: string;
+  action_type: string;
+  num_models: number;
+  preferred_providers: string[];
+  excluded_providers: string[];
+  temperature: number;
+  max_tokens: number;
+  timeout_ms: number;
+  budget_cap_usd: number;
+  tokens_spent: number;
+  strategy: ProbeStrategy;
+  confidence_threshold: number;
+  max_retries: number;
+  reasoning: string;
+  last_tuned_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A single probe outcome recorded by the tuning history. */
+export interface ProbeHistoryData {
+  id: string;
+  role: string;
+  repo_id: string;
+  action_type: string;
+  task_id: string;
+  providers_queried: string[];
+  providers_succeeded: string[];
+  provider_winner: string;
+  strategy_used: string;
+  consensus_confidence: number;
+  provider_latencies: Record<string, number>;
+  provider_tokens: Record<string, { prompt: number; completion: number }>;
+  total_ms: number;
+  total_tokens: number;
+  estimated_cost_usd: number;
+  success: boolean;
+  complexity_label: ComplexityLabel | "";
+  num_models_used: number;
+  temperature_used: number;
+  created_at: string;
+}
+
+/** Aggregated provider statistics for a role. */
+export interface ProviderStatsData {
+  provider: string;
+  total_probes: number;
+  successes: number;
+  success_rate: number;
+  wins: number;
+  win_rate: number;
+  avg_latency_ms: number;
+  reliability_score: number;
+}

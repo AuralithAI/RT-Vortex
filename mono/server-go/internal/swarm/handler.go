@@ -25,8 +25,9 @@ type Handler struct {
 	LLMProxy    *LLMProxy
 	ELO         *ELOService
 	RoleELO     *RoleELOService
-	TeamFormSvc *TeamFormationService
-	WS          *WSHub
+	TeamFormSvc    *TeamFormationService
+	ProbeTuningSvc *ProbeTuningService
+	WS             *WSHub
 	PRCreator   *PRCreator
 	VCSResolver *vcs.Resolver
 	DB          *pgxpool.Pool

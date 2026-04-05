@@ -33,6 +33,7 @@ from .tool import ToolDef
 if TYPE_CHECKING:
     from ..conversation import SharedConversation
     from ..memory import AgentMemory
+    from ..probe_tuning import AdaptiveProbeConfig
     from ..workspace import VirtualWorkspace
 
 logger = logging.getLogger(__name__)
@@ -93,11 +94,12 @@ class Agent:
         self.workspace: VirtualWorkspace | None = None
         self.memory: AgentMemory | None = None
         self._consensus_engine: ConsensusEngine | None = None
-        # Role-based ELO — injected at registration.
         self._tier: str = "standard"
         self._elo_score: float = 1200.0
         self._probe_count: int = 3
         self._repo_id: str = ""
+        self._adaptive_config: AdaptiveProbeConfig | None = None
+        self._complexity_label: str = ""
 
     @property
     def tier(self) -> str:
@@ -349,15 +351,48 @@ class Agent:
             self.agent_id, num_models or -1, self.role, action_type or "all",
         )
 
-        # If the caller didn't specify num_models, use the tier-based probe
-        # count from role ELO.  Restricted roles get *more* probes
-        # (reinforcement learning), expert roles get fewer (earned trust).
-        if num_models == 0 and self._probe_count > 0:
-            num_models = self._probe_count
-            logger.debug(
-                "Agent %s: using tier-based probe count %d (tier=%s)",
-                self.agent_id, num_models, self._tier,
+        # Fetch adaptive probe configuration from Go.
+        # This overrides tier-based defaults with data-driven parameters.
+        adaptive_cfg: AdaptiveProbeConfig | None = None
+        probe_start_ns = __import__("time").time_ns()
+        try:
+            from ..probe_tuning import fetch_probe_config
+            from ..go_client import GoClient
+
+            # Build a temporary GoClient to fetch config (uses agent's own token).
+            _go = GoClient(token=self.token or "")
+            adaptive_cfg = await fetch_probe_config(
+                _go,
+                role=self.role,
+                repo_id=self._repo_id,
+                action_type=action_type,
+                complexity_label=self._complexity_label,
+                tier=self._tier,
             )
+            self._adaptive_config = adaptive_cfg
+            logger.info(
+                "Agent %s: adaptive probe config — models=%d temp=%.2f strategy=%s",
+                self.agent_id, adaptive_cfg.num_models, adaptive_cfg.temperature,
+                adaptive_cfg.strategy,
+            )
+        except Exception as e:
+            logger.debug("Agent %s: adaptive config fetch skipped: %s", self.agent_id, e)
+
+        # Determine num_models: caller override > adaptive config > tier-based > default.
+        if num_models == 0:
+            if adaptive_cfg and adaptive_cfg.num_models > 0:
+                num_models = adaptive_cfg.num_models
+            elif self._probe_count > 0:
+                num_models = self._probe_count
+            logger.debug(
+                "Agent %s: probe count resolved to %d (adaptive=%s, tier=%s)",
+                self.agent_id, num_models,
+                "yes" if adaptive_cfg else "no", self._tier,
+            )
+
+        # Use adaptive max_tokens if caller didn't specify.
+        if max_tokens is None and adaptive_cfg and adaptive_cfg.max_tokens > 0:
+            max_tokens = adaptive_cfg.max_tokens
 
         # Extract the topic from the last user message for the discussion thread.
         topic = ""
@@ -419,6 +454,33 @@ class Agent:
             probe_resp.total_ms,
             discussion_thread.thread_id if discussion_thread else "none",
         )
+
+        # ── Record probe outcome for adaptive tuning (fire-and-forget) ───
+        try:
+            from ..probe_tuning import build_probe_outcome, record_probe_outcome
+            from ..go_client import GoClient
+
+            _task_id = ""
+            if self.conversation and hasattr(self.conversation, "task_id"):
+                _task_id = self.conversation.task_id or ""
+
+            outcome = build_probe_outcome(
+                task_id=_task_id,
+                role=self.role,
+                repo_id=self._repo_id,
+                action_type=action_type or "",
+                probe_resp=probe_resp,
+                config=self._adaptive_config,
+                complexity_label=self._complexity_label,
+                start_time_ns=probe_start_ns,
+            )
+            _go_out = GoClient(token=self.token or "")
+            await record_probe_outcome(_go_out, outcome)
+        except Exception:
+            logger.debug(
+                "Agent %s: probe outcome recording skipped",
+                self.agent_id, exc_info=True,
+            )
 
         return probe_resp
 

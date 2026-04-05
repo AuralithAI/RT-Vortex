@@ -405,6 +405,9 @@ async def _run_full_pipeline(
             agent.conversation = conversation
             agent.workspace = workspace
 
+            # Inject complexity label from dynamic team formation.
+            agent._complexity_label = formation.get("complexity_label", "")
+
             # Attach memory hierarchy.
             agent_mem = AgentMemory(
                 agent_id=agent.agent_id,
