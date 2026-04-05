@@ -71,8 +71,8 @@ func (h *Handler) HandleTeamRecommend(w http.ResponseWriter, r *http.Request) {
 	// Broadcast to WebSocket.
 	if h.WS != nil {
 		h.WS.BroadcastTaskEvent("team_formation", taskID.String(), map[string]interface{}{
-			"complexity_score": formation.ComplexityScore,
-			"complexity_label": formation.ComplexityLabel,
+			"complexity_score":  formation.ComplexityScore,
+			"complexity_label":  formation.ComplexityLabel,
 			"recommended_roles": formation.RecommendedRoles,
 			"team_size":         formation.TeamSize,
 			"strategy":          formation.Strategy,

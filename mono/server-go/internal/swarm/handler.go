@@ -1143,9 +1143,9 @@ func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
 
 	var evt struct {
 		ThreadID       string             `json:"thread_id"`
-		AgentRole      string             `json:"agent_role,omitempty"`   // role that ran this consensus (for role ELO)
-		Strategy       string             `json:"strategy"` // "pick_best", "majority_vote", "gpt_as_judge", "multi_judge_panel"
-		Provider       string             `json:"provider"` // winning provider or "consensus"
+		AgentRole      string             `json:"agent_role,omitempty"` // role that ran this consensus (for role ELO)
+		Strategy       string             `json:"strategy"`             // "pick_best", "majority_vote", "gpt_as_judge", "multi_judge_panel"
+		Provider       string             `json:"provider"`             // winning provider or "consensus"
 		Model          string             `json:"model"`
 		Confidence     float64            `json:"confidence"`
 		Reasoning      string             `json:"reasoning"`

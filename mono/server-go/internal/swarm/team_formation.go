@@ -39,8 +39,8 @@ import (
 
 const (
 	// Additional complexity labels not in task_manager.go.
-	FormationComplexityTrivial   = "trivial"
-	FormationComplexityCritical  = "critical"
+	FormationComplexityTrivial  = "trivial"
+	FormationComplexityCritical = "critical"
 
 	// Complexity label strings for matching (use string values of existing constants).
 	formationLabelSmall  = "small"
