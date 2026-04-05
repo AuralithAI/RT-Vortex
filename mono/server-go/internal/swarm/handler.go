@@ -19,22 +19,22 @@ import (
 
 // Handler holds all dependencies needed by swarm HTTP endpoints.
 type Handler struct {
-	AuthSvc        *swarmauth.Service
-	TaskMgr        *TaskManager
-	TeamMgr        *TeamManager
-	LLMProxy       *LLMProxy
-	ELO            *ELOService
-	RoleELO        *RoleELOService
-	TeamFormSvc    *TeamFormationService
-	ProbeTuningSvc  *ProbeTuningService
-	SelfHealSvc     *SelfHealService
+	AuthSvc          *swarmauth.Service
+	TaskMgr          *TaskManager
+	TeamMgr          *TeamManager
+	LLMProxy         *LLMProxy
+	ELO              *ELOService
+	RoleELO          *RoleELOService
+	TeamFormSvc      *TeamFormationService
+	ProbeTuningSvc   *ProbeTuningService
+	SelfHealSvc      *SelfHealService
 	ObservabilitySvc *ObservabilityService
-	WS              *WSHub
-	PRCreator      *PRCreator
-	VCSResolver    *vcs.Resolver
-	DB             *pgxpool.Pool
-	MemorySvc      *MemoryService
-	MCPSvc         MCPCaller
+	WS               *WSHub
+	PRCreator        *PRCreator
+	VCSResolver      *vcs.Resolver
+	DB               *pgxpool.Pool
+	MemorySvc        *MemoryService
+	MCPSvc           MCPCaller
 }
 
 // ── Agent Auth endpoints ────────────────────────────────────────────────────

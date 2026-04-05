@@ -133,9 +133,9 @@ func (h *Handler) HandleObservabilityProviderDetail(w http.ResponseWriter, r *ht
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"provider":   provider,
+		"provider":    provider,
 		"data_points": perf,
-		"count":      len(perf),
+		"count":       len(perf),
 	})
 }
 

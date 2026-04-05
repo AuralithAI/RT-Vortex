@@ -65,29 +65,29 @@ const defaultCostPer1KTokens = 0.005
 
 // MetricsSnapshot is one point in the time-series.
 type MetricsSnapshot struct {
-	ID                    uuid.UUID `json:"id"`
-	ActiveTasks           int       `json:"active_tasks"`
-	PendingTasks          int       `json:"pending_tasks"`
-	CompletedTasks        int64     `json:"completed_tasks"`
-	FailedTasks           int64     `json:"failed_tasks"`
-	OnlineAgents          int       `json:"online_agents"`
-	BusyAgents            int       `json:"busy_agents"`
-	ActiveTeams           int       `json:"active_teams"`
-	BusyTeams             int       `json:"busy_teams"`
-	LLMCalls              int64     `json:"llm_calls"`
-	LLMTokens             int64     `json:"llm_tokens"`
-	LLMAvgLatencyMs       float64   `json:"llm_avg_latency_ms"`
-	LLMErrorRate          float64   `json:"llm_error_rate"`
-	ProbeCalls            int64     `json:"probe_calls"`
-	ConsensusRuns         int64     `json:"consensus_runs"`
-	ConsensusAvgConf      float64   `json:"consensus_avg_confidence"`
-	OpenCircuits          int       `json:"open_circuits"`
-	HealEvents            int       `json:"heal_events"`
-	EstimatedCostUSD      float64   `json:"estimated_cost_usd"`
-	QueueDepth            int       `json:"queue_depth"`
-	AgentUtilisation      float64   `json:"agent_utilisation"`
-	HealthScore           int       `json:"health_score"`
-	CreatedAt             time.Time `json:"created_at"`
+	ID               uuid.UUID `json:"id"`
+	ActiveTasks      int       `json:"active_tasks"`
+	PendingTasks     int       `json:"pending_tasks"`
+	CompletedTasks   int64     `json:"completed_tasks"`
+	FailedTasks      int64     `json:"failed_tasks"`
+	OnlineAgents     int       `json:"online_agents"`
+	BusyAgents       int       `json:"busy_agents"`
+	ActiveTeams      int       `json:"active_teams"`
+	BusyTeams        int       `json:"busy_teams"`
+	LLMCalls         int64     `json:"llm_calls"`
+	LLMTokens        int64     `json:"llm_tokens"`
+	LLMAvgLatencyMs  float64   `json:"llm_avg_latency_ms"`
+	LLMErrorRate     float64   `json:"llm_error_rate"`
+	ProbeCalls       int64     `json:"probe_calls"`
+	ConsensusRuns    int64     `json:"consensus_runs"`
+	ConsensusAvgConf float64   `json:"consensus_avg_confidence"`
+	OpenCircuits     int       `json:"open_circuits"`
+	HealEvents       int       `json:"heal_events"`
+	EstimatedCostUSD float64   `json:"estimated_cost_usd"`
+	QueueDepth       int       `json:"queue_depth"`
+	AgentUtilisation float64   `json:"agent_utilisation"`
+	HealthScore      int       `json:"health_score"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 // ProviderPerfSnapshot is a per-provider performance data point.
@@ -140,13 +140,13 @@ type ObservabilityDashboard struct {
 
 // HealthBreakdown explains the health score components.
 type HealthBreakdown struct {
-	Score            int     `json:"score"`
-	TaskHealthPct    float64 `json:"task_health_pct"`
-	AgentHealthPct   float64 `json:"agent_health_pct"`
+	Score             int     `json:"score"`
+	TaskHealthPct     float64 `json:"task_health_pct"`
+	AgentHealthPct    float64 `json:"agent_health_pct"`
 	ProviderHealthPct float64 `json:"provider_health_pct"`
-	QueueHealthPct   float64 `json:"queue_health_pct"`
-	ErrorRatePct     float64 `json:"error_rate_pct"`
-	Details          string  `json:"details"`
+	QueueHealthPct    float64 `json:"queue_health_pct"`
+	ErrorRatePct      float64 `json:"error_rate_pct"`
+	Details           string  `json:"details"`
 }
 
 // CostSummary aggregates cost data.
@@ -173,9 +173,9 @@ type ObservabilityService struct {
 
 // latencyAccumulator tracks running latency stats between snapshots.
 type latencyAccumulator struct {
-	count    int64
-	sumMs    float64
-	samples  []float64 // for percentile computation (capped at 1000)
+	count   int64
+	sumMs   float64
+	samples []float64 // for percentile computation (capped at 1000)
 }
 
 // NewObservabilityService creates the observability service.
