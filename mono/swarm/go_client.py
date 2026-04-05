@@ -427,6 +427,78 @@ class GoClient:
             data = resp.json()
             return data.get("stats", [])
 
+    # ── Role-Based ELO ─────────────────────────────────────────
+
+    async def report_role_outcome(
+        self,
+        role: str,
+        repo_id: str,
+        task_id: str = "",
+        human_rating: int = 0,
+        consensus_confidence: float = 0.0,
+        consensus_strategy: str = "",
+        consensus_win: bool = False,
+        tests_passed: bool = False,
+        pr_accepted: bool = False,
+        build_success: bool = False,
+    ) -> dict:
+        """Report a task outcome for role-based ELO scoring.
+
+        The Go server computes a composite reward from human rating,
+        consensus quality, and automatic metrics (tests/PR/build).
+        The result updates the persistent (role, repo_id) ELO record.
+
+        Args:
+            role: Agent role (e.g. ``senior_dev``, ``qa``, ``security``).
+            repo_id: Repository UUID.
+            task_id: Task UUID (for history tracking).
+            human_rating: User rating 1-5 (0 = not rated).
+            consensus_confidence: Consensus engine confidence 0.0-1.0.
+            consensus_strategy: Strategy used (e.g. ``multi_judge_panel``).
+            consensus_win: Whether this role's response won consensus.
+            tests_passed: Automatic signal: tests passed.
+            pr_accepted: Automatic signal: PR accepted by user.
+            build_success: Automatic signal: build succeeded.
+
+        Returns:
+            Updated RoleELO record from the server.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/role-elo/outcome",
+                headers=self._headers(),
+                json={
+                    "role": role,
+                    "repo_id": repo_id,
+                    "task_id": task_id,
+                    "human_rating": human_rating,
+                    "consensus_confidence": consensus_confidence,
+                    "consensus_strategy": consensus_strategy,
+                    "consensus_win": consensus_win,
+                    "tests_passed": tests_passed,
+                    "pr_accepted": pr_accepted,
+                    "build_success": build_success,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_role_elo(self, role: str, repo_id: str) -> dict:
+        """Get the ELO record for a (role, repo_id) pair.
+
+        Returns:
+            RoleELO record with ``elo_score``, ``tier``, ``tasks_done``,
+            ``wins``, ``losses``, ``consensus_avg``, etc.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/role-elo/{role}",
+                headers=self._headers(),
+                params={"repo_id": repo_id},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     # ── HITL (Human-in-the-Loop) endpoints ───────────────────────────────
 
     async def ask_human(

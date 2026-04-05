@@ -660,6 +660,7 @@ func main() {
 	swarmWSHub := swarm.NewWSHub(wsHub)
 	swarmPRCreator := swarm.NewPRCreator(db.Pool, vcsResolver, swarmTaskMgr, swarmWSHub)
 	swarmMemorySvc := swarm.NewMemoryService(db.Pool)
+	swarmRoleELO := swarm.NewRoleELOService(db.Pool)
 
 	swarmHandler := &swarm.Handler{
 		AuthSvc:     swarmAuthSvc,
@@ -667,6 +668,7 @@ func main() {
 		TeamMgr:     swarmTeamMgr,
 		LLMProxy:    swarmLLMProxy,
 		ELO:         swarmELO,
+		RoleELO:     swarmRoleELO,
 		WS:          swarmWSHub,
 		PRCreator:   swarmPRCreator,
 		VCSResolver: vcsResolver,
@@ -685,6 +687,10 @@ func main() {
 	// ELO auto-promotion / demotion.
 	swarmAutoTier := swarm.NewELOAutoTierService(db.Pool)
 	go swarmAutoTier.Start(ctx)
+
+	// Role-based ELO decay: -2/day inactive, floor at 1100.
+	swarmRoleELODecay := swarm.NewRoleELODecayService(swarmRoleELO)
+	go swarmRoleELODecay.Start(ctx)
 
 	slog.Info("Swarm agent infrastructure initialized")
 

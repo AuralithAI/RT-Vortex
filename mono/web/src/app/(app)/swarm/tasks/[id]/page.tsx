@@ -28,6 +28,7 @@ import { TaskAgentList } from "@/components/swarm/task-agent-list";
 import { MultiLLMDiscussion } from "@/components/swarm/multi-llm-discussion";
 import { ConsensusResultCard } from "@/components/swarm/consensus-result-card";
 import { InsightMemoryPanel } from "@/components/swarm/insight-memory-panel";
+import { RoleELOLeaderboard } from "@/components/swarm/role-elo-leaderboard";
 import { useSwarmEvents } from "@/hooks/use-swarm-events";
 import { useDiscussionEvents } from "@/hooks/use-discussion-events";
 import type { SwarmTask, SwarmDiff, PlanDocument } from "@/types/swarm";
@@ -258,6 +259,9 @@ export default function SwarmTaskDetailPage() {
 
           {/* Cross-Task Insights — learned from past consensus decisions */}
           <InsightMemoryPanel taskId={params.id} />
+
+          {/* Role ELO Leaderboard — scoped to this task's repo */}
+          <RoleELOLeaderboard repoId={task.repo_id} />
 
           {/* Diffs Section */}
           {diffs.length > 0 && (

@@ -419,3 +419,55 @@ var (
 		Help:      "Total asset chunks ingested by type (document, pdf, url).",
 	}, []string{"asset_type"})
 )
+
+// ── Role-Based ELO Metrics ────────────────────────────────────────
+
+var (
+	// SwarmRoleELOGauge tracks current ELO score per (role, repo_id).
+	SwarmRoleELOGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "role_elo_score",
+		Help:      "Current ELO score per (role, repo_id) pair.",
+	}, []string{"role", "repo_id"})
+
+	// SwarmRoleTierChanges counts tier promotions/demotions.
+	SwarmRoleTierChanges = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "role_tier_changes_total",
+		Help:      "Total role tier changes (promotion/demotion) by role and direction.",
+	}, []string{"role", "old_tier", "new_tier"})
+
+	// SwarmRoleELODecayTotal counts decay events per role.
+	SwarmRoleELODecayTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "role_elo_decay_total",
+		Help:      "Total ELO decay events per role (from inactivity).",
+	}, []string{"role"})
+
+	// SwarmRoleOutcomeTotal counts task outcomes recorded for role ELO.
+	SwarmRoleOutcomeTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "role_outcome_total",
+		Help:      "Total task outcomes recorded for role ELO by event type.",
+	}, []string{"role", "event_type"})
+
+	// SwarmRoleTrainingProbes counts extra training probes for restricted-tier roles.
+	SwarmRoleTrainingProbes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "role_training_probes_total",
+		Help:      "Total extra training probes issued for restricted-tier roles.",
+	}, []string{"role"})
+
+	// SwarmRoleTierDistribution tracks current count of role ELOs per tier.
+	SwarmRoleTierDistribution = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "role_tier_distribution",
+		Help:      "Number of role ELO records in each tier (standard, expert, restricted).",
+	}, []string{"tier"})
+)

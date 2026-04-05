@@ -812,6 +812,10 @@ INSERT INTO schema_info (version, description)
 SELECT 19, 'Add swarm_consensus_insights table for cross-task learning from multi-LLM decisions'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 19);
 
+INSERT INTO schema_info (version, description)
+SELECT 20, 'Add swarm_role_elo and swarm_role_elo_history tables for role-based ELO tracking'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 20);
+
 -- ============================================================================
 -- UPDATED_AT TRIGGER
 -- ============================================================================
@@ -993,6 +997,64 @@ CREATE TRIGGER trg_consensus_insights_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================================================
+-- SWARM ROLE ELO (Phase 8)
+-- ============================================================================
+-- ELO tracking at the (role, repo_id) level instead of ephemeral agent UUIDs.
+-- When a new agent registers for a role+repo it inherits the accumulated
+-- score. Performance data survives agent lifecycles.
+
+CREATE TABLE IF NOT EXISTS swarm_role_elo (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role            TEXT NOT NULL,
+    repo_id         TEXT NOT NULL,
+    elo_score       DOUBLE PRECISION NOT NULL DEFAULT 1200,
+    tier            TEXT NOT NULL DEFAULT 'standard',  -- standard, expert, restricted
+    tasks_done      INT NOT NULL DEFAULT 0,
+    tasks_rated     INT NOT NULL DEFAULT 0,
+    avg_rating      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    wins            INT NOT NULL DEFAULT 0,
+    losses          INT NOT NULL DEFAULT 0,
+    consensus_avg   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    best_strategy   TEXT NOT NULL DEFAULT '',
+    training_probes INT NOT NULL DEFAULT 0,
+    last_active     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_role_elo_role_repo UNIQUE (role, repo_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_role_elo_role     ON swarm_role_elo (role);
+CREATE INDEX IF NOT EXISTS idx_role_elo_repo     ON swarm_role_elo (repo_id);
+CREATE INDEX IF NOT EXISTS idx_role_elo_tier     ON swarm_role_elo (tier);
+CREATE INDEX IF NOT EXISTS idx_role_elo_score    ON swarm_role_elo (elo_score DESC);
+CREATE INDEX IF NOT EXISTS idx_role_elo_active   ON swarm_role_elo (last_active);
+
+-- Append-only log of every ELO change for audit, charting, and debugging.
+
+CREATE TABLE IF NOT EXISTS swarm_role_elo_history (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role        TEXT NOT NULL,
+    repo_id     TEXT NOT NULL,
+    task_id     TEXT NOT NULL DEFAULT '',
+    event_type  TEXT NOT NULL,
+    old_elo     DOUBLE PRECISION NOT NULL,
+    new_elo     DOUBLE PRECISION NOT NULL,
+    delta       DOUBLE PRECISION NOT NULL,
+    detail      JSONB,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_role_elo_hist_role_repo ON swarm_role_elo_history (role, repo_id);
+CREATE INDEX IF NOT EXISTS idx_role_elo_hist_created   ON swarm_role_elo_history (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_role_elo_hist_event     ON swarm_role_elo_history (event_type);
+
+DROP TRIGGER IF EXISTS trg_swarm_role_elo_updated_at ON swarm_role_elo;
+CREATE TRIGGER trg_swarm_role_elo_updated_at
+    BEFORE UPDATE ON swarm_role_elo
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
 -- Ensures the rtvortex application role has full access to all tables.
@@ -1038,6 +1100,8 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE repo_links TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE repo_link_events TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_consensus_insights TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_role_elo TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_role_elo_history TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;

@@ -286,3 +286,47 @@ export interface ProviderReliabilityStatsData {
   total_decisions: number;
   avg_confidence: number;
 }
+
+// ─── Role-Based ELO Types ─────────────────────────────────────────
+
+/** Performance tier assigned to a (role, repo) pair. */
+export type RoleELOTier = "restricted" | "standard" | "expert";
+
+/** Persistent role-level ELO record — one per (role, repo_id) pair. */
+export interface RoleELOData {
+  id: string;
+  role: string;
+  repo_id: string;
+  elo_score: number;
+  tier: RoleELOTier;
+  tasks_done: number;
+  tasks_rated: number;
+  avg_rating: number;
+  wins: number;
+  losses: number;
+  consensus_avg: number;
+  best_strategy: string;
+  training_probes: number;
+  last_active: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A single role ELO history event (append-only audit log). */
+export interface RoleELOHistoryData {
+  id: string;
+  role: string;
+  repo_id: string;
+  task_id: string;
+  event_type: string;
+  old_elo: number;
+  new_elo: number;
+  delta: number;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
+/** Leaderboard entry — RoleELOData with a computed rank. */
+export interface RoleELOLeaderboardEntry extends RoleELOData {
+  rank: number;
+}

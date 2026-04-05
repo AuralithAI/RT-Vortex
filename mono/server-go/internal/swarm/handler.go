@@ -24,6 +24,7 @@ type Handler struct {
 	TeamMgr     *TeamManager
 	LLMProxy    *LLMProxy
 	ELO         *ELOService
+	RoleELO     *RoleELOService
 	WS          *WSHub
 	PRCreator   *PRCreator
 	VCSResolver *vcs.Resolver
@@ -73,8 +74,29 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build enriched response — inject role ELO tier and probe count.
+	enriched := map[string]interface{}{
+		"access_token": resp.AccessToken,
+		"agent_id":     resp.AgentID,
+		"expires_in":   resp.ExpiresIn,
+	}
+
+	// Inject role ELO if the service is available and we know the repo.
+	// The agent may send repo_id in the registration request body,
+	// or we fall back to defaults.
+	if h.RoleELO != nil && req.RepoID != "" {
+		tier, elo := h.RoleELO.TierForRole(r.Context(), req.Role, req.RepoID)
+		enriched["tier"] = tier
+		enriched["elo_score"] = elo
+		enriched["probe_count"] = ProbeCountForTier(tier)
+		slog.Info("swarm: role ELO injected at registration",
+			"role", req.Role, "repo_id", req.RepoID,
+			"tier", tier, "elo", elo,
+		)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(enriched)
 }
 
 // RevokeAgent handles DELETE /internal/swarm/auth/revoke.
@@ -783,6 +805,21 @@ func (h *Handler) RateTaskUser(w http.ResponseWriter, r *http.Request) {
 					"agents", len(agentIDs),
 				)
 			}
+
+			// Update role-based ELO for each agent's role.
+			if h.RoleELO != nil {
+				roles := h.resolveAgentRoles(r.Context(), agentIDs)
+				for _, role := range roles {
+					outcome := TaskOutcome{
+						TaskID:      taskID.String(),
+						HumanRating: body.Rating,
+					}
+					if roleErr := h.RoleELO.RecordRoleOutcome(r.Context(), role, task.RepoID, outcome); roleErr != nil {
+						slog.Error("swarm: role ELO update failed",
+							"role", role, "repo_id", task.RepoID, "error", roleErr)
+					}
+				}
+			}
 		}
 	}
 
@@ -1105,6 +1142,7 @@ func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
 
 	var evt struct {
 		ThreadID       string             `json:"thread_id"`
+		AgentRole      string             `json:"agent_role,omitempty"`   // role that ran this consensus (for role ELO)
 		Strategy       string             `json:"strategy"` // "pick_best", "majority_vote", "gpt_as_judge", "multi_judge_panel"
 		Provider       string             `json:"provider"` // winning provider or "consensus"
 		Model          string             `json:"model"`
@@ -1191,6 +1229,20 @@ func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
 				evt.Confidence, evt.Scores,
 				evt.JudgeCount, evt.JudgeAgreement,
 			)
+
+			// Update role ELO from consensus quality signal.
+			if h.RoleELO != nil && evt.AgentRole != "" {
+				outcome := TaskOutcome{
+					TaskID:            taskID,
+					ConsensusConf:     evt.Confidence,
+					ConsensusStrategy: evt.Strategy,
+					ConsensusWin:      evt.Provider != "" && evt.Provider != "consensus",
+				}
+				if roleErr := h.RoleELO.RecordRoleOutcome(ctx, evt.AgentRole, repoID, outcome); roleErr != nil {
+					slog.Error("swarm: role ELO consensus update failed",
+						"role", evt.AgentRole, "repo_id", repoID, "error", roleErr)
+				}
+			}
 		}()
 	}
 
@@ -1330,6 +1382,35 @@ func (h *Handler) getRepoInfo(ctx context.Context, repoID uuid.UUID) (owner, nam
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+// resolveAgentRoles returns the unique set of roles for the given agent IDs.
+// Queries the swarm_agents table and deduplicates.
+func (h *Handler) resolveAgentRoles(ctx context.Context, agentIDs []uuid.UUID) []string {
+	if len(agentIDs) == 0 || h.DB == nil {
+		return nil
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT DISTINCT role FROM swarm_agents
+		WHERE id = ANY($1) AND role != ''`,
+		agentIDs,
+	)
+	if err != nil {
+		slog.Error("resolve agent roles failed", "error", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var roles []string
+	for rows.Next() {
+		var role string
+		if err := rows.Scan(&role); err != nil {
+			continue
+		}
+		roles = append(roles, role)
+	}
+	return roles
+}
 
 // userIDFromRequest extracts the user UUID from auth context.
 // Falls back to a nil UUID if no user auth middleware is present.

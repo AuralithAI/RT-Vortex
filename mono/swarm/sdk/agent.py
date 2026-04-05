@@ -93,6 +93,31 @@ class Agent:
         self.workspace: VirtualWorkspace | None = None
         self.memory: AgentMemory | None = None
         self._consensus_engine: ConsensusEngine | None = None
+        # Role-based ELO — injected at registration.
+        self._tier: str = "standard"
+        self._elo_score: float = 1200.0
+        self._probe_count: int = 3
+        self._repo_id: str = ""
+
+    @property
+    def tier(self) -> str:
+        """The role's current ELO tier (standard, expert, restricted)."""
+        return self._tier
+
+    @property
+    def elo_score(self) -> float:
+        """The role's current ELO score for this repo."""
+        return self._elo_score
+
+    @property
+    def probe_count(self) -> int:
+        """Recommended number of LLM probes based on tier.
+
+        restricted → 5 (more perspectives needed)
+        standard   → 3 (balanced)
+        expert     → 2 (trusted, lean probing)
+        """
+        return self._probe_count
 
     @property
     def consensus_engine(self) -> ConsensusEngine:
@@ -121,6 +146,10 @@ class Agent:
 
         The server may assign a canonical UUID for the agent, which replaces
         the original short-form ``agent_id``.
+
+        If ``_repo_id`` is set before calling register, the Go server will
+        look up the role's ELO tier for that repo and inject ``tier``,
+        ``elo_score``, and ``probe_count`` into the response.
         """
         cfg = get_config()
         url = f"{self.config.go_base_url}/internal/swarm/auth/register"
@@ -131,6 +160,9 @@ class Agent:
             "hostname": socket.gethostname(),
             "version": _build_version(),
         }
+        # Include repo_id for role ELO tier injection.
+        if self._repo_id:
+            payload["repo_id"] = self._repo_id
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
@@ -144,7 +176,21 @@ class Agent:
             # The server may assign a canonical UUID; always prefer it.
             if data.get("agent_id"):
                 self.agent_id = data["agent_id"]
-            logger.info("Agent %s registered (role=%s, team=%s)", self.agent_id, self.role, self.team_id)
+
+            # Parse role ELO tier if injected by Go.
+            if "tier" in data:
+                self._tier = data["tier"]
+                self._elo_score = data.get("elo_score", 1200.0)
+                self._probe_count = data.get("probe_count", 3)
+                logger.info(
+                    "Agent %s registered with role ELO: tier=%s elo=%.0f probes=%d",
+                    self.agent_id, self._tier, self._elo_score, self._probe_count,
+                )
+            else:
+                logger.info(
+                    "Agent %s registered (role=%s, team=%s)",
+                    self.agent_id, self.role, self.team_id,
+                )
 
     async def run(self, task: Task) -> AgentResult:
         """Execute the agentic loop for the given task.
@@ -166,10 +212,33 @@ class Agent:
         Returns:
             An :class:`AgentResult` with the role-specific output.
         """
+        # Set repo_id before registration so the Go server can inject
+        # role-level ELO tier, score, and probe count for this (role, repo).
+        self._repo_id = task.repo_id
+
         if not self.token:
             await self.register()
 
         system_prompt = self.build_system_prompt(task)
+
+        # Inject role ELO context so the LLM knows its own performance tier.
+        if self._tier and self._tier != "standard":
+            system_prompt += (
+                f"\n\n=== Role Performance Tier ===\n"
+                f"Your role ({self.role}) is currently rated as: {self._tier.upper()}\n"
+                f"ELO score: {self._elo_score:.0f}  |  Training probes: {self._probe_count}\n"
+            )
+            if self._tier == "restricted":
+                system_prompt += (
+                    "⚠ Your role is on a RESTRICTED tier. Take extra care with "
+                    "accuracy and follow instructions precisely. Additional "
+                    "verification probes will be used.\n"
+                )
+            elif self._tier == "expert":
+                system_prompt += (
+                    "★ Your role is on the EXPERT tier. You have earned reduced "
+                    "oversight. Maintain high quality to keep this status.\n"
+                )
 
         # Inject conversation context so this agent sees what others did.
         if self.conversation and self.conversation.message_count > 0:
@@ -279,6 +348,16 @@ class Agent:
             "Agent %s probing %d models (role=%s, action=%s)",
             self.agent_id, num_models or -1, self.role, action_type or "all",
         )
+
+        # If the caller didn't specify num_models, use the tier-based probe
+        # count from role ELO.  Restricted roles get *more* probes
+        # (reinforcement learning), expert roles get fewer (earned trust).
+        if num_models == 0 and self._probe_count > 0:
+            num_models = self._probe_count
+            logger.debug(
+                "Agent %s: using tier-based probe count %d (tier=%s)",
+                self.agent_id, num_models, self._tier,
+            )
 
         # Extract the topic from the last user message for the discussion thread.
         topic = ""
@@ -471,6 +550,7 @@ class Agent:
                     "confidence": result.confidence,
                     "reasoning": result.reasoning,
                     "scores": result.all_scores,
+                    "agent_role": self.role,
                 }
                 # Include multi-judge panel metadata when available.
                 if result.judge_count > 0:

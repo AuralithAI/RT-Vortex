@@ -21,6 +21,7 @@ import {
   Percent,
   Kanban,
   History,
+  Trophy,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -28,11 +29,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { TaskPipelineBoard } from "@/components/swarm/task-pipeline-board";
 import { TaskHistory } from "@/components/swarm/task-history";
 import { LiveAgentPanel } from "@/components/swarm/live-agent-panel";
+import { RoleELOLeaderboard } from "@/components/swarm/role-elo-leaderboard";
 import { Combobox } from "@/components/ui/combobox";
 import { useRepos } from "@/lib/api/queries";
 import type { SwarmTask, SwarmOverview, TaskSubmission } from "@/types/swarm";
 
-type Tab = "pipeline" | "history";
+type Tab = "pipeline" | "history" | "role-elo";
 
 export default function SwarmDashboardPage() {
   const [tasks, setTasks] = useState<SwarmTask[]>([]);
@@ -308,10 +310,19 @@ export default function SwarmDashboardPage() {
             <History className="mr-2 h-4 w-4" />
             Task History
           </Button>
+          <Button
+            variant={activeTab === "role-elo" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setActiveTab("role-elo")}
+          >
+            <Trophy className="mr-2 h-4 w-4" />
+            Role ELO
+          </Button>
         </div>
 
         {activeTab === "pipeline" && <TaskPipelineBoard />}
         {activeTab === "history" && <TaskHistory />}
+        {activeTab === "role-elo" && <RoleELOLeaderboard />}
       </div>
 
       {/* Recent Tasks + Live Agents — side by side */}

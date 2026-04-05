@@ -523,6 +523,10 @@ func (s *Server) setupRouter() {
 				r.Get("/memory/insights", sh.HandleInsightRecall)
 				r.Get("/memory/provider-stats", sh.HandleProviderStats)
 
+				// Role-based ELO.
+				r.Post("/role-elo/outcome", sh.HandleRoleELOOutcome)
+				r.Get("/role-elo/{role}", sh.HandleGetRoleELO)
+
 				// Human-in-the-loop.
 				r.Post("/hitl/ask", sh.HandleHITLAsk)
 
@@ -589,6 +593,10 @@ func (s *Server) setupRouter() {
 
 			// Cross-task consensus insights (user JWT).
 			r.Get("/insights", sh.HandleInsightRecallPublic)
+
+			// Role-based ELO leaderboard + history (user JWT).
+			r.Get("/role-elo", sh.HandleRoleELOLeaderboard)
+			r.Get("/role-elo/{role}/history", sh.HandleRoleELOHistory)
 
 			// WebSocket: real-time swarm task events
 			if s.deps.WSHub != nil {
