@@ -81,12 +81,12 @@ func (h *Handler) HandleListCISignals(w http.ResponseWriter, r *http.Request) {
 // CIWebhookPayload is the expected body for POST /internal/swarm/ci-signal/webhook.
 type CIWebhookPayload struct {
 	TaskID       string `json:"task_id"`
-	PRState      string `json:"pr_state,omitempty"`      // open, merged, closed
+	PRState      string `json:"pr_state,omitempty"` // open, merged, closed
 	PRMerged     *bool  `json:"pr_merged,omitempty"`
-	CIState      string `json:"ci_state,omitempty"`      // pending, success, failure, error
+	CIState      string `json:"ci_state,omitempty"` // pending, success, failure, error
 	BuildSuccess *bool  `json:"build_success,omitempty"`
 	TestsPassed  *bool  `json:"tests_passed,omitempty"`
-	Source       string `json:"source,omitempty"`         // "github_actions", "jenkins", etc.
+	Source       string `json:"source,omitempty"` // "github_actions", "jenkins", etc.
 }
 
 // HandleCISignalWebhook accepts CI signal updates from external webhooks or CI systems.

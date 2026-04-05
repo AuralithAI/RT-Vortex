@@ -47,6 +47,7 @@ export interface SwarmTask {
   submitted_by?: string;
   retry_count: number;
   failure_reason?: string;
+  team_formation?: TeamFormationData;
   created_at: string;
   completed_at?: string;
   timeout_at?: string;
@@ -384,4 +385,46 @@ export interface CISignalSummary {
   ci_pending: number;
   finalized: boolean;
   updated_at: string;
+}
+
+// ─── Team Formation Types ─────────────────────────────────────────
+
+/** Complexity label assigned by the team formation engine. */
+export type ComplexityLabel = "trivial" | "small" | "medium" | "large" | "critical";
+
+/** Team formation strategy used to compute the recommendation. */
+export type FormationStrategy = "elo_weighted" | "static";
+
+/** Raw complexity signals extracted from the plan document. */
+export interface ComplexitySignalsData {
+  file_count: number;
+  step_count: number;
+  description_length: number;
+  language_count: number;
+  test_files: number;
+  has_migrations: boolean;
+  cross_package: boolean;
+  has_api_changes: boolean;
+  has_security_impact: boolean;
+  has_ui_changes: boolean;
+  languages: string[];
+}
+
+/** ELO summary for a role in the context of a repo. */
+export interface RoleELOInfoData {
+  elo: number;
+  tier: RoleELOTier;
+}
+
+/** Full team formation recommendation stored on the task. */
+export interface TeamFormationData {
+  complexity_score: number;
+  complexity_label: ComplexityLabel;
+  input_signals: ComplexitySignalsData;
+  recommended_roles: string[];
+  role_elos: Record<string, RoleELOInfoData>;
+  team_size: number;
+  reasoning: string;
+  strategy: FormationStrategy;
+  created_at: string;
 }

@@ -661,6 +661,7 @@ func main() {
 	swarmPRCreator := swarm.NewPRCreator(db.Pool, vcsResolver, swarmTaskMgr, swarmWSHub)
 	swarmMemorySvc := swarm.NewMemoryService(db.Pool)
 	swarmRoleELO := swarm.NewRoleELOService(db.Pool)
+	swarmTeamFormSvc := swarm.NewTeamFormationService(db.Pool, swarmRoleELO)
 
 	swarmHandler := &swarm.Handler{
 		AuthSvc:     swarmAuthSvc,
@@ -669,6 +670,7 @@ func main() {
 		LLMProxy:    swarmLLMProxy,
 		ELO:         swarmELO,
 		RoleELO:     swarmRoleELO,
+		TeamFormSvc: swarmTeamFormSvc,
 		WS:          swarmWSHub,
 		PRCreator:   swarmPRCreator,
 		VCSResolver: vcsResolver,

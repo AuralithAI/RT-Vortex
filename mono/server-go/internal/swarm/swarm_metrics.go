@@ -532,3 +532,15 @@ var (
 		Help:      "ELO updates triggered by CI signal ingestion, by role and CI state.",
 	}, []string{"role", "ci_state"})
 )
+
+// ── Team Formation Metrics ────────────────────────────────────────
+
+var (
+	// SwarmTeamFormationsTotal counts team formation recommendations by complexity and strategy.
+	SwarmTeamFormationsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "team_formations_total",
+		Help:      "Total team formation recommendations by complexity label and strategy.",
+	}, []string{"complexity", "strategy"})
+)

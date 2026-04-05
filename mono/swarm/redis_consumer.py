@@ -370,37 +370,29 @@ async def _run_full_pipeline(
         task.status = "implementing"
 
         # ── Step 3: Determine team composition from the plan ────────────
-        # The plan's estimated_complexity and agents_needed drive team size.
-        # Use a smarter team sizing algorithm that considers
-        # the plan's affected_files count, step count, and explicit agent request.
-        plan = orch_result.plan or {}
-        complexity = plan.get("estimated_complexity", "medium")
-        agents_needed = plan.get("agents_needed", 0)
-        affected_files = len(plan.get("affected_files", []))
-        step_count = len(plan.get("steps", []))
+        # Dynamic Team Formation — uses Go's complexity scoring
+        # engine + role-based ELO tiers for optimal team composition.
+        from .complexity import recommend_team_for_task
 
-        # Dynamic team sizing:
-        # 1. If the orchestrator explicitly requested a team size, respect it.
-        # 2. Otherwise, use heuristics based on complexity + file/step count.
-        if agents_needed and isinstance(agents_needed, int) and agents_needed > 0:
-            # Orchestrator requested specific team size — map to roles.
-            if agents_needed <= 1:
-                roles = ["senior_dev"]
-            elif agents_needed <= 3:
-                roles = ["senior_dev", "qa"]
-            elif agents_needed <= 5:
-                roles = ["architect", "senior_dev", "junior_dev", "qa", "security"]
-            else:
-                roles = ["architect", "senior_dev", "senior_dev", "junior_dev", "qa", "security", "docs", "ui_ux"]
-        elif complexity == "small" or (affected_files <= 2 and step_count <= 3):
-            roles = ["senior_dev"]
-        elif complexity == "large" or affected_files > 10 or step_count > 8:
-            roles = ["architect", "senior_dev", "junior_dev", "qa", "security", "docs", "ui_ux"]
-        else:  # medium
-            roles = ["senior_dev", "qa", "security"]
+        plan = orch_result.plan or {}
+        formation = await recommend_team_for_task(
+            go_client, task.id, task.repo_id, plan,
+        )
+        roles = formation.get("recommended_roles", ["senior_dev", "qa"])
+        team_size = formation.get("team_size", len(roles) + 1)
+
+        logger.info(
+            "Team %s: Dynamic formation — complexity=%s score=%.3f roles=%s team_size=%d strategy=%s",
+            team_id[:8],
+            formation.get("complexity_label", "?"),
+            formation.get("complexity_score", 0.0),
+            roles,
+            team_size,
+            formation.get("strategy", "?"),
+        )
 
         # Declare team size to Go (pass team_id so Go can auto-assign).
-        await go_client.declare_team_size(task.id, len(roles) + 1, team_id=team_id)
+        await go_client.declare_team_size(task.id, team_size, team_id=team_id)
 
         # ── Step 4: Run implementation agents ───────────────────────────
         implementation_agents: list[Agent] = []

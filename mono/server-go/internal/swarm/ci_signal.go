@@ -31,11 +31,11 @@ import (
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const (
-	CISignalPollInterval    = 2 * time.Minute  // how often the poller ticks
-	CISignalMaxPollAge      = 7 * 24 * time.Hour // stop polling after 7 days
-	CISignalMaxPolls        = 500                 // safety cap on total polls per signal
-	CISignalBatchSize       = 50                  // max tasks to check per cycle
-	CISignalCooldown        = 5 * time.Minute     // minimum time between polls of same task
+	CISignalPollInterval = 2 * time.Minute    // how often the poller ticks
+	CISignalMaxPollAge   = 7 * 24 * time.Hour // stop polling after 7 days
+	CISignalMaxPolls     = 500                // safety cap on total polls per signal
+	CISignalBatchSize    = 50                 // max tasks to check per cycle
+	CISignalCooldown     = 5 * time.Minute    // minimum time between polls of same task
 )
 
 // CISignal represents a row in swarm_ci_signals.
@@ -44,9 +44,9 @@ type CISignal struct {
 	TaskID        uuid.UUID       `json:"task_id"`
 	RepoID        string          `json:"repo_id"`
 	PRNumber      int             `json:"pr_number"`
-	PRState       string          `json:"pr_state"`       // open, merged, closed, unknown
+	PRState       string          `json:"pr_state"` // open, merged, closed, unknown
 	PRMerged      bool            `json:"pr_merged"`
-	CIState       string          `json:"ci_state"`       // pending, success, failure, error, unknown
+	CIState       string          `json:"ci_state"` // pending, success, failure, error, unknown
 	CITotal       int             `json:"ci_total"`
 	CIPassed      int             `json:"ci_passed"`
 	CIFailed      int             `json:"ci_failed"`
@@ -286,7 +286,7 @@ func (p *CISignalPoller) pollSingleSignal(
 		return true, false, false
 	}
 
-	prState := pr.State   // "open", "closed", "merged"
+	prState := pr.State // "open", "closed", "merged"
 	prMerged := prState == "merged"
 	headSHA := pr.HeadSHA
 

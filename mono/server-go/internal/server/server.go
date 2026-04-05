@@ -537,6 +537,9 @@ func (s *Server) setupRouter() {
 				r.Post("/ci-signal/webhook", sh.HandleCISignalWebhook)
 				r.Post("/ci-signal/report", sh.HandleCISignalReport)
 
+				// Team formation (dynamic complexity → team sizing).
+				r.Post("/team-recommend", sh.HandleTeamRecommend)
+
 				// Web fetch proxy (URL fetching for agents).
 				r.Post("/web/fetch", sh.HandleWebFetch)
 
@@ -595,6 +598,9 @@ func (s *Server) setupRouter() {
 			// CI signal status (user JWT).
 			r.Get("/tasks/{id}/ci-signal", sh.HandleGetCISignal)
 			r.Get("/ci-signals", sh.HandleListCISignals)
+
+			// Team formation (user JWT).
+			r.Get("/tasks/{id}/team-formation", sh.HandleGetTeamFormation)
 
 			// Human-in-the-loop response (user JWT).
 			r.Post("/hitl/respond", sh.HandleHITLRespond)

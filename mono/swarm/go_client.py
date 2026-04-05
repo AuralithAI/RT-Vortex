@@ -742,3 +742,44 @@ class GoClient:
             )
             resp.raise_for_status()
             return resp.json()
+
+    # ── Team Formation ───────────────────────────────────────────────────
+
+    async def recommend_team(
+        self,
+        task_id: str,
+        repo_id: str,
+        plan: dict | None = None,
+        signals: dict | None = None,
+    ) -> dict:
+        """Request an optimal team composition from the Go server.
+
+        The Go ``TeamFormationService`` analyses the plan document, computes
+        a multi-dimensional complexity score, queries role-based ELO tiers,
+        and returns an ``TeamFormation`` struct with recommended roles, team
+        size, reasoning, and strategy.
+
+        Args:
+            task_id: The swarm task ID.
+            repo_id: Repository ID (for ELO lookups).
+            plan: Optional plan dict (if None, Go loads from DB).
+            signals: Optional pre-computed complexity signals override.
+
+        Returns:
+            TeamFormation dict with ``complexity_score``, ``complexity_label``,
+            ``recommended_roles``, ``role_elos``, ``team_size``, ``reasoning``,
+            ``strategy``, ``input_signals``.
+        """
+        payload: dict = {"task_id": task_id, "repo_id": repo_id}
+        if plan is not None:
+            payload["plan"] = plan
+        if signals is not None:
+            payload["signals"] = signals
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/team-recommend",
+                headers=self._headers(),
+                json=payload,
+            )
+            resp.raise_for_status()
+            return resp.json()

@@ -30,6 +30,7 @@ import { ConsensusResultCard } from "@/components/swarm/consensus-result-card";
 import { InsightMemoryPanel } from "@/components/swarm/insight-memory-panel";
 import { RoleELOLeaderboard } from "@/components/swarm/role-elo-leaderboard";
 import { CISignalBadge } from "@/components/swarm/ci-signal-badge";
+import { TeamFormationCard } from "@/components/swarm/team-formation-card";
 import { useSwarmEvents } from "@/hooks/use-swarm-events";
 import { useDiscussionEvents } from "@/hooks/use-discussion-events";
 import type { SwarmTask, SwarmDiff, PlanDocument } from "@/types/swarm";
@@ -250,6 +251,9 @@ export default function SwarmTaskDetailPage() {
               onComment={handlePlanComment}
             />
           )}
+
+          {/* Dynamic Team Formation — complexity analysis + ELO-aware team composition */}
+          <TeamFormationCard taskId={params.id} refreshInterval={15000} />
 
           {/* Agent Conversation — live chat feed */}
           <AgentChat events={events} />

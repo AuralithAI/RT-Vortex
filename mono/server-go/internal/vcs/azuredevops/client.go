@@ -652,9 +652,9 @@ func (c *Client) GetCombinedStatus(ctx context.Context, project, repo, ref strin
 			Context struct {
 				Name string `json:"name"`
 			} `json:"context"`
-			State       string    `json:"state"` // pending, succeeded, failed, error, notSet, notApplicable
-			Description string    `json:"description"`
-			TargetURL   string    `json:"targetUrl"`
+			State        string    `json:"state"` // pending, succeeded, failed, error, notSet, notApplicable
+			Description  string    `json:"description"`
+			TargetURL    string    `json:"targetUrl"`
 			CreationDate time.Time `json:"creationDate"`
 		} `json:"value"`
 	}

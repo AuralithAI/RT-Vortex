@@ -364,6 +364,7 @@ CREATE TABLE IF NOT EXISTS swarm_tasks (
     submitted_by      UUID,
     retry_count       INT DEFAULT 0,
     failure_reason    TEXT,
+    team_formation    JSONB DEFAULT NULL,
     created_at        TIMESTAMPTZ DEFAULT NOW(),
     completed_at      TIMESTAMPTZ,
     timeout_at        TIMESTAMPTZ
@@ -381,6 +382,10 @@ CREATE INDEX IF NOT EXISTS idx_swarm_tasks_timeout
     ON swarm_tasks(timeout_at)
     WHERE timeout_at IS NOT NULL
       AND status NOT IN ('completed', 'cancelled', 'failed', 'timed_out');
+
+CREATE INDEX IF NOT EXISTS idx_swarm_tasks_team_formation
+    ON swarm_tasks USING GIN (team_formation)
+    WHERE team_formation IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS swarm_task_diffs (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -819,6 +824,10 @@ WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 20);
 INSERT INTO schema_info (version, description)
 SELECT 21, 'Add swarm_ci_signals table for automatic CI signal ingestion into role ELO'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 21);
+
+INSERT INTO schema_info (version, description)
+SELECT 22, 'Add team_formation JSONB column to swarm_tasks for dynamic team formation'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 22);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
