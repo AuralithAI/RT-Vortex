@@ -26,9 +26,10 @@ type Handler struct {
 	ELO            *ELOService
 	RoleELO        *RoleELOService
 	TeamFormSvc    *TeamFormationService
-	ProbeTuningSvc *ProbeTuningService
-	SelfHealSvc    *SelfHealService
-	WS             *WSHub
+	ProbeTuningSvc  *ProbeTuningService
+	SelfHealSvc     *SelfHealService
+	ObservabilitySvc *ObservabilityService
+	WS              *WSHub
 	PRCreator      *PRCreator
 	VCSResolver    *vcs.Resolver
 	DB             *pgxpool.Pool

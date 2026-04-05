@@ -664,22 +664,24 @@ func main() {
 	swarmTeamFormSvc := swarm.NewTeamFormationService(db.Pool, swarmRoleELO)
 	swarmProbeTuningSvc := swarm.NewProbeTuningService(db.Pool, swarmRoleELO)
 	swarmSelfHealSvc := swarm.NewSelfHealService(db.Pool, swarmTaskMgr, swarmWSHub)
+	swarmObservabilitySvc := swarm.NewObservabilityService(db.Pool, swarmSelfHealSvc)
 
 	swarmHandler := &swarm.Handler{
-		AuthSvc:        swarmAuthSvc,
-		TaskMgr:        swarmTaskMgr,
-		TeamMgr:        swarmTeamMgr,
-		LLMProxy:       swarmLLMProxy,
-		ELO:            swarmELO,
-		RoleELO:        swarmRoleELO,
-		TeamFormSvc:    swarmTeamFormSvc,
-		ProbeTuningSvc: swarmProbeTuningSvc,
-		SelfHealSvc:    swarmSelfHealSvc,
-		WS:             swarmWSHub,
-		PRCreator:      swarmPRCreator,
-		VCSResolver:    vcsResolver,
-		DB:             db.Pool,
-		MemorySvc:      swarmMemorySvc,
+		AuthSvc:          swarmAuthSvc,
+		TaskMgr:          swarmTaskMgr,
+		TeamMgr:          swarmTeamMgr,
+		LLMProxy:         swarmLLMProxy,
+		ELO:              swarmELO,
+		RoleELO:          swarmRoleELO,
+		TeamFormSvc:      swarmTeamFormSvc,
+		ProbeTuningSvc:   swarmProbeTuningSvc,
+		SelfHealSvc:      swarmSelfHealSvc,
+		ObservabilitySvc: swarmObservabilitySvc,
+		WS:               swarmWSHub,
+		PRCreator:        swarmPRCreator,
+		VCSResolver:      vcsResolver,
+		DB:               db.Pool,
+		MemorySvc:        swarmMemorySvc,
 	}
 
 	// Start the swarm task assignment loop.
@@ -707,6 +709,9 @@ func main() {
 
 	// Self-healing pipeline: circuit breakers, stuck-task recovery, auto-retry.
 	go swarmSelfHealSvc.Start(ctx)
+
+	// Observability dashboard: periodic metric snapshots, provider perf, health scoring.
+	go swarmObservabilitySvc.Start(ctx)
 
 	slog.Info("Swarm agent infrastructure initialized")
 

@@ -552,3 +552,91 @@ export interface SelfHealSummaryData {
   providers: ProviderCircuitData[];
   recent_events: SelfHealEventData[];
 }
+
+// ─── Observability Dashboard Types ────────────────────────────────
+
+/** A single metric snapshot data point. */
+export interface MetricsSnapshotData {
+  id: string;
+  active_tasks: number;
+  pending_tasks: number;
+  completed_tasks: number;
+  failed_tasks: number;
+  online_agents: number;
+  busy_agents: number;
+  active_teams: number;
+  busy_teams: number;
+  llm_calls: number;
+  llm_tokens: number;
+  llm_avg_latency_ms: number;
+  llm_error_rate: number;
+  probe_calls: number;
+  consensus_runs: number;
+  consensus_avg_confidence: number;
+  open_circuits: number;
+  heal_events: number;
+  estimated_cost_usd: number;
+  queue_depth: number;
+  agent_utilisation: number;
+  health_score: number;
+  created_at: string;
+}
+
+/** Per-provider performance data point. */
+export interface ProviderPerfData {
+  id: string;
+  provider: string;
+  calls: number;
+  successes: number;
+  failures: number;
+  tokens_used: number;
+  avg_latency_ms: number;
+  p95_latency_ms: number;
+  p99_latency_ms: number;
+  error_rate: number;
+  estimated_cost_usd: number;
+  consensus_wins: number;
+  consensus_total: number;
+  created_at: string;
+}
+
+/** Composite health score breakdown. */
+export interface HealthBreakdownData {
+  score: number;
+  task_health_pct: number;
+  agent_health_pct: number;
+  provider_health_pct: number;
+  queue_health_pct: number;
+  error_rate_pct: number;
+  details: string;
+}
+
+/** Aggregated cost summary. */
+export interface CostSummaryData {
+  today_usd: number;
+  this_week_usd: number;
+  this_month_usd: number;
+  by_provider: Record<string, number>;
+  budget?: CostBudgetData;
+}
+
+/** Monthly cost budget. */
+export interface CostBudgetData {
+  id: string;
+  scope: string;
+  month: string;
+  budget_usd: number;
+  spent_usd: number;
+  alert_threshold: number;
+}
+
+/** Full observability dashboard response. */
+export interface ObservabilityDashboardData {
+  current: MetricsSnapshotData | null;
+  time_series: MetricsSnapshotData[];
+  provider_perf: ProviderPerfData[];
+  provider_time_series: Record<string, ProviderPerfData[]>;
+  health_breakdown: HealthBreakdownData | null;
+  cost_summary: CostSummaryData | null;
+  uptime_seconds: number;
+}

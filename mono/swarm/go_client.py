@@ -906,3 +906,63 @@ class GoClient:
         except Exception:
             logger.debug("self-heal: failed to check provider status", exc_info=True)
         return {"provider": provider, "available": True, "state": "closed"}
+
+    # ── Observability Dashboard ──────────────────────────────────────────
+
+    async def get_observability_dashboard(self, hours: int = 24) -> dict:
+        """Fetch the full observability dashboard.
+
+        Args:
+            hours: Time range for time-series data (default 24h).
+
+        Returns:
+            Dashboard dict with current, time_series, provider_perf, health_breakdown, cost_summary.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"{self.base_url}/api/v1/swarm/observability/dashboard",
+                    headers=self._headers(),
+                    params={"hours": hours},
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            logger.debug("observability: failed to fetch dashboard", exc_info=True)
+        return {}
+
+    async def get_health_score(self) -> dict:
+        """Fetch the current system health score breakdown.
+
+        Returns:
+            Dict with ``score``, ``task_health_pct``, ``agent_health_pct``, etc.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{self.base_url}/api/v1/swarm/observability/health",
+                    headers=self._headers(),
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            logger.debug("observability: failed to fetch health", exc_info=True)
+        return {"score": 100, "details": "unknown"}
+
+    async def get_cost_summary(self) -> dict:
+        """Fetch the current cost summary.
+
+        Returns:
+            Dict with ``today_usd``, ``this_week_usd``, ``this_month_usd``, ``by_provider``.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{self.base_url}/api/v1/swarm/observability/cost",
+                    headers=self._headers(),
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            logger.debug("observability: failed to fetch cost", exc_info=True)
+        return {"today_usd": 0, "this_week_usd": 0, "this_month_usd": 0}

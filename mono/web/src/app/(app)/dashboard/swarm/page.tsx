@@ -22,7 +22,9 @@ import {
   Kanban,
   History,
   Trophy,
+  BarChart3,
 } from "lucide-react";
+import Link from "next/link";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -120,10 +122,18 @@ export default function SwarmDashboardPage() {
         title="Agent Swarm"
         description="AI agent teams that implement code changes from natural language descriptions"
         actions={
-          <Button onClick={() => setShowForm(!showForm)}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Task
-          </Button>
+          <div className="flex gap-2">
+            <Link href="/dashboard/swarm/observability">
+              <Button variant="outline">
+                <BarChart3 className="mr-2 h-4 w-4" />
+                Observability
+              </Button>
+            </Link>
+            <Button onClick={() => setShowForm(!showForm)}>
+              <Plus className="mr-2 h-4 w-4" />
+              New Task
+            </Button>
+          </div>
         }
       />
 

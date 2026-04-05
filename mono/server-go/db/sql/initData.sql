@@ -837,6 +837,10 @@ INSERT INTO schema_info (version, description)
 SELECT 24, 'Add swarm_provider_circuit_state and swarm_self_heal_events tables for self-healing pipeline'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 24);
 
+INSERT INTO schema_info (version, description)
+SELECT 25, 'Add swarm_metrics_snapshots, swarm_provider_perf_log, swarm_cost_budget for observability dashboard'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 25);
+
 -- ============================================================================
 -- UPDATED_AT TRIGGER
 -- ============================================================================
@@ -1249,6 +1253,89 @@ CREATE INDEX IF NOT EXISTS idx_self_heal_unresolved
     ON swarm_self_heal_events (resolved) WHERE resolved = false;
 
 -- ============================================================================
+-- SWARM OBSERVABILITY — METRIC SNAPSHOTS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS swarm_metrics_snapshots (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    active_tasks    INT         NOT NULL DEFAULT 0,
+    pending_tasks   INT         NOT NULL DEFAULT 0,
+    completed_tasks BIGINT      NOT NULL DEFAULT 0,
+    failed_tasks    BIGINT      NOT NULL DEFAULT 0,
+    online_agents   INT         NOT NULL DEFAULT 0,
+    busy_agents     INT         NOT NULL DEFAULT 0,
+    active_teams    INT         NOT NULL DEFAULT 0,
+    busy_teams      INT         NOT NULL DEFAULT 0,
+    llm_calls       BIGINT      NOT NULL DEFAULT 0,
+    llm_tokens      BIGINT      NOT NULL DEFAULT 0,
+    llm_avg_latency_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
+    llm_error_rate  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    probe_calls     BIGINT      NOT NULL DEFAULT 0,
+    consensus_runs  BIGINT      NOT NULL DEFAULT 0,
+    consensus_avg_confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+    open_circuits   INT         NOT NULL DEFAULT 0,
+    heal_events     INT         NOT NULL DEFAULT 0,
+    estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    queue_depth     INT         NOT NULL DEFAULT 0,
+    agent_utilisation DOUBLE PRECISION NOT NULL DEFAULT 0,
+    health_score    INT         NOT NULL DEFAULT 100,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_metrics_snap_created
+    ON swarm_metrics_snapshots (created_at DESC);
+
+-- ============================================================================
+-- SWARM OBSERVABILITY — PROVIDER PERFORMANCE LOG
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS swarm_provider_perf_log (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider        TEXT        NOT NULL,
+    calls           INT         NOT NULL DEFAULT 0,
+    successes       INT         NOT NULL DEFAULT 0,
+    failures        INT         NOT NULL DEFAULT 0,
+    tokens_used     BIGINT      NOT NULL DEFAULT 0,
+    avg_latency_ms  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    p95_latency_ms  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    p99_latency_ms  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    error_rate      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    consensus_wins  INT         NOT NULL DEFAULT 0,
+    consensus_total INT         NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_perf_created
+    ON swarm_provider_perf_log (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_provider_perf_provider
+    ON swarm_provider_perf_log (provider, created_at DESC);
+
+-- ============================================================================
+-- SWARM OBSERVABILITY — COST BUDGET
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS swarm_cost_budget (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    scope           TEXT        NOT NULL DEFAULT 'global',
+    month           DATE        NOT NULL,
+    budget_usd      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    spent_usd       DOUBLE PRECISION NOT NULL DEFAULT 0,
+    alert_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.8,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(scope, month)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_budget_scope
+    ON swarm_cost_budget (scope, month);
+
+DROP TRIGGER IF EXISTS trg_cost_budget_updated_at ON swarm_cost_budget;
+CREATE TRIGGER trg_cost_budget_updated_at
+    BEFORE UPDATE ON swarm_cost_budget
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
 -- Ensures the rtvortex application role has full access to all tables.
@@ -1301,6 +1388,9 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE swarm_probe_history TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_provider_circuit_state TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_self_heal_events TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_metrics_snapshots TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_provider_perf_log TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_cost_budget TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;

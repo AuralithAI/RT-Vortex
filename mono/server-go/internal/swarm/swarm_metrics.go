@@ -634,3 +634,40 @@ var (
 		Help:      "Current number of open (unavailable) provider circuit breakers.",
 	})
 )
+
+// ── Observability Dashboard Metrics ───────────────────────────────
+
+var (
+	// SwarmObservabilitySnapshotsTotal counts metric snapshots persisted.
+	SwarmObservabilitySnapshotsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "observability_snapshots_total",
+		Help:      "Total metric snapshots persisted by the observability service.",
+	})
+
+	// SwarmObservabilityCycleDuration observes the observability snapshot cycle duration.
+	SwarmObservabilityCycleDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "observability_cycle_seconds",
+		Help:      "Duration of observability snapshot cycles.",
+		Buckets:   []float64{0.01, 0.05, 0.1, 0.5, 1, 5, 10},
+	})
+
+	// SwarmObservabilityHealthScore tracks the current composite health score (0-100).
+	SwarmObservabilityHealthScore = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "observability_health_score",
+		Help:      "Current composite system health score (0-100).",
+	})
+
+	// SwarmObservabilityEstimatedCostUSD tracks estimated LLM cost in the latest snapshot.
+	SwarmObservabilityEstimatedCostUSD = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "observability_estimated_cost_usd",
+		Help:      "Estimated LLM cost (USD) from the latest observability snapshot.",
+	})
+)

@@ -624,6 +624,15 @@ func (s *Server) setupRouter() {
 			r.Post("/self-heal/circuits/{provider}/reset", sh.HandleResetCircuit)
 			r.Get("/self-heal/circuits", sh.HandleListCircuits)
 
+			// Observability dashboard (user JWT).
+			r.Get("/observability/dashboard", sh.HandleObservabilityDashboard)
+			r.Get("/observability/time-series", sh.HandleObservabilityTimeSeries)
+			r.Get("/observability/providers", sh.HandleObservabilityProviders)
+			r.Get("/observability/providers/{provider}", sh.HandleObservabilityProviderDetail)
+			r.Get("/observability/cost", sh.HandleObservabilityCost)
+			r.Get("/observability/health", sh.HandleObservabilityHealth)
+			r.Put("/observability/budget", sh.HandleObservabilitySetBudget)
+
 			// Human-in-the-loop response (user JWT).
 			r.Post("/hitl/respond", sh.HandleHITLRespond)
 
