@@ -751,7 +751,7 @@ func (s *SelfHealService) listCircuitStates(ctx context.Context) ([]ProviderCirc
 	}
 	defer rows.Close()
 
-	var out []ProviderCircuitState
+	out := make([]ProviderCircuitState, 0)
 	for rows.Next() {
 		var p ProviderCircuitState
 		if err := rows.Scan(
@@ -780,7 +780,7 @@ func (s *SelfHealService) listRecentEvents(ctx context.Context, limit int) ([]Se
 	}
 	defer rows.Close()
 
-	var out []SelfHealEvent
+	out := make([]SelfHealEvent, 0)
 	for rows.Next() {
 		var ev SelfHealEvent
 		if err := rows.Scan(

@@ -298,7 +298,7 @@ func (m *TaskManager) ListTasks(ctx context.Context, repoID, status string, limi
 	}
 	defer rows.Close()
 
-	var tasks []Task
+	tasks := make([]Task, 0)
 	for rows.Next() {
 		var t Task
 		if err := rows.Scan(

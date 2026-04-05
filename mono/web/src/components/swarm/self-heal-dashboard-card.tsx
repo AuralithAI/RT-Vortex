@@ -173,7 +173,9 @@ export function SelfHealDashboardCard() {
     );
   }
 
-  const { providers, recent_events, open_circuits, half_open_circuits, unresolved_events } = data;
+  const providers = data.providers ?? [];
+  const recent_events = data.recent_events ?? [];
+  const { open_circuits, half_open_circuits, unresolved_events } = data;
 
   return (
     <Card>
@@ -261,7 +263,7 @@ export function SelfHealDashboardCard() {
         )}
 
         {/* ── Recent Events ─────────────────────────────────────────── */}
-        {recent_events && recent_events.length > 0 && (
+        {recent_events.length > 0 && (
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
               Recent Events
@@ -309,7 +311,7 @@ export function SelfHealDashboardCard() {
         )}
 
         {/* ── Empty State ───────────────────────────────────────────── */}
-        {providers.length === 0 && (!recent_events || recent_events.length === 0) && (
+        {providers.length === 0 && recent_events.length === 0 && (
           <div className="text-center py-6 text-sm text-muted-foreground">
             <ShieldCheck className="h-8 w-8 mx-auto mb-2 text-green-500" />
             <p>All systems healthy — no self-heal events recorded yet.</p>

@@ -667,7 +667,7 @@ func (o *ObservabilityService) GetProviderPerf(ctx context.Context, provider str
 	}
 	defer rows.Close()
 
-	var out []ProviderPerfSnapshot
+	out := make([]ProviderPerfSnapshot, 0)
 	for rows.Next() {
 		var p ProviderPerfSnapshot
 		if err := rows.Scan(
@@ -739,7 +739,7 @@ func (o *ObservabilityService) getTimeSeries(ctx context.Context, since time.Tim
 	}
 	defer rows.Close()
 
-	var out []MetricsSnapshot
+	out := make([]MetricsSnapshot, 0)
 	for rows.Next() {
 		var s MetricsSnapshot
 		if err := rows.Scan(
@@ -772,7 +772,7 @@ func (o *ObservabilityService) getLatestProviderPerf(ctx context.Context) ([]Pro
 	}
 	defer rows.Close()
 
-	var out []ProviderPerfSnapshot
+	out := make([]ProviderPerfSnapshot, 0)
 	for rows.Next() {
 		var p ProviderPerfSnapshot
 		if err := rows.Scan(
