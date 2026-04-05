@@ -705,6 +705,83 @@ The Model Context Protocol (MCP) system provides tool integrations for agents an
 - **Cross-Repo Authorizer**: Share-profile-based access control for cross-repo data exposure
 - **Network Isolation**: Engine doesn't need public access
 
+## Self-Healing Pipeline (Phase 11)
+
+Automatic resilience and recovery for the LLM agent swarm:
+
+```
+  Agent LLM Call
+        │
+        ▼
+  ┌─────────────┐    success/failure
+  │ Go Proxy    │ ──────────────────► ┌────────────────────────┐
+  │ /llm/probe  │                     │  SelfHealService       │
+  └─────────────┘                     │                        │
+                                      │  ┌──────────────────┐  │
+                                      │  │ Circuit Breakers │  │
+                                      │  │ per-provider     │  │
+                                      │  │ closed → open →  │  │
+                                      │  │ half_open → …    │  │
+                                      │  └──────────────────┘  │
+                                      │                        │
+                                      │  ┌──────────────────┐  │
+                                      │  │ Stuck Task       │  │
+                                      │  │ Detector         │  │
+                                      │  │ (30s loop)       │  │
+                                      │  └──────────────────┘  │
+                                      │                        │
+                                      │  ┌──────────────────┐  │
+                                      │  │ Audit Event Log  │  │
+                                      │  │ (PostgreSQL)     │  │
+                                      │  └──────────────────┘  │
+                                      └────────────────────────┘
+```
+
+### Circuit Breaker State Machine
+
+Each LLM provider has an independent circuit breaker:
+
+| Transition | Trigger | Effect |
+|------------|---------|--------|
+| closed → open | 5 consecutive failures | Block traffic for 2 min |
+| open → half_open | Open duration expires | Allow limited probe traffic |
+| half_open → closed | 3 successes in half_open | Fully restore traffic |
+| half_open → open | Any failure in half_open | Re-open for another 2 min |
+| * → closed | Manual reset via dashboard | Admin override |
+
+### Self-Heal Event Types
+
+| Event | Severity | Description |
+|-------|----------|-------------|
+| `circuit_opened` | critical | Provider circuit breaker tripped |
+| `circuit_half_open` | warn | Provider entering recovery probe |
+| `circuit_closed` | info | Provider recovered |
+| `stuck_task_detected` | warn | Task in-progress beyond 45 min |
+| `task_timeout_recovery` | info | Stuck task auto-resubmitted |
+| `provider_failover` | warn | Provider failed, traffic rerouted |
+
+### Endpoints
+
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `POST /internal/swarm/self-heal/provider-outcome` | Agent JWT | Report provider success/failure |
+| `GET /internal/swarm/self-heal/provider-status` | Agent JWT | Check circuit breaker state |
+| `GET /api/v1/swarm/self-heal/summary` | User JWT | Dashboard overview |
+| `GET /api/v1/swarm/self-heal/events` | User JWT | Paginated event log |
+| `POST /api/v1/swarm/self-heal/events/{id}/resolve` | User JWT | Mark event resolved |
+| `POST /api/v1/swarm/self-heal/circuits/{provider}/reset` | User JWT | Manual circuit reset |
+| `GET /api/v1/swarm/self-heal/circuits` | User JWT | List all circuit states |
+
+### Prometheus Metrics (Self-Heal)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `rtvortex_swarm_self_heal_events_total` | Counter | Events by type |
+| `rtvortex_swarm_self_heal_circuit_transitions_total` | Counter | Circuit state transitions |
+| `rtvortex_swarm_self_heal_provider_failures_total` | Counter | Provider failure reports |
+| `rtvortex_swarm_self_heal_cycle_seconds` | Histogram | Background loop duration |
+| `rtvortex_swarm_self_heal_open_circuits` | Gauge | Currently open circuits |
+
 ## Observability
 
 ### Prometheus Metrics

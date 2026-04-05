@@ -492,3 +492,63 @@ export interface ProviderStatsData {
   avg_latency_ms: number;
   reliability_score: number;
 }
+
+// ─── Self-Healing Pipeline Types ──────────────────────────────────
+
+/** Provider circuit-breaker state. */
+export type CircuitState = "closed" | "half_open" | "open";
+
+/** Self-heal event severity. */
+export type SelfHealSeverity = "info" | "warn" | "critical";
+
+/** Self-heal event type. */
+export type SelfHealEventType =
+  | "circuit_opened"
+  | "circuit_closed"
+  | "circuit_half_open"
+  | "task_retry"
+  | "task_timeout_recovery"
+  | "provider_failover"
+  | "agent_restarted"
+  | "stuck_task_detected";
+
+/** Per-provider circuit breaker state. */
+export interface ProviderCircuitData {
+  id: string;
+  provider: string;
+  state: CircuitState;
+  consecutive_failures: number;
+  total_failures: number;
+  total_successes: number;
+  last_failure_at: string | null;
+  last_success_at: string | null;
+  open_until: string | null;
+  half_open_probes: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** A single self-heal audit event. */
+export interface SelfHealEventData {
+  id: string;
+  event_type: SelfHealEventType;
+  provider: string;
+  task_id: string | null;
+  agent_id: string | null;
+  details: Record<string, unknown>;
+  severity: SelfHealSeverity;
+  resolved: boolean;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+/** Summary returned by GET /api/v1/swarm/self-heal/summary. */
+export interface SelfHealSummaryData {
+  total_events: number;
+  unresolved_events: number;
+  open_circuits: number;
+  half_open_circuits: number;
+  closed_circuits: number;
+  providers: ProviderCircuitData[];
+  recent_events: SelfHealEventData[];
+}

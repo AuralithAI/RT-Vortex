@@ -663,6 +663,7 @@ func main() {
 	swarmRoleELO := swarm.NewRoleELOService(db.Pool)
 	swarmTeamFormSvc := swarm.NewTeamFormationService(db.Pool, swarmRoleELO)
 	swarmProbeTuningSvc := swarm.NewProbeTuningService(db.Pool, swarmRoleELO)
+	swarmSelfHealSvc := swarm.NewSelfHealService(db.Pool, swarmTaskMgr, swarmWSHub)
 
 	swarmHandler := &swarm.Handler{
 		AuthSvc:        swarmAuthSvc,
@@ -673,6 +674,7 @@ func main() {
 		RoleELO:        swarmRoleELO,
 		TeamFormSvc:    swarmTeamFormSvc,
 		ProbeTuningSvc: swarmProbeTuningSvc,
+		SelfHealSvc:    swarmSelfHealSvc,
 		WS:             swarmWSHub,
 		PRCreator:      swarmPRCreator,
 		VCSResolver:    vcsResolver,
@@ -702,6 +704,9 @@ func main() {
 
 	// Adaptive probe tuning: periodic config adjustment based on probe history.
 	go swarmProbeTuningSvc.StartTuningLoop(ctx)
+
+	// Self-healing pipeline: circuit breakers, stuck-task recovery, auto-retry.
+	go swarmSelfHealSvc.Start(ctx)
 
 	slog.Info("Swarm agent infrastructure initialized")
 

@@ -482,6 +482,31 @@ class Agent:
                 self.agent_id, exc_info=True,
             )
 
+        # ── Report per-provider outcomes for self-healing (fire-and-forget) ─
+        try:
+            from ..self_heal import report_provider_outcome
+            from ..go_client import GoClient
+
+            _sh_go = GoClient(token=self.token or "")
+            _sh_task_id = ""
+            if self.conversation and hasattr(self.conversation, "task_id"):
+                _sh_task_id = self.conversation.task_id or ""
+            for result in probe_resp.results:
+                await report_provider_outcome(
+                    _sh_go,
+                    provider=result.provider,
+                    success=result.succeeded,
+                    latency_ms=float(result.latency_ms),
+                    error_msg=result.error,
+                    task_id=_sh_task_id,
+                    agent_id=self.agent_id,
+                )
+        except Exception:
+            logger.debug(
+                "Agent %s: self-heal outcome reporting skipped",
+                self.agent_id, exc_info=True,
+            )
+
         return probe_resp
 
     def pick_best_probe_result(self, probe_resp: ProbeResponse) -> str:

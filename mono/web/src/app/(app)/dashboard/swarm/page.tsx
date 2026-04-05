@@ -30,6 +30,7 @@ import { TaskPipelineBoard } from "@/components/swarm/task-pipeline-board";
 import { TaskHistory } from "@/components/swarm/task-history";
 import { LiveAgentPanel } from "@/components/swarm/live-agent-panel";
 import { RoleELOLeaderboard } from "@/components/swarm/role-elo-leaderboard";
+import { SelfHealDashboardCard } from "@/components/swarm/self-heal-dashboard-card";
 import { Combobox } from "@/components/ui/combobox";
 import { useRepos } from "@/lib/api/queries";
 import type { SwarmTask, SwarmOverview, TaskSubmission } from "@/types/swarm";
@@ -381,6 +382,9 @@ export default function SwarmDashboardPage() {
 
         {/* Live Agent Panel */}
         <LiveAgentPanel agents={overview?.agents ?? []} />
+
+        {/* Self-Healing Pipeline */}
+        <SelfHealDashboardCard />
       </div>
     </>
   );

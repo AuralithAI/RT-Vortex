@@ -837,3 +837,72 @@ class GoClient:
                 json=outcome,
             )
             resp.raise_for_status()
+
+    # ── Self-Healing Pipeline ────────────────────────────────────────────
+
+    async def report_provider_outcome(
+        self,
+        provider: str,
+        success: bool,
+        latency_ms: float = 0.0,
+        error_msg: str = "",
+        task_id: str = "",
+        agent_id: str = "",
+    ) -> None:
+        """Report a provider call outcome for circuit-breaker tracking.
+
+        Fire-and-forget — errors are logged but not raised.
+
+        Args:
+            provider: LLM provider name (e.g. "openai", "anthropic").
+            success: Whether the call succeeded.
+            latency_ms: Call latency in milliseconds.
+            error_msg: Error message on failure.
+            task_id: Optional task context.
+            agent_id: Optional agent context.
+        """
+        payload = {
+            "provider": provider,
+            "success": success,
+            "latency_ms": latency_ms,
+            "error_msg": error_msg,
+            "task_id": task_id,
+            "agent_id": agent_id,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.base_url}/internal/swarm/self-heal/provider-outcome",
+                    headers=self._headers(),
+                    json=payload,
+                )
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "self-heal: provider-outcome report failed status=%d",
+                        resp.status_code,
+                    )
+        except Exception:
+            logger.debug("self-heal: failed to report provider outcome", exc_info=True)
+
+    async def check_provider_status(self, provider: str) -> dict:
+        """Check whether a provider is available (circuit breaker check).
+
+        Args:
+            provider: LLM provider name.
+
+        Returns:
+            Dict with ``available``, ``state``, ``consecutive_failures``, ``open_until``.
+            Returns a healthy-default on failure.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"{self.base_url}/internal/swarm/self-heal/provider-status",
+                    headers=self._headers(),
+                    params={"provider": provider},
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            logger.debug("self-heal: failed to check provider status", exc_info=True)
+        return {"provider": provider, "available": True, "state": "closed"}

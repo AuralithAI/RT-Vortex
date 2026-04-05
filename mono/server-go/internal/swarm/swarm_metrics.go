@@ -589,3 +589,48 @@ var (
 		Help:      "Total adaptive probe tuning config adjustments by role and strategy.",
 	}, []string{"role", "strategy"})
 )
+
+// ── Self-Healing Pipeline Metrics ─────────────────────────────────
+
+var (
+	// SwarmSelfHealEventsTotal counts self-heal events by type.
+	SwarmSelfHealEventsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "self_heal_events_total",
+		Help:      "Total self-healing events by type (circuit_opened, task_retry, stuck_task_detected, etc.).",
+	}, []string{"event_type"})
+
+	// SwarmSelfHealCircuitTransitions counts circuit-breaker state transitions.
+	SwarmSelfHealCircuitTransitions = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "self_heal_circuit_transitions_total",
+		Help:      "Total circuit-breaker state transitions by provider and new state.",
+	}, []string{"provider", "new_state"})
+
+	// SwarmSelfHealProviderFailures counts provider failure reports.
+	SwarmSelfHealProviderFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "self_heal_provider_failures_total",
+		Help:      "Total provider failure reports by provider name.",
+	}, []string{"provider"})
+
+	// SwarmSelfHealCycleDuration observes the self-heal background cycle duration.
+	SwarmSelfHealCycleDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "self_heal_cycle_seconds",
+		Help:      "Duration of self-heal background loop cycles.",
+		Buckets:   []float64{0.01, 0.05, 0.1, 0.5, 1, 5},
+	})
+
+	// SwarmSelfHealOpenCircuits tracks the current number of open circuits.
+	SwarmSelfHealOpenCircuits = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "self_heal_open_circuits",
+		Help:      "Current number of open (unavailable) provider circuit breakers.",
+	})
+)

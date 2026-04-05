@@ -27,6 +27,7 @@ type Handler struct {
 	RoleELO        *RoleELOService
 	TeamFormSvc    *TeamFormationService
 	ProbeTuningSvc *ProbeTuningService
+	SelfHealSvc    *SelfHealService
 	WS             *WSHub
 	PRCreator      *PRCreator
 	VCSResolver    *vcs.Resolver

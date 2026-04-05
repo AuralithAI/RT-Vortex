@@ -833,6 +833,10 @@ INSERT INTO schema_info (version, description)
 SELECT 23, 'Add swarm_probe_configs and swarm_probe_history tables for adaptive probe tuning'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 23);
 
+INSERT INTO schema_info (version, description)
+SELECT 24, 'Add swarm_provider_circuit_state and swarm_self_heal_events tables for self-healing pipeline'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 24);
+
 -- ============================================================================
 -- UPDATED_AT TRIGGER
 -- ============================================================================
@@ -1190,6 +1194,61 @@ CREATE INDEX IF NOT EXISTS idx_swarm_probe_hist_winner
     ON swarm_probe_history (provider_winner);
 
 -- ============================================================================
+-- Self-Healing Pipeline Tables
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS swarm_provider_circuit_state (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider        TEXT        NOT NULL UNIQUE,
+    state           TEXT        NOT NULL DEFAULT 'closed',
+    consecutive_failures INT   NOT NULL DEFAULT 0,
+    total_failures  BIGINT     NOT NULL DEFAULT 0,
+    total_successes BIGINT     NOT NULL DEFAULT 0,
+    last_failure_at TIMESTAMPTZ,
+    last_success_at TIMESTAMPTZ,
+    open_until      TIMESTAMPTZ,
+    half_open_probes INT       NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_circuit_provider
+    ON swarm_provider_circuit_state (provider);
+CREATE INDEX IF NOT EXISTS idx_provider_circuit_state
+    ON swarm_provider_circuit_state (state);
+
+DROP TRIGGER IF EXISTS trg_provider_circuit_updated_at ON swarm_provider_circuit_state;
+CREATE TRIGGER trg_provider_circuit_updated_at
+    BEFORE UPDATE ON swarm_provider_circuit_state
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TABLE IF NOT EXISTS swarm_self_heal_events (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_type      TEXT        NOT NULL,
+    provider        TEXT,
+    task_id         UUID,
+    agent_id        UUID,
+    details         JSONB       NOT NULL DEFAULT '{}',
+    severity        TEXT        NOT NULL DEFAULT 'info',
+    resolved        BOOLEAN     NOT NULL DEFAULT false,
+    resolved_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_self_heal_type
+    ON swarm_self_heal_events (event_type);
+CREATE INDEX IF NOT EXISTS idx_self_heal_provider
+    ON swarm_self_heal_events (provider);
+CREATE INDEX IF NOT EXISTS idx_self_heal_task
+    ON swarm_self_heal_events (task_id);
+CREATE INDEX IF NOT EXISTS idx_self_heal_severity
+    ON swarm_self_heal_events (severity);
+CREATE INDEX IF NOT EXISTS idx_self_heal_created
+    ON swarm_self_heal_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_self_heal_unresolved
+    ON swarm_self_heal_events (resolved) WHERE resolved = false;
+
+-- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
 -- Ensures the rtvortex application role has full access to all tables.
@@ -1240,6 +1299,8 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE swarm_ci_signals TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_probe_configs TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_probe_history TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_provider_circuit_state TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_self_heal_events TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;

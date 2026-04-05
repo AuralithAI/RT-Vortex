@@ -544,6 +544,10 @@ func (s *Server) setupRouter() {
 				r.Get("/probe-config", sh.HandleGetProbeConfig)
 				r.Post("/probe-history", sh.HandleRecordProbeHistory)
 
+				// Self-healing pipeline (provider outcome reporting + status check).
+				r.Post("/self-heal/provider-outcome", sh.HandleProviderOutcome)
+				r.Get("/self-heal/provider-status", sh.HandleProviderStatus)
+
 				// Web fetch proxy (URL fetching for agents).
 				r.Post("/web/fetch", sh.HandleWebFetch)
 
@@ -612,6 +616,13 @@ func (s *Server) setupRouter() {
 			r.Put("/probe-configs/{role}", sh.HandleUpdateProbeConfig)
 			r.Get("/probe-stats/{role}", sh.HandleGetProbeStats)
 			r.Get("/probe-history", sh.HandleListProbeHistory)
+
+			// Self-healing pipeline (user JWT).
+			r.Get("/self-heal/summary", sh.HandleSelfHealSummary)
+			r.Get("/self-heal/events", sh.HandleSelfHealEvents)
+			r.Post("/self-heal/events/{id}/resolve", sh.HandleResolveEvent)
+			r.Post("/self-heal/circuits/{provider}/reset", sh.HandleResetCircuit)
+			r.Get("/self-heal/circuits", sh.HandleListCircuits)
 
 			// Human-in-the-loop response (user JWT).
 			r.Post("/hitl/respond", sh.HandleHITLRespond)
