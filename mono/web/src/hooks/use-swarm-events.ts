@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 // ── Event types ─────────────────────────────────────────────────────────────
 
 export interface SwarmWsEvent {
-  type: "swarm_task" | "swarm_agent" | "swarm_diff" | "swarm_plan";
+  type: "swarm_task" | "swarm_agent" | "swarm_diff" | "swarm_plan" | "swarm_discussion";
   task_id?: string;
   agent_id?: string;
   event: string;

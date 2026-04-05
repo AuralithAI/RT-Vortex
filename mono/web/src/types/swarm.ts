@@ -179,3 +179,77 @@ export interface TaskSubmission {
   title: string;
   description: string;
 }
+
+// ─── Multi-LLM Discussion Types ─────────────────────────────────────────────
+
+export type ConsensusStrategy =
+  | "pick_best"
+  | "majority_vote"
+  | "gpt_as_judge"
+  | "multi_judge_panel"
+  | "auto";
+
+export type DiscussionStatus = "open" | "complete" | "synthesised";
+
+/** A single LLM provider's response within a discussion thread. */
+export interface ProviderResponseData {
+  provider: string;
+  model: string;
+  content: string;
+  latency_ms: number;
+  finish_reason?: string;
+  token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  error?: string;
+  timestamp?: number;
+}
+
+/** A multi-LLM discussion thread — multiple providers answered the same question. */
+export interface DiscussionThreadData {
+  thread_id: string;
+  agent_id: string;
+  agent_role: string;
+  topic: string;
+  action_type?: string;
+  responses: ProviderResponseData[];
+  status: DiscussionStatus;
+  synthesis?: string;
+  synthesis_provider?: string;
+  provider_count: number;
+  success_count: number;
+  created_at: number;
+  completed_at?: number;
+}
+
+/** A single judge's verdict from the multi-judge panel. */
+export interface JudgeVerdictData {
+  judge_provider: string;
+  judge_model: string;
+  winner: string;
+  confidence: number;
+  scores: Record<string, number>;
+  reasoning: string;
+  error?: string;
+}
+
+/** The consensus engine's final result. */
+export interface ConsensusResultData {
+  thread_id?: string;
+  strategy: ConsensusStrategy;
+  provider: string;
+  model?: string;
+  confidence: number;
+  reasoning: string;
+  scores?: Record<string, number>;
+  judge_count?: number;
+  judge_agreement?: number;
+  judge_verdicts?: JudgeVerdictData[];
+}
+
+/** LLM provider metadata for display (name, color, icon key). */
+export interface LLMProviderMeta {
+  name: string;
+  displayName: string;
+  color: string;
+  bgColor: string;
+  borderColor: string;
+}

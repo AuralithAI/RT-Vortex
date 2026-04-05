@@ -1,6 +1,7 @@
 // ─── Swarm Task Detail ───────────────────────────────────────────────────────
 // Task detail page: plan display, approve/reject, rating, diff list with
-// real-time WebSocket updates and links to full review page.
+// real-time WebSocket updates, multi-LLM discussion panels, consensus
+// decisions, and links to full review page.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -24,7 +25,10 @@ import { DiffViewer } from "@/components/swarm/diff-viewer";
 import { ActivityFeed } from "@/components/swarm/activity-feed";
 import { AgentChat } from "@/components/swarm/agent-chat";
 import { TaskAgentList } from "@/components/swarm/task-agent-list";
+import { MultiLLMDiscussion } from "@/components/swarm/multi-llm-discussion";
+import { ConsensusResultCard } from "@/components/swarm/consensus-result-card";
 import { useSwarmEvents } from "@/hooks/use-swarm-events";
+import { useDiscussionEvents } from "@/hooks/use-discussion-events";
 import type { SwarmTask, SwarmDiff, PlanDocument } from "@/types/swarm";
 
 export default function SwarmTaskDetailPage() {
@@ -36,6 +40,7 @@ export default function SwarmTaskDetailPage() {
   const [comment, setComment] = useState("");
 
   const { events, connected } = useSwarmEvents(params.id);
+  const { threads, consensusResults } = useDiscussionEvents(events);
 
   const fetchTask = useCallback(async () => {
     try {
@@ -237,6 +242,18 @@ export default function SwarmTaskDetailPage() {
 
           {/* Agent Conversation — live chat feed */}
           <AgentChat events={events} />
+
+          {/* Multi-LLM Discussion Panels — Perplexity-style transparency */}
+          <MultiLLMDiscussion threads={threads} />
+
+          {/* Consensus Decisions — shows how the engine chose the final answer */}
+          {consensusResults.length > 0 && (
+            <div className="space-y-4">
+              {consensusResults.map((result, i) => (
+                <ConsensusResultCard key={`consensus-${i}`} result={result} />
+              ))}
+            </div>
+          )}
 
           {/* Diffs Section */}
           {diffs.length > 0 && (
