@@ -499,6 +499,60 @@ class GoClient:
             resp.raise_for_status()
             return resp.json()
 
+    # ── CI Signal Ingestion ──────────────────────────────────────────────
+
+    async def report_ci_signal(
+        self,
+        task_id: str,
+        build_success: bool = False,
+        tests_passed: bool = False,
+        pr_accepted: bool = False,
+        details: str = "",
+    ) -> dict:
+        """Report a CI signal (build/test/PR result) for a task.
+
+        This feeds automatic signals into the role-based ELO system,
+        closing the loop between agent-produced PRs and their CI outcomes.
+
+        Args:
+            task_id: The swarm task ID.
+            build_success: Whether the build succeeded.
+            tests_passed: Whether tests passed.
+            pr_accepted: Whether the PR was merged/accepted.
+            details: Optional human-readable details.
+
+        Returns:
+            Server acknowledgment with task_id.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/ci-signal/report",
+                headers=self._headers(),
+                json={
+                    "task_id": task_id,
+                    "build_success": build_success,
+                    "tests_passed": tests_passed,
+                    "pr_accepted": pr_accepted,
+                    "details": details,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_ci_signal(self, task_id: str) -> dict:
+        """Get the CI signal status for a task.
+
+        Returns:
+            CI signal record with pr_state, ci_state, etc.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/api/v1/swarm/tasks/{task_id}/ci-signal",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     # ── HITL (Human-in-the-Loop) endpoints ───────────────────────────────
 
     async def ask_human(

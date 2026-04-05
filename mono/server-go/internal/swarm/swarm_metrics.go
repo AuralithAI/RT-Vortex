@@ -471,3 +471,64 @@ var (
 		Help:      "Number of role ELO records in each tier (standard, expert, restricted).",
 	}, []string{"tier"})
 )
+
+// ── CI Signal Ingestion Metrics ───────────────────────────────────
+
+var (
+	// SwarmCISignalPollCycles counts completed CI signal poll cycles.
+	SwarmCISignalPollCycles = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "ci_signal_poll_cycles_total",
+		Help:      "Total CI signal poll cycles completed.",
+	})
+
+	// SwarmCISignalSeeded counts CI signal records seeded (new tasks with PRs).
+	SwarmCISignalSeeded = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "ci_signal_seeded_total",
+		Help:      "Total CI signal records seeded from completed tasks.",
+	})
+
+	// SwarmCISignalPolled counts individual CI signal polls against VCS platforms.
+	SwarmCISignalPolled = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "ci_signal_polled_total",
+		Help:      "Total individual CI signal polls against VCS platforms.",
+	})
+
+	// SwarmCISignalIngested counts CI signals that were ingested into role ELO.
+	SwarmCISignalIngested = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "ci_signal_elo_ingested_total",
+		Help:      "Total CI signals ingested into role ELO system.",
+	})
+
+	// SwarmCISignalFinalized counts CI signals that were finalized (no more polling).
+	SwarmCISignalFinalized = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "ci_signal_finalized_total",
+		Help:      "Total CI signal records finalized.",
+	})
+
+	// SwarmCISignalCycleDuration observes CI signal poll cycle duration.
+	SwarmCISignalCycleDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "ci_signal_cycle_seconds",
+		Help:      "Duration of CI signal poll cycles.",
+		Buckets:   prometheus.DefBuckets,
+	})
+
+	// SwarmCISignalELOUpdates counts ELO updates from CI signals per role and CI state.
+	SwarmCISignalELOUpdates = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: swarmNS,
+		Subsystem: swarmSub,
+		Name:      "ci_signal_elo_updates_total",
+		Help:      "ELO updates triggered by CI signal ingestion, by role and CI state.",
+	}, []string{"role", "ci_state"})
+)

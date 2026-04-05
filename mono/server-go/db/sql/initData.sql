@@ -816,6 +816,10 @@ INSERT INTO schema_info (version, description)
 SELECT 20, 'Add swarm_role_elo and swarm_role_elo_history tables for role-based ELO tracking'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 20);
 
+INSERT INTO schema_info (version, description)
+SELECT 21, 'Add swarm_ci_signals table for automatic CI signal ingestion into role ELO'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 21);
+
 -- ============================================================================
 -- UPDATED_AT TRIGGER
 -- ============================================================================
@@ -1055,6 +1059,48 @@ CREATE TRIGGER trg_swarm_role_elo_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================================================
+-- SWARM CI SIGNALS
+-- ============================================================================
+-- Tracks per-task CI signals (PR merge state, build/test CI checks).
+-- The background CISignalPoller queries completed tasks with PRs and fills
+-- this table, then feeds the signals into the role-based ELO system.
+
+CREATE TABLE IF NOT EXISTS swarm_ci_signals (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id         UUID NOT NULL REFERENCES swarm_tasks(id) ON DELETE CASCADE,
+    repo_id         TEXT NOT NULL,
+    pr_number       INT,
+    pr_state        TEXT NOT NULL DEFAULT 'unknown',
+    pr_merged       BOOLEAN NOT NULL DEFAULT FALSE,
+    ci_state        TEXT NOT NULL DEFAULT 'unknown',
+    ci_total        INT NOT NULL DEFAULT 0,
+    ci_passed       INT NOT NULL DEFAULT 0,
+    ci_failed       INT NOT NULL DEFAULT 0,
+    ci_pending      INT NOT NULL DEFAULT 0,
+    ci_details      JSONB DEFAULT '[]'::jsonb,
+    elo_ingested    BOOLEAN NOT NULL DEFAULT FALSE,
+    elo_ingested_at TIMESTAMPTZ,
+    poll_count      INT NOT NULL DEFAULT 0,
+    last_polled_at  TIMESTAMPTZ,
+    finalized       BOOLEAN NOT NULL DEFAULT FALSE,
+    finalized_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_swarm_ci_signals_task
+    ON swarm_ci_signals (task_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_ci_signals_unfinalized
+    ON swarm_ci_signals (finalized, last_polled_at) WHERE NOT finalized;
+CREATE INDEX IF NOT EXISTS idx_swarm_ci_signals_repo
+    ON swarm_ci_signals (repo_id, created_at DESC);
+
+DROP TRIGGER IF EXISTS trg_swarm_ci_signals_updated_at ON swarm_ci_signals;
+CREATE TRIGGER trg_swarm_ci_signals_updated_at
+    BEFORE UPDATE ON swarm_ci_signals
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
 -- Ensures the rtvortex application role has full access to all tables.
@@ -1102,6 +1148,7 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE swarm_consensus_insights TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_role_elo TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_role_elo_history TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_ci_signals TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;

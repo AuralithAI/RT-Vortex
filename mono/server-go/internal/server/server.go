@@ -533,6 +533,10 @@ func (s *Server) setupRouter() {
 				// CI proxy.
 				r.Post("/ci/run", sh.HandleCIRun)
 
+				// CI signal ingestion (webhook + agent report).
+				r.Post("/ci-signal/webhook", sh.HandleCISignalWebhook)
+				r.Post("/ci-signal/report", sh.HandleCISignalReport)
+
 				// Web fetch proxy (URL fetching for agents).
 				r.Post("/web/fetch", sh.HandleWebFetch)
 
@@ -587,6 +591,10 @@ func (s *Server) setupRouter() {
 			r.Get("/agents", sh.ListAgentsUser)
 			r.Get("/teams", sh.ListTeamsUser)
 			r.Get("/overview", sh.SwarmOverview)
+
+			// CI signal status (user JWT).
+			r.Get("/tasks/{id}/ci-signal", sh.HandleGetCISignal)
+			r.Get("/ci-signals", sh.HandleListCISignals)
 
 			// Human-in-the-loop response (user JWT).
 			r.Post("/hitl/respond", sh.HandleHITLRespond)

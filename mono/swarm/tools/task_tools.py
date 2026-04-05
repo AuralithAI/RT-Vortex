@@ -218,6 +218,44 @@ async def complete_task(task_id: str) -> str:
     return f"Task {task_id} marked as completed."
 
 
+@tool(description=(
+    "Report CI signal results for a task. Call this after running tests or "
+    "verifying build status to feed automatic signals into the ELO system."
+))
+async def report_ci_signal(
+    task_id: str,
+    build_success: bool = False,
+    tests_passed: bool = False,
+    pr_accepted: bool = False,
+    details: str = "",
+) -> str:
+    """Report CI signal (build/test/PR result) for a task.
+
+    Args:
+        task_id: The task ID.
+        build_success: Whether the build succeeded.
+        tests_passed: Whether tests passed.
+        pr_accepted: Whether the PR was merged/accepted.
+        details: Optional human-readable details.
+
+    Returns:
+        Confirmation string.
+    """
+    client = _get_client()
+    result = await client.report_ci_signal(
+        task_id=task_id,
+        build_success=build_success,
+        tests_passed=tests_passed,
+        pr_accepted=pr_accepted,
+        details=details,
+    )
+    logger.info(
+        "CI signal reported for task %s: build=%s tests=%s pr=%s",
+        task_id, build_success, tests_passed, pr_accepted,
+    )
+    return f"CI signal reported for task {task_id}: {result}"
+
+
 # ── Collect all tools ────────────────────────────────────────────────────────
 
-TASK_TOOLS = [report_plan, report_diff, complete_task]
+TASK_TOOLS = [report_plan, report_diff, complete_task, report_ci_signal]

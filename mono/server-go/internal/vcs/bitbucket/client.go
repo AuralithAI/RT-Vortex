@@ -573,3 +573,68 @@ func (c *Client) GetBranchSHA(ctx context.Context, owner, repo, branch string) (
 	}
 	return branchInfo.Target.Hash, nil
 }
+
+// GetCombinedStatus returns the aggregated build status for a commit.
+func (c *Client) GetCombinedStatus(ctx context.Context, owner, repo, ref string) (*vcs.CombinedStatus, error) {
+	url := fmt.Sprintf("%s/repositories/%s/%s/commit/%s/statuses", c.baseURL, owner, repo, ref)
+
+	var resp struct {
+		Values []struct {
+			Name        string    `json:"name"`
+			State       string    `json:"state"` // SUCCESSFUL, FAILED, INPROGRESS, STOPPED
+			Description string    `json:"description"`
+			URL         string    `json:"url"`
+			CreatedOn   time.Time `json:"created_on"`
+		} `json:"values"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &resp); err != nil {
+		slog.Debug("bitbucket commit statuses unavailable", "ref", ref, "error", err)
+		return nil, nil
+	}
+
+	result := &vcs.CombinedStatus{}
+	for _, s := range resp.Values {
+		state := mapBitbucketState(s.State)
+		result.Statuses = append(result.Statuses, vcs.CommitStatus{
+			Context:     s.Name,
+			State:       state,
+			Description: s.Description,
+			TargetURL:   s.URL,
+			CreatedAt:   s.CreatedOn,
+		})
+		result.Total++
+		switch state {
+		case vcs.CommitStatusSuccess:
+			result.Passed++
+		case vcs.CommitStatusFailure, vcs.CommitStatusError:
+			result.Failed++
+		default:
+			result.Pending++
+		}
+	}
+
+	if result.Total == 0 {
+		result.State = vcs.CommitStatusSuccess
+	} else if result.Failed > 0 {
+		result.State = vcs.CommitStatusFailure
+	} else if result.Pending > 0 {
+		result.State = vcs.CommitStatusPending
+	} else {
+		result.State = vcs.CommitStatusSuccess
+	}
+
+	return result, nil
+}
+
+func mapBitbucketState(s string) vcs.CommitStatusState {
+	switch s {
+	case "SUCCESSFUL":
+		return vcs.CommitStatusSuccess
+	case "FAILED":
+		return vcs.CommitStatusFailure
+	case "STOPPED":
+		return vcs.CommitStatusError
+	default:
+		return vcs.CommitStatusPending
+	}
+}

@@ -456,3 +456,67 @@ func (c *Client) GetBranchSHA(ctx context.Context, owner, repo, branch string) (
 	}
 	return branchInfo.Commit.ID, nil
 }
+
+// GetCombinedStatus returns the aggregated CI pipeline status for a commit.
+func (c *Client) GetCombinedStatus(ctx context.Context, owner, repo, ref string) (*vcs.CombinedStatus, error) {
+	projectPath := fmt.Sprintf("%s%%2F%s", owner, repo)
+	url := fmt.Sprintf("%s/projects/%s/repository/commits/%s/statuses", c.baseURL, projectPath, ref)
+
+	var statuses []struct {
+		Name        string    `json:"name"`
+		Status      string    `json:"status"` // pending, running, success, failed, canceled
+		Description string    `json:"description"`
+		TargetURL   string    `json:"target_url"`
+		CreatedAt   time.Time `json:"created_at"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &statuses); err != nil {
+		slog.Debug("gitlab commit statuses unavailable", "ref", ref, "error", err)
+		return nil, nil
+	}
+
+	result := &vcs.CombinedStatus{}
+	for _, s := range statuses {
+		state := mapGitLabState(s.Status)
+		result.Statuses = append(result.Statuses, vcs.CommitStatus{
+			Context:     s.Name,
+			State:       state,
+			Description: s.Description,
+			TargetURL:   s.TargetURL,
+			CreatedAt:   s.CreatedAt,
+		})
+		result.Total++
+		switch state {
+		case vcs.CommitStatusSuccess:
+			result.Passed++
+		case vcs.CommitStatusFailure, vcs.CommitStatusError:
+			result.Failed++
+		default:
+			result.Pending++
+		}
+	}
+
+	if result.Total == 0 {
+		result.State = vcs.CommitStatusSuccess
+	} else if result.Failed > 0 {
+		result.State = vcs.CommitStatusFailure
+	} else if result.Pending > 0 {
+		result.State = vcs.CommitStatusPending
+	} else {
+		result.State = vcs.CommitStatusSuccess
+	}
+
+	return result, nil
+}
+
+func mapGitLabState(s string) vcs.CommitStatusState {
+	switch s {
+	case "success":
+		return vcs.CommitStatusSuccess
+	case "failed":
+		return vcs.CommitStatusFailure
+	case "canceled":
+		return vcs.CommitStatusError
+	default:
+		return vcs.CommitStatusPending
+	}
+}

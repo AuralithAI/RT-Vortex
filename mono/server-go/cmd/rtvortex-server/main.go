@@ -692,6 +692,10 @@ func main() {
 	swarmRoleELODecay := swarm.NewRoleELODecayService(swarmRoleELO)
 	go swarmRoleELODecay.Start(ctx)
 
+	// CI signal poller: auto-ingest PR merge state + CI checks into role ELO.
+	swarmCIPoller := swarm.NewCISignalPoller(db.Pool, vcsResolver, swarmRoleELO, swarmWSHub)
+	go swarmCIPoller.Start(ctx)
+
 	slog.Info("Swarm agent infrastructure initialized")
 
 	// ── Initialize MCP Integrations ─────────────────────────────────────

@@ -330,3 +330,58 @@ export interface RoleELOHistoryData {
 export interface RoleELOLeaderboardEntry extends RoleELOData {
   rank: number;
 }
+
+// ─── CI Signal Types ──────────────────────────────────────────────
+
+/** PR merge state from the VCS platform. */
+export type PRState = "open" | "merged" | "closed" | "unknown";
+
+/** Aggregated CI check state. */
+export type CIState = "pending" | "success" | "failure" | "error" | "unknown";
+
+/** A single CI check / status. */
+export interface CICheckStatus {
+  context: string;
+  state: CIState;
+  description: string;
+  target_url: string;
+  created_at: string;
+}
+
+/** CI signal record for a task — auto-ingested from VCS platform. */
+export interface CISignalData {
+  id: string;
+  task_id: string;
+  repo_id: string;
+  pr_number: number;
+  pr_state: PRState;
+  pr_merged: boolean;
+  ci_state: CIState;
+  ci_total: number;
+  ci_passed: number;
+  ci_failed: number;
+  ci_pending: number;
+  ci_details: CICheckStatus[];
+  elo_ingested: boolean;
+  elo_ingested_at?: string;
+  poll_count: number;
+  last_polled_at?: string;
+  finalized: boolean;
+  finalized_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Lightweight CI signal summary for lists. */
+export interface CISignalSummary {
+  task_id: string;
+  pr_state: PRState;
+  pr_merged: boolean;
+  ci_state: CIState;
+  ci_total: number;
+  ci_passed: number;
+  ci_failed: number;
+  ci_pending: number;
+  finalized: boolean;
+  updated_at: string;
+}
