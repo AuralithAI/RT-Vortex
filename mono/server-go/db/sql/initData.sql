@@ -804,6 +804,14 @@ INSERT INTO schema_info (version, description)
 SELECT 17, 'Add recovery_salt and recovery_wrapped_key columns to user_keychains'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 17);
 
+INSERT INTO schema_info (version, description)
+SELECT 18, 'Add cross-repo links tables — repo_links, repo_link_events'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 18);
+
+INSERT INTO schema_info (version, description)
+SELECT 19, 'Add swarm_consensus_insights table for cross-task learning from multi-LLM decisions'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 19);
+
 -- ============================================================================
 -- UPDATED_AT TRIGGER
 -- ============================================================================
@@ -947,6 +955,44 @@ CREATE TRIGGER trg_repo_links_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================================================
+-- SWARM CONSENSUS INSIGHTS (Cross-Task Learning)
+-- ============================================================================
+-- Durable per-repo insights extracted from multi-LLM consensus decisions.
+-- Categories: provider_reliability, strategy_effectiveness, code_pattern,
+--             provider_agreement, quality_signal.
+-- TTL: 30 days (cleaned by the janitor).
+
+CREATE TABLE IF NOT EXISTS swarm_consensus_insights (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    repo_id     TEXT NOT NULL,
+    task_id     TEXT NOT NULL DEFAULT '',
+    thread_id   TEXT NOT NULL DEFAULT '',
+    category    TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    insight     TEXT NOT NULL,
+    confidence  DOUBLE PRECISION NOT NULL DEFAULT 0.8,
+    strategy    TEXT NOT NULL DEFAULT '',
+    provider    TEXT NOT NULL DEFAULT '',
+    metadata    JSONB NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (repo_id, category, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_consensus_insights_repo_cat
+    ON swarm_consensus_insights (repo_id, category);
+CREATE INDEX IF NOT EXISTS idx_consensus_insights_updated
+    ON swarm_consensus_insights (updated_at);
+CREATE INDEX IF NOT EXISTS idx_consensus_insights_provider
+    ON swarm_consensus_insights (provider)
+    WHERE provider != '';
+
+DROP TRIGGER IF EXISTS trg_consensus_insights_updated_at ON swarm_consensus_insights;
+CREATE TRIGGER trg_consensus_insights_updated_at
+    BEFORE UPDATE ON swarm_consensus_insights
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
 -- Ensures the rtvortex application role has full access to all tables.
@@ -991,6 +1037,7 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE keychain_audit_log TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE repo_links TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE repo_link_events TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_consensus_insights TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;
