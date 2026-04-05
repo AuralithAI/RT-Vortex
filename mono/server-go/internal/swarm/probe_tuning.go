@@ -52,50 +52,50 @@ const (
 
 // ProbeConfig is a row in swarm_probe_configs.
 type ProbeConfig struct {
-	ID                  uuid.UUID `json:"id"`
-	Role                string    `json:"role"`
-	RepoID              string    `json:"repo_id"`
-	ActionType          string    `json:"action_type"`
-	NumModels           int       `json:"num_models"`
-	PreferredProviders  []string  `json:"preferred_providers"`
-	ExcludedProviders   []string  `json:"excluded_providers"`
-	Temperature         float64   `json:"temperature"`
-	MaxTokens           int       `json:"max_tokens"`
-	TimeoutSeconds      int       `json:"timeout_seconds"`
-	BudgetCapUSD        float64   `json:"budget_cap_usd"`
-	TokensSpent         int64     `json:"tokens_spent"`
-	Strategy            string    `json:"strategy"`
-	ConfidenceThreshold float64   `json:"confidence_threshold"`
-	Retries             int       `json:"retries"`
-	Reasoning           string    `json:"reasoning"`
+	ID                  uuid.UUID  `json:"id"`
+	Role                string     `json:"role"`
+	RepoID              string     `json:"repo_id"`
+	ActionType          string     `json:"action_type"`
+	NumModels           int        `json:"num_models"`
+	PreferredProviders  []string   `json:"preferred_providers"`
+	ExcludedProviders   []string   `json:"excluded_providers"`
+	Temperature         float64    `json:"temperature"`
+	MaxTokens           int        `json:"max_tokens"`
+	TimeoutSeconds      int        `json:"timeout_seconds"`
+	BudgetCapUSD        float64    `json:"budget_cap_usd"`
+	TokensSpent         int64      `json:"tokens_spent"`
+	Strategy            string     `json:"strategy"`
+	ConfidenceThreshold float64    `json:"confidence_threshold"`
+	Retries             int        `json:"retries"`
+	Reasoning           string     `json:"reasoning"`
 	LastTunedAt         *time.Time `json:"last_tuned_at,omitempty"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
 }
 
 // ProbeHistory is a row in swarm_probe_history.
 type ProbeHistory struct {
-	ID                  uuid.UUID              `json:"id"`
-	TaskID              uuid.UUID              `json:"task_id"`
-	Role                string                 `json:"role"`
-	RepoID              string                 `json:"repo_id"`
-	ActionType          string                 `json:"action_type"`
-	ProvidersQueried    []string               `json:"providers_queried"`
-	ProvidersSucceeded  []string               `json:"providers_succeeded"`
-	ProviderWinner      string                 `json:"provider_winner"`
-	StrategyUsed        string                 `json:"strategy_used"`
-	ConsensusConfidence float64                `json:"consensus_confidence"`
-	ProviderLatencies   map[string]int64       `json:"provider_latencies"`
-	ProviderTokens      map[string]TokenUsage  `json:"provider_tokens"`
-	TotalMs             int                    `json:"total_ms"`
-	TotalTokens         int                    `json:"total_tokens"`
-	EstimatedCostUSD    float64                `json:"estimated_cost_usd"`
-	Success             bool                   `json:"success"`
-	ErrorDetail         string                 `json:"error_detail,omitempty"`
-	ComplexityLabel     string                 `json:"complexity_label"`
-	NumModelsUsed       int                    `json:"num_models_used"`
-	TemperatureUsed     float64                `json:"temperature_used"`
-	CreatedAt           time.Time              `json:"created_at"`
+	ID                  uuid.UUID             `json:"id"`
+	TaskID              uuid.UUID             `json:"task_id"`
+	Role                string                `json:"role"`
+	RepoID              string                `json:"repo_id"`
+	ActionType          string                `json:"action_type"`
+	ProvidersQueried    []string              `json:"providers_queried"`
+	ProvidersSucceeded  []string              `json:"providers_succeeded"`
+	ProviderWinner      string                `json:"provider_winner"`
+	StrategyUsed        string                `json:"strategy_used"`
+	ConsensusConfidence float64               `json:"consensus_confidence"`
+	ProviderLatencies   map[string]int64      `json:"provider_latencies"`
+	ProviderTokens      map[string]TokenUsage `json:"provider_tokens"`
+	TotalMs             int                   `json:"total_ms"`
+	TotalTokens         int                   `json:"total_tokens"`
+	EstimatedCostUSD    float64               `json:"estimated_cost_usd"`
+	Success             bool                  `json:"success"`
+	ErrorDetail         string                `json:"error_detail,omitempty"`
+	ComplexityLabel     string                `json:"complexity_label"`
+	NumModelsUsed       int                   `json:"num_models_used"`
+	TemperatureUsed     float64               `json:"temperature_used"`
+	CreatedAt           time.Time             `json:"created_at"`
 }
 
 // TokenUsage is per-provider token breakdown.
@@ -115,53 +115,53 @@ type ProbeConfigRequest struct {
 
 // ProbeHistoryRequest is the payload Python sends after a probe.
 type ProbeHistoryRequest struct {
-	TaskID              string            `json:"task_id"`
-	Role                string            `json:"role"`
-	RepoID              string            `json:"repo_id"`
-	ActionType          string            `json:"action_type"`
-	ProvidersQueried    []string          `json:"providers_queried"`
-	ProvidersSucceeded  []string          `json:"providers_succeeded"`
-	ProviderWinner      string            `json:"provider_winner"`
-	StrategyUsed        string            `json:"strategy_used"`
-	ConsensusConfidence float64           `json:"consensus_confidence"`
-	ProviderLatencies   map[string]int64  `json:"provider_latencies"`
+	TaskID              string                `json:"task_id"`
+	Role                string                `json:"role"`
+	RepoID              string                `json:"repo_id"`
+	ActionType          string                `json:"action_type"`
+	ProvidersQueried    []string              `json:"providers_queried"`
+	ProvidersSucceeded  []string              `json:"providers_succeeded"`
+	ProviderWinner      string                `json:"provider_winner"`
+	StrategyUsed        string                `json:"strategy_used"`
+	ConsensusConfidence float64               `json:"consensus_confidence"`
+	ProviderLatencies   map[string]int64      `json:"provider_latencies"`
 	ProviderTokens      map[string]TokenUsage `json:"provider_tokens"`
-	TotalMs             int               `json:"total_ms"`
-	TotalTokens         int               `json:"total_tokens"`
-	EstimatedCostUSD    float64           `json:"estimated_cost_usd"`
-	Success             bool              `json:"success"`
-	ErrorDetail         string            `json:"error_detail"`
-	ComplexityLabel     string            `json:"complexity_label"`
-	NumModelsUsed       int               `json:"num_models_used"`
-	TemperatureUsed     float64           `json:"temperature_used"`
+	TotalMs             int                   `json:"total_ms"`
+	TotalTokens         int                   `json:"total_tokens"`
+	EstimatedCostUSD    float64               `json:"estimated_cost_usd"`
+	Success             bool                  `json:"success"`
+	ErrorDetail         string                `json:"error_detail"`
+	ComplexityLabel     string                `json:"complexity_label"`
+	NumModelsUsed       int                   `json:"num_models_used"`
+	TemperatureUsed     float64               `json:"temperature_used"`
 }
 
 // ProviderStats aggregates historical provider performance.
 type ProviderStats struct {
-	Provider       string  `json:"provider"`
-	TotalProbes    int     `json:"total_probes"`
-	Successes      int     `json:"successes"`
-	Wins           int     `json:"wins"`
-	AvgLatencyMs   float64 `json:"avg_latency_ms"`
-	AvgTokens      float64 `json:"avg_tokens"`
-	SuccessRate    float64 `json:"success_rate"`
-	WinRate        float64 `json:"win_rate"`
+	Provider         string  `json:"provider"`
+	TotalProbes      int     `json:"total_probes"`
+	Successes        int     `json:"successes"`
+	Wins             int     `json:"wins"`
+	AvgLatencyMs     float64 `json:"avg_latency_ms"`
+	AvgTokens        float64 `json:"avg_tokens"`
+	SuccessRate      float64 `json:"success_rate"`
+	WinRate          float64 `json:"win_rate"`
 	ReliabilityScore float64 `json:"reliability_score"` // 0.0–1.0 composite
 }
 
 // TuningRecommendation is the adaptive engine's output per config.
 type TuningRecommendation struct {
-	ConfigID    uuid.UUID       `json:"config_id"`
-	OldConfig   ProbeConfig     `json:"old_config"`
-	NewNumModels int            `json:"new_num_models"`
-	NewPreferred []string       `json:"new_preferred"`
-	NewExcluded  []string       `json:"new_excluded"`
-	NewTemp      float64        `json:"new_temperature"`
-	NewTimeout   int            `json:"new_timeout_seconds"`
-	NewRetries   int            `json:"new_retries"`
-	NewThreshold float64        `json:"new_confidence_threshold"`
-	Reasoning    string         `json:"reasoning"`
-	Applied      bool           `json:"applied"`
+	ConfigID     uuid.UUID   `json:"config_id"`
+	OldConfig    ProbeConfig `json:"old_config"`
+	NewNumModels int         `json:"new_num_models"`
+	NewPreferred []string    `json:"new_preferred"`
+	NewExcluded  []string    `json:"new_excluded"`
+	NewTemp      float64     `json:"new_temperature"`
+	NewTimeout   int         `json:"new_timeout_seconds"`
+	NewRetries   int         `json:"new_retries"`
+	NewThreshold float64     `json:"new_confidence_threshold"`
+	Reasoning    string      `json:"reasoning"`
+	Applied      bool        `json:"applied"`
 }
 
 // ── Service ─────────────────────────────────────────────────────────────────
