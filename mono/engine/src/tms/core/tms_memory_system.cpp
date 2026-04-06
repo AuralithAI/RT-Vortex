@@ -1333,10 +1333,19 @@ void TMSMemorySystem::save() {
 
 void TMSMemorySystem::load() {
     if (std::filesystem::exists(config_.storage_path)) {
+        LOG_INFO("[TMS] loading persisted data from " + config_.storage_path);
         ltm_->load();
         if (multi_vector_) multi_vector_->load();
         mtm_->load();
         embedding_engine_->loadCache();
+
+        // Log post-load summary so cold-start issues are immediately visible.
+        auto ltm_stats = ltm_->getStats();
+        LOG_INFO("[TMS] post-load: ltm_chunks=" + std::to_string(ltm_stats.total_chunks) +
+                 " repos=" + std::to_string(ltm_stats.total_repos) +
+                 " faiss_vectors=" + std::to_string(ltm_stats.index_vectors));
+    } else {
+        LOG_INFO("[TMS] no persisted data at " + config_.storage_path + " — starting fresh");
     }
 }
 

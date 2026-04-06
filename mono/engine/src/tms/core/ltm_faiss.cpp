@@ -5,6 +5,7 @@
  */
 
 #include "tms/ltm_faiss.h"
+#include "tms/memory_accounts.h"
 #include "logging.h"
 #include "metrics.h"
 #include <fstream>
@@ -1099,6 +1100,51 @@ void LTMFaiss::load(const std::string& path) {
         }
 
         chunks_[chunk_id] = std::move(chunk);
+    }
+
+    // Re-classify chunks into memory accounts.
+    // The v1/v2 binary format only persists the "repo:" tag — account tags
+    // (account:dev, account:ops, account:security, account:history) are
+    // lost across restarts.  Re-classify here so that account-aware search
+    // works correctly after a cold start.
+    {
+        MemoryAccountClassifier classifier;
+        size_t reclassified = 0;
+        for (auto& [cid, c] : chunks_) {
+            // Skip if the chunk already carries an account tag (future-proof)
+            bool has_account = false;
+            for (const auto& tag : c.tags) {
+                if (tag.rfind("account:", 0) == 0) { has_account = true; break; }
+            }
+            if (has_account) continue;
+
+            auto account = classifier.classify(c);
+            c.tags.push_back(MemoryAccountClassifier::accountTag(account));
+            ++reclassified;
+        }
+        if (reclassified > 0) {
+            LOG_INFO("[LTM] re-classified " + std::to_string(reclassified) +
+                     " chunks into memory accounts after load");
+        }
+
+        // Log per-account distribution for diagnostics
+        std::unordered_map<std::string, size_t> account_counts;
+        for (const auto& [cid2, c2] : chunks_) {
+            for (const auto& tag : c2.tags) {
+                if (tag.rfind("account:", 0) == 0) {
+                    account_counts[tag]++;
+                    break;
+                }
+            }
+        }
+        std::string dist;
+        for (const auto& [tag, cnt] : account_counts) {
+            if (!dist.empty()) dist += ", ";
+            dist += tag + "=" + std::to_string(cnt);
+        }
+        if (!dist.empty()) {
+            LOG_INFO("[LTM] account distribution: " + dist);
+        }
     }
 
     // Rebuild the in-memory BM25 lexical index from loaded chunks.
