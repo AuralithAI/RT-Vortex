@@ -213,6 +213,22 @@ void TMSMemorySystem::initialize() {
             kg_handle_ = std::make_unique<KnowledgeGraphHandle>(config_.storage_path);
             metrics::Registry::instance().setGauge(metrics::KG_ENABLED, 1.0);
             LOG_INFO("[TMS] Knowledge Graph initialized");
+
+            // Seed KG metrics from the persisted SQLite database so the
+            // dashboard shows correct node/edge counts after a cold restart.
+            {
+                auto& kg = kg_handle_->get();
+                size_t nodes = kg.nodeCount("");  // all repos
+                size_t edges = kg.edgeCount("");
+                if (nodes > 0 || edges > 0) {
+                    metrics::Registry::instance().setGauge(
+                        metrics::KG_NODES_TOTAL, static_cast<double>(nodes));
+                    metrics::Registry::instance().setGauge(
+                        metrics::KG_EDGES_TOTAL, static_cast<double>(edges));
+                    LOG_INFO("[TMS] KG post-load metrics: nodes=" +
+                             std::to_string(nodes) + " edges=" + std::to_string(edges));
+                }
+            }
         } catch (const std::exception& e) {
             LOG_ERROR("[TMS] Failed to initialize Knowledge Graph: " + std::string(e.what()));
         }
@@ -1357,6 +1373,20 @@ void TMSMemorySystem::load() {
         LOG_INFO("[TMS] post-load: ltm_chunks=" + std::to_string(ltm_stats.total_chunks) +
                  " repos=" + std::to_string(ltm_stats.total_repos) +
                  " faiss_vectors=" + std::to_string(ltm_stats.index_vectors));
+
+        // ── Populate metrics registry from restored data ────────────────
+        // During fresh ingestion these gauges/counters are set by addBatch()
+        // and KnowledgeGraph::finalizeEdges().  After a cold restart we must
+        // seed them from the loaded state so the dashboard shows correct
+        // "Chunks Ingested" / "FAISS index" / KG counts immediately.
+        if (ltm_stats.total_chunks > 0) {
+            metrics::Registry::instance().incCounter(
+                metrics::CHUNKS_INGESTED,
+                static_cast<double>(ltm_stats.total_chunks));
+            metrics::Registry::instance().setGauge(
+                metrics::INDEX_SIZE_VECTORS,
+                static_cast<double>(ltm_stats.index_vectors));
+        }
     } else {
         LOG_INFO("[TMS] no persisted data at " + config_.storage_path + " — starting fresh");
     }
