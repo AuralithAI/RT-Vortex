@@ -176,7 +176,7 @@ export function RoleELOLeaderboard({
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      setData(json.entries ?? json ?? []);
+      setData(json.records ?? json.entries ?? (Array.isArray(json) ? json : []));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch");
