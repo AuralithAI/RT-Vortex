@@ -662,6 +662,19 @@ void TMSMemorySystem::ingestChunksWithEmbeddings(
         if (chunk.id.find(repo_id + ":") != 0) {
             chunk.id = repo_id + ":" + chunk.id;
         }
+
+        // Ensure the chunk carries a "repo:<id>" tag so that save/load
+        // can persist and restore the repo association correctly.
+        {
+            bool has_repo_tag = false;
+            const std::string expected_tag = "repo:" + repo_id;
+            for (const auto& tag : chunk.tags) {
+                if (tag == expected_tag) { has_repo_tag = true; break; }
+            }
+            if (!has_repo_tag) {
+                chunk.tags.push_back(expected_tag);
+            }
+        }
         
         prepared_chunks.push_back(std::move(chunk));
     }

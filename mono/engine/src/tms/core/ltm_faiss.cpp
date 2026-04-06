@@ -1067,6 +1067,17 @@ void LTMFaiss::load(const std::string& path) {
         CodeChunk chunk;
         chunk.id = read_str();
         std::string repo_id = read_str();
+
+        // Fallback: if the persisted repo_id is empty (older data where
+        // the repo: tag was never added during ingestion), extract the
+        // repo UUID from the chunk_id which has the format "repo_uuid:rest".
+        if (repo_id.empty() && !chunk_id.empty()) {
+            // UUID format: 8-4-4-4-12 = 36 chars, followed by ':'
+            if (chunk_id.size() > 36 && chunk_id[36] == ':') {
+                repo_id = chunk_id.substr(0, 36);
+            }
+        }
+
         if (!repo_id.empty()) {
             chunk.tags.push_back("repo:" + repo_id);
         }
