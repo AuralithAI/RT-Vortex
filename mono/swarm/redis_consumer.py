@@ -55,8 +55,12 @@ _HEARTBEAT_INTERVAL = 25
 # How long to wait between status polls while waiting for human approval.
 _APPROVAL_POLL_INTERVAL = 5
 
-# Maximum wait time for plan approval before timing out (10 minutes).
-_APPROVAL_TIMEOUT = 600
+# Maximum wait time for plan approval before timing out.
+# Human review can take minutes, hours, or until the next day — a tight
+# timeout just kills the pipeline and wastes the LLM work already done.
+# 24 hours is generous enough to cover overnight reviews while still
+# preventing zombie pipelines.
+_APPROVAL_TIMEOUT = 86_400  # 24 hours
 
 # Pre-warmed agent pool size (Orchestrator + SeniorDev ready at startup).
 _WARM_POOL_SIZE = 2
@@ -153,14 +157,25 @@ async def _wait_for_status(
     """
     cancel_statuses = cancel_statuses or {"cancelled", "failed", "timed_out"}
     elapsed = 0.0
+    # Adaptive back-off: poll quickly at first (human might approve right
+    # away), then slow down to avoid wasting cycles on long reviews.
+    #   0-60 s  →  5 s interval  (responsive)
+    #   60-300 s → 10 s interval (moderate)
+    #   300+ s   → 30 s interval (patient)
     while elapsed < timeout:
         status = await go_client.get_task_status(task_id)
         if status in target_statuses:
             return status
         if status in cancel_statuses:
             raise RuntimeError(f"Task {task_id} reached terminal status: {status}")
-        await asyncio.sleep(_APPROVAL_POLL_INTERVAL)
-        elapsed += _APPROVAL_POLL_INTERVAL
+        if elapsed < 60:
+            interval = _APPROVAL_POLL_INTERVAL       # 5 s
+        elif elapsed < 300:
+            interval = _APPROVAL_POLL_INTERVAL * 2   # 10 s
+        else:
+            interval = _APPROVAL_POLL_INTERVAL * 6   # 30 s
+        await asyncio.sleep(interval)
+        elapsed += interval
 
     raise asyncio.TimeoutError(
         f"Timed out waiting for task {task_id} to reach {target_statuses}"

@@ -1012,7 +1012,7 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
 
         // Compute KG graph confidence score
         float graph_score = 0.0f;
-        if (config_.knowledge_graph_enabled && kg_handle_ && !ltm_results.empty()) {
+        if (config_.knowledge_graph_enabled && kg_handle_ && !ltm_results.empty() && !isTimedOut()) {
             try {
                 auto& kg = kg_handle_->get();
                 GraphRAGConfig graph_config;

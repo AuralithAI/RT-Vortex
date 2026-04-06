@@ -111,6 +111,10 @@ void KnowledgeGraph::ensureSchema() {
         CREATE INDEX IF NOT EXISTS idx_edges_dst  ON kg_edges(dst_id);
         CREATE INDEX IF NOT EXISTS idx_edges_repo ON kg_edges(repo_id);
         CREATE INDEX IF NOT EXISTS idx_edges_type ON kg_edges(edge_type);
+
+        -- Composite indexes for batch hop queries (WHERE repo_id = ? AND src/dst IN ...)
+        CREATE INDEX IF NOT EXISTS idx_edges_repo_src ON kg_edges(repo_id, src_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_repo_dst ON kg_edges(repo_id, dst_id);
     )SQL";
     exec(ddl);
 }
@@ -980,6 +984,152 @@ std::vector<KGEdge> KnowledgeGraph::getEdgesBetweenNodes(
     }
     sqlite3_finalize(stmt);
     return results;
+}
+
+// ── Batch shortest-hop (Confidence Gate) ───────────────────────────────────
+
+std::unordered_map<std::string, int> KnowledgeGraph::batchShortestHops(
+    const std::string& repo_id,
+    const std::unordered_set<std::string>& seed_node_ids,
+    const std::unordered_set<std::string>& result_node_ids) const
+{
+    std::unordered_map<std::string, int> hops;
+    if (!db_ || seed_node_ids.empty() || result_node_ids.empty()) return hops;
+
+    // Helper: build a SQL VALUES list and collect IDs for binding.
+    auto buildValuesSQL = [](const std::unordered_set<std::string>& ids) {
+        std::string sql;
+        bool first = true;
+        for (const auto& id : ids) {
+            (void)id; // only need count
+            if (!first) sql += ",";
+            sql += "(?)";
+            first = false;
+        }
+        return sql;
+    };
+
+    // ── Query 1: 1-hop ──────────────────────────────────────────────────
+    // Find result nodes that are direct neighbors of any seed node.
+    //
+    //   SELECT DISTINCT result_id
+    //   FROM kg_edges
+    //   WHERE repo_id = ?
+    //     AND ( (src_id IN seeds AND dst_id IN results)
+    //        OR (dst_id IN seeds AND src_id IN results) )
+    //
+    // We use CTEs so SQLite can hash-join on the VALUES sets.
+    {
+        std::string sql =
+            "WITH seeds(id) AS (VALUES " + buildValuesSQL(seed_node_ids) + "), "
+            "     results(id) AS (VALUES " + buildValuesSQL(result_node_ids) + ") "
+            "SELECT DISTINCT "
+            "  CASE WHEN e.src_id IN (SELECT id FROM seeds) THEN e.dst_id "
+            "       ELSE e.src_id END AS result_id "
+            "FROM kg_edges e "
+            "WHERE e.repo_id = ? "
+            "  AND ( (e.src_id IN (SELECT id FROM seeds) AND e.dst_id IN (SELECT id FROM results)) "
+            "     OR (e.dst_id IN (SELECT id FROM seeds) AND e.src_id IN (SELECT id FROM results)) )";
+
+        sqlite3_stmt* stmt = nullptr;
+        int rc = sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
+        if (rc == SQLITE_OK) {
+            int idx = 1;
+            for (const auto& sid : seed_node_ids)
+                sqlite3_bind_text(stmt, idx++, sid.c_str(), -1, SQLITE_TRANSIENT);
+            for (const auto& rid : result_node_ids)
+                sqlite3_bind_text(stmt, idx++, rid.c_str(), -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(stmt, idx++, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+
+            while (sqlite3_step(stmt) == SQLITE_ROW) {
+                auto res_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                if (res_id) hops[res_id] = 1;
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    // If all results already have 1-hop paths, skip the 2-hop query.
+    if (hops.size() >= result_node_ids.size()) return hops;
+
+    // ── Query 2: 2-hop (two-pass, index-friendly) ─────────────────────
+    // For result nodes NOT yet found at 1-hop, check reachability in 2 steps:
+    //   Pass A: get neighbors of the *remaining* result nodes (small set, index-assisted)
+    //   Pass B: get neighbors of *seed* nodes (small set, index-assisted)
+    //   In-memory: for each remaining node, check if any of its neighbors
+    //              appears in the seed-neighbor set → 2-hop path exists
+    //
+    // Both passes scan edges only for small node sets, using idx_edges_src
+    // and idx_edges_dst. No self-JOIN on the 5M-row table.
+    {
+        std::unordered_set<std::string> remaining;
+        for (const auto& rid : result_node_ids) {
+            if (!hops.count(rid)) remaining.insert(rid);
+        }
+        if (remaining.empty()) return hops;
+
+        // Pass A: neighbors of remaining nodes → per-remaining-node sets
+        std::unordered_map<std::string, std::unordered_set<std::string>> remainNeighbors;
+        {
+            std::string sql =
+                "WITH remaining(id) AS (VALUES " + buildValuesSQL(remaining) + ") "
+                "SELECT r.id, "
+                "  CASE WHEN e.src_id = r.id THEN e.dst_id ELSE e.src_id END AS neighbor "
+                "FROM remaining r "
+                "JOIN kg_edges e ON (e.src_id = r.id OR e.dst_id = r.id) "
+                "WHERE e.repo_id = ?";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+                int idx = 1;
+                for (const auto& rid : remaining)
+                    sqlite3_bind_text(stmt, idx++, rid.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(stmt, idx++, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+                while (sqlite3_step(stmt) == SQLITE_ROW) {
+                    auto r_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                    auto n_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
+                    if (r_id && n_id) remainNeighbors[r_id].insert(n_id);
+                }
+                sqlite3_finalize(stmt);
+            }
+        }
+
+        // Pass B: neighbors of seed nodes → flat hash set
+        std::unordered_set<std::string> seedNeighbors;
+        {
+            std::string sql =
+                "WITH seeds(id) AS (VALUES " + buildValuesSQL(seed_node_ids) + ") "
+                "SELECT "
+                "  CASE WHEN e.src_id = s.id THEN e.dst_id ELSE e.src_id END AS neighbor "
+                "FROM seeds s "
+                "JOIN kg_edges e ON (e.src_id = s.id OR e.dst_id = s.id) "
+                "WHERE e.repo_id = ?";
+            sqlite3_stmt* stmt = nullptr;
+            if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
+                int idx = 1;
+                for (const auto& sid : seed_node_ids)
+                    sqlite3_bind_text(stmt, idx++, sid.c_str(), -1, SQLITE_TRANSIENT);
+                sqlite3_bind_text(stmt, idx++, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+                while (sqlite3_step(stmt) == SQLITE_ROW) {
+                    auto n_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+                    if (n_id) seedNeighbors.insert(n_id);
+                }
+                sqlite3_finalize(stmt);
+            }
+        }
+
+        // In-memory intersection: remaining_node's neighbor ∩ seedNeighbors → 2-hop
+        for (const auto& [rid, nbrs] : remainNeighbors) {
+            if (hops.count(rid)) continue;
+            for (const auto& n : nbrs) {
+                if (seedNeighbors.count(n)) {
+                    hops[rid] = 2;
+                    break;
+                }
+            }
+        }
+    }
+
+    return hops;
 }
 
 // ── File-Level Edge Inference ──────────────────────────────────────────────

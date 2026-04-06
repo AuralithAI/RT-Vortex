@@ -177,6 +177,23 @@ public:
         const std::string& repo_id,
         const std::unordered_set<std::string>& file_node_ids) const;
 
+    /**
+     * Batch graph-proximity check for the Confidence Gate.
+     *
+     * Given two sets of KG node IDs (seeds and results), computes the
+     * shortest hop distance between each result node and any seed node.
+     * Returns a map: result_node_id → min_hops (1 or 2).
+     * Nodes with no path within 2 hops are omitted.
+     *
+     * Performs the entire computation in TWO SQL queries (1-hop + 2-hop)
+     * instead of per-node neighbor walks, making it O(1) SQL round-trips
+     * regardless of graph size.
+     */
+    std::unordered_map<std::string, int> batchShortestHops(
+        const std::string& repo_id,
+        const std::unordered_set<std::string>& seed_node_ids,
+        const std::unordered_set<std::string>& result_node_ids) const;
+
     // ── Statistics ──────────────────────────────────────────────────────
 
     size_t nodeCount(const std::string& repo_id = "") const;
