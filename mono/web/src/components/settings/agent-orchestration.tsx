@@ -231,7 +231,13 @@ export function AgentOrchestration() {
           </div>
           <div className="flex items-center gap-2">
             {configuredProviders.length > 1 && (
-              <Button variant="outline" size="sm" onClick={handleAutoAssign}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleAutoAssign}
+                disabled={!routesEnabled}
+                title={routesEnabled ? "Auto-assign providers to roles" : "Enable model routing first"}
+              >
                 <Sparkles className="mr-1 h-3.5 w-3.5" />
                 Auto-Assign
               </Button>
