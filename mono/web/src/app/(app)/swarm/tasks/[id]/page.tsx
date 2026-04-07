@@ -1,8 +1,8 @@
 // ─── Swarm Task Detail ───────────────────────────────────────────────────────
-// Task detail page with transparent AI reasoning: shows what each LLM is
-// responding, how they are thinking and discussing, and how consensus is
-// reached — all in real time. Includes plan display, approve/reject, rating,
-// diff list with real-time WebSocket updates.
+// Task detail page with a stunning multi-LLM orchestration UI. Shows a hero
+// panel with real-time parallel model responses, LIVE badge, provider avatars,
+// broadcast stats, plus the plan, agent chat, code changes, and consensus
+// panels. Designed to look like a modern parallel-task execution interface.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -26,7 +26,7 @@ import { DiffViewer } from "@/components/swarm/diff-viewer";
 import { ActivityFeed } from "@/components/swarm/activity-feed";
 import { LiveAgentChat } from "@/components/swarm/live-agent-chat";
 import { TaskAgentList } from "@/components/swarm/task-agent-list";
-import { LLMThinkingPanel } from "@/components/swarm/llm-thinking-panel";
+import { OrchestrationHero } from "@/components/swarm/orchestration-hero";
 import { ConsensusDecisionPanel } from "@/components/swarm/consensus-decision-panel";
 import { InsightMemoryPanel } from "@/components/swarm/insight-memory-panel";
 import { RoleELOLeaderboard } from "@/components/swarm/role-elo-leaderboard";
@@ -35,9 +35,48 @@ import { TeamFormationCard } from "@/components/swarm/team-formation-card";
 import { useSwarmEvents } from "@/hooks/use-swarm-events";
 import { useDiscussionEvents } from "@/hooks/use-discussion-events";
 import type { SwarmTask, SwarmDiff, PlanDocument } from "@/types/swarm";
+import type { LLMProvider } from "@/types/api";
 
 // ── Tab types for the main content area ─────────────────────────────────────
 type ContentTab = "reasoning" | "conversation" | "diffs";
+
+// ── Derive agent label from the task's agents ───────────────────────────────
+function deriveAgentLabel(task: SwarmTask | null): string {
+  if (!task) return "AI Agent";
+  const agentCount = (task.assigned_agents ?? []).length;
+  if (agentCount === 1) return "Senior Dev Agent";
+  if (agentCount > 1) return `Agent Swarm (${agentCount})`;
+  return "Senior Dev Agent";
+}
+
+// ── Fetch configured LLM providers ──────────────────────────────────────────
+function useActiveProviders() {
+  const [providers, setProviders] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/v1/llm/providers");
+        if (!res.ok) return;
+        const data = await res.json();
+        const list: LLMProvider[] = data.providers ?? [];
+        if (!cancelled) {
+          setProviders(
+            list.filter((p) => p.configured && p.healthy).map((p) => p.name),
+          );
+        }
+      } catch {
+        // non-critical
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  return providers;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export default function SwarmTaskDetailPage() {
   const params = useParams<{ id: string }>();
@@ -50,6 +89,7 @@ export default function SwarmTaskDetailPage() {
 
   const { events, connected } = useSwarmEvents(params.id);
   const { threads, consensusResults } = useDiscussionEvents(events);
+  const activeProviders = useActiveProviders();
 
   const fetchTask = useCallback(async () => {
     try {
@@ -344,13 +384,16 @@ export default function SwarmTaskDetailPage() {
               {/* ── AI Reasoning tab ─────────────────────────────────── */}
               {activeTab === "reasoning" && (
                 <div className="space-y-6">
-                  {/* Multi-LLM Thinking Panel — live provider responses, discussion, comparison */}
-                  <LLMThinkingPanel
+                  {/* ★ Orchestration Hero — stunning multi-LLM parallel execution UI ★ */}
+                  <OrchestrationHero
+                    agentLabel={deriveAgentLabel(task)}
+                    connected={connected}
                     threads={threads}
                     consensusResults={consensusResults}
+                    activeProviders={activeProviders}
                   />
 
-                  {/* Consensus Decisions — shows how the engine chose the final answer */}
+                  {/* Consensus Decisions — detailed judge verdicts & score comparison */}
                   <ConsensusDecisionPanel results={consensusResults} />
 
                   {/* Cross-Task Insights — learned from past consensus decisions */}
@@ -361,22 +404,6 @@ export default function SwarmTaskDetailPage() {
 
                   {/* Role ELO Leaderboard — scoped to this task's repo */}
                   <RoleELOLeaderboard repoId={task.repo_id} />
-
-                  {/* Empty state */}
-                  {threads.length === 0 && consensusResults.length === 0 && (
-                    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16">
-                      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-100 to-purple-100 dark:from-violet-900/40 dark:to-purple-900/40">
-                        <Brain className="h-8 w-8 text-violet-400" />
-                      </div>
-                      <p className="text-sm font-semibold text-muted-foreground">
-                        AI reasoning will appear here
-                      </p>
-                      <p className="mt-1 max-w-sm text-center text-xs text-muted-foreground/70">
-                        When multi-LLM routing is enabled, you&apos;ll see each model&apos;s
-                        response, their discussion, and how consensus is reached — all in real time
-                      </p>
-                    </div>
-                  )}
                 </div>
               )}
 

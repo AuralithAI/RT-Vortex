@@ -253,6 +253,10 @@ export interface LLMProviderMeta {
   color: string;
   bgColor: string;
   borderColor: string;
+  /** Hex colour for SVG / canvas use. */
+  accentHex?: string;
+  /** Tailwind dot-colour class (e.g. "bg-orange-500"). */
+  dotColor?: string;
 }
 
 /** Insight category for cross-task learning. */
