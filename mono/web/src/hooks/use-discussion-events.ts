@@ -40,7 +40,12 @@ export function useDiscussionEvents(events: SwarmWsEvent[]): DiscussionState {
 
       switch (evt.event) {
         case "thread_opened": {
-          const threadId = data.thread_id as string;
+          // thread_id may be at the top level or nested inside the thread dict.
+          const threadObj = data.thread as Record<string, unknown> | undefined;
+          const threadId =
+            (data.thread_id as string) ||
+            (threadObj?.thread_id as string) ||
+            "";
           if (!threadId) break;
 
           const thread = (data.thread as DiscussionThreadData) ?? {
@@ -55,6 +60,9 @@ export function useDiscussionEvents(events: SwarmWsEvent[]): DiscussionState {
             success_count: 0,
             created_at: Date.now() / 1000,
           };
+
+          // Ensure the thread object has the thread_id set.
+          if (!thread.thread_id) thread.thread_id = threadId;
 
           threadMap.set(threadId, thread);
           break;

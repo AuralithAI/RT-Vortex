@@ -1119,6 +1119,13 @@ func (h *Handler) DiscussionEvent(w http.ResponseWriter, r *http.Request) {
 		}
 		if evt.Thread != nil {
 			data["thread"] = evt.Thread
+			// For thread_opened the thread_id lives inside the nested thread dict.
+			// Promote it to the top level so the frontend can always find it.
+			if evt.ThreadID == "" {
+				if tid, ok := evt.Thread["thread_id"].(string); ok && tid != "" {
+					data["thread_id"] = tid
+				}
+			}
 		}
 		if evt.Response != nil {
 			data["response"] = evt.Response

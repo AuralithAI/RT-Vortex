@@ -63,7 +63,7 @@ function complexityConfig(label: ComplexityLabel): {
       return {
         displayLabel: "Trivial",
         color: "text-slate-500 dark:text-slate-400",
-        bgColor: "bg-slate-100 dark:bg-slate-800/50",
+        bgColor: "bg-slate-100/30 dark:bg-slate-800/30",
         borderColor: "border-slate-300 dark:border-slate-600",
         icon: <Minus className="h-3.5 w-3.5" />,
       };
@@ -71,7 +71,7 @@ function complexityConfig(label: ComplexityLabel): {
       return {
         displayLabel: "Small",
         color: "text-green-600 dark:text-green-400",
-        bgColor: "bg-green-100 dark:bg-green-900/40",
+        bgColor: "bg-green-100/30 dark:bg-green-900/30",
         borderColor: "border-green-300 dark:border-green-700",
         icon: <Code2 className="h-3.5 w-3.5" />,
       };
@@ -79,7 +79,7 @@ function complexityConfig(label: ComplexityLabel): {
       return {
         displayLabel: "Medium",
         color: "text-amber-600 dark:text-amber-400",
-        bgColor: "bg-amber-100 dark:bg-amber-900/40",
+        bgColor: "bg-amber-100/30 dark:bg-amber-900/30",
         borderColor: "border-amber-300 dark:border-amber-700",
         icon: <Layers className="h-3.5 w-3.5" />,
       };
@@ -87,7 +87,7 @@ function complexityConfig(label: ComplexityLabel): {
       return {
         displayLabel: "Large",
         color: "text-orange-600 dark:text-orange-400",
-        bgColor: "bg-orange-100 dark:bg-orange-900/40",
+        bgColor: "bg-orange-100/30 dark:bg-orange-900/30",
         borderColor: "border-orange-300 dark:border-orange-700",
         icon: <Brain className="h-3.5 w-3.5" />,
       };
@@ -95,7 +95,7 @@ function complexityConfig(label: ComplexityLabel): {
       return {
         displayLabel: "Critical",
         color: "text-red-600 dark:text-red-400",
-        bgColor: "bg-red-100 dark:bg-red-900/40",
+        bgColor: "bg-red-100/30 dark:bg-red-900/30",
         borderColor: "border-red-300 dark:border-red-700",
         icon: <Zap className="h-3.5 w-3.5" />,
       };
@@ -253,7 +253,7 @@ export function TeamFormationCard({
 
   // ── Full mode ─────────────────────────────────────────────────────────
   return (
-    <div className={`rounded-lg border ${cx.borderColor} ${cx.bgColor}/30 p-4`}>
+    <div className={`rounded-lg border ${cx.borderColor} ${cx.bgColor} p-4`}>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
