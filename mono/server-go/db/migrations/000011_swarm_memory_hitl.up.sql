@@ -12,8 +12,8 @@ CREATE TABLE IF NOT EXISTS swarm_agent_memory (
     UNIQUE (repo_id, agent_role, key)
 );
 
-CREATE INDEX idx_swarm_memory_repo_role ON swarm_agent_memory (repo_id, agent_role);
-CREATE INDEX idx_swarm_memory_updated   ON swarm_agent_memory (updated_at);
+CREATE INDEX IF NOT EXISTS idx_swarm_memory_repo_role ON swarm_agent_memory (repo_id, agent_role);
+CREATE INDEX IF NOT EXISTS idx_swarm_memory_updated   ON swarm_agent_memory (updated_at);
 
 ALTER TABLE swarm_agents ADD COLUMN IF NOT EXISTS tier TEXT NOT NULL DEFAULT 'standard';
 
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS swarm_hitl_log (
     responded_at TIMESTAMPTZ
 );
 
-CREATE INDEX idx_hitl_log_task ON swarm_hitl_log (task_id);
+CREATE INDEX IF NOT EXISTS idx_hitl_log_task ON swarm_hitl_log (task_id);
 
 CREATE TABLE IF NOT EXISTS agent_feedback (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

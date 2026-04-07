@@ -17,12 +17,12 @@ CREATE TABLE IF NOT EXISTS swarm_consensus_insights (
     UNIQUE (repo_id, category, key)
 );
 
-CREATE INDEX idx_consensus_insights_repo_cat
+CREATE INDEX IF NOT EXISTS idx_consensus_insights_repo_cat
     ON swarm_consensus_insights (repo_id, category);
 
-CREATE INDEX idx_consensus_insights_updated
+CREATE INDEX IF NOT EXISTS idx_consensus_insights_updated
     ON swarm_consensus_insights (updated_at);
 
-CREATE INDEX idx_consensus_insights_provider
+CREATE INDEX IF NOT EXISTS idx_consensus_insights_provider
     ON swarm_consensus_insights (provider)
     WHERE provider != '';
