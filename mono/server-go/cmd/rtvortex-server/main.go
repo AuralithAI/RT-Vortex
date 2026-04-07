@@ -432,6 +432,10 @@ func main() {
 		llmRegistry.SetPrimary(cfg.LLM.Primary)
 	}
 
+	// App config repo — system-wide non-secret settings (feature flags, toggles).
+	// Created early so it's available during startup rehydration.
+	appConfigRepo := store.NewAppConfigRepo(db.Pool)
+
 	// ── Startup rehydration ─────────────────────────────────────────────
 	// Load any previously-persisted LLM API keys, model choices, and routes
 	// from the keychain. This is essential for background services (review
@@ -450,6 +454,18 @@ func main() {
 			loaded := llmRegistry.LoadFromVault()
 			slog.Info("startup: rehydrated LLM providers from keychain",
 				"user", uid, "loaded", loaded)
+		}
+	}
+
+	// Load routes_enabled from the DB (app_config table), NOT the vault.
+	// The vault is reserved for secrets/tokens only.
+	{
+		reVal, reErr := appConfigRepo.Get(context.Background(), "llm_routes_enabled")
+		if reErr != nil {
+			slog.Warn("startup: failed to load routes_enabled from DB", "error", reErr)
+		} else {
+			llmRegistry.SetRoutesEnabled(reVal == "true")
+			slog.Info("startup: loaded routes_enabled from DB", "enabled", reVal == "true")
 		}
 	}
 
@@ -846,6 +862,8 @@ func main() {
 		CrossRepoHandler:      crossRepoHandler,
 		CrossRepoGraphHandler: crossRepoGraphHandler,
 		RepoLinkRepo:          repoLinkRepo,
+
+		AppConfigRepo: appConfigRepo,
 
 		ServerBase: serverBase,
 	}

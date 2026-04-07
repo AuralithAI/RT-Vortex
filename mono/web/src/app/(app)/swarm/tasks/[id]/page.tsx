@@ -258,7 +258,7 @@ export default function SwarmTaskDetailPage() {
           {/* Agent Conversation — live chat feed */}
           <AgentChat events={events} />
 
-          {/* Multi-LLM Discussion Panels — Perplexity-style transparency */}
+          {/* Multi-LLM Discussion Panels — cross-provider comparison */}
           <MultiLLMDiscussion threads={threads} />
 
           {/* Consensus Decisions — shows how the engine chose the final answer */}

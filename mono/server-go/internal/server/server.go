@@ -113,6 +113,9 @@ type Dependencies struct {
 	CrossRepoGraphHandler *crossrepo.GraphHandler
 	RepoLinkRepo          *store.RepoLinkRepo
 
+	// App Config — system-wide non-secret settings (feature flags, toggles)
+	AppConfigRepo *store.AppConfigRepo
+
 	// ServerBase — canonical server URL for constructing OAuth callback URLs.
 	ServerBase string
 }
@@ -189,6 +192,7 @@ func (s *Server) setupRouter() {
 		AssetRepo:       s.deps.AssetRepo,
 		KeychainService: s.deps.KeychainService,
 		VCSPlatformRepo: s.deps.VCSPlatformRepo,
+		AppConfigRepo:   s.deps.AppConfigRepo,
 	}
 	if s.deps.MetricsCollector != nil {
 		h.MetricsCollector = s.deps.MetricsCollector

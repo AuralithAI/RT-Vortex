@@ -396,10 +396,16 @@ float GraphRAGRetriever::computeGraphConfidence(
     auto [result_node_ids, result_map] = resolveNodes(result_chunk_ids);
     if (result_node_ids.empty()) return 0.0f;
 
+    auto t1 = std::chrono::steady_clock::now();
+    auto resolve_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
     // ── Phase 2: Batch 1-hop + 2-hop via SQL ────────────────────────────
     // A single call that does TWO SQL queries internally — no per-node
     // neighbor walks, so it scales to any graph size.
     auto hop_map = kg_.batchShortestHops(repo_id, seed_node_ids, result_node_ids);
+
+    auto t2 = std::chrono::steady_clock::now();
+    auto hops_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
 
     // ── Phase 3: Aggregate per result chunk ─────────────────────────────
     // A chunk may map to multiple KG nodes; take the best (shortest) hop.
@@ -430,7 +436,9 @@ float GraphRAGRetriever::computeGraphConfidence(
               + " results=" + std::to_string(result_node_ids.size())
               + " hop_hits=" + std::to_string(hop_map.size())
               + " score=" + std::to_string(scored > 0 ? total_score / scored : 0.0f)
-              + " ms=" + std::to_string(elapsed_ms));
+              + " resolve_ms=" + std::to_string(resolve_ms)
+              + " hops_ms=" + std::to_string(hops_ms)
+              + " total_ms=" + std::to_string(elapsed_ms));
 
     return (scored > 0) ? total_score / scored : 0.0f;
 }

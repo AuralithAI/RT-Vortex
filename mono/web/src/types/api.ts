@@ -251,6 +251,7 @@ export interface AgentRoute {
 export interface AgentRoutesResponse {
   routes: AgentRoute[];
   primary: string;
+  routes_enabled: boolean;
 }
 
 /** All agent roles in the review swarm. */

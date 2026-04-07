@@ -100,6 +100,8 @@ class Agent:
         self._repo_id: str = ""
         self._adaptive_config: AdaptiveProbeConfig | None = None
         self._complexity_label: str = ""
+        self._use_multi_llm: bool = False
+        self._configured_providers: int = 1
 
     @property
     def tier(self) -> str:
@@ -194,6 +196,16 @@ class Agent:
                     self.agent_id, self.role, self.team_id,
                 )
 
+            # Parse multi-LLM flag: when True, the agent should use
+            # probe_and_gather + consensus instead of single-model llm_complete.
+            self._use_multi_llm = data.get("use_multi_llm", False)
+            self._configured_providers = data.get("configured_providers", 1)
+            if self._use_multi_llm:
+                logger.info(
+                    "Agent %s: multi-LLM enabled (providers=%d)",
+                    self.agent_id, self._configured_providers,
+                )
+
     async def run(self, task: Task) -> AgentResult:
         """Execute the agentic loop for the given task.
 
@@ -264,6 +276,76 @@ class Agent:
 
         initial_message = f"Task: {task.description}\nRepo: {task.repo_id}"
 
+        # ── Multi-LLM initial reasoning ──────────────
+        # When multi-LLM is enabled and we have ≥2 providers, probe all
+        # LLMs with the initial task + system prompt, run consensus, and
+        # inject the synthesised multi-perspective answer as context so the
+        # agent loop benefits from diverse model reasoning from the start.
+        multi_llm_context = ""
+        if self._use_multi_llm and self._configured_providers >= 2:
+            try:
+                probe_messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": initial_message},
+                ]
+                logger.info(
+                    "Agent %s: multi-LLM probe starting (%d providers)",
+                    self.agent_id, self._configured_providers,
+                )
+                probe_resp = await self.probe_and_gather(
+                    probe_messages,
+                    action_type="initial_reasoning",
+                    num_models=min(self._probe_count, self._configured_providers),
+                )
+
+                if probe_resp.successes >= 2:
+                    # Run consensus to pick/synthesise the best answer.
+                    consensus = await self.run_consensus(probe_resp)
+                    multi_llm_context = (
+                        f"\n\n=== Multi-LLM Consensus (initial reasoning) ===\n"
+                        f"Strategy: {consensus.strategy.value}\n"
+                        f"Confidence: {consensus.confidence:.0%}\n"
+                        f"Providers queried: {probe_resp.providers} "
+                        f"({probe_resp.successes} succeeded)\n"
+                        f"Selected provider: {consensus.provider}\n\n"
+                        f"{consensus.content}\n"
+                        f"=== End Multi-LLM Consensus ===\n"
+                    )
+                    logger.info(
+                        "Agent %s: multi-LLM consensus done — strategy=%s "
+                        "confidence=%.2f provider=%s (%d/%d succeeded)",
+                        self.agent_id, consensus.strategy.value,
+                        consensus.confidence, consensus.provider,
+                        probe_resp.successes, probe_resp.providers,
+                    )
+                elif probe_resp.successes == 1:
+                    # Only one provider succeeded — use its response directly.
+                    best = self.pick_best_probe_result(probe_resp)
+                    if best:
+                        multi_llm_context = (
+                            f"\n\n=== Multi-LLM Initial Analysis ===\n"
+                            f"(Only 1/{probe_resp.providers} providers responded)\n\n"
+                            f"{best}\n"
+                            f"=== End Multi-LLM Initial Analysis ===\n"
+                        )
+                else:
+                    logger.warning(
+                        "Agent %s: all multi-LLM probes failed, "
+                        "falling back to single-model loop",
+                        self.agent_id,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Agent %s: multi-LLM probe failed, "
+                    "falling back to single-model loop: %s",
+                    self.agent_id, e,
+                )
+
+        # If we got multi-LLM context, inject it into the initial message
+        # so the agent loop has the synthesised reasoning from day one.
+        if multi_llm_context:
+            initial_message += multi_llm_context
+
         messages = await agent_loop(
             system_prompt=system_prompt,
             tools=self.tools,
@@ -310,7 +392,7 @@ class Agent:
     ) -> ProbeResponse:
         """Probe multiple LLMs in parallel and return all responses.
 
-        This is the agent-level entry point for Perplexity-style multi-LLM
+        This is the agent-level entry point for multi-LLM parallel
         querying.  The agent sends the same messages to all providers in its
         role's priority matrix, and each provider's response is returned
         separately.

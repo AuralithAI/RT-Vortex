@@ -483,13 +483,13 @@ export const llm = {
 
   /** Get the current agent role → provider/model routing table. */
   routes: () =>
-    request<{ routes: AgentRoute[]; primary: string }>("/api/v1/llm/routes"),
+    request<{ routes: AgentRoute[]; primary: string; routes_enabled: boolean }>("/api/v1/llm/routes"),
 
   /** Update the agent role → provider/model routing table. */
-  setRoutes: (routes: AgentRoute[]) =>
+  setRoutes: (routes: AgentRoute[], routesEnabled?: boolean) =>
     request<{ routes: number; ok: boolean }>("/api/v1/llm/routes", {
       method: "PUT",
-      body: JSON.stringify({ routes }),
+      body: JSON.stringify({ routes, routes_enabled: routesEnabled }),
     }),
 };
 

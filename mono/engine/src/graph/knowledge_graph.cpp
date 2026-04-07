@@ -996,139 +996,90 @@ std::unordered_map<std::string, int> KnowledgeGraph::batchShortestHops(
     std::unordered_map<std::string, int> hops;
     if (!db_ || seed_node_ids.empty() || result_node_ids.empty()) return hops;
 
-    // Helper: build a SQL VALUES list and collect IDs for binding.
-    auto buildValuesSQL = [](const std::unordered_set<std::string>& ids) {
-        std::string sql;
-        bool first = true;
-        for (const auto& id : ids) {
-            (void)id; // only need count
-            if (!first) sql += ",";
-            sql += "(?)";
-            first = false;
+    // Strategy: use per-node index-assisted neighbor lookups (fast on indexed
+    // columns) driven from the SMALLER of the two sets. Collect all 1-hop
+    // neighbors of seeds into a hash set, then check result membership.
+    //
+    // For 2-hop: collect 1-hop neighbors of seeds, then for unresolved
+    // results, check if their 1-hop neighbors overlap the seed-neighbor set.
+    //
+    // This avoids CTEs and complex SQL that cause SQLite to do full table
+    // scans on the 5M-row kg_edges table.
+
+    // Use two separate prepared statements for neighbor lookups —
+    // one for src_id, one for dst_id. This lets SQLite use the composite
+    // indexes (repo_id, src_id) and (repo_id, dst_id) directly, avoiding
+    // the slow OR-based index merge on the 5M-row table.
+    const char* nbr_src_sql =
+        "SELECT dst_id FROM kg_edges WHERE repo_id = ? AND src_id = ?";
+    const char* nbr_dst_sql =
+        "SELECT src_id FROM kg_edges WHERE repo_id = ? AND dst_id = ?";
+    sqlite3_stmt* nbr_src_stmt = nullptr;
+    sqlite3_stmt* nbr_dst_stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db_, nbr_src_sql, -1, &nbr_src_stmt, nullptr);
+    if (rc != SQLITE_OK) return hops;
+    rc = sqlite3_prepare_v2(db_, nbr_dst_sql, -1, &nbr_dst_stmt, nullptr);
+    if (rc != SQLITE_OK) { sqlite3_finalize(nbr_src_stmt); return hops; }
+
+    // Helper: get all neighbor IDs for a given node via two indexed lookups.
+    auto getNeighbors = [&](const std::string& node_id) -> std::vector<std::string> {
+        std::vector<std::string> nbrs;
+        // Edges where this node is src → get dst
+        sqlite3_reset(nbr_src_stmt);
+        sqlite3_bind_text(nbr_src_stmt, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(nbr_src_stmt, 2, node_id.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(nbr_src_stmt) == SQLITE_ROW) {
+            auto dst = reinterpret_cast<const char*>(sqlite3_column_text(nbr_src_stmt, 0));
+            if (dst) nbrs.emplace_back(dst);
         }
-        return sql;
+        // Edges where this node is dst → get src
+        sqlite3_reset(nbr_dst_stmt);
+        sqlite3_bind_text(nbr_dst_stmt, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(nbr_dst_stmt, 2, node_id.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(nbr_dst_stmt) == SQLITE_ROW) {
+            auto src = reinterpret_cast<const char*>(sqlite3_column_text(nbr_dst_stmt, 0));
+            if (src) nbrs.emplace_back(src);
+        }
+        return nbrs;
     };
 
-    // ── Query 1: 1-hop ──────────────────────────────────────────────────
-    // Find result nodes that are direct neighbors of any seed node.
-    //
-    //   SELECT DISTINCT result_id
-    //   FROM kg_edges
-    //   WHERE repo_id = ?
-    //     AND ( (src_id IN seeds AND dst_id IN results)
-    //        OR (dst_id IN seeds AND src_id IN results) )
-    //
-    // We use CTEs so SQLite can hash-join on the VALUES sets.
-    {
-        std::string sql =
-            "WITH seeds(id) AS (VALUES " + buildValuesSQL(seed_node_ids) + "), "
-            "     results(id) AS (VALUES " + buildValuesSQL(result_node_ids) + ") "
-            "SELECT DISTINCT "
-            "  CASE WHEN e.src_id IN (SELECT id FROM seeds) THEN e.dst_id "
-            "       ELSE e.src_id END AS result_id "
-            "FROM kg_edges e "
-            "WHERE e.repo_id = ? "
-            "  AND ( (e.src_id IN (SELECT id FROM seeds) AND e.dst_id IN (SELECT id FROM results)) "
-            "     OR (e.dst_id IN (SELECT id FROM seeds) AND e.src_id IN (SELECT id FROM results)) )";
-
-        sqlite3_stmt* stmt = nullptr;
-        int rc = sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr);
-        if (rc == SQLITE_OK) {
-            int idx = 1;
-            for (const auto& sid : seed_node_ids)
-                sqlite3_bind_text(stmt, idx++, sid.c_str(), -1, SQLITE_TRANSIENT);
-            for (const auto& rid : result_node_ids)
-                sqlite3_bind_text(stmt, idx++, rid.c_str(), -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(stmt, idx++, repo_id.c_str(), -1, SQLITE_TRANSIENT);
-
-            while (sqlite3_step(stmt) == SQLITE_ROW) {
-                auto res_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-                if (res_id) hops[res_id] = 1;
-            }
-            sqlite3_finalize(stmt);
+    // ── 1-hop: Collect all neighbors of seed nodes ──────────────────────
+    // For each seed, do one indexed lookup. Total = |seeds| lookups.
+    std::unordered_set<std::string> seed_neighbor_set;  // all 1-hop neighbors of seeds
+    for (const auto& sid : seed_node_ids) {
+        for (const auto& nbr : getNeighbors(sid)) {
+            seed_neighbor_set.insert(nbr);
         }
     }
 
-    // If all results already have 1-hop paths, skip the 2-hop query.
-    if (hops.size() >= result_node_ids.size()) return hops;
-
-    // ── Query 2: 2-hop (two-pass, index-friendly) ─────────────────────
-    // For result nodes NOT yet found at 1-hop, check reachability in 2 steps:
-    //   Pass A: get neighbors of the *remaining* result nodes (small set, index-assisted)
-    //   Pass B: get neighbors of *seed* nodes (small set, index-assisted)
-    //   In-memory: for each remaining node, check if any of its neighbors
-    //              appears in the seed-neighbor set → 2-hop path exists
-    //
-    // Both passes scan edges only for small node sets, using idx_edges_src
-    // and idx_edges_dst. No self-JOIN on the 5M-row table.
-    {
-        std::unordered_set<std::string> remaining;
-        for (const auto& rid : result_node_ids) {
-            if (!hops.count(rid)) remaining.insert(rid);
+    // Check which result nodes are direct neighbors (1-hop)
+    for (const auto& rid : result_node_ids) {
+        if (seed_neighbor_set.count(rid)) {
+            hops[rid] = 1;
         }
-        if (remaining.empty()) return hops;
+    }
 
-        // Pass A: neighbors of remaining nodes → per-remaining-node sets
-        std::unordered_map<std::string, std::unordered_set<std::string>> remainNeighbors;
-        {
-            std::string sql =
-                "WITH remaining(id) AS (VALUES " + buildValuesSQL(remaining) + ") "
-                "SELECT r.id, "
-                "  CASE WHEN e.src_id = r.id THEN e.dst_id ELSE e.src_id END AS neighbor "
-                "FROM remaining r "
-                "JOIN kg_edges e ON (e.src_id = r.id OR e.dst_id = r.id) "
-                "WHERE e.repo_id = ?";
-            sqlite3_stmt* stmt = nullptr;
-            if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-                int idx = 1;
-                for (const auto& rid : remaining)
-                    sqlite3_bind_text(stmt, idx++, rid.c_str(), -1, SQLITE_TRANSIENT);
-                sqlite3_bind_text(stmt, idx++, repo_id.c_str(), -1, SQLITE_TRANSIENT);
-                while (sqlite3_step(stmt) == SQLITE_ROW) {
-                    auto r_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-                    auto n_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-                    if (r_id && n_id) remainNeighbors[r_id].insert(n_id);
-                }
-                sqlite3_finalize(stmt);
-            }
-        }
+    // If all results resolved at 1-hop, done.
+    if (hops.size() >= result_node_ids.size()) {
+        sqlite3_finalize(nbr_src_stmt);
+        sqlite3_finalize(nbr_dst_stmt);
+        return hops;
+    }
 
-        // Pass B: neighbors of seed nodes → flat hash set
-        std::unordered_set<std::string> seedNeighbors;
-        {
-            std::string sql =
-                "WITH seeds(id) AS (VALUES " + buildValuesSQL(seed_node_ids) + ") "
-                "SELECT "
-                "  CASE WHEN e.src_id = s.id THEN e.dst_id ELSE e.src_id END AS neighbor "
-                "FROM seeds s "
-                "JOIN kg_edges e ON (e.src_id = s.id OR e.dst_id = s.id) "
-                "WHERE e.repo_id = ?";
-            sqlite3_stmt* stmt = nullptr;
-            if (sqlite3_prepare_v2(db_, sql.c_str(), -1, &stmt, nullptr) == SQLITE_OK) {
-                int idx = 1;
-                for (const auto& sid : seed_node_ids)
-                    sqlite3_bind_text(stmt, idx++, sid.c_str(), -1, SQLITE_TRANSIENT);
-                sqlite3_bind_text(stmt, idx++, repo_id.c_str(), -1, SQLITE_TRANSIENT);
-                while (sqlite3_step(stmt) == SQLITE_ROW) {
-                    auto n_id = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-                    if (n_id) seedNeighbors.insert(n_id);
-                }
-                sqlite3_finalize(stmt);
-            }
-        }
-
-        // In-memory intersection: remaining_node's neighbor ∩ seedNeighbors → 2-hop
-        for (const auto& [rid, nbrs] : remainNeighbors) {
-            if (hops.count(rid)) continue;
-            for (const auto& n : nbrs) {
-                if (seedNeighbors.count(n)) {
-                    hops[rid] = 2;
-                    break;
-                }
+    // ── 2-hop: For unresolved results, check if any of THEIR neighbors
+    //           is in the seed_neighbor_set ───────────────────────────────
+    for (const auto& rid : result_node_ids) {
+        if (hops.count(rid)) continue;  // already found at 1-hop
+        for (const auto& nbr : getNeighbors(rid)) {
+            if (seed_neighbor_set.count(nbr)) {
+                hops[rid] = 2;
+                break;
             }
         }
     }
 
+    sqlite3_finalize(nbr_src_stmt);
+    sqlite3_finalize(nbr_dst_stmt);
     return hops;
 }
 

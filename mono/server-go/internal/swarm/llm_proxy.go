@@ -160,7 +160,7 @@ type ProbeResponse struct {
 // ProbeMultiple fans out completion requests to multiple LLM providers in
 // parallel, collects all responses, and returns them in priority order.
 //
-// This is the core of the Perplexity-style multi-LLM approach: every provider
+// This is the core of the multi-LLM approach: every provider
 // in the role's priority matrix is queried simultaneously, and the agent (or
 // consensus engine in Phase 5) chooses the best answer.
 func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*ProbeResponse, error) {

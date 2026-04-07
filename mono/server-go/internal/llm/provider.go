@@ -179,6 +179,7 @@ type Registry struct {
 	fallbacks      []string
 	vault          SecretStore                   // optional — if set, API keys are persisted
 	routes         map[string]ModelRoute         // role → preferred provider/model (legacy single-route)
+	routesEnabled  bool                          // when false, agents use multi-LLM probing instead of role routes
 	priorityMatrix map[string][]ProviderPriority // role → ordered list of providers (multi-LLM)
 	timeout        time.Duration                 // LLM request timeout passed to re-created providers
 }
@@ -200,6 +201,18 @@ func NewRegistry() *Registry {
 func (r *Registry) SetRoutes(routes map[string]ModelRoute) {
 	r.routes = routes
 	r.persistRoutes()
+}
+
+// SetRoutesEnabled controls whether per-role model routes are active.
+// When false, agents ignore role routes and use multi-LLM probing instead.
+// Persistence is handled by the caller (API handler → app_config DB table).
+func (r *Registry) SetRoutesEnabled(enabled bool) {
+	r.routesEnabled = enabled
+}
+
+// RoutesEnabled returns whether per-role model routes are active.
+func (r *Registry) RoutesEnabled() bool {
+	return r.routesEnabled
 }
 
 // SetPriorityMatrix configures the multi-LLM priority matrix from config.
@@ -524,6 +537,9 @@ func (r *Registry) LoadFromVault() int {
 		}
 	}
 
+	// NOTE: routes_enabled is loaded from the app_config DB table at startup,
+	// NOT from the vault. See main.go startup rehydration.
+
 	return loaded
 }
 
@@ -737,14 +753,16 @@ type RouteEntry struct {
 }
 
 // routeOrder determines the provider try-order for a request.
-// If a role-based route is configured, that provider goes first, then the
-// normal primary+fallbacks order (skipping duplicates).
+// If a role-based route is configured AND routes are enabled, that provider
+// goes first, then the normal primary+fallbacks order (skipping duplicates).
+// When routes are disabled, role-based routes are ignored so the agent uses
+// multi-LLM probing instead of being pinned to a single provider.
 func (r *Registry) routeOrder(req *CompletionRequest) []routeEntry {
 	entries := make([]routeEntry, 0, len(r.providers))
 	seen := make(map[string]bool, len(r.providers))
 
-	// 1. If there's a role-based route, try that provider first.
-	if req.AgentRole != "" {
+	// 1. If there's a role-based route AND routes are enabled, try that provider first.
+	if r.routesEnabled && req.AgentRole != "" {
 		if route, ok := r.routes[req.AgentRole]; ok {
 			if _, provOK := r.providers[route.Provider]; provOK {
 				entries = append(entries, routeEntry{provider: route.Provider, model: route.Model})

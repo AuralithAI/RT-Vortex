@@ -85,6 +85,14 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		"expires_in":   resp.ExpiresIn,
 	}
 
+	// Tell the agent whether to use multi-LLM probing.
+	// When routes are disabled (default), agents probe multiple LLMs
+	// in parallel and use consensus to select the best response.
+	if h.LLMProxy != nil && h.LLMProxy.registry != nil {
+		enriched["use_multi_llm"] = !h.LLMProxy.registry.RoutesEnabled()
+		enriched["configured_providers"] = h.LLMProxy.registry.ConfiguredProviderCount()
+	}
+
 	// Inject role ELO if the service is available and we know the repo.
 	// The agent may send repo_id in the registration request body,
 	// or we fall back to defaults.

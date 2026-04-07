@@ -14,6 +14,7 @@ import {
   Save,
   Sparkles,
   AlertTriangle,
+  Layers,
 } from "lucide-react";
 import { useLLMProviders, useLLMRoutes } from "@/lib/api/queries";
 import { useSetLLMRoutes } from "@/lib/api/mutations";
@@ -39,6 +40,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import { getLLMIcon } from "@/components/icons/brand-icons";
 
 /** Sentinel value for "use primary / default" (no explicit route). */
@@ -71,12 +73,14 @@ export function AgentOrchestration() {
   const [localRoutes, setLocalRoutes] = useState<
     Record<string, { provider: string; model: string }>
   >({});
+  const [routesEnabled, setRoutesEnabled] = useState(false);
   const [initialised, setInitialised] = useState(false);
 
   // Seed local state from server data on first load.
   useEffect(() => {
     if (!initialised && routesData) {
       setLocalRoutes(serverRouteMap);
+      setRoutesEnabled(routesData.routes_enabled ?? false);
       setInitialised(true);
     }
   }, [routesData, serverRouteMap, initialised]);
@@ -84,6 +88,8 @@ export function AgentOrchestration() {
   // Track if user has unsaved changes.
   const isDirty = useMemo(() => {
     if (!initialised) return false;
+    // Check routes_enabled toggle change.
+    if (routesEnabled !== (routesData?.routes_enabled ?? false)) return true;
     for (const role of AGENT_ROLES) {
       const local = localRoutes[role];
       const server = serverRouteMap[role];
@@ -96,7 +102,7 @@ export function AgentOrchestration() {
       if (!localRoutes[role]) return true;
     }
     return false;
-  }, [localRoutes, serverRouteMap, initialised]);
+  }, [localRoutes, serverRouteMap, initialised, routesEnabled, routesData]);
 
   // Saved-feedback flash.
   const [showSaved, setShowSaved] = useState(false);
@@ -131,7 +137,7 @@ export function AgentOrchestration() {
         routes.push({ role, provider: val.provider, model: val.model || undefined });
       }
     }
-    setRoutes.mutate(routes, {
+    setRoutes.mutate({ routes, routesEnabled }, {
       onSuccess: () => {
         setShowSaved(true);
         setTimeout(() => setShowSaved(false), 2500);
@@ -141,6 +147,7 @@ export function AgentOrchestration() {
 
   const handleReset = () => {
     setLocalRoutes(serverRouteMap);
+    setRoutesEnabled(routesData?.routes_enabled ?? false);
   };
 
   const handleAutoAssign = () => {
@@ -231,6 +238,31 @@ export function AgentOrchestration() {
             )}
           </div>
         </div>
+
+        {/* Multi-LLM toggle */}
+        <div className="mt-4 flex items-start gap-3 rounded-lg border border-dashed p-3 bg-muted/30">
+          <div className="pt-0.5">
+            <Switch
+              id="routes-enabled"
+              checked={routesEnabled}
+              onCheckedChange={setRoutesEnabled}
+            />
+          </div>
+          <div className="flex-1 min-w-0">
+            <label
+              htmlFor="routes-enabled"
+              className="text-sm font-medium cursor-pointer flex items-center gap-1.5"
+            >
+              <Layers className="h-4 w-4 text-muted-foreground" />
+              Enable agent-specific model routing
+            </label>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {routesEnabled
+                ? "Each agent is pinned to its assigned model below. Agents talk to one LLM per turn."
+                : "Agents use multi-LLM probing — querying multiple providers in parallel and using consensus to select the best response. Recommended for higher-quality results."}
+            </p>
+          </div>
+        </div>
       </CardHeader>
 
       <CardContent>
@@ -259,8 +291,14 @@ export function AgentOrchestration() {
 
             <Separator className="mb-6" />
 
-            {/* Role assignment grid */}
-            <div className="space-y-3">
+            {/* Role assignment grid — dimmed when routes are disabled */}
+            <div className={`space-y-3 transition-opacity ${routesEnabled ? "" : "opacity-40 pointer-events-none"}`}>
+              {!routesEnabled && (
+                <p className="text-xs text-muted-foreground italic mb-2 pointer-events-auto opacity-100">
+                  Agent model routing is disabled — agents will query multiple LLMs and use consensus.
+                  Enable the toggle above to pin agents to specific models.
+                </p>
+              )}
               {AGENT_ROLES.map((role) => {
                 const meta = AGENT_ROLE_META[role];
                 const route = localRoutes[role];

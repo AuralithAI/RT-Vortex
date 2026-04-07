@@ -214,7 +214,8 @@ export function useCheckLLMBalance() {
 export function useSetLLMRoutes() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (routes: AgentRoute[]) => api.llm.setRoutes(routes),
+    mutationFn: ({ routes, routesEnabled }: { routes: AgentRoute[]; routesEnabled?: boolean }) =>
+      api.llm.setRoutes(routes, routesEnabled),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.llmRoutes });
     },
