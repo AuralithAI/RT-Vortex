@@ -366,6 +366,7 @@ CREATE TABLE IF NOT EXISTS swarm_tasks (
     failure_reason    TEXT,
     team_formation    JSONB DEFAULT NULL,
     created_at        TIMESTAMPTZ DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ DEFAULT NOW(),
     completed_at      TIMESTAMPTZ,
     timeout_at        TIMESTAMPTZ
 );
@@ -1140,14 +1141,14 @@ CREATE TABLE IF NOT EXISTS swarm_probe_configs (
     num_models      INT NOT NULL DEFAULT 3,
     preferred_providers TEXT[] NOT NULL DEFAULT '{}',
     excluded_providers  TEXT[] NOT NULL DEFAULT '{}',
-    temperature     DOUBLE PRECISION NOT NULL DEFAULT 0.2,
+    temperature     DOUBLE PRECISION NOT NULL DEFAULT 0.7,
     max_tokens      INT NOT NULL DEFAULT 4096,
-    timeout_ms      INT NOT NULL DEFAULT 60000,
+    timeout_seconds INT NOT NULL DEFAULT 120,
     budget_cap_usd  DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     tokens_spent    BIGINT NOT NULL DEFAULT 0,
     strategy        TEXT NOT NULL DEFAULT 'adaptive',
-    confidence_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.6,
-    max_retries     INT NOT NULL DEFAULT 1,
+    confidence_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.7,
+    retries         INT NOT NULL DEFAULT 1,
     reasoning       TEXT NOT NULL DEFAULT '',
     last_tuned_at   TIMESTAMPTZ,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1171,10 +1172,10 @@ CREATE TRIGGER trg_swarm_probe_configs_updated_at
 
 CREATE TABLE IF NOT EXISTS swarm_probe_history (
     id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id               UUID NOT NULL,
     role                  TEXT NOT NULL,
     repo_id               TEXT NOT NULL DEFAULT '',
     action_type           TEXT NOT NULL DEFAULT '',
-    task_id               TEXT NOT NULL DEFAULT '',
     providers_queried     TEXT[] NOT NULL DEFAULT '{}',
     providers_succeeded   TEXT[] NOT NULL DEFAULT '{}',
     provider_winner       TEXT NOT NULL DEFAULT '',
@@ -1185,10 +1186,11 @@ CREATE TABLE IF NOT EXISTS swarm_probe_history (
     total_ms              INT NOT NULL DEFAULT 0,
     total_tokens          INT NOT NULL DEFAULT 0,
     estimated_cost_usd    DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-    success               BOOLEAN NOT NULL DEFAULT FALSE,
+    success               BOOLEAN NOT NULL DEFAULT TRUE,
+    error_detail          TEXT NOT NULL DEFAULT '',
     complexity_label      TEXT NOT NULL DEFAULT '',
     num_models_used       INT NOT NULL DEFAULT 0,
-    temperature_used      DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    temperature_used      DOUBLE PRECISION NOT NULL DEFAULT 0.7,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

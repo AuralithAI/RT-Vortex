@@ -437,6 +437,9 @@ async def _run_full_pipeline(
             agent.memory = agent_mem
 
             # Inject extended tools based on role.
+            # NOTE: Tool names must be globally unique in the list sent to LLM
+            # providers.  CODE_TOOLS and RESEARCH_TOOLS both contain
+            # recall_memory, so we deduplicate after assembly.
             if role in ("senior_dev", "architect", "junior_dev"):
                 agent.tools.extend(CODE_TOOLS)
                 agent.tools.extend(RESEARCH_TOOLS)
@@ -456,6 +459,16 @@ async def _run_full_pipeline(
             # MCP integration tools for roles that interact with external services.
             if role in ("ops", "senior_dev", "architect"):
                 agent.tools.extend(MCP_TOOLS)
+
+            # Deduplicate tools by name — LLM providers (Anthropic, Gemini, etc.)
+            # reject requests containing duplicate tool/function names.
+            seen_names: set[str] = set()
+            unique_tools = []
+            for t in agent.tools:
+                if t.name not in seen_names:
+                    seen_names.add(t.name)
+                    unique_tools.append(t)
+            agent.tools = unique_tools
 
             warm_id = warm_pool_cb() if warm_pool_cb else None
             if warm_id:
