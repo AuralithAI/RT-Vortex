@@ -26,6 +26,7 @@ import type {
   LLMConfigureRequest,
   LLMConfigureResult,
   LLMProvider,
+  LLMProviderStatus,
   LLMTestResult,
   MultimodalConfig,
   MultimodalUpdateRequest,
@@ -480,6 +481,10 @@ export const llm = {
     request<LLMBalanceResult>(`/api/v1/llm/providers/${provider}/balance`, {
       method: "POST",
     }),
+
+  /** Get extended status for a provider (Ollama: running/available models). */
+  providerStatus: (provider: string) =>
+    request<LLMProviderStatus>(`/api/v1/llm/providers/${provider}/status`),
 
   /** Get the current agent role → provider/model routing table. */
   routes: () =>

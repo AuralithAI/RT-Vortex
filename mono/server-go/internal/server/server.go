@@ -369,6 +369,7 @@ func (s *Server) setupRouter() {
 				r.Get("/providers", h.ListLLMProviders)
 				r.Put("/providers/{provider}", h.ConfigureLLMProvider)
 				r.Post("/providers/{provider}/balance", h.CheckLLMBalance)
+				r.Get("/providers/{provider}/status", h.GetLLMProviderStatus)
 				r.Post("/providers/test", h.TestLLMProvider)
 				r.Put("/primary", h.SetPrimaryLLMProvider)
 				r.Get("/routes", h.GetLLMRoutes)

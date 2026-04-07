@@ -208,6 +208,107 @@ func (p *OllamaProvider) Healthy(ctx context.Context) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// OllamaRunningModel contains metadata about a model currently loaded in
+// Ollama's memory, as returned by GET /api/ps.
+type OllamaRunningModel struct {
+	Name      string    `json:"name"`
+	Model     string    `json:"model"`
+	Size      int64     `json:"size"`
+	SizeVRAM  int64     `json:"size_vram"`
+	Processor string    `json:"processor"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// ListRunningModels queries Ollama's /api/ps endpoint to discover which
+// models are currently loaded in memory and actively serving requests.
+func (p *OllamaProvider) ListRunningModels(ctx context.Context) ([]OllamaRunningModel, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/ps", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ollama /api/ps returned %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Models []OllamaRunningModel `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return result.Models, nil
+}
+
+// OllamaModelDetail contains extended information about a pulled model,
+// as returned by GET /api/tags.
+type OllamaModelDetail struct {
+	Name       string    `json:"name"`
+	Model      string    `json:"model"`
+	ModifiedAt time.Time `json:"modified_at"`
+	Size       int64     `json:"size"`
+	Digest     string    `json:"digest"`
+	Family     string    `json:"family,omitempty"`
+	Parameters string    `json:"parameter_size,omitempty"`
+	Quant      string    `json:"quantization_level,omitempty"`
+}
+
+// ListModelsDetailed returns all pulled models with extended metadata
+// (size, family, quantization) instead of just names.
+func (p *OllamaProvider) ListModelsDetailed(ctx context.Context) ([]OllamaModelDetail, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("ollama /api/tags returned %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Models []struct {
+			Name       string    `json:"name"`
+			Model      string    `json:"model"`
+			ModifiedAt time.Time `json:"modified_at"`
+			Size       int64     `json:"size"`
+			Digest     string    `json:"digest"`
+			Details    struct {
+				Family            string `json:"family"`
+				ParameterSize     string `json:"parameter_size"`
+				QuantizationLevel string `json:"quantization_level"`
+			} `json:"details"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	models := make([]OllamaModelDetail, len(result.Models))
+	for i, m := range result.Models {
+		models[i] = OllamaModelDetail{
+			Name:       m.Name,
+			Model:      m.Model,
+			ModifiedAt: m.ModifiedAt,
+			Size:       m.Size,
+			Digest:     m.Digest,
+			Family:     m.Details.Family,
+			Parameters: m.Details.ParameterSize,
+			Quant:      m.Details.QuantizationLevel,
+		}
+	}
+	return models, nil
+}
+
 // ── Ollama Streaming ────────────────────────────────────────────────────────
 
 // StreamComplete sends a streaming chat request to Ollama.

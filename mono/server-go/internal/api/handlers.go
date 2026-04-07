@@ -2311,6 +2311,71 @@ func (h *Handler) checkEmbeddingHealthViaTest(ctx context.Context, w http.Respon
 	}
 }
 
+// GetLLMProviderStatus returns extended status for a provider.
+// For Ollama this includes available models (pulled), running models (loaded
+// in VRAM), and connection health.  For cloud providers it returns basic
+// health and model list info.
+// GET /api/v1/llm/providers/{provider}/status
+func (h *Handler) GetLLMProviderStatus(w http.ResponseWriter, r *http.Request) {
+	providerName := chi.URLParam(r, "provider")
+	if providerName == "" {
+		writeError(w, http.StatusBadRequest, "provider name required")
+		return
+	}
+
+	p, ok := h.LLMRegistry.Get(providerName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "provider not found: "+providerName)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	resp := map[string]interface{}{
+		"provider": providerName,
+		"healthy":  p.Healthy(ctx),
+	}
+
+	// Generic: available models.
+	models, err := p.ListModels(ctx)
+	if err != nil {
+		resp["available_models"] = []string{}
+		resp["models_error"] = err.Error()
+	} else {
+		resp["available_models"] = models
+	}
+
+	// Ollama-specific: running models + detailed model info.
+	if providerName == "ollama" {
+		op, isOllama := p.(*llm.OllamaProvider)
+		if isOllama {
+			running, err := op.ListRunningModels(ctx)
+			if err != nil {
+				resp["running_models"] = []interface{}{}
+				resp["running_error"] = err.Error()
+			} else {
+				resp["running_models"] = running
+				resp["running_count"] = len(running)
+			}
+
+			detailed, err := op.ListModelsDetailed(ctx)
+			if err == nil {
+				resp["models_detailed"] = detailed
+			}
+		}
+	}
+
+	meta, hasMeta := h.LLMRegistry.GetMeta(providerName)
+	if hasMeta {
+		resp["configured"] = meta.Configured
+		resp["base_url"] = meta.BaseURL
+		resp["default_model"] = meta.DefaultModel
+	}
+
+	writeJSON(w, http.StatusOK, resp)
+}
+
 // CheckLLMBalance checks the credit/token balance for a cloud LLM provider.
 // POST /api/v1/llm/providers/{provider}/balance
 func (h *Handler) CheckLLMBalance(w http.ResponseWriter, r *http.Request) {
