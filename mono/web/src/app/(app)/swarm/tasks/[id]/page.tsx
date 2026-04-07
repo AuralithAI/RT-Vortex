@@ -1,7 +1,8 @@
 // ─── Swarm Task Detail ───────────────────────────────────────────────────────
-// Task detail page: plan display, approve/reject, rating, diff list with
-// real-time WebSocket updates, multi-LLM discussion panels, consensus
-// decisions, and links to full review page.
+// Task detail page with transparent AI reasoning: shows what each LLM is
+// responding, how they are thinking and discussing, and how consensus is
+// reached — all in real time. Includes plan display, approve/reject, rating,
+// diff list with real-time WebSocket updates.
 // ─────────────────────────────────────────────────────────────────────────────
 
 "use client";
@@ -9,24 +10,24 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import {
-  Bot,
-  CheckCircle,
-  XCircle,
   MessageSquare,
   Star,
   FileCode,
   ArrowLeft,
   ExternalLink,
+  Eye,
+  Activity,
+  Brain,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
 import { PlanReviewCard } from "@/components/swarm/plan-review-card";
 import { DiffViewer } from "@/components/swarm/diff-viewer";
 import { ActivityFeed } from "@/components/swarm/activity-feed";
-import { AgentChat } from "@/components/swarm/agent-chat";
+import { LiveAgentChat } from "@/components/swarm/live-agent-chat";
 import { TaskAgentList } from "@/components/swarm/task-agent-list";
-import { MultiLLMDiscussion } from "@/components/swarm/multi-llm-discussion";
-import { ConsensusResultCard } from "@/components/swarm/consensus-result-card";
+import { LLMThinkingPanel } from "@/components/swarm/llm-thinking-panel";
+import { ConsensusDecisionPanel } from "@/components/swarm/consensus-decision-panel";
 import { InsightMemoryPanel } from "@/components/swarm/insight-memory-panel";
 import { RoleELOLeaderboard } from "@/components/swarm/role-elo-leaderboard";
 import { CISignalBadge } from "@/components/swarm/ci-signal-badge";
@@ -35,6 +36,9 @@ import { useSwarmEvents } from "@/hooks/use-swarm-events";
 import { useDiscussionEvents } from "@/hooks/use-discussion-events";
 import type { SwarmTask, SwarmDiff, PlanDocument } from "@/types/swarm";
 
+// ── Tab types for the main content area ─────────────────────────────────────
+type ContentTab = "reasoning" | "conversation" | "diffs";
+
 export default function SwarmTaskDetailPage() {
   const params = useParams<{ id: string }>();
   const [task, setTask] = useState<SwarmTask | null>(null);
@@ -42,6 +46,7 @@ export default function SwarmTaskDetailPage() {
   const [loading, setLoading] = useState(true);
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState("");
+  const [activeTab, setActiveTab] = useState<ContentTab>("reasoning");
 
   const { events, connected } = useSwarmEvents(params.id);
   const { threads, consensusResults } = useDiscussionEvents(events);
@@ -138,6 +143,16 @@ export default function SwarmTaskDetailPage() {
         description={`${task.repo_id} • ${task.status.replace(/_/g, " ")}`}
         actions={
           <div className="flex items-center gap-3">
+            {/* Multi-LLM status indicator */}
+            {threads.length > 0 && (
+              <span className="flex items-center gap-1.5 rounded-full bg-violet-100 px-3 py-1 text-[11px] font-medium text-violet-700 dark:bg-violet-900/40 dark:text-violet-300">
+                <Brain className="h-3.5 w-3.5" />
+                {threads.length} LLM discussion{threads.length !== 1 ? "s" : ""}
+                {threads.some((t) => t.status === "open") && (
+                  <Activity className="h-3 w-3 animate-pulse text-yellow-500" />
+                )}
+              </span>
+            )}
             {connected && (
               <span className="flex items-center gap-1.5 text-xs text-green-600 dark:text-green-400">
                 <span className="h-2 w-2 animate-pulse rounded-full bg-green-500" />
@@ -255,59 +270,166 @@ export default function SwarmTaskDetailPage() {
           {/* Dynamic Team Formation — complexity analysis + ELO-aware team composition */}
           <TeamFormationCard taskId={params.id} refreshInterval={15000} />
 
-          {/* Agent Conversation — live chat feed */}
-          <AgentChat events={events} />
-
-          {/* Multi-LLM Discussion Panels — cross-provider comparison */}
-          <MultiLLMDiscussion threads={threads} />
-
-          {/* Consensus Decisions — shows how the engine chose the final answer */}
-          {consensusResults.length > 0 && (
-            <div className="space-y-4">
-              {consensusResults.map((result, i) => (
-                <ConsensusResultCard key={`consensus-${i}`} result={result} />
-              ))}
+          {/* ── Tabbed Content Area ─────────────────────────────────── */}
+          <div className="space-y-4">
+            {/* Tab bar */}
+            <div className="flex items-center gap-1 rounded-xl border bg-muted/30 p-1">
+              <button
+                onClick={() => setActiveTab("reasoning")}
+                className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all ${
+                  activeTab === "reasoning"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Eye className="h-4 w-4" />
+                AI Reasoning
+                {(threads.length > 0 || consensusResults.length > 0) && (
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                    activeTab === "reasoning"
+                      ? "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300"
+                      : "bg-muted text-muted-foreground"
+                  }`}>
+                    {threads.length + consensusResults.length}
+                  </span>
+                )}
+                {threads.some((t) => t.status === "open") && (
+                  <span className="h-2 w-2 rounded-full bg-yellow-500 animate-pulse" />
+                )}
+              </button>
+              <button
+                onClick={() => setActiveTab("conversation")}
+                className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all ${
+                  activeTab === "conversation"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <MessageSquare className="h-4 w-4" />
+                Agent Chat
+                {events.filter((e) => e.type === "swarm_agent").length > 0 && (
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                    activeTab === "conversation"
+                      ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
+                      : "bg-muted text-muted-foreground"
+                  }`}>
+                    {events.filter((e) => e.type === "swarm_agent").length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setActiveTab("diffs")}
+                className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all ${
+                  activeTab === "diffs"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <FileCode className="h-4 w-4" />
+                Code Changes
+                {diffs.length > 0 && (
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                    activeTab === "diffs"
+                      ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300"
+                      : "bg-muted text-muted-foreground"
+                  }`}>
+                    {diffs.length}
+                  </span>
+                )}
+              </button>
             </div>
-          )}
 
-          {/* Cross-Task Insights — learned from past consensus decisions */}
-          <InsightMemoryPanel taskId={params.id} />
+            {/* Tab content */}
+            <div>
+              {/* ── AI Reasoning tab ─────────────────────────────────── */}
+              {activeTab === "reasoning" && (
+                <div className="space-y-6">
+                  {/* Multi-LLM Thinking Panel — live provider responses, discussion, comparison */}
+                  <LLMThinkingPanel
+                    threads={threads}
+                    consensusResults={consensusResults}
+                  />
 
-          {/* CI Signal Status — auto-ingested PR merge + CI check status */}
-          {task.pr_url && <CISignalBadge taskId={params.id} />}
+                  {/* Consensus Decisions — shows how the engine chose the final answer */}
+                  <ConsensusDecisionPanel results={consensusResults} />
 
-          {/* Role ELO Leaderboard — scoped to this task's repo */}
-          <RoleELOLeaderboard repoId={task.repo_id} />
+                  {/* Cross-Task Insights — learned from past consensus decisions */}
+                  <InsightMemoryPanel taskId={params.id} />
 
-          {/* Diffs Section */}
-          {diffs.length > 0 && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-semibold">
-                  Diffs ({diffs.length} file{diffs.length !== 1 ? "s" : ""})
-                </h3>
-                <Button variant="outline" size="sm" asChild>
-                  <a href={`/swarm/tasks/${params.id}/review`}>
-                    Full Review View →
-                  </a>
-                </Button>
-              </div>
-              {diffs.slice(0, 5).map((diff) => (
-                <DiffViewer key={diff.id} diff={diff} readOnly />
-              ))}
-              {diffs.length > 5 && (
-                <p className="text-center text-sm text-muted-foreground">
-                  +{diffs.length - 5} more files.{" "}
-                  <a
-                    href={`/swarm/tasks/${params.id}/review`}
-                    className="text-blue-600 hover:underline"
-                  >
-                    View all in review mode
-                  </a>
-                </p>
+                  {/* CI Signal Status — auto-ingested PR merge + CI check status */}
+                  {task.pr_url && <CISignalBadge taskId={params.id} />}
+
+                  {/* Role ELO Leaderboard — scoped to this task's repo */}
+                  <RoleELOLeaderboard repoId={task.repo_id} />
+
+                  {/* Empty state */}
+                  {threads.length === 0 && consensusResults.length === 0 && (
+                    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16">
+                      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-violet-100 to-purple-100 dark:from-violet-900/40 dark:to-purple-900/40">
+                        <Brain className="h-8 w-8 text-violet-400" />
+                      </div>
+                      <p className="text-sm font-semibold text-muted-foreground">
+                        AI reasoning will appear here
+                      </p>
+                      <p className="mt-1 max-w-sm text-center text-xs text-muted-foreground/70">
+                        When multi-LLM routing is enabled, you&apos;ll see each model&apos;s
+                        response, their discussion, and how consensus is reached — all in real time
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Agent Chat tab ───────────────────────────────────── */}
+              {activeTab === "conversation" && (
+                <LiveAgentChat events={events} />
+              )}
+
+              {/* ── Code Changes tab ─────────────────────────────────── */}
+              {activeTab === "diffs" && (
+                <div className="space-y-4">
+                  {diffs.length > 0 ? (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-semibold">
+                          Diffs ({diffs.length} file{diffs.length !== 1 ? "s" : ""})
+                        </h3>
+                        <Button variant="outline" size="sm" asChild>
+                          <a href={`/swarm/tasks/${params.id}/review`}>
+                            Full Review View →
+                          </a>
+                        </Button>
+                      </div>
+                      {diffs.slice(0, 5).map((diff) => (
+                        <DiffViewer key={diff.id} diff={diff} readOnly />
+                      ))}
+                      {diffs.length > 5 && (
+                        <p className="text-center text-sm text-muted-foreground">
+                          +{diffs.length - 5} more files.{" "}
+                          <a
+                            href={`/swarm/tasks/${params.id}/review`}
+                            className="text-blue-600 hover:underline"
+                          >
+                            View all in review mode
+                          </a>
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed py-16">
+                      <FileCode className="mb-3 h-10 w-10 text-muted-foreground/40" />
+                      <p className="text-sm font-semibold text-muted-foreground">
+                        No code changes yet
+                      </p>
+                      <p className="mt-1 text-xs text-muted-foreground/70">
+                        Diffs will appear here as agents make changes
+                      </p>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
-          )}
+          </div>
         </div>
 
         {/* Sidebar */}
