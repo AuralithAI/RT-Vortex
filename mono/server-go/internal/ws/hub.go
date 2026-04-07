@@ -118,22 +118,35 @@ type Hub struct {
 	swarm    map[string]map[*Client]struct{}    // taskID → set of clients (swarm)
 	metrics  map[*Client]struct{}               // engine metrics subscribers
 
+	// swarmHistory stores recent swarm events per task so that newly-connecting
+	// WebSocket clients receive the full discussion history
+	swarmHistory map[string][]swarmHistoryEntry
+
 	register   chan *Client
 	unregister chan *Client
 	done       chan struct{}
 }
 
+// swarmHistoryEntry holds a pre-serialized swarm event for replay.
+type swarmHistoryEntry struct {
+	data []byte
+}
+
+// Maximum number of swarm events kept per task for replay.
+const swarmHistoryMax = 200
+
 // NewHub creates and starts a new Hub.
 func NewHub() *Hub {
 	h := &Hub{
-		reviews:    make(map[uuid.UUID]map[*Client]struct{}),
-		indexes:    make(map[string]map[*Client]struct{}),
-		prEmbeds:   make(map[string]map[*Client]struct{}),
-		swarm:      make(map[string]map[*Client]struct{}),
-		metrics:    make(map[*Client]struct{}),
-		register:   make(chan *Client, 32),
-		unregister: make(chan *Client, 32),
-		done:       make(chan struct{}),
+		reviews:      make(map[uuid.UUID]map[*Client]struct{}),
+		indexes:      make(map[string]map[*Client]struct{}),
+		prEmbeds:     make(map[string]map[*Client]struct{}),
+		swarm:        make(map[string]map[*Client]struct{}),
+		metrics:      make(map[*Client]struct{}),
+		swarmHistory: make(map[string][]swarmHistoryEntry),
+		register:     make(chan *Client, 32),
+		unregister:   make(chan *Client, 32),
+		done:         make(chan struct{}),
 	}
 	go h.run()
 	return h
@@ -442,6 +455,8 @@ func (h *Hub) HasPREmbedSubscribers(repoID string) bool {
 
 // SubscribeSwarm registers a client for swarm events on a task.
 // If taskID is empty, the client receives ALL swarm events (global subscriber).
+// On connect, any buffered history for the task is replayed so the client
+// catches up on discussion threads that started before it joined.
 func (h *Hub) SubscribeSwarm(conn *websocket.Conn, taskID string) *Client {
 	if taskID == "" {
 		taskID = "*" // sentinel for global subscribers
@@ -453,6 +468,25 @@ func (h *Hub) SubscribeSwarm(conn *websocket.Conn, taskID string) *Client {
 	}
 	h.register <- c
 	metrics.WSConnectionsActive.Inc()
+
+	// Replay buffered history for this task so the UI is never empty.
+	if taskID != "*" {
+		h.mu.RLock()
+		hist := h.swarmHistory[taskID]
+		h.mu.RUnlock()
+		if len(hist) > 0 {
+			slog.Info("ws swarm: replaying history", "task_id", taskID, "events", len(hist))
+			for _, entry := range hist {
+				select {
+				case c.send <- entry.data:
+					metrics.WSMessagesTotal.Inc()
+				default:
+					slog.Debug("ws: dropping replay message, client buffer full", "task_id", taskID)
+				}
+			}
+		}
+	}
+
 	return c
 }
 
@@ -469,8 +503,16 @@ func (h *Hub) BroadcastSwarm(evt SwarmEvent) {
 		return
 	}
 
-	h.mu.RLock()
-	defer h.mu.RUnlock()
+	h.mu.Lock()
+
+	// Buffer the event for late-joining clients.
+	if evt.TaskID != "" {
+		hist := h.swarmHistory[evt.TaskID]
+		if len(hist) >= swarmHistoryMax {
+			hist = hist[1:] // drop oldest
+		}
+		h.swarmHistory[evt.TaskID] = append(hist, swarmHistoryEntry{data: data})
+	}
 
 	// Send to task-specific subscribers.
 	if evt.TaskID != "" {
@@ -497,6 +539,8 @@ func (h *Hub) BroadcastSwarm(evt SwarmEvent) {
 			}
 		}
 	}
+
+	h.mu.Unlock()
 }
 
 // HasSwarmSubscribers returns true if at least one client is watching swarm events
@@ -509,6 +553,15 @@ func (h *Hub) HasSwarmSubscribers(taskID string) bool {
 	}
 	clients, ok := h.swarm["*"]
 	return ok && len(clients) > 0
+}
+
+// ClearSwarmHistory removes the buffered event history for a task.
+// Call this when a task reaches a terminal state (completed, failed, cancelled)
+// to prevent unbounded memory growth.
+func (h *Hub) ClearSwarmHistory(taskID string) {
+	h.mu.Lock()
+	delete(h.swarmHistory, taskID)
+	h.mu.Unlock()
 }
 
 // ── Engine metrics subscriptions ───────────────────────────────────────────

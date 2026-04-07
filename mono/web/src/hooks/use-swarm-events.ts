@@ -78,7 +78,9 @@ export function useSwarmEvents(
 
       ws.onopen = () => {
         reconnectCount.current = 0;
-        setState((prev) => ({ ...prev, connected: true, error: null }));
+        // Clear existing events on (re)connect — the server replays
+        // buffered history so we'll get everything again without duplicates.
+        setState((prev) => ({ ...prev, connected: true, error: null, events: [], lastEvent: null }));
       };
 
       ws.onmessage = (e) => {

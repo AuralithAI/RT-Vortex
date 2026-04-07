@@ -77,11 +77,22 @@ export function useDiscussionEvents(events: SwarmWsEvent[]): DiscussionState {
 
           const resp = data.response as ProviderResponseData | undefined;
           if (resp) {
-            existing.responses.push(resp);
-            existing.provider_count = existing.responses.length;
-            existing.success_count = existing.responses.filter(
-              (r) => !r.error
-            ).length;
+            // Deduplicate: skip if we already have a response from the same
+            // provider+model (replay buffer can re-send events the client
+            // already received live).
+            const isDup = existing.responses.some(
+              (r) =>
+                r.provider === resp.provider &&
+                r.model === resp.model &&
+                r.content === resp.content,
+            );
+            if (!isDup) {
+              existing.responses.push(resp);
+              existing.provider_count = existing.responses.length;
+              existing.success_count = existing.responses.filter(
+                (r) => !r.error
+              ).length;
+            }
           }
           break;
         }

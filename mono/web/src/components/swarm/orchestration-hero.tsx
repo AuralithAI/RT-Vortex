@@ -7,7 +7,7 @@
 
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect, useRef } from "react";
 import {
   Activity,
   Brain,
@@ -24,6 +24,8 @@ import {
   Zap,
 } from "lucide-react";
 import { getProviderMeta } from "@/lib/llm-providers";
+import { sanitizeLLMContent } from "@/lib/sanitize-llm-content";
+import { useTypewriter } from "@/hooks/use-typewriter";
 import type {
   DiscussionThreadData,
   ProviderResponseData,
@@ -76,24 +78,57 @@ function TypingDots({ className = "" }: { className?: string }) {
 
 type CardStatus = "thinking" | "streaming" | "complete" | "failed";
 
+/** Inner component that renders content with typewriter effect. */
+function TypewriterContent({
+  content,
+  expanded,
+  isNew,
+}: {
+  content: string;
+  expanded: boolean;
+  isNew: boolean;
+}) {
+  const sanitized = sanitizeLLMContent(content);
+  const previewText =
+    sanitized.length > 220 && !expanded
+      ? sanitized.slice(0, 220) + "…"
+      : sanitized;
+
+  const { displayedText, isTyping } = useTypewriter(previewText, {
+    charsPerTick: 6,
+    intervalMs: 14,
+    instant: !isNew,
+  });
+
+  return (
+    <>
+      <p className="text-[13px] leading-relaxed text-white/70 whitespace-pre-wrap">
+        {displayedText}
+        {isTyping && (
+          <span className="inline-block w-[2px] h-[14px] bg-blue-400 ml-0.5 animate-pulse align-text-bottom" />
+        )}
+      </p>
+    </>
+  );
+}
+
 function ModelResponseCard({
   response,
   status,
   isWinner,
   timeAgo,
+  isNew,
 }: {
   response: ProviderResponseData;
   status: CardStatus;
   isWinner: boolean;
   timeAgo: string;
+  isNew: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const meta = getProviderMeta(response.provider);
   const succeeded = !response.error;
-  const preview =
-    response.content.length > 220 && !expanded
-      ? response.content.slice(0, 220) + "…"
-      : response.content;
+  const sanitized = sanitizeLLMContent(response.content);
 
   const statusBadge: Record<CardStatus, { label: string; cls: string }> = {
     thinking: {
@@ -158,10 +193,12 @@ function ModelResponseCard({
           </div>
         ) : succeeded ? (
           <div className="relative">
-            <p className="text-[13px] leading-relaxed text-white/70">
-              {preview}
-            </p>
-            {response.content.length > 220 && (
+            <TypewriterContent
+              content={response.content}
+              expanded={expanded}
+              isNew={isNew}
+            />
+            {sanitized.length > 220 && (
               <button
                 onClick={() => setExpanded(!expanded)}
                 className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-blue-400 hover:text-blue-300 transition-colors"
@@ -325,6 +362,32 @@ function ThreadHero({
   thread: DiscussionThreadData;
   consensusResult?: ConsensusResultData;
 }) {
+  // Track which responses we have already rendered so we can animate only
+  // genuinely new arrivals (not replayed history).
+  const seenResponseKeys = useRef(new Set<string>());
+  const [newKeys, setNewKeys] = useState(new Set<string>());
+
+  const responseKey = (r: ProviderResponseData) =>
+    `${r.provider}::${r.model}::${(r.content || "").slice(0, 40)}`;
+
+  // Whenever responses change, figure out which ones are new.
+  useEffect(() => {
+    const freshKeys = new Set<string>();
+    for (const r of thread.responses) {
+      const k = responseKey(r);
+      if (!seenResponseKeys.current.has(k)) {
+        freshKeys.add(k);
+      }
+    }
+    // After first render all keys are "seen" — only later arrivals animate.
+    if (seenResponseKeys.current.size > 0 && freshKeys.size > 0) {
+      setNewKeys(freshKeys);
+    }
+    for (const r of thread.responses) {
+      seenResponseKeys.current.add(responseKey(r));
+    }
+  }, [thread.responses]);
+
   const uniqueProviders = useMemo(() => {
     const seen = new Set<string>();
     for (const r of thread.responses) {
@@ -378,7 +441,7 @@ function ThreadHero({
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         {thread.responses.map((resp, i) => (
           <ModelResponseCard
-            key={`${resp.provider}-${i}`}
+            key={`${resp.provider}-${resp.model}-${i}`}
             response={resp}
             status={cardStatus(resp)}
             isWinner={
@@ -386,6 +449,7 @@ function ThreadHero({
               (thread.synthesis_provider === resp.provider)
             }
             timeAgo={timeAgoStr(resp)}
+            isNew={newKeys.has(responseKey(resp))}
           />
         ))}
         {/* Placeholder cards for providers still thinking */}
@@ -415,9 +479,10 @@ function ThreadHero({
                 )}
               </div>
               <p className="text-[13px] leading-relaxed text-white/70">
-                {thread.synthesis.length > 600
-                  ? thread.synthesis.slice(0, 600) + "…"
-                  : thread.synthesis}
+                {(() => {
+                  const s = sanitizeLLMContent(thread.synthesis!);
+                  return s.length > 600 ? s.slice(0, 600) + "…" : s;
+                })()}
               </p>
             </div>
           </div>
