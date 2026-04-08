@@ -125,6 +125,20 @@ function extractCodeFromToolResult(inner: string): string {
     return "";
   }
 
+  // Skip search_code / tool result JSON arrays — these are metadata
+  // (file_path, score, line_number lists), not actual source code.
+  // Detect: starts with [ and looks like an array of objects with "file_path"/"score".
+  if (/^\s*\[/.test(trimmed) && /"(?:file_path|score|line_number)"/.test(trimmed)) {
+    return "";
+  }
+
+  // Skip "The file at X contains:" narration blocks — these just echo
+  // file content from get_file_content calls. The code inside them is
+  // from the repo under review, not the LLM's analysis.
+  if (/^the file at\s/i.test(trimmed)) {
+    return "";
+  }
+
   // ── 1) Fenced code blocks with file-path headers ────────────────────
   // Pattern: optional "N. " prefix + **path** (optional line range) + code fence.
   const blocks: string[] = [];

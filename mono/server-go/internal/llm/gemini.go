@@ -270,30 +270,68 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}
 
 	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", p.baseURL, model, p.apiKey)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("gemini request: %w", err)
-	}
-	defer resp.Body.Close()
+	// Retry loop — Gemini frequently returns 503 "high demand" or 429.
+	// Exponential backoff: 1s → 2s → 4s (3 attempts total).
+	const maxRetries = 3
+	var respBody []byte
+	var lastErr error
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			slog.Warn("gemini: retrying after transient error",
+				"model", model,
+				"attempt", attempt+1,
+				"backoff", backoff,
+				"error", lastErr,
+			)
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("gemini request cancelled during retry: %w", ctx.Err())
+			case <-time.After(backoff):
+			}
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err := p.client.Do(httpReq)
+		if err != nil {
+			lastErr = fmt.Errorf("gemini request: %w", err)
+			continue
+		}
+
+		respBody, err = io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("read response: %w", err)
+			continue
+		}
+
+		// Retryable status codes: 429 (rate limit), 503 (overloaded).
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			var errResp geminiErrorResponse
+			_ = json.Unmarshal(respBody, &errResp)
+			lastErr = fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+			continue // retry
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			var errResp geminiErrorResponse
+			_ = json.Unmarshal(respBody, &errResp)
+			return nil, fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+		}
+
+		lastErr = nil
+		break // success
 	}
 
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, fmt.Errorf("%w: %s", ErrRateLimited, string(respBody))
-	}
-	if resp.StatusCode != http.StatusOK {
-		var errResp geminiErrorResponse
-		_ = json.Unmarshal(respBody, &errResp)
-		return nil, fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+	if lastErr != nil {
+		return nil, lastErr
 	}
 
 	var gr geminiResponse
@@ -528,26 +566,64 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 	}
 
 	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse&key=%s", p.baseURL, model, p.apiKey)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("gemini stream request: %w", err)
-	}
+	// Retry loop — same transient-error handling as Complete().
+	const streamMaxRetries = 3
+	var resp *http.Response
+	var lastStreamErr error
 
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		if resp.StatusCode == http.StatusTooManyRequests {
-			return nil, fmt.Errorf("%w: %s", ErrRateLimited, string(respBody))
+	for attempt := 0; attempt < streamMaxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			slog.Warn("gemini stream: retrying after transient error",
+				"model", model,
+				"attempt", attempt+1,
+				"backoff", backoff,
+				"error", lastStreamErr,
+			)
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("gemini stream cancelled during retry: %w", ctx.Err())
+			case <-time.After(backoff):
+			}
 		}
-		var errResp geminiErrorResponse
-		_ = json.Unmarshal(respBody, &errResp)
-		return nil, fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err = p.client.Do(httpReq)
+		if err != nil {
+			lastStreamErr = fmt.Errorf("gemini stream request: %w", err)
+			continue
+		}
+
+		// Retryable: 429, 503.
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			var errResp geminiErrorResponse
+			_ = json.Unmarshal(respBody, &errResp)
+			lastStreamErr = fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			var errResp geminiErrorResponse
+			_ = json.Unmarshal(respBody, &errResp)
+			return nil, fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+		}
+
+		lastStreamErr = nil
+		break // success
+	}
+
+	if lastStreamErr != nil {
+		return nil, lastStreamErr
 	}
 
 	ch := make(chan StreamChunk, 64)
