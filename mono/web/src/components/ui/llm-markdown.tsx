@@ -151,11 +151,16 @@ function InlineMarkdown({
   text: string;
   variant?: Variant;
 }) {
+  // Safety: cap inline parsing at 5 000 chars to prevent runaway regex.
+  const safeText = text.length > 5000 ? text.slice(0, 5000) + "…" : text;
   const parts: React.ReactNode[] = [];
-  let remaining = text;
+  let remaining = safeText;
   let key = 0;
+  // Guard against excessive iterations (pathological input).
+  let safety = 0;
+  const MAX_ITERS = 2000;
 
-  while (remaining.length > 0) {
+  while (remaining.length > 0 && safety++ < MAX_ITERS) {
     const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
     const italicMatch = remaining.match(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/);
     const codeMatch = remaining.match(/`([^`]+)`/);
@@ -399,12 +404,20 @@ function MdBlockRenderer({
 
 // ── Main Component ──────────────────────────────────────────────────────────
 
+/** Maximum content length before truncation — prevents DOM/perf blowup. */
+const MAX_CONTENT_LENGTH = 20_000;
+
 export function LLMMarkdown({
   content,
   variant = "light",
   className,
 }: LLMMarkdownProps) {
-  const blocks = useMemo(() => parseMarkdown(content), [content]);
+  const safeContent =
+    content.length > MAX_CONTENT_LENGTH
+      ? content.slice(0, MAX_CONTENT_LENGTH) + "\n\n…(content truncated)"
+      : content;
+
+  const blocks = useMemo(() => parseMarkdown(safeContent), [safeContent]);
 
   return (
     <div className={cn("space-y-2", className)}>

@@ -1,6 +1,7 @@
 // Strip internal LLM tool-use markup from provider responses before rendering.
 // Models like Claude emit XML-based function_calls / invoke blocks that
-// should never be shown to the end user.
+// should never be shown to the end user.  Claude also tends to echo tool-call
+// arguments as plain text (e.g. repo UUIDs followed by search queries).
 
 /**
  * Remove XML-based tool-call blocks and other LLM-internal markup from a
@@ -32,10 +33,25 @@ export function sanitizeLLMContent(raw: string): string {
   // 6. Remove VSCode.Cell tags.
   cleaned = cleaned.replace(/<\/?VSCode\.Cell[^>]*>/g, "");
 
-  // 7. Collapse excessive whitespace left by removals.
+  // 7. Remove lines that are just a UUID (repo_id) optionally followed by a
+  //    search query — Claude echoes tool-call arguments as plain text.
+  //    Pattern: lines containing a bare UUID-v4 possibly followed by words.
+  cleaned = cleaned.replace(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\s+\S.*)?$/gm,
+    "",
+  );
+
+  // 8. Remove orphaned tool-call ID lines (toolu_..., call_..., chatcmpl-...).
+  cleaned = cleaned.replace(/^(?:toolu_|call_|chatcmpl-)[A-Za-z0-9_-]+\s*$/gm, "");
+
+  // 9. Remove tool_use / tool_result JSON-like fragments Claude sometimes
+  //    emits as text (e.g. {"type":"tool_use","id":"toolu_...",...}).
+  cleaned = cleaned.replace(/\{"type"\s*:\s*"tool_(?:use|result)"[\s\S]*?\}\s*/g, "");
+
+  // 10. Collapse excessive whitespace left by removals.
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
 
-  // 8. Trim leading/trailing whitespace.
+  // 11. Trim leading/trailing whitespace.
   cleaned = cleaned.trim();
 
   return cleaned;

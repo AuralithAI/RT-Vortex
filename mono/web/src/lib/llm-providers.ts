@@ -26,7 +26,7 @@ const providers: Record<string, LLMProviderMeta> = {
   },
   openai: {
     name: "openai",
-    displayName: "GPT-4o",
+    displayName: "OpenAI",
     color: "text-emerald-600 dark:text-emerald-400",
     bgColor: "bg-emerald-50 dark:bg-emerald-950/30",
     borderColor: "border-emerald-200 dark:border-emerald-800",

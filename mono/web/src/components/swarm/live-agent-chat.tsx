@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { AgentAvatar } from "@/components/swarm/agent-avatar";
 import { LLMMarkdown } from "@/components/ui/llm-markdown";
+import { sanitizeLLMContent } from "@/lib/sanitize-llm-content";
 import type { SwarmWsEvent } from "@/hooks/use-swarm-events";
 
 // ── Role styling ────────────────────────────────────────────────────────────
@@ -409,11 +410,16 @@ export function LiveAgentChat({ events, maxMessages = 200 }: LiveAgentChatProps)
                         {msg.content}
                       </p>
                     ) : (
-                      <LLMMarkdown
-                        content={msg.content}
-                        variant="light"
-                        className="text-[13px]"
-                      />
+                      (() => {
+                        const cleaned = sanitizeLLMContent(msg.content);
+                        return cleaned ? (
+                          <LLMMarkdown
+                            content={cleaned}
+                            variant="light"
+                            className="text-[13px]"
+                          />
+                        ) : null;
+                      })()
                     )}
                   </div>
                 ))}

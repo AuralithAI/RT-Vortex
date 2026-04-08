@@ -18,6 +18,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { getProviderMeta } from "@/lib/llm-providers";
+import { sanitizeLLMContent } from "@/lib/sanitize-llm-content";
 import { LLMMarkdown } from "@/components/ui/llm-markdown";
 import {
   OpenAIIcon,
@@ -110,31 +111,44 @@ function ProviderResponseCard({
 
       {/* Content */}
       {succeeded ? (
-        <div className="relative">
-          <div className={!expanded && response.content.length > 300 ? "max-h-[200px] overflow-hidden" : ""}>
-            <LLMMarkdown
-              content={expanded || response.content.length <= 300 ? response.content : response.content.slice(0, 300) + "…"}
-              variant="light"
-              className="text-xs"
-            />
-          </div>
-          {response.content.length > 300 && (
-            <button
-              onClick={() => setExpanded(!expanded)}
-              className="mt-1 flex items-center gap-1 text-xs text-blue-600 hover:underline dark:text-blue-400"
-            >
-              {expanded ? (
-                <>
-                  <ChevronUp className="h-3 w-3" /> Show less
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="h-3 w-3" /> Show full response
-                </>
+        (() => {
+          const sanitized = sanitizeLLMContent(response.content);
+          // If sanitization removed everything, show a subtle note instead of blank.
+          if (!sanitized) {
+            return (
+              <p className="text-xs italic text-muted-foreground">
+                (tool-call only — no text content)
+              </p>
+            );
+          }
+          return (
+            <div className="relative">
+              <div className={!expanded && sanitized.length > 300 ? "max-h-[200px] overflow-hidden" : ""}>
+                <LLMMarkdown
+                  content={expanded || sanitized.length <= 300 ? sanitized : sanitized.slice(0, 300) + "…"}
+                  variant="light"
+                  className="text-xs"
+                />
+              </div>
+              {sanitized.length > 300 && (
+                <button
+                  onClick={() => setExpanded(!expanded)}
+                  className="mt-1 flex items-center gap-1 text-xs text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  {expanded ? (
+                    <>
+                      <ChevronUp className="h-3 w-3" /> Show less
+                    </>
+                  ) : (
+                    <>
+                      <ChevronDown className="h-3 w-3" /> Show full response
+                    </>
+                  )}
+                </button>
               )}
-            </button>
-          )}
-        </div>
+            </div>
+          );
+        })()
       ) : (
         <p className="text-xs text-red-600 dark:text-red-400">
           {response.error}
@@ -237,9 +251,10 @@ function DiscussionThreadCard({
                 )}
               </div>
               <LLMMarkdown
-                content={thread.synthesis.length > 500
-                  ? thread.synthesis.slice(0, 500) + "…"
-                  : thread.synthesis}
+                content={(() => {
+                  const s = sanitizeLLMContent(thread.synthesis);
+                  return s.length > 500 ? s.slice(0, 500) + "…" : s;
+                })()}
                 variant="light"
                 className="text-xs"
               />

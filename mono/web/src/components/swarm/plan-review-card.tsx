@@ -100,12 +100,16 @@ export function PlanReviewCard({
             <span>{plan.steps.length} steps</span>
             <span>•</span>
             <span>{plan.affected_files.length} files</span>
-            {plan.agents_needed > 0 && (
-              <>
-                <span>•</span>
-                <span>{plan.agents_needed} agents</span>
-              </>
-            )}
+            {(() => {
+              const needed = plan.agents_needed;
+              const count = Array.isArray(needed) ? needed.length : (typeof needed === "number" ? needed : 0);
+              return count > 0 ? (
+                <>
+                  <span>•</span>
+                  <span>{count} agent{count !== 1 ? "s" : ""}</span>
+                </>
+              ) : null;
+            })()}
           </div>
         </div>
         {canReview && (

@@ -58,7 +58,7 @@ export interface PlanDocument {
   steps: PlanStep[];
   affected_files: string[];
   estimated_complexity: "small" | "medium" | "large";
-  agents_needed: number;
+  agents_needed: string[] | number;
 }
 
 export interface PlanStep {
