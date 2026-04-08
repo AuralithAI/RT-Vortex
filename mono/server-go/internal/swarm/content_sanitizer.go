@@ -127,7 +127,7 @@ var (
 	reGrokToolIntent       = regexp.MustCompile(
 		`(?im)^(?:I will (?:use the provided tools|start by|now (?:proceed|search|check|examine)|follow|also check)|Let me (?:begin|start|now) by)[^\n]*$`)
 	reGrokStepByStep = regexp.MustCompile(
-		`(?im)^(?:First|Next|Then|Finally|Now),?\s+I (?:will|need to|should|am going to|'ll)\s[^\n]*$`)
+		`(?im)^(?:First|Next|Then|Finally|Now),?\s+I(?:\s+will|\s+need\s+to|\s+should|\s+am\s+going\s+to|'ll)\s[^\n]*$`)
 	reGrokPlanBoilerplate = regexp.MustCompile(
 		`(?im)^(?:This (?:plan )?will be submitted|Below is the structured plan|If there are any discrepancies|I will now submit this plan|Based on (?:the (?:task description|information gathered|analysis|error)|my (?:exploration|analysis|review)|standard workflow))[^\n]*$`)
 	reGrokStepNoun = regexp.MustCompile(
@@ -169,6 +169,9 @@ var (
 		"(?s)```(?:python|json|yaml|xml|go|bash|sh)?\\s*\\n\\s*```")
 	reGeminiFencedToolCall = regexp.MustCompile(
 		"(?s)```(?:python)?\\s*\\n(?:print\\s*\\(\\s*)?(?:search_code|get_file_content|get_index_status|report_plan|submit_plan|create_plan|get_index)\\s*\\([^\\n]*\\)\\s*\\)?\\s*\\n```")
+
+	reTrailingJSONPlan = regexp.MustCompile(
+		`(?s)\n\s*\{\s*\n?\s*"summary"\s*:\s*"[\s\S]*?"steps"\s*:\s*\[[\s\S]*?\]\s*,[\s\S]*?\}\s*$`)
 
 	// ── Preamble patterns ───────────────────────────────────────────────
 
@@ -278,6 +281,7 @@ func sanitizeGemini(text string) string {
 	c = reGeminiPythonToolCall.ReplaceAllString(c, "")
 	c = reGeminiEmptyFence.ReplaceAllString(c, "")
 	c = reGeminiFencedToolCall.ReplaceAllString(c, "")
+	c = reTrailingJSONPlan.ReplaceAllString(c, "")
 	return c
 }
 
@@ -303,6 +307,8 @@ func sanitizeShared(text string) string {
 	c = reKnownParamTags.ReplaceAllString(c, "")
 	c = reUUIDLine.ReplaceAllString(c, "")
 	c = reToolCallID.ReplaceAllString(c, "")
+
+	c = reTrailingJSONPlan.ReplaceAllString(c, "")
 
 	// Strip preamble.
 	c = stripPreamble(c)

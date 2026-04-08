@@ -115,6 +115,13 @@ export function sanitizeLLMContent(raw: string, provider?: string): string {
   // Orphaned tool-call ID lines (toolu_..., call_..., chatcmpl-...).
   cleaned = cleaned.replace(/^(?:toolu_|call_|chatcmpl-)[A-Za-z0-9_-]+\s*$/gm, "");
 
+  // Trailing raw JSON plan blob — any provider may append the report_plan
+  // tool arguments as a raw JSON object after the human-readable text.
+  cleaned = cleaned.replace(
+    /\n\s*\{\s*\n?\s*"summary"\s*:\s*"[\s\S]*?"steps"\s*:\s*\[[\s\S]*?\]\s*,[\s\S]*?\}\s*$/,
+    "",
+  );
+
   // Strip conversational preamble ("Ok I am the orchestrator…", etc.).
   cleaned = stripLLMPreamble(cleaned);
 
@@ -563,7 +570,7 @@ function sanitizeGrok(text: string): string {
   );
 
   cleaned = cleaned.replace(
-    /^(?:First|Next|Then|Finally|Now|Additionally|Furthermore),?\s+I (?:will|need to|should|am going to|'ll)\s[^\n]*$/gim,
+    /^(?:First|Next|Then|Finally|Now|Additionally|Furthermore),?\s+I(?:\s+will|\s+need\s+to|\s+should|\s+am\s+going\s+to|'ll)\s[^\n]*$/gim,
     "",
   );
 
@@ -705,6 +712,11 @@ function sanitizeGemini(text: string): string {
   // Strip the whole fenced tool call.
   cleaned = cleaned.replace(
     /```(?:python)?\s*\n(?:print\s*\(\s*)?(?:search_code|get_file_content|get_index_status|report_plan|submit_plan|create_plan|get_index)\s*\([^\n]*\)\s*\)?\s*\n```/gm,
+    "",
+  );
+
+  cleaned = cleaned.replace(
+    /\n\s*\{\s*\n?\s*"summary"\s*:\s*"[\s\S]*?"steps"\s*:\s*\[[\s\S]*?\]\s*,[\s\S]*?\}\s*$/,
     "",
   );
 
