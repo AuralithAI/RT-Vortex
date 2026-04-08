@@ -273,13 +273,87 @@ function sanitizeAnthropic(text: string): string {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. Grok
-//    Grok occasionally leaks JSON tool fragments.
+//    Grok leaks tool-call narration ("Action: Use search_code…"),
+//    repo-id UUIDs embedded in sentences, broken code fences (`` vs ```),
+//    and JSON tool fragments.
 // ─────────────────────────────────────────────────────────────────────────────
 function sanitizeGrok(text: string): string {
   let cleaned = text;
 
   // JSON tool fragments.
   cleaned = cleaned.replace(/\{"type"\s*:\s*"tool_(?:use|result)"[^}]{0,3000}\}/g, "");
+
+  // "Action:" / "Next Action:" lines describing tool invocations.
+  // e.g. "Action: Use get_index_status to check if the repository…"
+  // e.g. "Next Action: Call get_index_status for repository…"
+  cleaned = cleaned.replace(
+    /^(?:Next\s+)?Action:\s*(?:Use|Call|Execute|Run|Invoke)\s+(?:get_index_status|search_code|get_file_content|report_plan|submit_plan|create_plan|get_index)\b[^\n]*$/gim,
+    "",
+  );
+
+  // "Action: Use search_code with the above terms…" (broader match).
+  cleaned = cleaned.replace(
+    /^(?:Next\s+)?Action:\s*Use\s+\w+\s+(?:with|for|to)\s[^\n]*$/gim,
+    "",
+  );
+
+  // "Search Terms:" header followed by bare term lines — Grok lists
+  // what it would search for.
+  cleaned = cleaned.replace(
+    /^Search Terms:\s*$/gm,
+    "",
+  );
+
+  // "Assuming the repository is indexed…" conditional narration.
+  cleaned = cleaned.replace(
+    /^Assuming the repository is indexed[^\n]*$/gim,
+    "",
+  );
+
+  // Inline repo-id UUIDs inside sentences (shared rule only catches
+  // lines that are JUST a UUID — Grok embeds them in prose).
+  cleaned = cleaned.replace(
+    /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/g,
+    "",
+  );
+
+  // Broken double-backtick fences: Grok sometimes writes ``json instead
+  // of ```json. Fix them so Markdown renders properly.
+  // Opening: ``lang  →  ```lang  (only at start of line, 2 backticks not 3+)
+  cleaned = cleaned.replace(
+    /^``(?!`)(\w+)\s*$/gm,
+    "```$1",
+  );
+  // Closing: ``  →  ```  (bare double-backtick line)
+  cleaned = cleaned.replace(
+    /^``\s*$/gm,
+    "```",
+  );
+
+  // "Agents Needed:" section with a JSON array on the next line(s).
+  // Grok echoes the agents_needed parameter from report_plan.
+  cleaned = cleaned.replace(
+    /^Agents Needed:\s*\n``(?:`)?json\s*\n\[.*?\]\s*\n``(?:`)?/gm,
+    "",
+  );
+
+  // Tool-narration lines where Grok describes its intent to call tools.
+  // These appear throughout the response (not just at the top like preamble).
+  // e.g. "First, I will verify the repository index status to ensure…"
+  // e.g. "I will now proceed with the necessary tool calls to gather…"
+  // e.g. "This plan will be submitted for human review…"
+  // e.g. "Below is the structured plan based on the analysis."
+  cleaned = cleaned.replace(
+    /^(?:First, I will (?:verify|check|search|use|call|ensure|confirm|look|review|examine|inspect|investigate)|I will now proceed with (?:the|this)|This (?:plan )?will be submitted|Below is the structured plan|If there are any discrepancies|I will (?:now )?(?:proceed|submit|finalize))[^\n]*$/gim,
+    "",
+  );
+
+  // "A senior developer to…" / "A QA agent to…" — agent role descriptions
+  // that Grok echoes from the agents_needed parameter.
+  cleaned = cleaned.replace(
+    /^A (?:senior (?:developer|dev)|QA (?:agent|engineer)|(?:code|security) reviewer)\s+to\s[^\n]*$/gim,
+    "",
+  );
 
   return cleaned;
 }
