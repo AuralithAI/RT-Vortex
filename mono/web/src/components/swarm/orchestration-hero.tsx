@@ -231,7 +231,7 @@ function ModelResponseCard({
           <div className="flex items-center gap-2 py-3">
             <ThinkingVerbRotator size="sm" intervalMs={1100} />
           </div>
-        ) : succeeded ? (
+        ) : succeeded && sanitized.trim().length > 0 ? (
           <div className="relative">
             <TypewriterContent
               content={response.content}
@@ -255,6 +255,12 @@ function ModelResponseCard({
                 )}
               </button>
             )}
+          </div>
+        ) : succeeded ? (
+          <div className="py-2 text-xs text-white/40 italic">
+            {response.token_usage && response.token_usage.total_tokens > 0
+              ? `Used ${response.token_usage.total_tokens.toLocaleString()} tokens on tool calls — no text response produced.`
+              : "Tool-call only — no text content."}
           </div>
         ) : (
           <div className="flex items-center gap-2 py-1 text-sm text-red-400">

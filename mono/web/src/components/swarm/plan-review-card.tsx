@@ -141,11 +141,30 @@ function splitOverstuffedStep(desc: string): PlanStep[] {
 function normalisePlan(plan: PlanDocument): PlanDocument {
   // ── Defensive defaults — backend may send partial / malformed data ────
   let summary = typeof plan.summary === "string" ? plan.summary : "";
+
+  // Accept step objects with either "description" or "step" key (the backend
+  // may use either depending on the LLM provider that generated the plan).
   let steps: PlanStep[] = Array.isArray(plan.steps)
-    ? plan.steps.filter(
-        (s): s is PlanStep =>
-          typeof s === "object" && s !== null && typeof s.description === "string",
-      )
+    ? (plan.steps
+        .map((s: unknown) => {
+          if (typeof s === "string") return { description: s };
+          if (typeof s === "object" && s !== null) {
+            const obj = s as Record<string, unknown>;
+            const desc =
+              (typeof obj.description === "string" ? obj.description : undefined) ||
+              (typeof obj.step === "string" ? obj.step : undefined) ||
+              (typeof obj.title === "string" ? obj.title : undefined) ||
+              (typeof obj.action === "string" ? obj.action : undefined);
+            if (desc) {
+              return {
+                description: desc,
+                files: Array.isArray(obj.files) ? obj.files : undefined,
+              } as PlanStep;
+            }
+          }
+          return null;
+        })
+        .filter((s): s is PlanStep => s !== null))
     : [];
   const affected_files: string[] = Array.isArray(plan.affected_files)
     ? plan.affected_files.filter((f): f is string => typeof f === "string")
@@ -182,6 +201,7 @@ function normalisePlan(plan: PlanDocument): PlanDocument {
                     return {
                       description:
                         (obj.description as string) ||
+                        (obj.step as string) ||
                         (obj.title as string) ||
                         (obj.action as string) ||
                         JSON.stringify(s),
@@ -222,6 +242,22 @@ function normalisePlan(plan: PlanDocument): PlanDocument {
     ...step,
     description: stripPreamble(step.description),
   }));
+
+  // Deduplicate steps — some providers send the same step twice with minor
+  // formatting differences (e.g. with/without backticks). Normalise to
+  // plain text for comparison and keep only the first (richer) variant.
+  const seenNormalised = new Set<string>();
+  steps = steps.filter((step) => {
+    // Strip backticks, extra whitespace, and lowercase for comparison.
+    const key = step.description
+      .replace(/`/g, "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+    if (seenNormalised.has(key)) return false;
+    seenNormalised.add(key);
+    return true;
+  });
 
   return { summary, steps, affected_files, estimated_complexity, agents_needed };
 }

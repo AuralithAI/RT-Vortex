@@ -273,9 +273,14 @@ function ProviderTile({
                 provider={response.provider}
               />
             ) : (
-              <p className="text-xs italic text-muted-foreground">
-                (tool-call only — no text content)
-              </p>
+              <div className="flex items-center gap-2 py-1">
+                <Cpu className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                <p className="text-xs italic text-muted-foreground">
+                  {response.token_usage && response.token_usage.total_tokens > 0
+                    ? `Used ${response.token_usage.total_tokens.toLocaleString()} tokens on tool calls — no text response produced`
+                    : "Tool-call only — no text content"}
+                </p>
+              </div>
             )}
           </div>
         ) : (
