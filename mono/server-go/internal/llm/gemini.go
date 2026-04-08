@@ -98,10 +98,15 @@ type geminiFuncResp struct {
 }
 
 type geminiGenerationCfg struct {
-	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
-	Temperature     float64  `json:"temperature,omitempty"`
-	TopP            float64  `json:"topP,omitempty"`
-	StopSequences   []string `json:"stopSequences,omitempty"`
+	MaxOutputTokens int                `json:"maxOutputTokens,omitempty"`
+	Temperature     float64            `json:"temperature,omitempty"`
+	TopP            float64            `json:"topP,omitempty"`
+	StopSequences   []string           `json:"stopSequences,omitempty"`
+	ThinkingConfig  *geminiThinkingCfg `json:"thinkingConfig,omitempty"`
+}
+
+type geminiThinkingCfg struct {
+	ThinkingBudget int `json:"thinkingBudget"`
 }
 
 type geminiResponse struct {
@@ -114,6 +119,7 @@ type geminiResponse struct {
 	UsageMetadata struct {
 		PromptTokenCount     int `json:"promptTokenCount"`
 		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		ThoughtsTokenCount   int `json:"thoughtsTokenCount"`
 		TotalTokenCount      int `json:"totalTokenCount"`
 	} `json:"usageMetadata"`
 	ModelVersion string `json:"modelVersion"`
@@ -223,6 +229,28 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		geminiTools = []geminiToolDeclarations{{FunctionDeclarations: decls}}
 	}
 
+	// Build thinking config — Gemini 2.5 models use "thinking" (internal
+	// reasoning) that consumes the maxOutputTokens budget. Without a cap,
+	// the model can spend ALL output tokens on thinking, hit MAX_TOKENS,
+	// and produce zero actual content or function calls. We cap thinking
+	// at 25% of the output budget so the model has room to respond.
+	var thinkingCfg *geminiThinkingCfg
+	if strings.Contains(model, "2.5") {
+		budget := req.MaxTokens / 4
+		if budget < 1024 {
+			budget = 1024
+		}
+		if budget > 8192 {
+			budget = 8192
+		}
+		thinkingCfg = &geminiThinkingCfg{ThinkingBudget: budget}
+		slog.Debug("gemini: capping thinking budget",
+			"model", model,
+			"max_output_tokens", req.MaxTokens,
+			"thinking_budget", budget,
+		)
+	}
+
 	body := geminiRequest{
 		Contents:       contents,
 		SystemInstruct: systemInstruct,
@@ -232,6 +260,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			Temperature:     req.Temperature,
 			TopP:            req.TopP,
 			StopSequences:   req.Stop,
+			ThinkingConfig:  thinkingCfg,
 		},
 	}
 
@@ -301,6 +330,25 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		finishReason = "tool_calls"
 	}
 
+	// Log thinking token usage for observability — Gemini 2.5 models can
+	// spend significant output budget on internal reasoning.
+	if gr.UsageMetadata.ThoughtsTokenCount > 0 {
+		slog.Info("gemini: thinking tokens consumed",
+			"model", model,
+			"thoughts_tokens", gr.UsageMetadata.ThoughtsTokenCount,
+			"candidates_tokens", gr.UsageMetadata.CandidatesTokenCount,
+			"total_tokens", gr.UsageMetadata.TotalTokenCount,
+			"finish_reason", finishReason,
+		)
+	}
+
+	// Report completion tokens = candidates + thoughts so callers
+	// (and the UI) see the real output token spend.
+	completionTokens := gr.UsageMetadata.CandidatesTokenCount
+	if completionTokens == 0 && gr.UsageMetadata.ThoughtsTokenCount > 0 {
+		completionTokens = gr.UsageMetadata.ThoughtsTokenCount
+	}
+
 	return &CompletionResponse{
 		Content:      textContent,
 		Model:        model,
@@ -308,7 +356,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		ToolCalls:    toolCalls,
 		Usage: Usage{
 			PromptTokens:     gr.UsageMetadata.PromptTokenCount,
-			CompletionTokens: gr.UsageMetadata.CandidatesTokenCount,
+			CompletionTokens: completionTokens,
 			TotalTokens:      gr.UsageMetadata.TotalTokenCount,
 		},
 	}, nil
@@ -448,6 +496,19 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 		geminiTools = []geminiToolDeclarations{{FunctionDeclarations: decls}}
 	}
 
+	// Cap thinking budget for 2.5 models (same logic as Complete).
+	var thinkingCfg *geminiThinkingCfg
+	if strings.Contains(model, "2.5") {
+		budget := req.MaxTokens / 4
+		if budget < 1024 {
+			budget = 1024
+		}
+		if budget > 8192 {
+			budget = 8192
+		}
+		thinkingCfg = &geminiThinkingCfg{ThinkingBudget: budget}
+	}
+
 	body := geminiRequest{
 		Contents:       contents,
 		SystemInstruct: systemInstruct,
@@ -457,6 +518,7 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 			Temperature:     req.Temperature,
 			TopP:            req.TopP,
 			StopSequences:   req.Stop,
+			ThinkingConfig:  thinkingCfg,
 		},
 	}
 
