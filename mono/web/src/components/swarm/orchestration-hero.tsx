@@ -25,7 +25,6 @@ import {
 } from "lucide-react";
 import { getProviderMeta } from "@/lib/llm-providers";
 import { sanitizeLLMContent } from "@/lib/sanitize-llm-content";
-import { useTypewriter } from "@/hooks/use-typewriter";
 import { LLMMarkdown } from "@/components/ui/llm-markdown";
 import {
   OpenAIIcon,
@@ -124,7 +123,6 @@ type CardStatus = "thinking" | "streaming" | "complete" | "failed";
 function TypewriterContent({
   content,
   expanded,
-  isNew,
   provider,
 }: {
   content: string;
@@ -132,23 +130,18 @@ function TypewriterContent({
   isNew: boolean;
   provider?: string;
 }) {
-  const sanitized = sanitizeLLMContent(content, provider);
-  const previewText =
+  const sanitized = useMemo(
+    () => sanitizeLLMContent(content, provider),
+    [content, provider],
+  );
+  const displayText =
     sanitized.length > 220 && !expanded
       ? sanitized.slice(0, 220) + "…"
       : sanitized;
 
-  const { displayedText, isTyping } = useTypewriter(previewText, {
-    intervalMs: 28,
-    instant: !isNew,
-  });
-
   return (
     <div className="relative">
-      <LLMMarkdown content={displayedText} variant="dark" />
-      {isTyping && (
-        <span className="inline-block w-[2px] h-[14px] bg-blue-400 ml-0.5 animate-pulse align-text-bottom" />
-      )}
+      <LLMMarkdown content={displayText} variant="dark" />
     </div>
   );
 }
@@ -397,6 +390,68 @@ function BroadcastStatsBar({
   );
 }
 
+// ─── Synthesis / Selected Answer (with expand/collapse) ─────────────────────
+
+const SYNTHESIS_PREVIEW_LEN = 600;
+
+function SynthesisBlock({
+  synthesis,
+  synthesisProvider,
+}: {
+  synthesis: string;
+  synthesisProvider?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const sanitized = sanitizeLLMContent(synthesis, synthesisProvider);
+  const needsTruncation = sanitized.length > SYNTHESIS_PREVIEW_LEN;
+  const displayContent =
+    needsTruncation && !expanded
+      ? sanitized.slice(0, SYNTHESIS_PREVIEW_LEN) + "…"
+      : sanitized;
+
+  return (
+    <div className="relative overflow-hidden rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.08] p-5">
+      <div className="absolute -right-10 -top-10 h-28 w-28 rounded-full bg-emerald-500/5 blur-3xl" />
+      <div className="relative flex items-start gap-3">
+        <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-500/20">
+          <Sparkles className="h-4 w-4 text-emerald-400" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-sm font-semibold text-emerald-300">
+              Selected Answer
+            </span>
+            {synthesisProvider && (
+              <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-300 border border-emerald-500/20">
+                via {getProviderMeta(synthesisProvider).displayName}
+              </span>
+            )}
+          </div>
+          <div className="max-h-[800px] overflow-y-auto">
+            <LLMMarkdown content={displayContent} variant="dark" />
+          </div>
+          {needsTruncation && (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="mt-2 flex items-center gap-1 text-xs font-medium text-emerald-400 hover:text-emerald-300 transition-colors"
+            >
+              {expanded ? (
+                <>
+                  <ChevronUp className="h-3 w-3" /> Collapse
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="h-3 w-3" /> Show full answer
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Single Discussion Thread (hero layout) ─────────────────────────────────
 
 function ThreadHero({
@@ -505,33 +560,10 @@ function ThreadHero({
 
       {/* Synthesis / selected answer */}
       {thread.synthesis && (
-        <div className="relative overflow-hidden rounded-2xl border border-emerald-500/20 bg-emerald-500/[0.08] p-5">
-          <div className="absolute -right-10 -top-10 h-28 w-28 rounded-full bg-emerald-500/5 blur-3xl" />
-          <div className="relative flex items-start gap-3">
-            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-500/20">
-              <Sparkles className="h-4 w-4 text-emerald-400" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="mb-2 flex items-center gap-2">
-                <span className="text-sm font-semibold text-emerald-300">
-                  Selected Answer
-                </span>
-                {thread.synthesis_provider && (
-                  <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-medium text-emerald-300 border border-emerald-500/20">
-                    via {getProviderMeta(thread.synthesis_provider).displayName}
-                  </span>
-                )}
-              </div>
-              <LLMMarkdown
-                content={(() => {
-                  const s = sanitizeLLMContent(thread.synthesis!, thread.synthesis_provider);
-                  return s.length > 600 ? s.slice(0, 600) + "…" : s;
-                })()}
-                variant="dark"
-              />
-            </div>
-          </div>
-        </div>
+        <SynthesisBlock
+          synthesis={thread.synthesis}
+          synthesisProvider={thread.synthesis_provider}
+        />
       )}
     </div>
   );

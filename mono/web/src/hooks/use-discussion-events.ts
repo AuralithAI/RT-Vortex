@@ -192,6 +192,18 @@ export function useDiscussionEvents(events: SwarmWsEvent[]): DiscussionState {
               existing.provider_count = fullThread.provider_count ?? existing.responses.length;
               existing.success_count = fullThread.success_count ?? existing.responses.filter((r) => !r.error).length;
             }
+
+            // Clean up any stale _streaming placeholders that never
+            // received a provider_response (e.g. WS dropped the event).
+            // Once the thread is complete all providers have finished,
+            // so a placeholder with no content is a lost response.
+            existing.responses = existing.responses.filter(
+              (r) => !(r as ProviderResponseData & { _streaming?: boolean })._streaming || r.content,
+            );
+            existing.provider_count = existing.responses.length;
+            existing.success_count = existing.responses.filter(
+              (r) => !r.error,
+            ).length;
           }
           break;
         }

@@ -295,7 +295,8 @@ func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*Probe
 				}
 
 				result.LatencyMs = time.Since(provStart).Milliseconds()
-				result.Content = contentBuf.String()
+				rawContent := contentBuf.String()
+				result.Content = SanitizeLLMContent(rawContent, e.Provider)
 				result.FinishReason = lastChunk.FinishReason
 				result.ToolCalls = lastChunk.ToolCalls
 				if lastChunk.Model != "" {
@@ -313,7 +314,8 @@ func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*Probe
 					"provider", e.Provider,
 					"model", result.Model,
 					"latency_ms", result.LatencyMs,
-					"content_len", contentBuf.Len(),
+					"raw_content_len", len(rawContent),
+					"sanitized_content_len", len(result.Content),
 					"tokens", result.Usage.TotalTokens,
 				)
 				SwarmProbeProviderLatency.WithLabelValues(e.Provider, "ok").Observe(float64(result.LatencyMs) / 1000.0)
@@ -361,7 +363,7 @@ func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*Probe
 				)
 				SwarmProbeProviderLatency.WithLabelValues(e.Provider, "error").Observe(float64(result.LatencyMs) / 1000.0)
 			} else {
-				result.Content = resp.Content
+				result.Content = SanitizeLLMContent(resp.Content, e.Provider)
 				result.Model = resp.Model
 				result.FinishReason = resp.FinishReason
 				result.ToolCalls = resp.ToolCalls

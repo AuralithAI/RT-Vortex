@@ -167,6 +167,63 @@ function ProviderResponseCard({
   );
 }
 
+// ── Synthesis Footer (with expand/collapse) ─────────────────────────────────
+
+const SYNTHESIS_PREVIEW_LEN = 500;
+
+function DiscussionSynthesisFooter({
+  synthesis,
+  synthesisProvider,
+}: {
+  synthesis: string;
+  synthesisProvider?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const sanitized = sanitizeLLMContent(synthesis, synthesisProvider);
+  const needsTruncation = sanitized.length > SYNTHESIS_PREVIEW_LEN;
+  const displayContent =
+    needsTruncation && !expanded
+      ? sanitized.slice(0, SYNTHESIS_PREVIEW_LEN) + "…"
+      : sanitized;
+
+  return (
+    <div className="rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800 dark:bg-green-950/30">
+      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-green-700 dark:text-green-300">
+        <Sparkles className="h-3 w-3" />
+        Selected Answer
+        {synthesisProvider && (
+          <span className="ml-1 rounded bg-green-200/60 px-1 py-0.5 text-[10px] dark:bg-green-800/40">
+            from {getProviderMeta(synthesisProvider).displayName}
+          </span>
+        )}
+      </div>
+      <div className="max-h-[600px] overflow-y-auto">
+        <LLMMarkdown
+          content={displayContent}
+          variant="light"
+          className="text-xs"
+        />
+      </div>
+      {needsTruncation && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300 transition-colors"
+        >
+          {expanded ? (
+            <>
+              <ChevronUp className="h-3 w-3" /> Collapse
+            </>
+          ) : (
+            <>
+              <ChevronDown className="h-3 w-3" /> Show full answer
+            </>
+          )}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── Discussion Thread ───────────────────────────────────────────────────────
 
 function DiscussionThreadCard({
@@ -240,25 +297,10 @@ function DiscussionThreadCard({
 
           {/* Synthesis footer */}
           {thread.synthesis && (
-            <div className="rounded-lg border border-green-200 bg-green-50 p-3 dark:border-green-800 dark:bg-green-950/30">
-              <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-green-700 dark:text-green-300">
-                <Sparkles className="h-3 w-3" />
-                Selected Answer
-                {thread.synthesis_provider && (
-                  <span className="ml-1 rounded bg-green-200/60 px-1 py-0.5 text-[10px] dark:bg-green-800/40">
-                    from {getProviderMeta(thread.synthesis_provider).displayName}
-                  </span>
-                )}
-              </div>
-              <LLMMarkdown
-                content={(() => {
-                  const s = sanitizeLLMContent(thread.synthesis, thread.synthesis_provider);
-                  return s.length > 500 ? s.slice(0, 500) + "…" : s;
-                })()}
-                variant="light"
-                className="text-xs"
-              />
-            </div>
+            <DiscussionSynthesisFooter
+              synthesis={thread.synthesis}
+              synthesisProvider={thread.synthesis_provider}
+            />
           )}
         </div>
       )}
