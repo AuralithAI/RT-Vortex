@@ -27,6 +27,8 @@ import {
   Wand2,
 } from "lucide-react";
 import { getProviderMeta } from "@/lib/llm-providers";
+import { sanitizeLLMContent } from "@/lib/sanitize-llm-content";
+import { LLMMarkdown } from "@/components/ui/llm-markdown";
 import type {
   DiscussionThreadData,
   ProviderResponseData,
@@ -119,10 +121,11 @@ function ProviderTile({
   const [expanded, setExpanded] = useState(false);
   const meta = getProviderMeta(response.provider);
   const succeeded = !response.error;
+  const sanitized = sanitizeLLMContent(response.content);
   const contentPreview =
-    response.content.length > 400 && !expanded
-      ? response.content.slice(0, 400) + "…"
-      : response.content;
+    sanitized.length > 400 && !expanded
+      ? sanitized.slice(0, 400) + "…"
+      : sanitized;
 
   return (
     <div
@@ -191,24 +194,36 @@ function ProviderTile({
           </div>
         ) : succeeded ? (
           <div className="relative">
-            <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-foreground/90">
-              {contentPreview}
-            </pre>
-            {response.content.length > 400 && (
-              <button
-                onClick={() => setExpanded(!expanded)}
-                className="mt-2 flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
-              >
-                {expanded ? (
-                  <>
-                    <ChevronUp className="h-3 w-3" /> Collapse
-                  </>
-                ) : (
-                  <>
-                    <ChevronDown className="h-3 w-3" /> Show full response ({response.content.length} chars)
-                  </>
+            {sanitized ? (
+              <>
+                <div className="max-h-[500px] overflow-y-auto">
+                  <LLMMarkdown
+                    content={contentPreview}
+                    variant="light"
+                    className="text-[13px] leading-relaxed"
+                  />
+                </div>
+                {sanitized.length > 400 && (
+                  <button
+                    onClick={() => setExpanded(!expanded)}
+                    className="mt-2 flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
+                  >
+                    {expanded ? (
+                      <>
+                        <ChevronUp className="h-3 w-3" /> Collapse
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="h-3 w-3" /> Show full response ({sanitized.length} chars)
+                      </>
+                    )}
+                  </button>
                 )}
-              </button>
+              </>
+            ) : (
+              <p className="text-xs italic text-muted-foreground">
+                (tool-call only — no text content)
+              </p>
             )}
           </div>
         ) : (
@@ -391,13 +406,18 @@ function SynthesisBlock({
   synthesisProvider?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const sanitized = sanitizeLLMContent(synthesis);
   const displayContent =
-    synthesis.length > 600 && !expanded
-      ? synthesis.slice(0, 600) + "…"
-      : synthesis;
+    sanitized.length > 600 && !expanded
+      ? sanitized.slice(0, 600) + "…"
+      : sanitized;
   const providerMeta = synthesisProvider
     ? getProviderMeta(synthesisProvider)
     : null;
+
+  if (!sanitized) {
+    return null;
+  }
 
   return (
     <div className="relative overflow-hidden rounded-xl border-2 border-green-200 bg-gradient-to-br from-green-50 to-emerald-50/50 p-4 dark:border-green-800/60 dark:from-green-950/30 dark:to-emerald-950/20">
@@ -421,11 +441,15 @@ function SynthesisBlock({
           )}
         </div>
 
-        <pre className="whitespace-pre-wrap font-sans text-[13px] leading-relaxed text-foreground/90">
-          {displayContent}
-        </pre>
+        <div className="max-h-[600px] overflow-y-auto">
+          <LLMMarkdown
+            content={displayContent}
+            variant="light"
+            className="text-[13px] leading-relaxed"
+          />
+        </div>
 
-        {synthesis.length > 600 && (
+        {sanitized.length > 600 && (
           <button
             onClick={() => setExpanded(!expanded)}
             className="mt-2 flex items-center gap-1 text-xs font-medium text-green-600 hover:text-green-700 dark:text-green-400 dark:hover:text-green-300"

@@ -133,6 +133,8 @@ Use `report_plan` to submit a structured plan with:
 
         final_output = output_parts[-1] if output_parts else "Plan submitted."
 
+        final_output = self._strip_preamble(final_output)
+
         # Fallback: if the LLM never called report_plan (e.g. truncation lost
         # the tool call, or the model wrote the plan as text), try to extract
         # a structured plan from the last assistant message.
@@ -147,11 +149,51 @@ Use `report_plan` to submit a structured plan with:
         )
 
     @staticmethod
+    def _strip_preamble(text: str) -> str:
+        """Remove conversational preamble from LLM output.
+
+        Some models (especially Grok) prefix their responses with lines like
+        ``"Ok, I am the orchestrator agent and here is my plan..."`` or similar
+        self-introductions before the actual content.  Strip those.
+        """
+        lines = text.split("\n")
+        stripped: list[str] = []
+        past_preamble = False
+        for line in lines:
+            if not past_preamble:
+                lower = line.strip().lower()
+                # Skip blank lines at the very top.
+                if not lower:
+                    continue
+                # Detect preamble patterns — conversational self-intro lines.
+                if re.match(
+                    r"^(ok[,.]?\s+)?(i am|i'm|as)\s+(the\s+)?(an?\s+)?orchestrator",
+                    lower,
+                ):
+                    continue
+                if re.match(
+                    r"^(ok[,.]?\s+)?(let me|i'll|i will)\s+(start|begin|create|produce|analyze|analyse)",
+                    lower,
+                ):
+                    continue
+                if re.match(r"^(sure|alright|certainly|understood)[,!.]", lower):
+                    continue
+                # If we get here, the line is real content.
+                past_preamble = True
+            stripped.append(line)
+        return "\n".join(stripped).strip() if stripped else text
+
+    @staticmethod
     def _extract_plan_from_text(text: str) -> dict | None:
         """Best-effort extraction of a plan from free-form assistant text.
 
-        Looks for JSON blocks first, then falls back to treating the entire
-        text as a summary with a single step.
+        The function tries, in order:
+        1. Embedded JSON code blocks that look like a plan.
+        2. Embedded JSON code blocks that look like a *steps* array.
+        3. Markdown-section parsing (### Summary, ### Steps, etc.).
+        4. Numbered/bulleted list extraction as steps.
+        5. Final fallback — split on paragraphs so we never stuff the entire
+           response into a single step.
 
         Returns:
             A plan dict, or ``None`` if the text is too short to be useful.
@@ -159,15 +201,18 @@ Use `report_plan` to submit a structured plan with:
         if not text or len(text) < 50:
             return None
 
-        # Try to find an embedded JSON plan object.
+        # ── 1. Try to find an embedded JSON plan object ──────────────────
         json_blocks = re.findall(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
         for block in json_blocks:
             try:
                 candidate = json.loads(block)
                 if "summary" in candidate or "steps" in candidate:
+                    raw_steps = candidate.get("steps", [])
+                    from ..tools.task_tools import _normalize_step
+                    steps = [_normalize_step(s) for s in raw_steps] if raw_steps else []
                     return {
                         "summary": candidate.get("summary", text[:200]),
-                        "steps": candidate.get("steps", [{"description": text[:500]}]),
+                        "steps": steps or [{"description": text[:500]}],
                         "affected_files": candidate.get("affected_files", []),
                         "estimated_complexity": candidate.get("estimated_complexity", "medium"),
                         "agents_needed": candidate.get("agents_needed", []),
@@ -175,13 +220,270 @@ Use `report_plan` to submit a structured plan with:
             except (json.JSONDecodeError, TypeError):
                 continue
 
-        # Fallback: use the text itself as the plan summary.  The LLM
-        # clearly produced planning output; losing it because it skipped a
-        # tool call shouldn't fail the entire task.
+        # ── 2. Try to find a JSON array of steps ─────────────────────────
+        json_arrays = re.findall(r'```(?:json)?\s*(\[.*?\])\s*```', text, re.DOTALL)
+        for block in json_arrays:
+            try:
+                candidate = json.loads(block)
+                if isinstance(candidate, list) and len(candidate) > 0:
+                    from ..tools.task_tools import _normalize_step
+                    steps = [_normalize_step(s) for s in candidate]
+                    # Use text before the code block as summary.
+                    pre = text[:text.find("```")].strip()
+                    summary = pre[:500] if pre else "Implementation plan"
+                    return {
+                        "summary": summary,
+                        "steps": steps,
+                        "affected_files": [],
+                        "estimated_complexity": "medium",
+                        "agents_needed": [],
+                    }
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+        # ── 3. Parse Markdown sections ───────────────────────────────────
+        plan = OrchestratorAgent._extract_from_markdown_sections(text)
+        if plan:
+            return plan
+
+        # ── 4. Extract numbered/bulleted steps from the text ─────────────
+        plan = OrchestratorAgent._extract_numbered_steps(text)
+        if plan:
+            return plan
+
+        # ── 5. Final fallback — split into paragraph-sized steps ─────────
+        paragraphs = [p.strip() for p in re.split(r'\n{2,}', text) if p.strip()]
+        if len(paragraphs) > 1:
+            summary = paragraphs[0][:500]
+            steps = [{"description": p[:1000]} for p in paragraphs[1:]]
+            return {
+                "summary": summary,
+                "steps": steps or [{"description": text[:500]}],
+                "affected_files": [],
+                "estimated_complexity": "medium",
+                "agents_needed": [],
+            }
+
+        # Single paragraph fallback.
         return {
             "summary": text[:500],
-            "steps": [{"description": text}],
+            "steps": [{"description": text[:1000]}],
             "affected_files": [],
             "estimated_complexity": "medium",
             "agents_needed": [],
         }
+
+    @staticmethod
+    def _extract_from_markdown_sections(text: str) -> dict | None:
+        """Parse markdown-structured plan text into a plan dict.
+
+        Recognises headings like:
+        - ``### Summary`` / ``## Summary``
+        - ``### Implementation Plan`` / ``### Steps`` / ``### Plan``
+        - ``### Affected Files``
+        - ``### Estimated Complexity``
+        - ``### Agents Needed``
+        """
+        # Split on markdown headings (##, ###, ####) preserving the heading text.
+        section_pattern = re.compile(r'^#{2,4}\s+(.+)$', re.MULTILINE)
+        headings = list(section_pattern.finditer(text))
+
+        if len(headings) < 2:
+            return None  # Not enough structure to parse.
+
+        sections: dict[str, str] = {}
+        for i, match in enumerate(headings):
+            title = match.group(1).strip().lower()
+            # Normalise common heading variants.
+            for key in ("summary", "implementation plan", "plan", "steps",
+                        "affected files", "estimated complexity",
+                        "agents needed", "agents", "complexity"):
+                if key in title:
+                    start = match.end()
+                    end = headings[i + 1].start() if i + 1 < len(headings) else len(text)
+                    sections[key] = text[start:end].strip()
+                    break
+
+        if not sections:
+            return None
+
+        # ── Summary ──────────────────────────────────────────────────────
+        summary = sections.get("summary", "")
+        if not summary:
+            # Use text before the first heading as summary.
+            summary = text[:headings[0].start()].strip()
+        summary = summary[:500]
+
+        # ── Steps ────────────────────────────────────────────────────────
+        steps_text = (
+            sections.get("implementation plan")
+            or sections.get("plan")
+            or sections.get("steps")
+            or ""
+        )
+        steps = OrchestratorAgent._parse_steps_text(steps_text)
+
+        # ── Affected files ───────────────────────────────────────────────
+        files_text = sections.get("affected files", "")
+        affected_files = OrchestratorAgent._extract_file_paths(files_text)
+
+        # ── Complexity ───────────────────────────────────────────────────
+        complexity_text = (sections.get("estimated complexity") or sections.get("complexity") or "").lower()
+        if "small" in complexity_text:
+            complexity = "small"
+        elif "large" in complexity_text:
+            complexity = "large"
+        else:
+            complexity = "medium"
+
+        # ── Agents needed ────────────────────────────────────────────────
+        agents_text = sections.get("agents needed") or sections.get("agents") or ""
+        agents_needed = OrchestratorAgent._extract_agents(agents_text)
+
+        if not steps and not summary:
+            return None
+
+        return {
+            "summary": summary or "Implementation plan",
+            "steps": steps or [{"description": summary or "See plan details"}],
+            "affected_files": affected_files,
+            "estimated_complexity": complexity,
+            "agents_needed": agents_needed,
+        }
+
+    @staticmethod
+    def _extract_numbered_steps(text: str) -> dict | None:
+        """Extract numbered or bulleted list items as plan steps."""
+        # Match lines starting with "1.", "2.", "- ", "* ", etc.
+        step_pattern = re.compile(
+            r'^(?:\d+[\.\)]\s+|\-\s+|\*\s+)(.+?)(?=\n(?:\d+[\.\)]\s+|\-\s+|\*\s+)|\Z)',
+            re.MULTILINE | re.DOTALL,
+        )
+        matches = step_pattern.findall(text)
+        if len(matches) < 2:
+            return None  # Need at least 2 items to call it a list.
+
+        steps = [{"description": m.strip()[:1000]} for m in matches if m.strip()]
+
+        # Use text before the first list item as the summary.
+        first_match = step_pattern.search(text)
+        summary = text[:first_match.start()].strip()[:500] if first_match else text[:200]
+
+        return {
+            "summary": summary or "Implementation plan",
+            "steps": steps,
+            "affected_files": [],
+            "estimated_complexity": "medium",
+            "agents_needed": [],
+        }
+
+    @staticmethod
+    def _parse_steps_text(text: str) -> list[dict]:
+        """Parse a steps section into individual step dicts.
+
+        Handles:
+        - Numbered lists (``1. Do X``, ``2. Do Y``)
+        - Bulleted lists (``- Do X``, ``* Do Y``)
+        - JSON arrays embedded in the section
+        """
+        if not text:
+            return []
+
+        # Try JSON array first.
+        json_match = re.search(r'```(?:json)?\s*(\[.*?\])\s*```', text, re.DOTALL)
+        if json_match:
+            try:
+                arr = json.loads(json_match.group(1))
+                if isinstance(arr, list):
+                    from ..tools.task_tools import _normalize_step
+                    return [_normalize_step(s) for s in arr]
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Try bare JSON array (no code fence).
+        bare_match = re.search(r'\[[\s\S]*\]', text)
+        if bare_match:
+            try:
+                arr = json.loads(bare_match.group(0))
+                if isinstance(arr, list) and len(arr) > 0 and isinstance(arr[0], (dict, str)):
+                    from ..tools.task_tools import _normalize_step
+                    return [_normalize_step(s) for s in arr]
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Parse numbered/bulleted list items, each potentially multi-line.
+        lines = text.split("\n")
+        steps: list[dict] = []
+        current: list[str] = []
+
+        for line in lines:
+            stripped = line.strip()
+            # New numbered/bulleted item?
+            if re.match(r'^(\d+[\.\)]\s+|\-\s+|\*\s+)', stripped):
+                if current:
+                    desc = " ".join(current).strip()
+                    if desc:
+                        steps.append({"description": desc[:1000]})
+                # Remove the bullet/number prefix.
+                cleaned = re.sub(r'^(\d+[\.\)]\s+|\-\s+|\*\s+)', '', stripped)
+                current = [cleaned]
+            elif stripped and current:
+                current.append(stripped)
+            elif not stripped and current:
+                # Blank line ends the current item.
+                desc = " ".join(current).strip()
+                if desc:
+                    steps.append({"description": desc[:1000]})
+                current = []
+
+        # Flush last item.
+        if current:
+            desc = " ".join(current).strip()
+            if desc:
+                steps.append({"description": desc[:1000]})
+
+        return steps
+
+    @staticmethod
+    def _extract_file_paths(text: str) -> list[str]:
+        """Extract file paths from an 'Affected Files' section."""
+        if not text:
+            return []
+        files: list[str] = []
+        for line in text.split("\n"):
+            stripped = line.strip()
+            # Remove bullets/numbers.
+            cleaned = re.sub(r'^(\d+[\.\)]\s+|\-\s+|\*\s+|`)', '', stripped).rstrip('`').strip()
+            # Looks like a file path?
+            if cleaned and "/" in cleaned and " " not in cleaned:
+                files.append(cleaned)
+            elif cleaned and re.match(r'^[\w\-\.]+\.\w+$', cleaned):
+                # Bare filename like "server.go".
+                files.append(cleaned)
+        return files
+
+    @staticmethod
+    def _extract_agents(text: str) -> list[str]:
+        """Extract agent role names from an 'Agents Needed' section."""
+        if not text:
+            return []
+        known_roles = {
+            "senior_dev", "junior_dev", "qa", "security",
+            "architect", "devops", "ui_ux", "docs", "ops",
+        }
+        agents: list[str] = []
+        # Try JSON array.
+        json_match = re.search(r'\[.*?\]', text, re.DOTALL)
+        if json_match:
+            try:
+                arr = json.loads(json_match.group(0))
+                if isinstance(arr, list):
+                    return [str(a) for a in arr]
+            except (json.JSONDecodeError, TypeError):
+                pass
+        # Scan for known roles.
+        lower = text.lower()
+        for role in known_roles:
+            if role in lower or role.replace("_", " ") in lower:
+                agents.append(role)
+        return agents
