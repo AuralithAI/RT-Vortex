@@ -34,6 +34,37 @@ export function sanitizeLLMContent(raw: string): string {
   //    e.g. "<invoke name="workspace_search">" or "<invoke name="workspace_list_dir">"
   cleaned = cleaned.replace(/<invoke\s+name="workspace_[^"]*"[^>]*>[\s\S]*?<\/invoke>/g, "");
 
+  // 5b. Remove ANY XML tag that looks like a tool/function invocation.
+  //     LLMs (Claude, Gemini, Grok) echo tool calls as XML in their text
+  //     stream.  Tool tags always use snake_case names (search_code,
+  //     get_file_content, report_plan, etc.) which are never valid HTML or
+  //     Markdown.  This generic approach catches all current and future tool
+  //     names without maintaining an explicit list.
+  //
+  //     Pattern: <word_word> ... </word_word>  (snake_case, paired)
+  //              <word_word> ... $              (unclosed / trailing)
+  //              <word_word />                  (self-closing)
+  //              </word_word>                   (orphaned closing tag)
+  //
+  //     Excludes single-word tags that could be HTML (p, div, span, etc.)
+  //     by requiring at least one underscore in the tag name.
+  // Paired: <search_code>...</search_code>
+  cleaned = cleaned.replace(/<([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*>[\s\S]*?<\/\1\s*>/gi, "");
+  // Unclosed / trailing
+  cleaned = cleaned.replace(/<([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*>[\s\S]*$/gi, "");
+  // Self-closing: <get_index_status />
+  cleaned = cleaned.replace(/<([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*\/?>/gi, "");
+  // Orphaned closing: </search_code>
+  cleaned = cleaned.replace(/<\/([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*>/gi, "");
+
+  // Also strip single-word XML tags that are known tool parameter wrappers
+  // (query, path, instruction, etc.) — these are NOT valid HTML either.
+  // Use a small explicit set here since single-word tags overlap with HTML.
+  cleaned = cleaned.replace(
+    /<\/?(?:query|path|instruction|step_by_step_plan|affected_files|agents_needed)\s*>/gi,
+    "",
+  );
+
   // 6. Remove parameter tags (including those with content between them).
   cleaned = cleaned.replace(/<parameter[^>]*>[\s\S]*?<\/parameter>/g, "");
   cleaned = cleaned.replace(/<\/?parameter[^>]*>/g, "");
@@ -56,11 +87,31 @@ export function sanitizeLLMContent(raw: string): string {
   //     emits as text (e.g. {"type":"tool_use","id":"toolu_...",...}).
   cleaned = cleaned.replace(/\{"type"\s*:\s*"tool_(?:use|result)"[\s\S]*?\}\s*/g, "");
 
+  // 10b. Remove Gemini-style Python tool invocations that appear as text.
+  //      e.g. `print(search_code("some query"))`, `print(get_file_content("path"))`,
+  //      `print(get_index_status())`, `print(report_plan({...}))`.
+  cleaned = cleaned.replace(
+    /^print\(\s*(?:search_code|get_file_content|get_index_status|report_plan|get_index|submit_plan|create_plan)\s*\([\s\S]*?\)\s*\)\s*$/gm,
+    "",
+  );
+  // Also bare calls without print()
+  cleaned = cleaned.replace(
+    /^(?:search_code|get_file_content|get_index_status|report_plan|get_index|submit_plan|create_plan)\s*\([\s\S]*?\)\s*$/gm,
+    "",
+  );
+
   // 11. Remove lines that are only tool invocation narration from Claude
   //     e.g. "Now let me search for..." or "Let me look for..." followed by
   //     nothing useful (often the only text between stripped invoke blocks).
-  //     Only remove when the cleaned result would otherwise be mostly this.
-  //     — skip this aggressive rule; the narration may be useful to users.
+  //     Now that tool-call XML is stripped, these orphaned narration lines
+  //     are just noise.  Remove lines that are *only* tool-narration.
+  cleaned = cleaned.replace(
+    /^(?:(?:Now )?[Ll]et me (?:search|look|examine|check|find|also|now)|(?:I'll|I will) (?:search|look|examine|check|find|now)|(?:Let me also|Now I'll|Now let me)|(?:Based on (?:my|the|this)|After reviewing|After examining)).*$/gm,
+    "",
+  );
+  // Remove standalone lines that are just "python" or "```python" (Gemini
+  // echoes code-fence language markers for its internal tool calls).
+  cleaned = cleaned.replace(/^```(?:python|json|go|bash|sh)?\s*$/gm, "");
 
   // 12. Strip conversational preamble (Grok "Ok I am the orchestrator…",
   //     Gemini "Hello! As the Orchestrator agent…", etc.).

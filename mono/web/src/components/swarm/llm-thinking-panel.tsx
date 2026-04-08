@@ -29,6 +29,7 @@ import {
 import { getProviderMeta } from "@/lib/llm-providers";
 import { sanitizeLLMContent } from "@/lib/sanitize-llm-content";
 import { LLMMarkdown } from "@/components/ui/llm-markdown";
+import { useTypewriter } from "@/hooks/use-typewriter";
 import type {
   DiscussionThreadData,
   ProviderResponseData,
@@ -108,6 +109,47 @@ function ConfidenceRing({ value, size = 64 }: { value: number; size?: number }) 
 // ── Provider Response Tile ──────────────────────────────────────────────────
 // Individual card for each provider's response — shown in a grid
 
+/** Word-by-word streaming content renderer for provider tiles. */
+function TileStreamingContent({
+  content,
+  expanded,
+  isNew,
+}: {
+  content: string;
+  expanded: boolean;
+  isNew: boolean;
+}) {
+  const sanitized = sanitizeLLMContent(content);
+  const previewText =
+    sanitized.length > 400 && !expanded
+      ? sanitized.slice(0, 400) + "…"
+      : sanitized;
+
+  const { displayedText, isTyping } = useTypewriter(previewText, {
+    intervalMs: 22,
+    instant: !isNew,
+  });
+
+  return (
+    <>
+      <div className="max-h-[500px] overflow-y-auto">
+        <LLMMarkdown
+          content={displayedText}
+          variant="light"
+          className="text-[13px] leading-relaxed"
+        />
+        {isTyping && (
+          <span className="inline-block w-[2px] h-[13px] bg-blue-400 ml-0.5 animate-pulse align-text-bottom" />
+        )}
+      </div>
+      {sanitized.length > 400 && !isTyping && (
+        <></>
+        // Expand/collapse button is rendered by the parent
+      )}
+    </>
+  );
+}
+
 function ProviderTile({
   response,
   isWinner,
@@ -123,10 +165,10 @@ function ProviderTile({
   const meta = getProviderMeta(response.provider);
   const succeeded = !response.error;
   const sanitized = sanitizeLLMContent(response.content);
-  const contentPreview =
-    sanitized.length > 400 && !expanded
-      ? sanitized.slice(0, 400) + "…"
-      : sanitized;
+
+  // Content is "new" (should animate) if the thread is still active.
+  // Once all providers are done, skip animation on re-renders.
+  const isNewContent = threadStatus === "streaming" || threadStatus === "pending";
 
   return (
     <div
@@ -195,13 +237,11 @@ function ProviderTile({
           <div className="relative">
             {sanitized ? (
               <>
-                <div className="max-h-[500px] overflow-y-auto">
-                  <LLMMarkdown
-                    content={contentPreview}
-                    variant="light"
-                    className="text-[13px] leading-relaxed"
-                  />
-                </div>
+                <TileStreamingContent
+                  content={response.content}
+                  expanded={expanded}
+                  isNew={isNewContent}
+                />
                 {sanitized.length > 400 && (
                   <button
                     onClick={() => setExpanded(!expanded)}

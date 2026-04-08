@@ -120,7 +120,7 @@ function TypingDots({ className = "" }: { className?: string }) {
 
 type CardStatus = "thinking" | "streaming" | "complete" | "failed";
 
-/** Inner component that renders content with typewriter effect. */
+/** Inner component that renders content with word-by-word streaming effect. */
 function TypewriterContent({
   content,
   expanded,
@@ -137,8 +137,7 @@ function TypewriterContent({
       : sanitized;
 
   const { displayedText, isTyping } = useTypewriter(previewText, {
-    charsPerTick: 6,
-    intervalMs: 14,
+    intervalMs: 28,
     instant: !isNew,
   });
 
@@ -592,16 +591,25 @@ export function OrchestrationHero({
           <div className="space-y-2">
             {/* Title row */}
             <div className="flex items-center gap-3">
-              <h2 className="text-2xl font-bold text-white tracking-tight">
-                {agentLabel}
-              </h2>
-              <span className="text-2xl">🧠</span>
-              {hasActiveThreads && (
-                <span className="ml-1">
-                  <ThinkingVerbRotator size="sm" intervalMs={1100} />
-                </span>
-              )}
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-violet-600/20 border border-violet-500/30">
+                <Brain className="h-5 w-5 text-violet-400" />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold text-white tracking-tight">
+                  Multi-LLM Discussion
+                </h2>
+                <p className="text-[11px] text-white/40 font-medium">
+                  {agentLabel}
+                </p>
+              </div>
             </div>
+
+            {/* Live verb rotator — prominent when active */}
+            {hasActiveThreads && (
+              <div className="pt-1">
+                <ThinkingVerbRotator size="md" intervalMs={1000} />
+              </div>
+            )}
 
             {/* Subtitle — dynamic when active */}
             {hasActiveThreads ? (
