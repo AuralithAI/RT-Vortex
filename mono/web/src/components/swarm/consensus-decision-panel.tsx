@@ -26,6 +26,7 @@ import {
   Target,
 } from "lucide-react";
 import { getProviderMeta } from "@/lib/llm-providers";
+import { LLMMarkdown } from "@/components/ui/llm-markdown";
 import { JudgeVerdictPanel } from "@/components/swarm/judge-verdict-panel";
 import type { ConsensusResultData } from "@/types/swarm";
 
@@ -319,9 +320,7 @@ function ConsensusCard({
                 <Brain className="h-3 w-3" />
                 Reasoning
               </div>
-              <p className="text-[13px] leading-relaxed text-foreground/80">
-                {result.reasoning}
-              </p>
+              <LLMMarkdown content={result.reasoning} variant="light" className="text-[13px]" />
             </div>
           </div>
         </div>

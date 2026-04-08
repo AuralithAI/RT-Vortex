@@ -31,6 +31,7 @@ import {
   MessageCircle,
 } from "lucide-react";
 import { AgentAvatar } from "@/components/swarm/agent-avatar";
+import { LLMMarkdown } from "@/components/ui/llm-markdown";
 import type { SwarmWsEvent } from "@/hooks/use-swarm-events";
 
 // ── Role styling ────────────────────────────────────────────────────────────
@@ -399,17 +400,21 @@ export function LiveAgentChat({ events, maxMessages = 200 }: LiveAgentChatProps)
                     </div>
 
                     {/* Content */}
-                    <p
-                      className={`text-[13px] leading-relaxed ${
-                        msg.kind === "error"
-                          ? "text-red-600 dark:text-red-400"
-                          : msg.kind === "tool_call"
-                            ? "font-mono text-xs text-muted-foreground"
-                            : "text-foreground/90"
-                      }`}
-                    >
-                      {msg.content}
-                    </p>
+                    {msg.kind === "tool_call" ? (
+                      <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+                        {msg.content}
+                      </p>
+                    ) : msg.kind === "error" ? (
+                      <p className="text-[13px] leading-relaxed text-red-600 dark:text-red-400">
+                        {msg.content}
+                      </p>
+                    ) : (
+                      <LLMMarkdown
+                        content={msg.content}
+                        variant="light"
+                        className="text-[13px]"
+                      />
+                    )}
                   </div>
                 ))}
               </div>

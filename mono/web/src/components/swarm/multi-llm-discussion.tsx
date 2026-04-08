@@ -18,10 +18,29 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { getProviderMeta } from "@/lib/llm-providers";
+import { LLMMarkdown } from "@/components/ui/llm-markdown";
+import {
+  OpenAIIcon,
+  AnthropicIcon,
+  GeminiIcon,
+  GrokIcon,
+  OllamaIcon,
+} from "@/components/icons/brand-icons";
 import type {
   DiscussionThreadData,
   ProviderResponseData,
 } from "@/types/swarm";
+
+// ── Provider icon lookup ────────────────────────────────────────────────────
+
+const providerIconMap: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
+  openai: OpenAIIcon,
+  anthropic: AnthropicIcon,
+  gemini: GeminiIcon,
+  google: GeminiIcon,
+  grok: GrokIcon,
+  ollama: OllamaIcon,
+};
 
 // ── Props ───────────────────────────────────────────────────────────────────
 
@@ -44,9 +63,6 @@ function ProviderResponseCard({
   const [expanded, setExpanded] = useState(false);
   const meta = getProviderMeta(response.provider);
   const succeeded = !response.error;
-  const contentPreview = response.content.length > 300 && !expanded
-    ? response.content.slice(0, 300) + "…"
-    : response.content;
 
   return (
     <div
@@ -57,6 +73,11 @@ function ProviderResponseCard({
       {/* Header */}
       <div className="mb-2 flex items-center justify-between">
         <div className="flex items-center gap-2">
+          {(() => {
+            const key = response.provider.toLowerCase().replace(/[^a-z]/g, "");
+            const Icon = providerIconMap[key];
+            return Icon ? <Icon size={18} className="shrink-0" /> : null;
+          })()}
           <span className={`text-sm font-semibold ${meta.color}`}>
             {meta.displayName}
           </span>
@@ -90,9 +111,13 @@ function ProviderResponseCard({
       {/* Content */}
       {succeeded ? (
         <div className="relative">
-          <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/90">
-            {contentPreview}
-          </pre>
+          <div className={!expanded && response.content.length > 300 ? "max-h-[200px] overflow-hidden" : ""}>
+            <LLMMarkdown
+              content={expanded || response.content.length <= 300 ? response.content : response.content.slice(0, 300) + "…"}
+              variant="light"
+              className="text-xs"
+            />
+          </div>
           {response.content.length > 300 && (
             <button
               onClick={() => setExpanded(!expanded)}
@@ -211,11 +236,13 @@ function DiscussionThreadCard({
                   </span>
                 )}
               </div>
-              <pre className="whitespace-pre-wrap text-xs leading-relaxed text-foreground/90">
-                {thread.synthesis.length > 500
+              <LLMMarkdown
+                content={thread.synthesis.length > 500
                   ? thread.synthesis.slice(0, 500) + "…"
                   : thread.synthesis}
-              </pre>
+                variant="light"
+                className="text-xs"
+              />
             </div>
           )}
         </div>

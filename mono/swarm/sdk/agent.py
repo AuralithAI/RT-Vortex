@@ -493,6 +493,11 @@ class Agent:
                 action_type=action_type,
             )
 
+        # Resolve task_id for real-time WS streaming from Go.
+        _probe_task_id = ""
+        if self.conversation and hasattr(self.conversation, "task_id"):
+            _probe_task_id = self.conversation.task_id or ""
+
         probe_resp = await llm_probe(
             messages=messages,
             tools=tools,
@@ -502,6 +507,8 @@ class Agent:
             agent_role=self.role,
             action_type=action_type,
             num_models=num_models,
+            task_id=_probe_task_id,
+            thread_id=discussion_thread.thread_id if discussion_thread else "",
         )
 
         # Record each provider's response in the discussion thread.

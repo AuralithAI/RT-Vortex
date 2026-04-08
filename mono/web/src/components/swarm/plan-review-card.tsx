@@ -18,6 +18,7 @@ import {
   Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LLMMarkdown } from "@/components/ui/llm-markdown";
 import type { PlanDocument } from "@/types/swarm";
 
 interface PlanReviewCardProps {
@@ -167,7 +168,7 @@ export function PlanReviewCard({
       {/* Summary */}
       <div className="border-b px-6 py-4">
         <h4 className="mb-2 text-sm font-medium text-muted-foreground">Summary</h4>
-        <p className="text-sm">{plan.summary}</p>
+        <LLMMarkdown content={plan.summary} variant="light" className="text-sm" />
       </div>
 
       {/* Steps */}
@@ -180,7 +181,7 @@ export function PlanReviewCard({
                 className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-muted/30"
                 onClick={() => toggleStep(i)}
               >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary">
                   {i + 1}
                 </span>
                 {expandedSteps.has(i) ? (
@@ -188,26 +189,35 @@ export function PlanReviewCard({
                 ) : (
                   <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                 )}
-                <span className="flex-1">{step.description}</span>
+                <span className="flex-1 font-medium">{step.description}</span>
                 {step.files && step.files.length > 0 && (
-                  <span className="text-xs text-muted-foreground">
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
                     {step.files.length} file{step.files.length !== 1 ? "s" : ""}
                   </span>
                 )}
               </button>
-              {expandedSteps.has(i) && step.files && step.files.length > 0 && (
-                <div className="border-t bg-muted/10 px-4 py-2">
-                  <ul className="space-y-1">
-                    {step.files.map((f, j) => (
-                      <li
-                        key={j}
-                        className="flex items-center gap-2 font-mono text-xs text-muted-foreground"
-                      >
-                        <FileCode className="h-3 w-3" />
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
+              {expandedSteps.has(i) && (
+                <div className="border-t bg-muted/10 px-4 py-3 space-y-2">
+                  {/* Render the step description as rich markdown when expanded */}
+                  <LLMMarkdown content={step.description} variant="light" className="text-xs" />
+                  {step.files && step.files.length > 0 && (
+                    <div className="pt-2 border-t border-dashed">
+                      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        Affected Files
+                      </p>
+                      <ul className="space-y-1">
+                        {step.files.map((f, j) => (
+                          <li
+                            key={j}
+                            className="flex items-center gap-2 font-mono text-xs text-muted-foreground"
+                          >
+                            <FileCode className="h-3 w-3 shrink-0" />
+                            {f}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -220,13 +230,13 @@ export function PlanReviewCard({
         <h4 className="mb-3 text-sm font-medium text-muted-foreground">
           All Affected Files ({plan.affected_files.length})
         </h4>
-        <div className="grid gap-1 sm:grid-cols-2">
+        <div className="grid gap-1.5 sm:grid-cols-2">
           {plan.affected_files.map((f, i) => (
             <div
               key={i}
-              className="flex items-center gap-2 rounded px-2 py-1 font-mono text-xs hover:bg-muted/30"
+              className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-1.5 font-mono text-xs transition-colors hover:bg-muted/50"
             >
-              <FileCode className="h-3 w-3 shrink-0 text-muted-foreground" />
+              <FileCode className="h-3.5 w-3.5 shrink-0 text-primary/60" />
               <span className="truncate">{f}</span>
             </div>
           ))}

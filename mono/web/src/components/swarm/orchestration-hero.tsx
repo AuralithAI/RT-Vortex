@@ -26,13 +26,31 @@ import {
 import { getProviderMeta } from "@/lib/llm-providers";
 import { sanitizeLLMContent } from "@/lib/sanitize-llm-content";
 import { useTypewriter } from "@/hooks/use-typewriter";
+import { LLMMarkdown } from "@/components/ui/llm-markdown";
+import {
+  OpenAIIcon,
+  AnthropicIcon,
+  GeminiIcon,
+  GrokIcon,
+  OllamaIcon,
+} from "@/components/icons/brand-icons";
 import type {
   DiscussionThreadData,
   ProviderResponseData,
   ConsensusResultData,
 } from "@/types/swarm";
 
-// ─── Provider Icon (coloured circle with initial) ───────────────────────────
+// ─── Provider Icon (SVG brand logo with accent ring) ────────────────────────
+
+/** Map provider key → brand SVG component. */
+const providerIconMap: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
+  openai: OpenAIIcon,
+  anthropic: AnthropicIcon,
+  gemini: GeminiIcon,
+  google: GeminiIcon,
+  grok: GrokIcon,
+  ollama: OllamaIcon,
+};
 
 function ProviderIcon({
   provider,
@@ -43,8 +61,31 @@ function ProviderIcon({
 }) {
   const meta = getProviderMeta(provider);
   const accent = meta.accentHex ?? "#6b7280";
-  const initials = meta.displayName.slice(0, 2);
+  const key = provider.toLowerCase().replace(/[^a-z]/g, "");
+  const IconComponent = providerIconMap[key];
 
+  // Inner icon size — leave room for the ring/padding.
+  const iconSize = Math.round(size * 0.52);
+
+  if (IconComponent) {
+    return (
+      <div
+        className="flex items-center justify-center rounded-full shadow-md"
+        style={{
+          width: size,
+          height: size,
+          background: `linear-gradient(135deg, ${accent}18, ${accent}30)`,
+          boxShadow: `0 0 0 2px ${accent}, 0 2px 8px ${accent}40`,
+        }}
+        title={meta.displayName}
+      >
+        <IconComponent size={iconSize} className="drop-shadow-sm" />
+      </div>
+    );
+  }
+
+  // Fallback: coloured circle with initials for unknown providers.
+  const initials = meta.displayName.slice(0, 2);
   return (
     <div
       className="flex items-center justify-center rounded-full font-bold text-white select-none"
@@ -101,14 +142,12 @@ function TypewriterContent({
   });
 
   return (
-    <>
-      <p className="text-[13px] leading-relaxed text-white/70 whitespace-pre-wrap">
-        {displayedText}
-        {isTyping && (
-          <span className="inline-block w-[2px] h-[14px] bg-blue-400 ml-0.5 animate-pulse align-text-bottom" />
-        )}
-      </p>
-    </>
+    <div className="relative">
+      <LLMMarkdown content={displayedText} variant="dark" />
+      {isTyping && (
+        <span className="inline-block w-[2px] h-[14px] bg-blue-400 ml-0.5 animate-pulse align-text-bottom" />
+      )}
+    </div>
   );
 }
 
@@ -478,12 +517,13 @@ function ThreadHero({
                   </span>
                 )}
               </div>
-              <p className="text-[13px] leading-relaxed text-white/70">
-                {(() => {
+              <LLMMarkdown
+                content={(() => {
                   const s = sanitizeLLMContent(thread.synthesis!);
                   return s.length > 600 ? s.slice(0, 600) + "…" : s;
                 })()}
-              </p>
+                variant="dark"
+              />
             </div>
           </div>
         </div>

@@ -204,6 +204,8 @@ async def llm_probe(
     agent_role: str = "",
     action_type: str = "",
     num_models: int = 0,
+    task_id: str = "",
+    thread_id: str = "",
 ) -> ProbeResponse:
     """Send a multi-LLM probe via the Go probe endpoint.
 
@@ -245,6 +247,10 @@ async def llm_probe(
         payload["action_type"] = action_type
     if num_models > 0:
         payload["num_models"] = num_models
+    if task_id:
+        payload["task_id"] = task_id
+    if thread_id:
+        payload["thread_id"] = thread_id
 
     logger.info(
         "llm_probe: requesting multi-LLM probe (role=%s, action=%s, num_models=%d, messages=%d)",

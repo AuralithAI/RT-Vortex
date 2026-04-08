@@ -22,11 +22,17 @@ import (
 // dashboard. The Go llm.Registry handles all provider-specific API details.
 type LLMProxy struct {
 	registry *llm.Registry
+	wsHub    *WSHub
 }
 
 // NewLLMProxy creates an LLM proxy backed by the existing registry.
 func NewLLMProxy(reg *llm.Registry) *LLMProxy {
 	return &LLMProxy{registry: reg}
+}
+
+// SetWSHub attaches a WebSocket hub for real-time provider streaming.
+func (p *LLMProxy) SetWSHub(hub *WSHub) {
+	p.wsHub = hub
 }
 
 // ── Request / Response (OpenAI-compatible) ──────────────────────────────────
@@ -131,9 +137,11 @@ type ProbeRequest struct {
 	Tools      []llm.ToolDef `json:"tools,omitempty"`
 	ToolChoice string        `json:"tool_choice,omitempty"`
 	MaxTokens  int           `json:"max_tokens,omitempty"`
-	AgentRole  string        `json:"agent_role,omitempty"`  // role for priority matrix lookup
-	ActionType string        `json:"action_type,omitempty"` // optional action type filter
-	NumModels  int           `json:"num_models,omitempty"`  // max providers to probe (0 = all)
+	AgentRole  string        `json:"agent_role,omitempty"`
+	ActionType string        `json:"action_type,omitempty"`
+	NumModels  int           `json:"num_models,omitempty"`
+	TaskID     string        `json:"task_id,omitempty"`
+	ThreadID   string        `json:"thread_id,omitempty"`
 }
 
 // ProbeResult is the response from a single LLM provider in a multi-probe.
@@ -152,9 +160,9 @@ type ProbeResult struct {
 type ProbeResponse struct {
 	Results   []ProbeResult `json:"results"`
 	TotalMs   int64         `json:"total_ms"`   // wall-clock time for the entire probe
-	Providers int           `json:"providers"`   // number of providers probed
-	Successes int           `json:"successes"`   // number that returned successfully
-	AgentRole string        `json:"agent_role"`  // echo back for caller convenience
+	Providers int           `json:"providers"`  // number of providers probed
+	Successes int           `json:"successes"`  // number that returned successfully
+	AgentRole string        `json:"agent_role"` // echo back for caller convenience
 }
 
 // ProbeMultiple fans out completion requests to multiple LLM providers in
@@ -227,11 +235,10 @@ func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*Probe
 					"error", err,
 					"latency_ms", result.LatencyMs,
 				)
-				// Record per-provider failure metric.
 				SwarmProbeProviderLatency.WithLabelValues(e.Provider, "error").Observe(float64(result.LatencyMs) / 1000.0)
 			} else {
 				result.Content = resp.Content
-				result.Model = resp.Model // use actual model name from response
+				result.Model = resp.Model
 				result.FinishReason = resp.FinishReason
 				result.ToolCalls = resp.ToolCalls
 				result.Usage = LLMUsage{
@@ -245,13 +252,38 @@ func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*Probe
 					"latency_ms", result.LatencyMs,
 					"tokens", resp.Usage.TotalTokens,
 				)
-				// Record per-provider success metric.
 				SwarmProbeProviderLatency.WithLabelValues(e.Provider, "ok").Observe(float64(result.LatencyMs) / 1000.0)
 			}
 
 			mu.Lock()
 			results[idx] = result
 			mu.Unlock()
+
+			// Stream this result to the UI immediately via WebSocket
+			// so providers appear one-by-one as they finish.
+			if p.wsHub != nil && req.TaskID != "" && req.ThreadID != "" {
+				respData := map[string]interface{}{
+					"provider":      result.Provider,
+					"model":         result.Model,
+					"content":       result.Content,
+					"latency_ms":    result.LatencyMs,
+					"finish_reason": result.FinishReason,
+					"token_usage": map[string]int{
+						"prompt_tokens":     result.Usage.PromptTokens,
+						"completion_tokens": result.Usage.CompletionTokens,
+						"total_tokens":      result.Usage.TotalTokens,
+					},
+					"timestamp": float64(time.Now().UnixMilli()) / 1000.0,
+				}
+				if result.Error != "" {
+					respData["error"] = result.Error
+				}
+				p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_response", map[string]interface{}{
+					"event":     "provider_response",
+					"thread_id": req.ThreadID,
+					"response":  respData,
+				})
+			}
 		}(i, entry)
 	}
 

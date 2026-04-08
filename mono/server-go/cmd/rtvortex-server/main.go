@@ -674,6 +674,7 @@ func main() {
 	swarmLLMProxy := swarm.NewLLMProxy(llmRegistry)
 	swarmELO := swarm.NewELOService(db.Pool)
 	swarmWSHub := swarm.NewWSHub(wsHub)
+	swarmLLMProxy.SetWSHub(swarmWSHub)
 	swarmPRCreator := swarm.NewPRCreator(db.Pool, vcsResolver, swarmTaskMgr, swarmWSHub)
 	swarmMemorySvc := swarm.NewMemoryService(db.Pool)
 	swarmRoleELO := swarm.NewRoleELOService(db.Pool)
