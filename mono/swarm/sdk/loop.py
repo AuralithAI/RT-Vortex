@@ -193,13 +193,22 @@ async def agent_loop(
                 except Exception as mem_err:
                     logger.debug("agent_loop: memory reflect failed: %s", mem_err)
 
-            # If the agent just called complete_task, the task is done on the
-            # server side and the agent token may be invalidated.  Break out of
-            # the loop immediately to avoid a spurious 401 on the next LLM call.
+            # If the agent just called complete_task, check if the task was
+            # actually completed (the tool returns a warning if no workspace
+            # changes exist, giving the agent a chance to make edits first).
             if fn_name == "complete_task":
-                task_completed = True
-                logger.info("agent_loop: complete_task called — exiting loop")
-                break
+                if isinstance(result_str, str) and "WARNING" in result_str:
+                    # The workspace guard rejected the completion — let the LLM
+                    # see the warning and try again. Do NOT exit the loop.
+                    logger.warning(
+                        "agent_loop: complete_task rejected (no workspace changes), "
+                        "continuing loop (turn %d)",
+                        turn + 1,
+                    )
+                else:
+                    task_completed = True
+                    logger.info("agent_loop: complete_task called — exiting loop")
+                    break
 
         if task_completed:
             break

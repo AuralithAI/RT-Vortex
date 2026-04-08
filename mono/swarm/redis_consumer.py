@@ -542,15 +542,31 @@ async def _run_full_pipeline(
                         logger.error("Team %s: Failed to submit diff for %s: %s",
                                      team_id[:8], diff["file_path"], e)
             else:
-                logger.info("Team %s: No workspace changes (no diffs)", team_id[:8])
+                logger.warning("Team %s: No workspace changes (no diffs)", team_id[:8])
 
             if agent_failures:
                 logger.warning("Team %s: %d/%d agents failed, completing with partial results",
                                team_id[:8], len(agent_failures), total_agents)
 
-            # Mark task complete — Go triggers PR creation.
-            await go_client.report_result(task.id)
-            logger.info("Team %s: Task %s completed successfully", team_id[:8], task.id)
+            if not changeset:
+                try:
+                    current_status = await go_client.get_task_status(task.id)
+                except Exception:
+                    current_status = ""
+                if current_status == "completed":
+                    logger.info("Team %s: Task %s already completed by agent",
+                                team_id[:8], task.id)
+                else:
+                    await go_client.fail_task(
+                        task.id,
+                        "Agents produced no code changes. The task may need "
+                        "clearer instructions or the target files may not exist.",
+                    )
+                    logger.warning("Team %s: Task %s failed — no diffs produced",
+                                   team_id[:8], task.id)
+            else:
+                await go_client.report_result(task.id)
+                logger.info("Team %s: Task %s completed successfully", team_id[:8], task.id)
 
     except Exception as e:
         logger.error("Team %s: Fatal pipeline error: %s", team_id[:8], e, exc_info=True)
