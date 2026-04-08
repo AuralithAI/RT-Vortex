@@ -325,7 +325,7 @@ func (s *ProbeTuningService) defaultConfig(role, repoID, actionType string) *Pro
 		PreferredProviders:  []string{},
 		ExcludedProviders:   []string{},
 		Temperature:         temp,
-		MaxTokens:           4096,
+		MaxTokens:           16384,
 		TimeoutSeconds:      timeout,
 		BudgetCapUSD:        0,
 		TokensSpent:         0,

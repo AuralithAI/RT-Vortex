@@ -160,7 +160,10 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 	}
 
 	maxTokens := req.MaxTokens
-	if maxTokens == 0 {
+	if maxTokens < 8192 {
+		// Extended thinking requires a generous budget — thinking tokens
+		// count against max_tokens, so anything below 8192 risks leaving
+		// no room for the actual response.  16384 is a safe default.
 		maxTokens = 16384
 	}
 
@@ -445,7 +448,10 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 	}
 
 	maxTokens := req.MaxTokens
-	if maxTokens == 0 {
+	if maxTokens < 8192 {
+		// Extended thinking requires a generous budget — thinking tokens
+		// count against max_tokens, so anything below 8192 risks leaving
+		// no room for the actual response.  16384 is a safe default.
 		maxTokens = 16384
 	}
 
