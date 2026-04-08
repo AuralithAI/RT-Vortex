@@ -33,7 +33,7 @@ func NewGrokProvider(cfg GrokConfig) *GrokProvider {
 	}
 	model := cfg.DefaultModel
 	if model == "" {
-		model = "grok-3-mini"
+		model = "grok-3"
 	}
 	return &GrokProvider{
 		inner: NewOpenAIProvider(OpenAIConfig{

@@ -66,12 +66,22 @@ func (p *AnthropicProvider) Name() string { return "anthropic" }
 
 // ── Anthropic Messages API ──────────────────────────────────────────────────
 
+// anthropicThinkingConfig enables extended thinking for Claude models.
+// When enabled, Claude produces internal reasoning ("thinking" content blocks)
+// before its final text answer, dramatically improving analysis quality.
+type anthropicThinkingConfig struct {
+	Type         string `json:"type"`              // "enabled"
+	BudgetTokens int    `json:"budget_tokens"`     // must be < max_tokens, min 1024
+	Display      string `json:"display,omitempty"` // "summarized" (default for Claude 4) or "omitted"
+}
+
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    json.RawMessage    `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Tools     []anthropicToolDef `json:"tools,omitempty"`
+	Model     string                   `json:"model"`
+	MaxTokens int                      `json:"max_tokens"`
+	System    json.RawMessage          `json:"system,omitempty"`
+	Messages  []anthropicMessage       `json:"messages"`
+	Tools     []anthropicToolDef       `json:"tools,omitempty"`
+	Thinking  *anthropicThinkingConfig `json:"thinking,omitempty"`
 }
 
 // anthropicMessage supports text, tool_use, and tool_result content blocks.
@@ -151,7 +161,28 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
-		maxTokens = 4096
+		maxTokens = 16384
+	}
+
+	// ── Extended thinking configuration ─────────────────────────────────
+	// Enable extended thinking so Claude reasons step-by-step before answering.
+	// budget_tokens must be < max_tokens; we cap at 25% of max_tokens
+	// (min 1024, max 8192) to leave room for the actual response.
+	// Thinking is incompatible with temperature, so we do NOT send temperature.
+	thinkingBudget := maxTokens / 4
+	if thinkingBudget < 1024 {
+		thinkingBudget = 1024
+	}
+	if thinkingBudget > 8192 {
+		thinkingBudget = 8192
+	}
+	// Ensure budget_tokens < max_tokens (Anthropic API requirement).
+	if thinkingBudget >= maxTokens {
+		maxTokens = thinkingBudget + 1024
+	}
+	thinking := &anthropicThinkingConfig{
+		Type:         "enabled",
+		BudgetTokens: thinkingBudget,
 	}
 
 	// Anthropic separates the system message.
@@ -229,12 +260,21 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		System:    systemJSON,
 		Messages:  msgs,
 		Tools:     tools,
+		Thinking:  thinking,
 	}
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
+
+	slog.Info("anthropic: Complete request",
+		"model", model,
+		"max_tokens", maxTokens,
+		"thinking_budget", thinkingBudget,
+		"tools", len(tools),
+		"messages", len(msgs),
+	)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/messages", bytes.NewReader(jsonBody))
 	if err != nil {
@@ -243,7 +283,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.apiKey)
 	httpReq.Header.Set("anthropic-version", p.apiVersion)
-	httpReq.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
+	httpReq.Header.Set("anthropic-beta", "prompt-caching-2024-07-31,interleaved-thinking-2025-05-14")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
@@ -270,11 +310,14 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	// Parse content blocks — collect text and tool_use blocks.
+	// Parse content blocks — collect text, thinking, and tool_use blocks.
 	var textContent string
+	var thinkingContent string
 	var toolCalls []ToolCall
 	for _, c := range ar.Content {
 		switch c.Type {
+		case "thinking":
+			thinkingContent += c.Text
 		case "text":
 			textContent += c.Text
 		case "tool_use":
@@ -290,6 +333,14 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 				},
 			})
 		}
+	}
+
+	if thinkingContent != "" {
+		slog.Info("anthropic: extended thinking produced",
+			"thinking_chars", len(thinkingContent),
+			"text_chars", len(textContent),
+			"tool_calls", len(toolCalls),
+		)
 	}
 
 	finishReason := ar.StopReason
@@ -374,12 +425,13 @@ func (p *AnthropicProvider) Healthy(ctx context.Context) bool {
 // ── Anthropic Streaming ─────────────────────────────────────────────────────
 
 type anthropicStreamRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    json.RawMessage    `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Stream    bool               `json:"stream"`
-	Tools     []anthropicToolDef `json:"tools,omitempty"`
+	Model     string                   `json:"model"`
+	MaxTokens int                      `json:"max_tokens"`
+	System    json.RawMessage          `json:"system,omitempty"`
+	Messages  []anthropicMessage       `json:"messages"`
+	Stream    bool                     `json:"stream"`
+	Tools     []anthropicToolDef       `json:"tools,omitempty"`
+	Thinking  *anthropicThinkingConfig `json:"thinking,omitempty"`
 }
 
 // StreamComplete sends a streaming completion request using Anthropic's SSE API.
@@ -394,7 +446,23 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
-		maxTokens = 4096
+		maxTokens = 16384
+	}
+
+	// ── Extended thinking for streaming ─────────────────────────────────
+	thinkingBudget := maxTokens / 4
+	if thinkingBudget < 1024 {
+		thinkingBudget = 1024
+	}
+	if thinkingBudget > 8192 {
+		thinkingBudget = 8192
+	}
+	if thinkingBudget >= maxTokens {
+		maxTokens = thinkingBudget + 1024
+	}
+	thinking := &anthropicThinkingConfig{
+		Type:         "enabled",
+		BudgetTokens: thinkingBudget,
 	}
 
 	var systemMsg string
@@ -466,12 +534,21 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 		Messages:  msgs,
 		Stream:    true,
 		Tools:     tools,
+		Thinking:  thinking,
 	}
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
+
+	slog.Info("anthropic: StreamComplete request",
+		"model", model,
+		"max_tokens", maxTokens,
+		"thinking_budget", thinkingBudget,
+		"tools", len(tools),
+		"messages", len(msgs),
+	)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/messages", bytes.NewReader(jsonBody))
 	if err != nil {
@@ -480,7 +557,8 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.apiKey)
 	httpReq.Header.Set("anthropic-version", p.apiVersion)
-	httpReq.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
+	// Enable prompt caching + interleaved thinking (thinking between tool calls).
+	httpReq.Header.Set("anthropic-beta", "prompt-caching-2024-07-31,interleaved-thinking-2025-05-14")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
@@ -516,6 +594,8 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 		}
 		var toolCalls []ToolCall
 		var activeTool *pendingToolCall
+		var inThinkingBlock bool  // true while streaming a "thinking" content block
+		var thinkingChars int     // total thinking characters received (for logging)
 
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -543,13 +623,16 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 				}
 
 			case "content_block_start":
-				// A new content block is starting. Could be text or tool_use.
+				// A new content block is starting. Could be thinking, text, or tool_use.
 				if cb, ok := evt["content_block"].(map[string]interface{}); ok {
 					blockType, _ := cb["type"].(string)
-					if blockType == "tool_use" {
+					switch blockType {
+					case "tool_use":
 						id, _ := cb["id"].(string)
 						name, _ := cb["name"].(string)
 						activeTool = &pendingToolCall{ID: id, Name: name}
+					case "thinking":
+						inThinkingBlock = true
 					}
 				}
 
@@ -564,6 +647,14 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 						case <-ctx.Done():
 							return
 						}
+					case "thinking_delta":
+						// Extended thinking content — don't stream to the user,
+						// just count it for logging. The real answer comes in text_delta.
+						if t, ok := delta["thinking"].(string); ok {
+							thinkingChars += len(t)
+						}
+					case "signature_delta":
+						// Encrypted thinking signature — skip, not user-visible.
 					case "input_json_delta":
 						// Accumulate partial JSON for the active tool call.
 						if activeTool != nil {
@@ -585,6 +676,13 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 						},
 					})
 					activeTool = nil
+				}
+				if inThinkingBlock {
+					inThinkingBlock = false
+					slog.Info("anthropic: thinking block complete",
+						"thinking_chars", thinkingChars,
+						"model", currentModel,
+					)
 				}
 
 			case "message_delta":
