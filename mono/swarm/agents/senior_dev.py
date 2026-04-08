@@ -124,6 +124,12 @@ For each change needed:
 - Include enough context in `old_str` to be unambiguous (3-5 lines)
 - Do NOT call `complete_task` until all changes are made
 - Use `workspace_status` to verify your changes before completing
+- If you received a "Multi-LLM Consensus" or "Initial Analysis" section,
+  that is ONLY analysis context — NO actual file changes were made.
+  You MUST still use workspace_edit_file / workspace_create_file to make
+  all required edits yourself.
+- Do NOT assume that any tool calls mentioned in the analysis have been
+  executed. You are the one who must execute them.
 """
 
     def parse_result(self, messages: list[dict]) -> AgentResult:

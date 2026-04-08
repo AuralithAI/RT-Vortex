@@ -18,6 +18,7 @@ live UI display.
 from __future__ import annotations
 
 import logging
+import re
 import socket
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -37,6 +38,78 @@ if TYPE_CHECKING:
     from ..workspace import VirtualWorkspace
 
 logger = logging.getLogger(__name__)
+
+# ── Patterns that strip fake tool-call narration from probe responses ────
+#
+# During the initial multi-LLM probe phase, LLMs respond WITHOUT tools and
+# often narrate what tool calls they *would* make as plain text.  This text
+# (e.g. ``workspace_edit_file(...)``, ``complete_task(...)`` and false
+# assertions like "The changes have been applied") confuses the downstream
+# single-model tool-use loop into thinking edits were already made, causing
+# it to skip actual tool calls and produce zero diffs.
+#
+# These patterns strip or rewrite the most common narration patterns so the
+# agent loop sees a clean analysis without phantom edits.
+
+# Matches ```python\nworkspace_edit_file(...)\n``` blocks.
+_RE_FENCED_TOOL_BLOCK = re.compile(
+    r"```(?:python|bash|shell)?\s*\n"
+    r"(?:workspace_edit_file|workspace_create_file|workspace_delete_file|"
+    r"workspace_read_file|workspace_search|workspace_list_dir|workspace_status|"
+    r"complete_task|report_diff|report_plan|declare_team_size|get_file_content|"
+    r"search_code)\s*\(.*?\)\s*\n```",
+    re.DOTALL,
+)
+
+# Matches inline tool-call narration like workspace_edit_file(...) not in fences.
+_RE_INLINE_TOOL_CALL = re.compile(
+    r"(?:workspace_edit_file|workspace_create_file|workspace_delete_file|"
+    r"workspace_status|complete_task|report_diff)\s*\([^)]*\)",
+)
+
+# Matches false-completion assertions that mislead the tool loop.
+_RE_FALSE_COMPLETION = re.compile(
+    r"(?:The changes have been (?:applied|made|submitted|completed)|"
+    r"I have (?:successfully )?(?:modified|edited|created|updated|implemented|applied)|"
+    r"I will now (?:verify|complete|submit|mark)|"
+    r"The file .{1,80} has been (?:modified|updated|created|changed)|"
+    r"changes (?:are|have been) (?:ready|applied|submitted))",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_probe_for_tool_loop(content: str) -> str:
+    """Strip fake tool-call narration from probe content before injection.
+
+    The multi-LLM probe runs without tools, so LLMs narrate tool calls as text.
+    If injected verbatim, the downstream tool loop thinks edits are done.
+
+    This function:
+    1. Removes fenced code blocks containing tool-call invocations
+    2. Removes inline tool-call narration
+    3. Replaces false-completion assertions with a note
+
+    Returns:
+        Cleaned content suitable for injection as analysis context.
+    """
+    if not content:
+        return content
+
+    # Strip fenced tool-call blocks.
+    cleaned = _RE_FENCED_TOOL_BLOCK.sub("", content)
+
+    # Strip inline tool calls (workspace_edit_file(...), complete_task(...), etc.)
+    cleaned = _RE_INLINE_TOOL_CALL.sub("[tool call removed — use actual tools]", cleaned)
+
+    # Rewrite false-completion assertions.
+    cleaned = _RE_FALSE_COMPLETION.sub(
+        "[NOTE: This is analysis only — no actual changes were made]", cleaned
+    )
+
+    # Collapse runs of blank lines left by removals.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    return cleaned.strip()
 
 
 def _build_version() -> str:
@@ -301,6 +374,12 @@ class Agent:
                 if probe_resp.successes >= 2:
                     # Run consensus to pick/synthesise the best answer.
                     consensus = await self.run_consensus(probe_resp)
+                    # Sanitize probe content: strip fake tool-call narration
+                    # and false-completion claims so the tool loop doesn't
+                    # think edits were already made.
+                    sanitized_content = _sanitize_probe_for_tool_loop(
+                        consensus.content
+                    )
                     multi_llm_context = (
                         f"\n\n=== Multi-LLM Consensus (initial reasoning) ===\n"
                         f"Strategy: {consensus.strategy.value}\n"
@@ -308,7 +387,13 @@ class Agent:
                         f"Providers queried: {probe_resp.providers} "
                         f"({probe_resp.successes} succeeded)\n"
                         f"Selected provider: {consensus.provider}\n\n"
-                        f"{consensus.content}\n"
+                        f"⚠ IMPORTANT: The analysis below is from a PLANNING-ONLY "
+                        f"phase where the LLM had NO access to tools. Any mentions "
+                        f"of file edits, tool calls, or completed changes are "
+                        f"HYPOTHETICAL — no actual changes have been made yet. "
+                        f"You MUST use your actual tools (workspace_edit_file, "
+                        f"workspace_create_file, etc.) to implement the changes.\n\n"
+                        f"{sanitized_content}\n"
                         f"=== End Multi-LLM Consensus ===\n"
                     )
                     logger.info(
@@ -322,10 +407,16 @@ class Agent:
                     # Only one provider succeeded — use its response directly.
                     best = self.pick_best_probe_result(probe_resp)
                     if best:
+                        sanitized_best = _sanitize_probe_for_tool_loop(best)
                         multi_llm_context = (
                             f"\n\n=== Multi-LLM Initial Analysis ===\n"
                             f"(Only 1/{probe_resp.providers} providers responded)\n\n"
-                            f"{best}\n"
+                            f"⚠ IMPORTANT: The analysis below is from a PLANNING-ONLY "
+                            f"phase where the LLM had NO access to tools. Any mentions "
+                            f"of file edits, tool calls, or completed changes are "
+                            f"HYPOTHETICAL — no actual changes have been made yet. "
+                            f"You MUST use your actual tools to implement the changes.\n\n"
+                            f"{sanitized_best}\n"
                             f"=== End Multi-LLM Initial Analysis ===\n"
                         )
                 else:
