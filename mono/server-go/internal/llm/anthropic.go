@@ -43,7 +43,10 @@ func NewAnthropicProvider(cfg AnthropicConfig) *AnthropicProvider {
 	}
 	timeout := cfg.Timeout
 	if timeout == 0 {
-		timeout = 90 * time.Second
+		// Extended thinking + high max_tokens can push Claude responses
+		// well past two minutes. Use a generous default so the HTTP
+		// client doesn't kill the connection before the model finishes.
+		timeout = 5 * time.Minute
 	}
 	model := cfg.DefaultModel
 	if model == "" {

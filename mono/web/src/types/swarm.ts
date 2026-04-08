@@ -202,6 +202,8 @@ export interface ProviderResponseData {
   token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   error?: string;
   timestamp?: number;
+  /** Internal flag: true while content is being built from streaming chunks. */
+  _streaming?: boolean;
 }
 
 /** A multi-LLM discussion thread — multiple providers answered the same question. */

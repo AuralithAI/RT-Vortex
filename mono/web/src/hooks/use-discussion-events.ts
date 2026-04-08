@@ -77,23 +77,74 @@ export function useDiscussionEvents(events: SwarmWsEvent[]): DiscussionState {
 
           const resp = data.response as ProviderResponseData | undefined;
           if (resp) {
-            // Deduplicate: skip if we already have a response from the same
-            // provider+model (replay buffer can re-send events the client
-            // already received live).
-            const isDup = existing.responses.some(
+            // If we were accumulating streaming chunks for this provider,
+            // replace the in-progress entry with the final complete response.
+            const streamIdx = existing.responses.findIndex(
               (r) =>
                 r.provider === resp.provider &&
                 r.model === resp.model &&
-                r.content === resp.content,
+                (r as ProviderResponseData & { _streaming?: boolean })._streaming,
             );
-            if (!isDup) {
-              existing.responses.push(resp);
-              existing.provider_count = existing.responses.length;
-              existing.success_count = existing.responses.filter(
-                (r) => !r.error
-              ).length;
+            if (streamIdx >= 0) {
+              existing.responses[streamIdx] = resp;
+            } else {
+              // Deduplicate: skip if we already have a response from the same
+              // provider+model (replay buffer can re-send events the client
+              // already received live).
+              const isDup = existing.responses.some(
+                (r) =>
+                  r.provider === resp.provider &&
+                  r.model === resp.model &&
+                  r.content === resp.content,
+              );
+              if (!isDup) {
+                existing.responses.push(resp);
+              }
             }
+            existing.provider_count = existing.responses.length;
+            existing.success_count = existing.responses.filter(
+              (r) => !r.error
+            ).length;
           }
+          break;
+        }
+
+        case "provider_streaming_chunk": {
+          // Incremental streaming chunk from a provider. Accumulate
+          // content so the UI can render text as it arrives, word by
+          // word, instead of waiting for the full response.
+          const threadId = data.thread_id as string;
+          if (!threadId) break;
+
+          const existing = threadMap.get(threadId);
+          if (!existing) break;
+
+          const provider = data.provider as string;
+          const model = data.model as string;
+          const chunkText = data.chunk as string;
+          if (!provider || !chunkText) break;
+
+          // Find or create the in-progress response for this provider.
+          let entry = existing.responses.find(
+            (r) => r.provider === provider && r.model === model,
+          );
+          if (!entry) {
+            entry = {
+              provider,
+              model: model ?? provider,
+              content: "",
+              latency_ms: 0,
+              _streaming: true,
+            } as ProviderResponseData & { _streaming?: boolean };
+            existing.responses.push(entry);
+            existing.provider_count = existing.responses.length;
+            existing.success_count = existing.responses.filter(
+              (r) => !r.error
+            ).length;
+          }
+
+          // Append the chunk to accumulated content.
+          entry.content = (entry.content ?? "") + chunkText;
           break;
         }
 

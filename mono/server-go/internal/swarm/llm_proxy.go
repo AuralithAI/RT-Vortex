@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -224,6 +225,124 @@ func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*Probe
 				return
 			}
 
+			// ── Streaming path ──────────────────────────────────────
+			// If the provider supports streaming, use StreamComplete so
+			// the frontend receives incremental chunks in real time
+			// instead of waiting 45-120s for the full response.
+			canStream := p.wsHub != nil && req.TaskID != "" && req.ThreadID != ""
+			sp, isStreamable := provider.(llm.StreamingProvider)
+
+			if canStream && isStreamable {
+				ch, err := sp.StreamComplete(ctx, cr)
+				if err != nil {
+					result.Error = err.Error()
+					result.LatencyMs = time.Since(provStart).Milliseconds()
+					slog.Warn("llm probe: stream open failed",
+						"provider", e.Provider,
+						"model", e.Model,
+						"error", err,
+						"latency_ms", result.LatencyMs,
+					)
+					SwarmProbeProviderLatency.WithLabelValues(e.Provider, "error").Observe(float64(result.LatencyMs) / 1000.0)
+
+					mu.Lock()
+					results[idx] = result
+					mu.Unlock()
+
+					// Notify the UI that this provider failed.
+					p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_response", map[string]interface{}{
+						"event":     "provider_response",
+						"thread_id": req.ThreadID,
+						"response": map[string]interface{}{
+							"provider":   e.Provider,
+							"model":      e.Model,
+							"error":      result.Error,
+							"latency_ms": result.LatencyMs,
+							"timestamp":  float64(time.Now().UnixMilli()) / 1000.0,
+						},
+					})
+					return
+				}
+
+				// Read streaming chunks and forward each to the UI.
+				var contentBuf strings.Builder
+				var lastChunk llm.StreamChunk
+				chunkSeq := 0
+
+				for chunk := range ch {
+					if chunk.Content != "" {
+						contentBuf.WriteString(chunk.Content)
+						chunkSeq++
+
+						// Send incremental chunk to UI via WebSocket.
+						p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_streaming_chunk", map[string]interface{}{
+							"event":     "provider_streaming_chunk",
+							"thread_id": req.ThreadID,
+							"provider":  e.Provider,
+							"model":     e.Model,
+							"chunk":     chunk.Content,
+							"seq":       chunkSeq,
+							"done":      chunk.Done,
+						})
+					}
+					if chunk.Done {
+						lastChunk = chunk
+					}
+				}
+
+				result.LatencyMs = time.Since(provStart).Milliseconds()
+				result.Content = contentBuf.String()
+				result.FinishReason = lastChunk.FinishReason
+				result.ToolCalls = lastChunk.ToolCalls
+				if lastChunk.Model != "" {
+					result.Model = lastChunk.Model
+				}
+				if lastChunk.Usage != nil {
+					result.Usage = LLMUsage{
+						PromptTokens:     lastChunk.Usage.PromptTokens,
+						CompletionTokens: lastChunk.Usage.CompletionTokens,
+						TotalTokens:      lastChunk.Usage.TotalTokens,
+					}
+				}
+
+				slog.Info("llm probe: provider streamed",
+					"provider", e.Provider,
+					"model", result.Model,
+					"latency_ms", result.LatencyMs,
+					"chunks", chunkSeq,
+					"content_len", contentBuf.Len(),
+					"tokens", result.Usage.TotalTokens,
+				)
+				SwarmProbeProviderLatency.WithLabelValues(e.Provider, "ok").Observe(float64(result.LatencyMs) / 1000.0)
+
+				mu.Lock()
+				results[idx] = result
+				mu.Unlock()
+
+				// Send the final complete response event so the
+				// frontend can finalize the tile with full metadata.
+				p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_response", map[string]interface{}{
+					"event":     "provider_response",
+					"thread_id": req.ThreadID,
+					"response": map[string]interface{}{
+						"provider":      result.Provider,
+						"model":         result.Model,
+						"content":       result.Content,
+						"latency_ms":    result.LatencyMs,
+						"finish_reason": result.FinishReason,
+						"token_usage": map[string]int{
+							"prompt_tokens":     result.Usage.PromptTokens,
+							"completion_tokens": result.Usage.CompletionTokens,
+							"total_tokens":      result.Usage.TotalTokens,
+						},
+						"timestamp": float64(time.Now().UnixMilli()) / 1000.0,
+					},
+				})
+				return
+			}
+
+			// ── Non-streaming fallback ──────────────────────────────
+			// Provider doesn't support streaming or no WebSocket hub.
 			resp, err := provider.Complete(ctx, cr)
 			result.LatencyMs = time.Since(provStart).Milliseconds()
 

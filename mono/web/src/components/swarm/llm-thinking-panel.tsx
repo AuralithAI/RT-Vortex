@@ -167,6 +167,7 @@ function ProviderTile({
   const meta = getProviderMeta(response.provider);
   const succeeded = !response.error;
   const sanitized = sanitizeLLMContent(response.content, response.provider);
+  const isLiveStreaming = !!(response as ProviderResponseData & { _streaming?: boolean })._streaming;
 
   // Content is "new" (should animate) if the thread is still active.
   // Once all providers are done, skip animation on re-renders.
@@ -212,7 +213,14 @@ function ProviderTile({
 
         {/* Status indicators */}
         <div className="flex items-center gap-2">
-          {succeeded ? (
+          {isLiveStreaming ? (
+            <>
+              <span className="flex items-center gap-1 text-[11px] text-blue-500 dark:text-blue-400">
+                <Activity className="h-3 w-3 animate-pulse" />
+                Streaming…
+              </span>
+            </>
+          ) : succeeded ? (
             <>
               <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
                 <Clock className="h-3 w-3" />
@@ -231,9 +239,23 @@ function ProviderTile({
 
       {/* Content area */}
       <div className="px-4 py-3">
-        {isStreaming && !response.content ? (
+        {isStreaming && !response.content && !isLiveStreaming ? (
           <div className="py-2">
             <ThinkingVerbRotator size="sm" intervalMs={1100} />
+          </div>
+        ) : isLiveStreaming && response.content ? (
+          /* Live streaming — render content directly (no typewriter,
+             the text is already appearing incrementally from the
+             WebSocket chunks). */
+          <div className="relative">
+            <div className="max-h-[500px] overflow-y-auto">
+              <LLMMarkdown
+                content={sanitized.length > 400 && !expanded ? sanitized.slice(0, 400) + "…" : sanitized}
+                variant="light"
+                className="text-[13px] leading-relaxed"
+              />
+              <span className="inline-block w-[2px] h-[13px] bg-blue-400 ml-0.5 animate-pulse align-text-bottom" />
+            </div>
           </div>
         ) : succeeded ? (
           <div className="relative">
