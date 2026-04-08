@@ -16,19 +16,26 @@ export function sanitizeLLMContent(raw: string): string {
   //    function_result sub-blocks that Claude echoes back.
   cleaned = cleaned.replace(/<function_calls>[\s\S]*?<\/function_calls>/g, "");
 
-  // 2. Remove unclosed / trailing function_calls (truncated responses).
-  cleaned = cleaned.replace(/<function_calls>[\s\S]*$/g, "");
+  // 2. Remove unclosed / trailing function_calls — but ONLY if it appears
+  //    near the end of the text (within the last 2000 chars) to avoid
+  //    nuking legitimate content that follows an echoed tag mid-response.
+  //    We repeatedly strip unclosed blocks that are within the trailing
+  //    portion of the string.
+  cleaned = cleaned.replace(/<function_calls>(?:(?!<function_calls>)[\s\S]){0,2000}$/g, "");
 
   // 3. Remove <function_result>...</function_result> blocks (Claude echoes
   //    search results, file contents, etc. back into its text stream).
   cleaned = cleaned.replace(/<function_result>[\s\S]*?<\/function_result>/g, "");
-  // Unclosed / trailing function_result.
-  cleaned = cleaned.replace(/<function_result>[\s\S]*$/g, "");
+  // Unclosed / trailing function_result (conservative — trailing portion only).
+  cleaned = cleaned.replace(/<function_result>(?:(?!<function_result>)[\s\S]){0,2000}$/g, "");
 
   // 4. Remove individual invoke / antml:invoke tags that might be outside blocks.
   cleaned = cleaned.replace(/<\/?invoke[^>]*>/g, "");
   cleaned = cleaned.replace(/<\/?antml:invoke[^>]*>/g, "");
-  cleaned = cleaned.replace(/<\/?antml:parameter[^>]*>[\s\S]*?(?:<\/antml:parameter>|$)/g, "");
+  // Remove paired antml:parameter tags with content between them.
+  cleaned = cleaned.replace(/<parameter[^>]*>[\s\S]*?<\/antml:parameter>/g, "");
+  // Remove orphaned opening/closing antml:parameter tags (tag only, not trailing content).
+  cleaned = cleaned.replace(/<\/?antml:parameter[^>]*>/g, "");
 
   // 5. Remove workspace_ tool calls that appear as plain text.
   //    e.g. "<invoke name="workspace_search">" or "<invoke name="workspace_list_dir">"
@@ -50,8 +57,9 @@ export function sanitizeLLMContent(raw: string): string {
   //     by requiring at least one underscore in the tag name.
   // Paired: <search_code>...</search_code>
   cleaned = cleaned.replace(/<([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*>[\s\S]*?<\/\1\s*>/gi, "");
-  // Unclosed / trailing
-  cleaned = cleaned.replace(/<([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*>[\s\S]*$/gi, "");
+  // Unclosed / trailing — conservative: only strip if the unclosed block is
+  // within the last 2000 chars so we don't eat the entire response.
+  cleaned = cleaned.replace(/<([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*>(?:(?!<\1)[\s\S]){0,2000}$/gi, "");
   // Self-closing: <get_index_status />
   cleaned = cleaned.replace(/<([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*\/?>/gi, "");
   // Orphaned closing: </search_code>
@@ -85,18 +93,22 @@ export function sanitizeLLMContent(raw: string): string {
 
   // 10. Remove tool_use / tool_result JSON-like fragments Claude sometimes
   //     emits as text (e.g. {"type":"tool_use","id":"toolu_...",...}).
-  cleaned = cleaned.replace(/\{"type"\s*:\s*"tool_(?:use|result)"[\s\S]*?\}\s*/g, "");
+  //     Use a balanced-brace approach: match the opening { and consume
+  //     only until a } on the same nesting level, limited to 2000 chars
+  //     to avoid runaway matches across the entire response.
+  cleaned = cleaned.replace(/\{"type"\s*:\s*"tool_(?:use|result)"[^}]{0,2000}\}\s*/g, "");
 
   // 10b. Remove Gemini-style Python tool invocations that appear as text.
   //      e.g. `print(search_code("some query"))`, `print(get_file_content("path"))`,
   //      `print(get_index_status())`, `print(report_plan({...}))`.
+  //      Use [^\n]* instead of [\s\S]*? to prevent cross-line matching.
   cleaned = cleaned.replace(
-    /^print\(\s*(?:search_code|get_file_content|get_index_status|report_plan|get_index|submit_plan|create_plan)\s*\([\s\S]*?\)\s*\)\s*$/gm,
+    /^print\(\s*(?:search_code|get_file_content|get_index_status|report_plan|get_index|submit_plan|create_plan)\s*\([^\n]*\)\s*\)\s*$/gm,
     "",
   );
   // Also bare calls without print()
   cleaned = cleaned.replace(
-    /^(?:search_code|get_file_content|get_index_status|report_plan|get_index|submit_plan|create_plan)\s*\([\s\S]*?\)\s*$/gm,
+    /^(?:search_code|get_file_content|get_index_status|report_plan|get_index|submit_plan|create_plan)\s*\([^\n]*\)\s*$/gm,
     "",
   );
 

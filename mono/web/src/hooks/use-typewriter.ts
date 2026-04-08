@@ -89,10 +89,24 @@ export function useTypewriter(
 
     const boundaries = wordBoundariesRef.current;
     const timer = setInterval(() => {
-      wordIdxRef.current += 1;
+      // Find the current word-boundary index that matches our charIndex,
+      // then advance to the next one.  This avoids the off-by-one that
+      // previously skipped the first word after a reset.
+      let nextWordIdx = wordIdxRef.current;
+
+      // If we haven't revealed anything yet (charIndex === 0), start at
+      // the first boundary (index 0).  Otherwise advance past current.
+      if (charIndex === 0 && nextWordIdx === 0) {
+        // first tick — reveal the first word
+      } else {
+        nextWordIdx += 1;
+      }
+
+      wordIdxRef.current = nextWordIdx;
+
       const nextChar =
-        wordIdxRef.current < boundaries.length
-          ? boundaries[wordIdxRef.current]
+        nextWordIdx < boundaries.length
+          ? boundaries[nextWordIdx]
           : fullText.length;
 
       setCharIndex(nextChar);

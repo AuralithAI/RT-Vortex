@@ -259,6 +259,15 @@ function ProviderTile({
                   </button>
                 )}
               </>
+            ) : response.content ? (
+              /* Sanitization stripped all visible text but the LLM did
+                 respond (tokens were consumed).  Show the raw content
+                 as a fallback so users can still see the response. */
+              <TileStreamingContent
+                content={response.content}
+                expanded={expanded}
+                isNew={isNewContent}
+              />
             ) : (
               <p className="text-xs italic text-muted-foreground">
                 (tool-call only — no text content)
