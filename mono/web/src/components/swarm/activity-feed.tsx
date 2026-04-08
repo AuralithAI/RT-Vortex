@@ -208,7 +208,15 @@ function formatTime(timestamp: string): string {
 }
 
 export function ActivityFeed({ events, maxItems = 50 }: ActivityFeedProps) {
-  const displayed = events.slice(0, maxItems);
+  // Filter out low-value noise events that would flood the feed.
+  // provider_streaming_start is internal plumbing (spinner trigger);
+  // provider_streaming_chunk is legacy (server no longer sends it).
+  const meaningful = events.filter(
+    (e) =>
+      e.event !== "provider_streaming_start" &&
+      e.event !== "provider_streaming_chunk",
+  );
+  const displayed = meaningful.slice(0, maxItems);
 
   if (displayed.length === 0) {
     return (

@@ -103,8 +103,10 @@ type Client struct {
 }
 
 const (
-	sendBufSize = 64
-	writeWait   = 10 * time.Second
+	sendBufSize = 64 // per-client outbound buffer; safe now that streaming
+	// chunks are accumulated server-side (2 WS msgs per
+	// provider instead of hundreds).
+	writeWait = 10 * time.Second
 )
 
 // ── Hub ─────────────────────────────────────────────────────────────────────
@@ -133,6 +135,8 @@ type swarmHistoryEntry struct {
 }
 
 // Maximum number of swarm events kept per task for replay.
+// With server-side chunk accumulation, only structural events are stored
+// (thread_opened, provider_response, consensus_result, etc.).
 const swarmHistoryMax = 200
 
 // NewHub creates and starts a new Hub.
@@ -505,7 +509,9 @@ func (h *Hub) BroadcastSwarm(evt SwarmEvent) {
 
 	h.mu.Lock()
 
-	// Buffer the event for late-joining clients.
+	// Buffer the event for late-joining clients so they get the full
+	// discussion state on reconnect. All events we broadcast now are
+	// structural (no more per-token streaming chunks).
 	if evt.TaskID != "" {
 		hist := h.swarmHistory[evt.TaskID]
 		if len(hist) >= swarmHistoryMax {
@@ -601,6 +607,10 @@ func (h *Hub) HasMetricsSubscribers() bool {
 
 // WritePump writes queued messages to the WebSocket until the client disconnects.
 // Callers must pass a context created with context.WithoutCancel.
+//
+// After writing one message, the pump drains any additional queued messages
+// without blocking. This reduces write-syscall overhead when multiple events
+// arrive in a burst (e.g. streaming chunks from several LLM providers).
 func (h *Hub) WritePump(ctx context.Context, c *Client) {
 	defer func() {
 		h.Unsubscribe(c)
@@ -621,6 +631,24 @@ func (h *Hub) WritePump(ctx context.Context, c *Client) {
 			if err != nil {
 				slog.Debug("ws: write failed", "error", err, "review_id", c.reviewID)
 				return
+			}
+
+			// Drain any already-queued messages to reduce per-message
+			// write overhead. This is the same pattern gorilla/websocket
+			// examples use and is critical under streaming load.
+			n := len(c.send)
+			for i := 0; i < n; i++ {
+				extra, ok := <-c.send
+				if !ok {
+					return
+				}
+				writeCtx2, cancel2 := context.WithTimeout(ctx, writeWait)
+				err = c.conn.Write(writeCtx2, websocket.MessageText, extra)
+				cancel2()
+				if err != nil {
+					slog.Debug("ws: write failed (drain)", "error", err)
+					return
+				}
 			}
 
 		case <-closeCtx.Done():

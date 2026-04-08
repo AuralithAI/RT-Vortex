@@ -72,8 +72,24 @@ export function useDiscussionEvents(events: SwarmWsEvent[]): DiscussionState {
           const threadId = data.thread_id as string;
           if (!threadId) break;
 
-          const existing = threadMap.get(threadId);
-          if (!existing) break;
+          // Auto-create thread if it doesn't exist yet (e.g. thread_opened
+          // event was missed during reconnect or dropped from replay buffer).
+          let existing = threadMap.get(threadId);
+          if (!existing) {
+            existing = {
+              thread_id: threadId,
+              agent_id: "",
+              agent_role: "",
+              topic: "",
+              action_type: "",
+              responses: [],
+              status: "open" as const,
+              provider_count: 0,
+              success_count: 0,
+              created_at: Date.now() / 1000,
+            };
+            threadMap.set(threadId, existing);
+          }
 
           const resp = data.response as ProviderResponseData | undefined;
           if (resp) {
@@ -110,41 +126,54 @@ export function useDiscussionEvents(events: SwarmWsEvent[]): DiscussionState {
         }
 
         case "provider_streaming_chunk": {
-          // Incremental streaming chunk from a provider. Accumulate
-          // content so the UI can render text as it arrives, word by
-          // word, instead of waiting for the full response.
+          // Legacy: server no longer sends this event. Streaming
+          // accumulation now happens server-side. Ignore gracefully
+          // in case of replay from older history.
+          break;
+        }
+
+        case "provider_streaming_start": {
+          // A provider has started generating. Show a spinner/placeholder
+          // in the UI until the full provider_response arrives.
           const threadId = data.thread_id as string;
           if (!threadId) break;
 
-          const existing = threadMap.get(threadId);
-          if (!existing) break;
+          let existing = threadMap.get(threadId);
+          if (!existing) {
+            existing = {
+              thread_id: threadId,
+              agent_id: "",
+              agent_role: "",
+              topic: "",
+              action_type: "",
+              responses: [],
+              status: "open" as const,
+              provider_count: 0,
+              success_count: 0,
+              created_at: Date.now() / 1000,
+            };
+            threadMap.set(threadId, existing);
+          }
 
           const provider = data.provider as string;
           const model = data.model as string;
-          const chunkText = data.chunk as string;
-          if (!provider || !chunkText) break;
+          if (!provider) break;
 
-          // Find or create the in-progress response for this provider.
-          let entry = existing.responses.find(
+          // Create an in-progress placeholder if we don't already have
+          // a response from this provider.
+          const alreadyHas = existing.responses.some(
             (r) => r.provider === provider && r.model === model,
           );
-          if (!entry) {
-            entry = {
+          if (!alreadyHas) {
+            existing.responses.push({
               provider,
               model: model ?? provider,
               content: "",
               latency_ms: 0,
               _streaming: true,
-            } as ProviderResponseData & { _streaming?: boolean };
-            existing.responses.push(entry);
+            } as ProviderResponseData & { _streaming?: boolean });
             existing.provider_count = existing.responses.length;
-            existing.success_count = existing.responses.filter(
-              (r) => !r.error
-            ).length;
           }
-
-          // Append the chunk to accumulated content.
-          entry.content = (entry.content ?? "") + chunkText;
           break;
         }
 

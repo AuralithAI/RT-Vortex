@@ -226,9 +226,16 @@ func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*Probe
 			}
 
 			// ── Streaming path ──────────────────────────────────────
-			// If the provider supports streaming, use StreamComplete so
-			// the frontend receives incremental chunks in real time
-			// instead of waiting 45-120s for the full response.
+			// We use streaming to reduce time-to-first-token, but we
+			// do NOT broadcast per-chunk WS events. Instead:
+			//   1. One "provider_streaming_start" event (UI shows spinner)
+			//   2. Accumulate content server-side (zero WS traffic)
+			//   3. One "provider_response" event with full content (UI
+			//      renders it with a lightweight typewriter animation)
+			//
+			// This is O(2) WS messages per provider regardless of
+			// response length. At 1M users × 4 providers = 8M messages
+			// total, not 1M × 176 chunks × 4 = 704M messages.
 			canStream := p.wsHub != nil && req.TaskID != "" && req.ThreadID != ""
 			sp, isStreamable := provider.(llm.StreamingProvider)
 
@@ -264,26 +271,23 @@ func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*Probe
 					return
 				}
 
-				// Read streaming chunks and forward each to the UI.
+				// Tell the UI this provider started generating. Single
+				// lightweight event — the tile shows a spinner until
+				// the final provider_response arrives.
+				p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_streaming_start", map[string]interface{}{
+					"event":     "provider_streaming_start",
+					"thread_id": req.ThreadID,
+					"provider":  e.Provider,
+					"model":     e.Model,
+				})
+
+				// ── Server-side accumulation (no WS traffic) ─────────
 				var contentBuf strings.Builder
 				var lastChunk llm.StreamChunk
-				chunkSeq := 0
 
 				for chunk := range ch {
 					if chunk.Content != "" {
 						contentBuf.WriteString(chunk.Content)
-						chunkSeq++
-
-						// Send incremental chunk to UI via WebSocket.
-						p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_streaming_chunk", map[string]interface{}{
-							"event":     "provider_streaming_chunk",
-							"thread_id": req.ThreadID,
-							"provider":  e.Provider,
-							"model":     e.Model,
-							"chunk":     chunk.Content,
-							"seq":       chunkSeq,
-							"done":      chunk.Done,
-						})
 					}
 					if chunk.Done {
 						lastChunk = chunk
@@ -309,7 +313,6 @@ func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*Probe
 					"provider", e.Provider,
 					"model", result.Model,
 					"latency_ms", result.LatencyMs,
-					"chunks", chunkSeq,
 					"content_len", contentBuf.Len(),
 					"tokens", result.Usage.TotalTokens,
 				)
@@ -319,8 +322,10 @@ func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*Probe
 				results[idx] = result
 				mu.Unlock()
 
-				// Send the final complete response event so the
-				// frontend can finalize the tile with full metadata.
+				// Send the final complete response — the ONLY data-
+				// carrying WS event. The frontend typewriter animation
+				// gives the user the streaming feel without real-time
+				// chunk traffic.
 				p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_response", map[string]interface{}{
 					"event":     "provider_response",
 					"thread_id": req.ThreadID,

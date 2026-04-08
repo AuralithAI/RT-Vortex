@@ -603,8 +603,8 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 		}
 		var toolCalls []ToolCall
 		var activeTool *pendingToolCall
-		var inThinkingBlock bool  // true while streaming a "thinking" content block
-		var thinkingChars int     // total thinking characters received (for logging)
+		var inThinkingBlock bool // true while streaming a "thinking" content block
+		var thinkingChars int    // total thinking characters received (for logging)
 
 		for scanner.Scan() {
 			line := scanner.Text()
