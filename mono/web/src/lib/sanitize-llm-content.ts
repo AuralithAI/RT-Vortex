@@ -1,142 +1,186 @@
-// Strip internal LLM tool-use markup from provider responses before rendering.
-// Models like Claude emit XML-based function_calls / invoke blocks that
-// should never be shown to the end user.  Claude also tends to echo tool-call
-// arguments as plain text (e.g. repo UUIDs followed by search queries).
+// ─── Provider-Aware LLM Response Sanitizer ──────────────────────────────────
+// Each LLM provider leaks different artifacts into its text stream.  Rather
+// than a single gauntlet of regexes that risk false-positive matches across
+// providers, we dispatch to a dedicated cleaner per provider.
+//
+// Provider string is whatever the backend sends — typically "anthropic",
+// "openai", "grok", "gemini".  An unknown or missing provider gets the
+// conservative shared cleaner only.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Known LLM provider identifiers. */
+export type LLMProvider = "anthropic" | "grok" | "openai" | "gemini";
 
 /**
- * Remove XML-based tool-call blocks and other LLM-internal markup from a
- * response string so only the human-readable prose remains.
+ * Production-grade LLM response sanitizer.
+ *
+ * @param raw      — The raw LLM response text.
+ * @param provider — Optional provider key (e.g. "anthropic", "gemini").
+ *                   When omitted, only the shared (safe) rules run.
  */
-export function sanitizeLLMContent(raw: string): string {
+export function sanitizeLLMContent(raw: string, provider?: string): string {
   if (!raw || typeof raw !== "string") return "";
 
   let cleaned = raw;
 
-  // 1. Remove paired function_calls blocks (Claude-style), including nested
-  //    function_result sub-blocks that Claude echoes back.
-  cleaned = cleaned.replace(/<function_calls>[\s\S]*?<\/function_calls>/g, "");
+  // Normalise provider key so "Anthropic", "GEMINI", etc. all match.
+  const key = (provider ?? "").toLowerCase().replace(/[^a-z]/g, "");
 
-  // 2. Remove unclosed / trailing function_calls — but ONLY if it appears
-  //    near the end of the text (within the last 2000 chars) to avoid
-  //    nuking legitimate content that follows an echoed tag mid-response.
-  //    We repeatedly strip unclosed blocks that are within the trailing
-  //    portion of the string.
-  cleaned = cleaned.replace(/<function_calls>(?:(?!<function_calls>)[\s\S]){0,2000}$/g, "");
+  switch (key) {
+    case "anthropic":
+      cleaned = sanitizeAnthropic(cleaned);
+      break;
+    case "grok":
+      cleaned = sanitizeGrok(cleaned);
+      break;
+    case "gemini":
+    case "google":
+      cleaned = sanitizeGemini(cleaned);
+      break;
+    case "openai":
+      cleaned = sanitizeOpenAI(cleaned);
+      break;
+    default:
+      // Unknown / missing provider — apply all provider cleaners so
+      // nothing leaks.  This is the fallback for call sites that don't
+      // have a provider (e.g. agent chat messages).
+      cleaned = sanitizeAnthropic(cleaned);
+      cleaned = sanitizeGrok(cleaned);
+      cleaned = sanitizeGemini(cleaned);
+      break;
+  }
 
-  // 3. Remove <function_result>...</function_result> blocks (Claude echoes
-  //    search results, file contents, etc. back into its text stream).
-  cleaned = cleaned.replace(/<function_result>[\s\S]*?<\/function_result>/g, "");
-  // Unclosed / trailing function_result (conservative — trailing portion only).
-  cleaned = cleaned.replace(/<function_result>(?:(?!<function_result>)[\s\S]){0,2000}$/g, "");
+  // ── Shared finishing rules (safe for every provider) ──────────────────
 
-  // 4. Remove individual invoke / antml:invoke tags that might be outside blocks.
-  cleaned = cleaned.replace(/<\/?invoke[^>]*>/g, "");
-  cleaned = cleaned.replace(/<\/?antml:invoke[^>]*>/g, "");
-  // Remove paired antml:parameter tags with content between them.
-  cleaned = cleaned.replace(/<parameter[^>]*>[\s\S]*?<\/antml:parameter>/g, "");
-  // Remove orphaned opening/closing antml:parameter tags (tag only, not trailing content).
-  cleaned = cleaned.replace(/<\/?antml:parameter[^>]*>/g, "");
-
-  // 5. Remove workspace_ tool calls that appear as plain text.
-  //    e.g. "<invoke name="workspace_search">" or "<invoke name="workspace_list_dir">"
-  cleaned = cleaned.replace(/<invoke\s+name="workspace_[^"]*"[^>]*>[\s\S]*?<\/invoke>/g, "");
-
-  // 5b. Remove ANY XML tag that looks like a tool/function invocation.
-  //     LLMs (Claude, Gemini, Grok) echo tool calls as XML in their text
-  //     stream.  Tool tags always use snake_case names (search_code,
-  //     get_file_content, report_plan, etc.) which are never valid HTML or
-  //     Markdown.  This generic approach catches all current and future tool
-  //     names without maintaining an explicit list.
-  //
-  //     Pattern: <word_word> ... </word_word>  (snake_case, paired)
-  //              <word_word> ... $              (unclosed / trailing)
-  //              <word_word />                  (self-closing)
-  //              </word_word>                   (orphaned closing tag)
-  //
-  //     Excludes single-word tags that could be HTML (p, div, span, etc.)
-  //     by requiring at least one underscore in the tag name.
+  // Generic snake_case XML tags — tool invocation tags use snake_case names
+  // (search_code, get_file_content, report_plan, etc.) which are never
+  // valid HTML or Markdown.  Requires ≥1 underscore so single-word HTML
+  // tags (p, div, span…) are never touched.
   // Paired: <search_code>...</search_code>
   cleaned = cleaned.replace(/<([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*>[\s\S]*?<\/\1\s*>/gi, "");
-  // Unclosed / trailing — conservative: only strip if the unclosed block is
-  // within the last 2000 chars so we don't eat the entire response.
-  cleaned = cleaned.replace(/<([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*>(?:(?!<\1)[\s\S]){0,2000}$/gi, "");
   // Self-closing: <get_index_status />
   cleaned = cleaned.replace(/<([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*\/?>/gi, "");
   // Orphaned closing: </search_code>
   cleaned = cleaned.replace(/<\/([a-z][a-z0-9]*(?:_[a-z0-9]+)+)\s*>/gi, "");
 
-  // Also strip single-word XML tags that are known tool parameter wrappers
-  // (query, path, instruction, etc.) — these are NOT valid HTML either.
-  // Use a small explicit set here since single-word tags overlap with HTML.
+  // Known single-word tool-parameter wrapper tags.
   cleaned = cleaned.replace(
     /<\/?(?:query|path|instruction|step_by_step_plan|affected_files|agents_needed)\s*>/gi,
     "",
   );
 
-  // 6. Remove parameter tags (including those with content between them).
-  cleaned = cleaned.replace(/<parameter[^>]*>[\s\S]*?<\/parameter>/g, "");
-  cleaned = cleaned.replace(/<\/?parameter[^>]*>/g, "");
-
-  // 7. Remove VSCode.Cell tags.
+  // Remove VSCode.Cell tags.
   cleaned = cleaned.replace(/<\/?VSCode\.Cell[^>]*>/g, "");
 
-  // 8. Remove lines that are just a UUID (repo_id) optionally followed by a
-  //    search query — Claude echoes tool-call arguments as plain text.
-  //    Pattern: lines containing a bare UUID-v4 possibly followed by words.
+  // Lines that are just a bare UUID-v4 (repo_id echo).
   cleaned = cleaned.replace(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}(?:\s+\S.*)?$/gm,
     "",
   );
 
-  // 9. Remove orphaned tool-call ID lines (toolu_..., call_..., chatcmpl-...).
+  // Orphaned tool-call ID lines (toolu_..., call_..., chatcmpl-...).
   cleaned = cleaned.replace(/^(?:toolu_|call_|chatcmpl-)[A-Za-z0-9_-]+\s*$/gm, "");
 
-  // 10. Remove tool_use / tool_result JSON-like fragments Claude sometimes
-  //     emits as text (e.g. {"type":"tool_use","id":"toolu_...",...}).
-  //     Use a balanced-brace approach: match the opening { and consume
-  //     only until a } on the same nesting level, limited to 2000 chars
-  //     to avoid runaway matches across the entire response.
-  cleaned = cleaned.replace(/\{"type"\s*:\s*"tool_(?:use|result)"[^}]{0,2000}\}\s*/g, "");
-
-  // 10b. Remove Gemini-style Python tool invocations that appear as text.
-  //      e.g. `print(search_code("some query"))`, `print(get_file_content("path"))`,
-  //      `print(get_index_status())`, `print(report_plan({...}))`.
-  //      Use [^\n]* instead of [\s\S]*? to prevent cross-line matching.
-  cleaned = cleaned.replace(
-    /^print\(\s*(?:search_code|get_file_content|get_index_status|report_plan|get_index|submit_plan|create_plan)\s*\([^\n]*\)\s*\)\s*$/gm,
-    "",
-  );
-  // Also bare calls without print()
-  cleaned = cleaned.replace(
-    /^(?:search_code|get_file_content|get_index_status|report_plan|get_index|submit_plan|create_plan)\s*\([^\n]*\)\s*$/gm,
-    "",
-  );
-
-  // 11. Remove lines that are only tool invocation narration from Claude
-  //     e.g. "Now let me search for..." or "Let me look for..." followed by
-  //     nothing useful (often the only text between stripped invoke blocks).
-  //     Now that tool-call XML is stripped, these orphaned narration lines
-  //     are just noise.  Remove lines that are *only* tool-narration.
-  cleaned = cleaned.replace(
-    /^(?:(?:Now )?[Ll]et me (?:search|look|examine|check|find|also|now)|(?:I'll|I will) (?:search|look|examine|check|find|now)|(?:Let me also|Now I'll|Now let me)|(?:Based on (?:my|the|this)|After reviewing|After examining)).*$/gm,
-    "",
-  );
-  // Remove standalone lines that are just "python" or "```python" (Gemini
-  // echoes code-fence language markers for its internal tool calls).
-  cleaned = cleaned.replace(/^```(?:python|json|go|bash|sh)?\s*$/gm, "");
-
-  // 12. Strip conversational preamble (Grok "Ok I am the orchestrator…",
-  //     Gemini "Hello! As the Orchestrator agent…", etc.).
+  // Strip conversational preamble ("Ok I am the orchestrator…", etc.).
   cleaned = stripLLMPreamble(cleaned);
 
-  // 13. Collapse excessive whitespace left by removals.
+  // Collapse excessive whitespace left by removals.
   cleaned = cleaned.replace(/\n{3,}/g, "\n\n");
 
-  // 14. Trim leading/trailing whitespace.
+  // Trim.
   cleaned = cleaned.trim();
 
   return cleaned;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. Anthropic / Claude
+//    Claude is the most aggressive leaker — full XML tool-call blocks,
+//    <function_calls>, <invoke>, <parameter>, truncated partial tags, and
+//    tool-narration lines between invocations.
+// ─────────────────────────────────────────────────────────────────────────────
+function sanitizeAnthropic(text: string): string {
+  let cleaned = text;
+
+  // Paired XML tool blocks.
+  cleaned = cleaned.replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, "");
+  cleaned = cleaned.replace(/<function_result>[\s\S]*?<\/function_result>/gi, "");
+  cleaned = cleaned.replace(/<invoke[\s\S]*?<\/invoke>/gi, "");
+
+  // Truncated / cut-off tags that never got a closing counterpart.
+  // These appear at the very end of a response when the model stopped
+  // mid-tag (e.g. `<parameter name="end_line`).
+  cleaned = cleaned.replace(/<parameter[^>]*$/gm, "");
+  cleaned = cleaned.replace(/<invoke[^>]*$/gm, "");
+  cleaned = cleaned.replace(/<function_calls[^>]*$/gm, "");
+  cleaned = cleaned.replace(/<function_result[^>]*$/gm, "");
+
+  // Any remaining opening/closing tool tags that survived above.
+  cleaned = cleaned.replace(
+    /<\/?(?:function_calls|invoke|function_result|parameter|antml:invoke|antml:parameter)[^>]*>/gi,
+    "",
+  );
+
+  // tool_use / tool_result JSON fragments Claude sometimes emits inline.
+  // e.g. {"type":"tool_use","id":"toolu_...","name":"search_code",...}
+  cleaned = cleaned.replace(/\{"type"\s*:\s*"tool_(?:use|result)"[^}]{0,3000}\}/g, "");
+
+  // Orphaned narration lines between stripped invoke blocks.
+  // e.g. "Let me search for…", "Now I'll examine…"
+  cleaned = cleaned.replace(
+    /^(?:(?:Now )?[Ll]et me (?:search|look|examine|check|find|also|now)|(?:I'll|I will) (?:search|look|examine|check|find|now)|(?:Let me also|Now I'll|Now let me)|(?:Based on (?:my|the|this)|After reviewing|After examining)).*$/gm,
+    "",
+  );
+
+  return cleaned;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. Grok
+//    Grok occasionally leaks JSON tool fragments.
+// ─────────────────────────────────────────────────────────────────────────────
+function sanitizeGrok(text: string): string {
+  let cleaned = text;
+
+  // JSON tool fragments.
+  cleaned = cleaned.replace(/\{"type"\s*:\s*"tool_(?:use|result)"[^}]{0,3000}\}/g, "");
+
+  return cleaned;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. Gemini / Google
+//    Gemini echoes Python-style tool calls (`print(search_code(…))`) and
+//    stray code-fence language markers.
+// ─────────────────────────────────────────────────────────────────────────────
+function sanitizeGemini(text: string): string {
+  let cleaned = text;
+
+  // Python-style tool invocations (with or without wrapping `print()`).
+  // Match only within a single line — [^\n]* to avoid cross-line eating.
+  cleaned = cleaned.replace(
+    /^(?:print\s*\(\s*)?(?:search_code|get_file_content|get_index_status|report_plan|submit_plan|create_plan|get_index)\s*\([^\n]*\)\s*\)?$/gm,
+    "",
+  );
+
+  // Code-fence language markers that Gemini echoes for its internal calls.
+  cleaned = cleaned.replace(/^```(?:python|json|yaml|xml|go|bash|sh)?\s*$/gm, "");
+
+  return cleaned;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. OpenAI
+//    OpenAI almost never leaks tool markup — cleanest of the bunch.
+// ─────────────────────────────────────────────────────────────────────────────
+function sanitizeOpenAI(text: string): string {
+  // Nothing to strip — OpenAI responses are clean.
+  return text;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Preamble stripper
+// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Remove conversational self-introduction lines that some models (Grok, Gemini)

@@ -114,12 +114,14 @@ function TileStreamingContent({
   content,
   expanded,
   isNew,
+  provider,
 }: {
   content: string;
   expanded: boolean;
   isNew: boolean;
+  provider?: string;
 }) {
-  const sanitized = sanitizeLLMContent(content);
+  const sanitized = sanitizeLLMContent(content, provider);
   const previewText =
     sanitized.length > 400 && !expanded
       ? sanitized.slice(0, 400) + "…"
@@ -164,7 +166,7 @@ function ProviderTile({
   const [expanded, setExpanded] = useState(false);
   const meta = getProviderMeta(response.provider);
   const succeeded = !response.error;
-  const sanitized = sanitizeLLMContent(response.content);
+  const sanitized = sanitizeLLMContent(response.content, response.provider);
 
   // Content is "new" (should animate) if the thread is still active.
   // Once all providers are done, skip animation on re-renders.
@@ -241,6 +243,7 @@ function ProviderTile({
                   content={response.content}
                   expanded={expanded}
                   isNew={isNewContent}
+                  provider={response.provider}
                 />
                 {sanitized.length > 400 && (
                   <button
@@ -267,6 +270,7 @@ function ProviderTile({
                 content={response.content}
                 expanded={expanded}
                 isNew={isNewContent}
+                provider={response.provider}
               />
             ) : (
               <p className="text-xs italic text-muted-foreground">
@@ -454,7 +458,7 @@ function SynthesisBlock({
   synthesisProvider?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const sanitized = sanitizeLLMContent(synthesis);
+  const sanitized = sanitizeLLMContent(synthesis, synthesisProvider);
   const displayContent =
     sanitized.length > 600 && !expanded
       ? sanitized.slice(0, 600) + "…"

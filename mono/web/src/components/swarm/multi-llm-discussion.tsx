@@ -112,7 +112,7 @@ function ProviderResponseCard({
       {/* Content */}
       {succeeded ? (
         (() => {
-          const sanitized = sanitizeLLMContent(response.content);
+          const sanitized = sanitizeLLMContent(response.content, response.provider);
           // If sanitization removed everything, show a subtle note instead of blank.
           if (!sanitized) {
             return (
@@ -252,7 +252,7 @@ function DiscussionThreadCard({
               </div>
               <LLMMarkdown
                 content={(() => {
-                  const s = sanitizeLLMContent(thread.synthesis);
+                  const s = sanitizeLLMContent(thread.synthesis, thread.synthesis_provider);
                   return s.length > 500 ? s.slice(0, 500) + "…" : s;
                 })()}
                 variant="light"

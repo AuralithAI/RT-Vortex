@@ -125,12 +125,14 @@ function TypewriterContent({
   content,
   expanded,
   isNew,
+  provider,
 }: {
   content: string;
   expanded: boolean;
   isNew: boolean;
+  provider?: string;
 }) {
-  const sanitized = sanitizeLLMContent(content);
+  const sanitized = sanitizeLLMContent(content, provider);
   const previewText =
     sanitized.length > 220 && !expanded
       ? sanitized.slice(0, 220) + "…"
@@ -167,7 +169,7 @@ function ModelResponseCard({
   const [expanded, setExpanded] = useState(false);
   const meta = getProviderMeta(response.provider);
   const succeeded = !response.error;
-  const sanitized = sanitizeLLMContent(response.content);
+  const sanitized = sanitizeLLMContent(response.content, response.provider);
 
   const statusBadge: Record<CardStatus, { label: string; cls: string }> = {
     thinking: {
@@ -235,6 +237,7 @@ function ModelResponseCard({
               content={response.content}
               expanded={expanded}
               isNew={isNew}
+              provider={response.provider}
             />
             {sanitized.length > 220 && (
               <button
@@ -515,7 +518,7 @@ function ThreadHero({
               </div>
               <LLMMarkdown
                 content={(() => {
-                  const s = sanitizeLLMContent(thread.synthesis!);
+                  const s = sanitizeLLMContent(thread.synthesis!, thread.synthesis_provider);
                   return s.length > 600 ? s.slice(0, 600) + "…" : s;
                 })()}
                 variant="dark"
