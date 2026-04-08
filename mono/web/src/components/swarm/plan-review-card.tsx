@@ -24,8 +24,9 @@ import type { PlanDocument, PlanStep } from "@/types/swarm";
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Strip conversational preamble that some LLMs (especially Grok) add.
+ * Strip conversational preamble that some LLMs (Grok, Gemini, etc.) add.
  * e.g. "Ok, I am the orchestrator agent and here is my plan..."
+ *      "Hello! As the Orchestrator agent, I've analyzed the task..."
  *
  * Only scans the first few leading lines for preamble patterns.
  */
@@ -48,7 +49,10 @@ function stripPreamble(text: string): string {
       if (
         /^(ok[,.]?\s+)?(i am|i'm|as)\s+(the\s+)?(an?\s+)?orchestrator/.test(lower) ||
         /^(ok[,.]?\s+)?(let me|i'll|i will)\s+(start|begin|create|produce|analy[sz]e)/.test(lower) ||
-        /^(sure|alright|certainly|understood)[,!.]/.test(lower)
+        /^(sure|alright|certainly|understood)[,!.]/.test(lower) ||
+        /^(hello|hi|hey|greetings)[!,.\s]/.test(lower) ||
+        /^as\s+the\s+(orchestrator|team\s+lead)/.test(lower) ||
+        /^i('ve|'ve| have)\s+(analy[sz]ed|reviewed|examined|formulated|assessed)/.test(lower)
       ) {
         continue;
       }

@@ -39,6 +39,7 @@ import type {
   ProviderResponseData,
   ConsensusResultData,
 } from "@/types/swarm";
+import { ThinkingVerbRotator } from "@/components/swarm/thinking-verb-rotator";
 
 // ─── Provider Icon (SVG brand logo with accent ring) ────────────────────────
 
@@ -226,9 +227,8 @@ function ModelResponseCard({
       {/* ── Card body ────────────────────────────────────────────── */}
       <div className="flex-1 px-4 pb-3">
         {status === "thinking" && !response.content ? (
-          <div className="flex items-center gap-2 py-3 text-sm text-white/40">
-            <Activity className="h-4 w-4 animate-pulse" />
-            <span>Analysing the problem…</span>
+          <div className="flex items-center gap-2 py-3">
+            <ThinkingVerbRotator size="sm" intervalMs={1100} />
           </div>
         ) : succeeded ? (
           <div className="relative">
@@ -290,16 +290,13 @@ function ModelResponseCard({
 
 function PlaceholderCard({ providerName }: { providerName?: string }) {
   return (
-    <div className="flex flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-[#1a1b2e]/50 backdrop-blur-sm animate-pulse">
+    <div className="flex flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-[#1a1b2e]/50 backdrop-blur-sm">
       <div className="flex items-center gap-2.5 px-4 py-3">
         <div className="h-7 w-7 rounded-full bg-white/10" />
         <div className="h-4 w-20 rounded bg-white/10" />
-        <TypingDots className="text-white/20" />
       </div>
-      <div className="space-y-2 px-4 pb-4">
-        <div className="h-3 w-full rounded bg-white/5" />
-        <div className="h-3 w-3/4 rounded bg-white/5" />
-        <div className="h-3 w-1/2 rounded bg-white/5" />
+      <div className="px-4 pb-4">
+        <ThinkingVerbRotator size="sm" intervalMs={1300} />
       </div>
     </div>
   );
@@ -599,12 +596,33 @@ export function OrchestrationHero({
                 {agentLabel}
               </h2>
               <span className="text-2xl">🧠</span>
+              {hasActiveThreads && (
+                <span className="ml-1">
+                  <ThinkingVerbRotator size="sm" intervalMs={1100} />
+                </span>
+              )}
             </div>
 
-            {/* Subtitle */}
-            <p className="text-sm text-white/40">
-              Orchestrating real-time conversations with multiple LLMs
-            </p>
+            {/* Subtitle — dynamic when active */}
+            {hasActiveThreads ? (
+              <div className="flex items-center gap-2 text-sm text-white/40">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-violet-400 opacity-60" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-violet-500" />
+                </span>
+                <span>
+                  Routing to{" "}
+                  <span className="font-semibold text-white/60">
+                    {totalModels} model{totalModels !== 1 ? "s" : ""}
+                  </span>
+                  {" "}in parallel
+                </span>
+              </div>
+            ) : (
+              <p className="text-sm text-white/40">
+                Orchestrating real-time conversations with multiple LLMs
+              </p>
+            )}
 
             {/* Provider avatar row */}
             {displayProviders.length > 0 && (
@@ -726,9 +744,8 @@ export function OrchestrationHero({
               consensus — all in real time
             </p>
             {hasActiveThreads && (
-              <div className="mt-4 flex items-center gap-2 text-xs text-yellow-400/60">
-                <Activity className="h-4 w-4 animate-pulse" />
-                Models are responding…
+              <div className="mt-4">
+                <ThinkingVerbRotator size="md" intervalMs={1000} />
               </div>
             )}
           </div>

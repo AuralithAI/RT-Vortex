@@ -62,7 +62,8 @@ export function sanitizeLLMContent(raw: string): string {
   //     Only remove when the cleaned result would otherwise be mostly this.
   //     — skip this aggressive rule; the narration may be useful to users.
 
-  // 12. Strip conversational preamble (Grok-style "Ok I am the orchestrator…").
+  // 12. Strip conversational preamble (Grok "Ok I am the orchestrator…",
+  //     Gemini "Hello! As the Orchestrator agent…", etc.).
   cleaned = stripLLMPreamble(cleaned);
 
   // 13. Collapse excessive whitespace left by removals.
@@ -75,8 +76,9 @@ export function sanitizeLLMContent(raw: string): string {
 }
 
 /**
- * Remove conversational self-introduction lines that some models (Grok)
+ * Remove conversational self-introduction lines that some models (Grok, Gemini)
  * prefix their responses with, e.g. "Ok, I am the orchestrator agent…"
+ * or "Hello! As the Orchestrator agent, I've analyzed…"
  *
  * Only scans the first few lines — once real content is found, the rest
  * of the text passes through untouched for performance.
@@ -100,7 +102,10 @@ function stripLLMPreamble(text: string): string {
       if (
         /^(ok[,.]?\s+)?(i am|i'm|as)\s+(the\s+)?(an?\s+)?orchestrator/.test(lower) ||
         /^(ok[,.]?\s+)?(let me|i'll|i will)\s+(start|begin|create|produce|analy[sz]e)/.test(lower) ||
-        /^(sure|alright|certainly|understood)[,!.]/.test(lower)
+        /^(sure|alright|certainly|understood)[,!.]/.test(lower) ||
+        /^(hello|hi|hey|greetings)[!,.\s]/.test(lower) ||
+        /^as\s+the\s+(orchestrator|team\s+lead)/.test(lower) ||
+        /^i('ve|'ve| have)\s+(analy[sz]ed|reviewed|examined|formulated|assessed)/.test(lower)
       ) {
         continue;
       }

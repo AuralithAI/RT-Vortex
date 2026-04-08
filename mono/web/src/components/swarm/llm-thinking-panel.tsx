@@ -34,6 +34,7 @@ import type {
   ProviderResponseData,
   ConsensusResultData,
 } from "@/types/swarm";
+import { ThinkingVerbRotator } from "@/components/swarm/thinking-verb-rotator";
 
 // ── Animated Typing Indicator ───────────────────────────────────────────────
 
@@ -187,10 +188,8 @@ function ProviderTile({
       {/* Content area */}
       <div className="px-4 py-3">
         {isStreaming && !response.content ? (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Activity className="h-3.5 w-3.5 animate-pulse" />
-            <span>Thinking…</span>
-            <TypingIndicator providerColor={meta.color.includes("orange") ? "bg-orange-400" : meta.color.includes("amber") ? "bg-amber-400" : meta.color.includes("emerald") ? "bg-emerald-400" : meta.color.includes("blue") ? "bg-blue-400" : "bg-gray-400"} />
+          <div className="py-2">
+            <ThinkingVerbRotator size="sm" intervalMs={1100} />
           </div>
         ) : succeeded ? (
           <div className="relative">

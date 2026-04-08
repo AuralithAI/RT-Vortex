@@ -152,9 +152,10 @@ Use `report_plan` to submit a structured plan with:
     def _strip_preamble(text: str) -> str:
         """Remove conversational preamble from LLM output.
 
-        Some models (especially Grok) prefix their responses with lines like
-        ``"Ok, I am the orchestrator agent and here is my plan..."`` or similar
-        self-introductions before the actual content.  Strip those.
+        Some models (Grok, Gemini) prefix their responses with lines like
+        ``"Ok, I am the orchestrator agent and here is my plan..."`` or
+        ``"Hello! As the Orchestrator agent, I've analyzed..."`` before
+        the actual content.  Strip those.
         """
         lines = text.split("\n")
         stripped: list[str] = []
@@ -177,6 +178,21 @@ Use `report_plan` to submit a structured plan with:
                 ):
                     continue
                 if re.match(r"^(sure|alright|certainly|understood)[,!.]", lower):
+                    continue
+                if re.match(
+                    r"^(hello|hi|hey)[!.,]?\s+(as|i am|i'm)\s+(the\s+)?orchestrator",
+                    lower,
+                ):
+                    continue
+                if re.match(
+                    r"^(here is|here's|below is)\s+(my|the)\s+(plan|analysis|summary)",
+                    lower,
+                ):
+                    continue
+                if re.match(
+                    r"^i('ve|'ve| have)\s+(analyz|analys|review|examin|assess)",
+                    lower,
+                ):
                     continue
                 # If we get here, the line is real content.
                 past_preamble = True
@@ -277,24 +293,56 @@ Use `report_plan` to submit a structured plan with:
     def _extract_from_markdown_sections(text: str) -> dict | None:
         """Parse markdown-structured plan text into a plan dict.
 
-        Recognises headings like:
-        - ``### Summary`` / ``## Summary``
-        - ``### Implementation Plan`` / ``### Steps`` / ``### Plan``
-        - ``### Affected Files``
-        - ``### Estimated Complexity``
-        - ``### Agents Needed``
+        Recognises both markdown headings (``## Summary``) and plain-text
+        section labels that some models like Gemini use (``Plan Summary``
+        on its own line).
         """
-        # Split on markdown headings (##, ###, ####) preserving the heading text.
+        # ── Try markdown headings first (##, ###, ####) ──────────────────
         section_pattern = re.compile(r'^#{2,4}\s+(.+)$', re.MULTILINE)
         headings = list(section_pattern.finditer(text))
 
-        if len(headings) < 2:
-            return None  # Not enough structure to parse.
+        if len(headings) >= 2:
+            plan = OrchestratorAgent._parse_sections_from_headings(
+                text, headings,
+            )
+            if plan:
+                return plan
 
+        # ── Fallback: detect plain-text section labels (Gemini-style) ────
+        # These are lines like "Plan Summary", "Implementation Plan",
+        # "Affected Files", etc. sitting alone on a line.
+        known_labels = [
+            "plan summary", "summary",
+            "implementation plan", "plan", "steps",
+            "affected files", "files",
+            "estimated complexity", "complexity",
+            "agents needed", "agents",
+        ]
+        label_pattern = re.compile(
+            r'^(' + '|'.join(re.escape(l) for l in known_labels) + r')\s*$',
+            re.MULTILINE | re.IGNORECASE,
+        )
+        label_matches = list(label_pattern.finditer(text))
+
+        if len(label_matches) >= 2:
+            # Build synthetic heading-like matches.
+            plan = OrchestratorAgent._parse_sections_from_labels(
+                text, label_matches,
+            )
+            if plan:
+                return plan
+
+        return None
+
+    @staticmethod
+    def _parse_sections_from_headings(
+        text: str,
+        headings: list[re.Match],
+    ) -> dict | None:
+        """Extract plan fields from markdown-heading-delimited sections."""
         sections: dict[str, str] = {}
         for i, match in enumerate(headings):
             title = match.group(1).strip().lower()
-            # Normalise common heading variants.
             for key in ("summary", "implementation plan", "plan", "steps",
                         "affected files", "estimated complexity",
                         "agents needed", "agents", "complexity"):
@@ -304,6 +352,43 @@ Use `report_plan` to submit a structured plan with:
                     sections[key] = text[start:end].strip()
                     break
 
+        return OrchestratorAgent._build_plan_from_sections(text, sections, headings[0].start())
+
+    @staticmethod
+    def _parse_sections_from_labels(
+        text: str,
+        labels: list[re.Match],
+    ) -> dict | None:
+        """Extract plan fields from plain-text label-delimited sections."""
+        sections: dict[str, str] = {}
+        for i, match in enumerate(labels):
+            title = match.group(1).strip().lower()
+            # Normalise "plan summary" → "summary" etc.
+            for key in ("summary", "plan summary", "implementation plan",
+                        "plan", "steps", "affected files", "files",
+                        "estimated complexity", "complexity",
+                        "agents needed", "agents"):
+                if key == title or key in title:
+                    norm_key = key
+                    # Collapse aliases.
+                    if norm_key == "plan summary":
+                        norm_key = "summary"
+                    elif norm_key == "files":
+                        norm_key = "affected files"
+                    start = match.end()
+                    end = labels[i + 1].start() if i + 1 < len(labels) else len(text)
+                    sections[norm_key] = text[start:end].strip()
+                    break
+
+        return OrchestratorAgent._build_plan_from_sections(text, sections, labels[0].start())
+
+    @staticmethod
+    def _build_plan_from_sections(
+        text: str,
+        sections: dict[str, str],
+        first_heading_pos: int,
+    ) -> dict | None:
+        """Shared logic: build a plan dict from parsed sections."""
         if not sections:
             return None
 
@@ -311,7 +396,7 @@ Use `report_plan` to submit a structured plan with:
         summary = sections.get("summary", "")
         if not summary:
             # Use text before the first heading as summary.
-            summary = text[:headings[0].start()].strip()
+            summary = text[:first_heading_pos].strip()
         summary = summary[:500]
 
         # ── Steps ────────────────────────────────────────────────────────
