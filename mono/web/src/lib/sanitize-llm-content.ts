@@ -52,6 +52,40 @@ export function sanitizeLLMContent(raw: string, provider?: string): string {
 
   // ── Shared finishing rules (safe for every provider) ──────────────────
 
+  // ── Namespaced XML tool blocks (any provider) ─────────────────────────
+  // LLMs sometimes produce <prefix:function_calls>, <prefix:invoke>, etc.
+  // with arbitrary namespace prefixes (anythingllm:, anthropic:, etc.).
+  // These are never valid user-facing content.
+  cleaned = cleaned.replace(
+    /<[a-z][a-z0-9]*:(?:function_calls|invoke|function_result|parameter)\b[\s\S]*?<\/[a-z][a-z0-9]*:(?:function_calls|invoke|function_result|parameter)\s*>/gi,
+    "",
+  );
+  // Unclosed namespaced blocks (truncated at max_tokens).
+  cleaned = cleaned.replace(
+    /<[a-z][a-z0-9]*:(?:function_calls|invoke|function_result|parameter)\b(?:(?!<\/[a-z][a-z0-9]*:(?:function_calls|invoke|function_result|parameter))[\s\S])*$/gi,
+    "",
+  );
+  // Orphaned namespaced tags.
+  cleaned = cleaned.replace(
+    /<\/?[a-z][a-z0-9]*:(?:function_calls|invoke|function_result|parameter)[^>]*>/gi,
+    "",
+  );
+
+  // Non-namespaced tool blocks.
+  cleaned = cleaned.replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, "");
+  cleaned = cleaned.replace(/<function_result>[\s\S]*?<\/function_result>/gi, "");
+  cleaned = cleaned.replace(/<invoke[\s\S]*?<\/invoke>/gi, "");
+  // Unclosed non-namespaced blocks.
+  cleaned = cleaned.replace(
+    /<(?:function_calls|invoke|function_result)\b(?:(?!<\/(?:function_calls|invoke|function_result))[\s\S])*$/gi,
+    "",
+  );
+  // Orphaned non-namespaced tags.
+  cleaned = cleaned.replace(
+    /<\/?(?:function_calls|invoke|function_result|parameter)\b[^>]*>/gi,
+    "",
+  );
+
   // Generic snake_case XML tags — tool invocation tags use snake_case names
   // (search_code, get_file_content, report_plan, etc.) which are never
   // valid HTML or Markdown.  Requires ≥1 underscore so single-word HTML
@@ -89,6 +123,30 @@ export function sanitizeLLMContent(raw: string, provider?: string): string {
 
   // Trim.
   cleaned = cleaned.trim();
+
+  // Safety net: if after all sanitization the output is still excessively
+  // large, it's almost certainly unsanitized tool debris.  Truncate to
+  // prevent the markdown renderer from hanging the browser.
+  const MAX_SANITIZED_LENGTH = 12000;
+  if (cleaned.length > MAX_SANITIZED_LENGTH) {
+    // Check if the remaining content is mostly XML/tool debris by looking
+    // for a high density of angle brackets — normal prose has very few.
+    const angleBrackets = (cleaned.match(/[<>]/g) || []).length;
+    const ratio = angleBrackets / cleaned.length;
+    if (ratio > 0.02) {
+      // High XML density — this is tool debris, not useful content.
+      // Try to salvage the first meaningful paragraph.
+      const firstParagraph = cleaned.split(/\n{2,}/)[0] || "";
+      if (firstParagraph.length > 20 && firstParagraph.length < 2000) {
+        cleaned = firstParagraph + "\n\n*(Response contained tool-call data that was filtered out.)*";
+      } else {
+        cleaned = "*(Response contained only tool-call data — no analysis produced. The model may have hit its output limit.)*";
+      }
+    } else {
+      // Not XML-heavy — just long prose. Truncate cleanly.
+      cleaned = cleaned.slice(0, MAX_SANITIZED_LENGTH) + "\n\n*(Response truncated for display.)*";
+    }
+  }
 
   return cleaned;
 }
@@ -212,6 +270,35 @@ function extractCodeFromToolResult(inner: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 function sanitizeAnthropic(text: string): string {
   let cleaned = text;
+
+  // ── Step 0: Strip ALL namespaced XML tool-call blocks ─────────────────
+  // Claude generates tool simulations with various XML namespace prefixes:
+  //   <anythingllm:function_calls>…</anythingllm:function_calls>
+  //   <anythingllm:invoke name="search_code">…</anythingllm:invoke>
+  //   <anythingllm:function_result>…</anythingllm:function_result>
+  //   <function_calls>…  <anthropic:invoke>…  etc.
+  // These can be tens of thousands of characters and hang the renderer.
+  // Strip them FIRST before any other processing.
+
+  // Paired namespaced blocks: <prefix:function_calls>…</prefix:function_calls>
+  // Also covers prefix:invoke, prefix:function_result, prefix:parameter.
+  cleaned = cleaned.replace(
+    /<[a-z][a-z0-9]*:(?:function_calls|invoke|function_result|parameter)\b[\s\S]*?<\/[a-z][a-z0-9]*:(?:function_calls|invoke|function_result|parameter)\s*>/gi,
+    "",
+  );
+
+  // Unclosed namespaced blocks (max_tokens cut off mid-tag).
+  // Strip from the last unclosed namespaced opening tag to end of string.
+  cleaned = cleaned.replace(
+    /<[a-z][a-z0-9]*:(?:function_calls|invoke|function_result|parameter)\b(?:(?!<\/[a-z][a-z0-9]*:(?:function_calls|invoke|function_result|parameter))[\s\S])*$/gi,
+    "",
+  );
+
+  // Orphaned namespaced closing/self-closing tags.
+  cleaned = cleaned.replace(
+    /<\/?[a-z][a-z0-9]*:(?:function_calls|invoke|function_result|parameter)[^>]*>/gi,
+    "",
+  );
 
   // ── Step 1: Extract code blocks from <function_result> before stripping ──
   // Claude's tool results echo source code from the repo inside code fences.
