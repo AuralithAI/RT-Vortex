@@ -657,6 +657,9 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 				}
 				if gr.Candidates[0].FinishReason != "" && gr.Candidates[0].FinishReason != "STOP" {
 					sc.FinishReason = strings.ToLower(gr.Candidates[0].FinishReason)
+					if sc.FinishReason == "max_tokens" {
+						sc.FinishReason = "length"
+					}
 				}
 				if gr.Candidates[0].FinishReason == "STOP" {
 					sc.FinishReason = "stop"

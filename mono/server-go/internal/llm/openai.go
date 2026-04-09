@@ -166,7 +166,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		_ = json.Unmarshal(respBody, &errResp)
 		errMsg := errResp.Error.Message
 
-	if resp.StatusCode == http.StatusBadRequest &&
+		if resp.StatusCode == http.StatusBadRequest &&
 			(strings.Contains(errMsg, "max_tokens") ||
 				strings.Contains(errMsg, "output limit") ||
 				strings.Contains(errMsg, "max_completion_tokens")) {

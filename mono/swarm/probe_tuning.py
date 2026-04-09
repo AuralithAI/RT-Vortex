@@ -37,7 +37,7 @@ class AdaptiveProbeConfig:
     preferred_providers: list[str] = field(default_factory=list)
     excluded_providers: list[str] = field(default_factory=list)
     temperature: float = 0.7
-    max_tokens: int = 4096
+    max_tokens: int = 16384
     timeout_seconds: int = 120
     budget_cap_usd: float = 0.0
     tokens_spent: int = 0
@@ -53,7 +53,7 @@ class AdaptiveProbeConfig:
             preferred_providers=d.get("preferred_providers") or [],
             excluded_providers=d.get("excluded_providers") or [],
             temperature=d.get("temperature", 0.7),
-            max_tokens=d.get("max_tokens", 4096),
+            max_tokens=d.get("max_tokens", 16384),
             timeout_seconds=d.get("timeout_seconds", 120),
             budget_cap_usd=d.get("budget_cap_usd", 0.0),
             tokens_spent=d.get("tokens_spent", 0),
@@ -65,15 +65,20 @@ class AdaptiveProbeConfig:
 
     @classmethod
     def default_for_role(cls, role: str) -> "AdaptiveProbeConfig":
-        """Local fallback defaults when Go is unreachable."""
+        """Local fallback defaults when Go is unreachable.
+
+        max_tokens is set high (16384) for all roles to prevent truncation.
+        Cost is based on actual tokens generated, not the cap — a higher cap
+        just gives the model room to finish its answer without being cut off.
+        """
         defaults: dict[str, dict[str, Any]] = {
-            "orchestrator": {"num_models": 3, "temperature": 0.5, "timeout_seconds": 180, "max_tokens": 8192},
-            "architect": {"num_models": 3, "temperature": 0.6, "max_tokens": 8192},
-            "senior_dev": {"num_models": 2, "temperature": 0.4, "timeout_seconds": 150, "max_tokens": 8192},
-            "qa": {"num_models": 3, "temperature": 0.3, "confidence_threshold": 0.8, "max_tokens": 6144},
-            "security": {"num_models": 3, "temperature": 0.3, "confidence_threshold": 0.8, "max_tokens": 6144},
-            "junior_dev": {"num_models": 2, "temperature": 0.5},
-            "docs": {"num_models": 2, "temperature": 0.7, "timeout_seconds": 90},
+            "orchestrator": {"num_models": 3, "temperature": 0.5, "timeout_seconds": 180, "max_tokens": 16384},
+            "architect": {"num_models": 3, "temperature": 0.6, "max_tokens": 16384},
+            "senior_dev": {"num_models": 2, "temperature": 0.4, "timeout_seconds": 150, "max_tokens": 16384},
+            "qa": {"num_models": 3, "temperature": 0.3, "confidence_threshold": 0.8, "max_tokens": 16384},
+            "security": {"num_models": 3, "temperature": 0.3, "confidence_threshold": 0.8, "max_tokens": 16384},
+            "junior_dev": {"num_models": 2, "temperature": 0.5, "max_tokens": 16384},
+            "docs": {"num_models": 2, "temperature": 0.7, "timeout_seconds": 90, "max_tokens": 16384},
         }
         role_defaults = defaults.get(role, {})
         return cls(**role_defaults)
