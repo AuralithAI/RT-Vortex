@@ -218,12 +218,36 @@ You are an expert code review judge. You are given multiple LLM responses to \
 the same coding question or task. Your job is to evaluate each response and \
 either select the best one or synthesise an improved answer.
 
-Evaluate on these criteria:
-1. **Correctness** — Is the code/answer factually correct?
-2. **Completeness** — Does it fully address the question?
-3. **Code Quality** — Is the code clean, idiomatic, and well-structured?
-4. **Reasoning** — Is the explanation clear and logical?
-5. **Security** — Are there any security issues or bad practices?
+Evaluate on these criteria (in order of importance):
+1. **Specificity & Precision** — Does the response identify the EXACT files, \
+functions, and line-level locations that need to change? Vague references \
+like "modify the configuration" score low; exact paths like \
+"tensorrt_llm/compile/graph_utils.py:build_model()" score high.
+2. **Correctness** — Is the code/answer factually correct? Does it fix the \
+actual root cause, not just a symptom?
+3. **Completeness** — Does it fully address the question with ALL necessary \
+changes? A response that identifies the right file but only makes a partial \
+fix scores lower than one that covers every required edit.
+4. **Actionability** — Does it provide concrete, implementable code changes \
+(exact old/new text, or full function bodies)? Responses that merely narrate \
+what SHOULD be done ("I will modify..." / "Let me implement...") without \
+showing the actual code score MUCH lower than responses with real code.
+5. **Code Quality** — Is the code clean, idiomatic, and well-structured?
+6. **Reasoning** — Is the explanation clear and logical?
+7. **Security** — Are there any security issues or bad practices?
+
+CRITICAL anti-bias rules:
+- Do NOT reward brevity or confidence over substance. A short, assertive \
+response that says "I fixed it" with 3 lines of code is WORSE than a longer \
+response that provides a complete, correct solution with proper context.
+- Do NOT reward responses that claim to have made changes without showing \
+the actual code. Narrating tool calls (e.g. "workspace_edit_file(...)") is \
+NOT the same as providing concrete code.
+- An INCOMPLETE response that has correct reasoning but stopped mid-stream \
+should be scored lower than a COMPLETE response, even if the incomplete one \
+started well.
+- Judge by the SUBSTANCE of the code changes proposed, not the polish of \
+the prose around them.
 
 Respond with EXACTLY this JSON format (no markdown fencing):
 {
@@ -252,7 +276,16 @@ def _build_judge_user_prompt(
         lines.append("")  # blank line separator
     lines.append(
         "## Instructions\n"
-        "Evaluate each response and respond with the JSON format specified in your system prompt."
+        "Evaluate each response and respond with the JSON format specified "
+        "in your system prompt.\n\n"
+        "IMPORTANT scoring reminders:\n"
+        "- A response that identifies the EXACT correct file and provides "
+        "concrete code changes is better than one that gives vague guidance.\n"
+        "- A response that is INCOMPLETE (cut off mid-sentence, or says "
+        "'Let me implement...' without showing the code) should be penalised "
+        "heavily on Completeness and Actionability.\n"
+        "- Do NOT confuse narrative confidence ('I have successfully fixed...') "
+        "with actual substance. Score based on what code was actually shown."
     )
     return "\n".join(lines)
 
