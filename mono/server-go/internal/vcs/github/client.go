@@ -426,6 +426,131 @@ func base64Encode(data []byte) string {
 	return base64.StdEncoding.EncodeToString(data)
 }
 
+// ── CI Commit Status ────────────────────────────────────────────────────────
+
+// ghCombinedStatus models GitHub's GET /repos/{owner}/{repo}/commits/{ref}/status.
+type ghCombinedStatus struct {
+	State    string         `json:"state"` // pending, success, failure
+	Statuses []ghStatusItem `json:"statuses"`
+}
+
+type ghStatusItem struct {
+	Context     string    `json:"context"`
+	State       string    `json:"state"` // pending, success, failure, error
+	Description string    `json:"description"`
+	TargetURL   string    `json:"target_url"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// ghCheckRuns models GitHub's GET /repos/{owner}/{repo}/commits/{ref}/check-runs.
+type ghCheckRunsResp struct {
+	TotalCount int          `json:"total_count"`
+	CheckRuns  []ghCheckRun `json:"check_runs"`
+}
+
+type ghCheckRun struct {
+	Name       string    `json:"name"`
+	Status     string    `json:"status"`     // queued, in_progress, completed
+	Conclusion string    `json:"conclusion"` // success, failure, neutral, cancelled, skipped, timed_out, action_required
+	HTMLURL    string    `json:"html_url"`
+	StartedAt  time.Time `json:"started_at"`
+}
+
+func (c *Client) GetCombinedStatus(ctx context.Context, owner, repo, ref string) (*vcs.CombinedStatus, error) {
+	// 1. Get combined commit statuses (Status API).
+	statusURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/status", c.baseURL, owner, repo, ref)
+	var ghStatus ghCombinedStatus
+	if err := c.doJSON(ctx, http.MethodGet, statusURL, nil, &ghStatus); err != nil {
+		return nil, fmt.Errorf("github combined status: %w", err)
+	}
+
+	result := &vcs.CombinedStatus{}
+	for _, s := range ghStatus.Statuses {
+		cs := vcs.CommitStatus{
+			Context:     s.Context,
+			State:       mapGitHubState(s.State),
+			Description: s.Description,
+			TargetURL:   s.TargetURL,
+			CreatedAt:   s.CreatedAt,
+		}
+		result.Statuses = append(result.Statuses, cs)
+	}
+
+	// 2. Get check runs (Checks API — GitHub Apps, GitHub Actions).
+	checksURL := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs", c.baseURL, owner, repo, ref)
+	var ghChecks ghCheckRunsResp
+	if err := c.doJSON(ctx, http.MethodGet, checksURL, nil, &ghChecks); err != nil {
+		// Check runs API may 404 if not enabled — not fatal.
+		slog.Debug("github check-runs unavailable", "ref", ref, "error", err)
+	} else {
+		for _, cr := range ghChecks.CheckRuns {
+			state := mapCheckRunToState(cr.Status, cr.Conclusion)
+			cs := vcs.CommitStatus{
+				Context:     cr.Name,
+				State:       state,
+				Description: cr.Conclusion,
+				TargetURL:   cr.HTMLURL,
+				CreatedAt:   cr.StartedAt,
+			}
+			result.Statuses = append(result.Statuses, cs)
+		}
+	}
+
+	// 3. Aggregate.
+	for _, s := range result.Statuses {
+		result.Total++
+		switch s.State {
+		case vcs.CommitStatusSuccess:
+			result.Passed++
+		case vcs.CommitStatusFailure, vcs.CommitStatusError:
+			result.Failed++
+		default:
+			result.Pending++
+		}
+	}
+
+	if result.Total == 0 {
+		result.State = vcs.CommitStatusSuccess // no checks = pass
+	} else if result.Failed > 0 {
+		result.State = vcs.CommitStatusFailure
+	} else if result.Pending > 0 {
+		result.State = vcs.CommitStatusPending
+	} else {
+		result.State = vcs.CommitStatusSuccess
+	}
+
+	return result, nil
+}
+
+func mapGitHubState(s string) vcs.CommitStatusState {
+	switch s {
+	case "success":
+		return vcs.CommitStatusSuccess
+	case "failure":
+		return vcs.CommitStatusFailure
+	case "error":
+		return vcs.CommitStatusError
+	default:
+		return vcs.CommitStatusPending
+	}
+}
+
+func mapCheckRunToState(status, conclusion string) vcs.CommitStatusState {
+	if status != "completed" {
+		return vcs.CommitStatusPending
+	}
+	switch conclusion {
+	case "success", "neutral", "skipped":
+		return vcs.CommitStatusSuccess
+	case "failure", "timed_out", "action_required":
+		return vcs.CommitStatusFailure
+	case "cancelled":
+		return vcs.CommitStatusError
+	default:
+		return vcs.CommitStatusPending
+	}
+}
+
 func (c *Client) doJSON(ctx context.Context, method, url string, body interface{}, dest interface{}) error {
 	var reqBody io.Reader
 	if body != nil {

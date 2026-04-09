@@ -113,6 +113,9 @@ type Dependencies struct {
 	CrossRepoGraphHandler *crossrepo.GraphHandler
 	RepoLinkRepo          *store.RepoLinkRepo
 
+	// App Config — system-wide non-secret settings (feature flags, toggles)
+	AppConfigRepo *store.AppConfigRepo
+
 	// ServerBase — canonical server URL for constructing OAuth callback URLs.
 	ServerBase string
 }
@@ -189,6 +192,7 @@ func (s *Server) setupRouter() {
 		AssetRepo:       s.deps.AssetRepo,
 		KeychainService: s.deps.KeychainService,
 		VCSPlatformRepo: s.deps.VCSPlatformRepo,
+		AppConfigRepo:   s.deps.AppConfigRepo,
 	}
 	if s.deps.MetricsCollector != nil {
 		h.MetricsCollector = s.deps.MetricsCollector
@@ -365,6 +369,7 @@ func (s *Server) setupRouter() {
 				r.Get("/providers", h.ListLLMProviders)
 				r.Put("/providers/{provider}", h.ConfigureLLMProvider)
 				r.Post("/providers/{provider}/balance", h.CheckLLMBalance)
+				r.Get("/providers/{provider}/status", h.GetLLMProviderStatus)
 				r.Post("/providers/test", h.TestLLMProvider)
 				r.Put("/primary", h.SetPrimaryLLMProvider)
 				r.Get("/routes", h.GetLLMRoutes)
@@ -510,17 +515,43 @@ func (s *Server) setupRouter() {
 				r.Post("/tasks/{id}/declare-size", sh.DeclareTeamSize)
 				r.Post("/tasks/{id}/contribution", sh.RecordContribution)
 				r.Post("/tasks/{id}/agent-message", sh.AgentMessage)
+				r.Post("/tasks/{id}/discussion", sh.DiscussionEvent)
+				r.Post("/tasks/{id}/consensus", sh.ConsensusEvent)
 				r.Post("/heartbeat/{id}", sh.Heartbeat)
 
 				// Memory hierarchy.
 				r.Post("/memory/mtm", sh.HandleMTMStore)
 				r.Get("/memory/mtm", sh.HandleMTMRecall)
 
+				// Cross-task consensus insights.
+				r.Post("/memory/insights", sh.HandleInsightStore)
+				r.Get("/memory/insights", sh.HandleInsightRecall)
+				r.Get("/memory/provider-stats", sh.HandleProviderStats)
+
+				// Role-based ELO.
+				r.Post("/role-elo/outcome", sh.HandleRoleELOOutcome)
+				r.Get("/role-elo/{role}", sh.HandleGetRoleELO)
+
 				// Human-in-the-loop.
 				r.Post("/hitl/ask", sh.HandleHITLAsk)
 
 				// CI proxy.
 				r.Post("/ci/run", sh.HandleCIRun)
+
+				// CI signal ingestion (webhook + agent report).
+				r.Post("/ci-signal/webhook", sh.HandleCISignalWebhook)
+				r.Post("/ci-signal/report", sh.HandleCISignalReport)
+
+				// Team formation (dynamic complexity → team sizing).
+				r.Post("/team-recommend", sh.HandleTeamRecommend)
+
+				// Adaptive probe tuning (config fetch + outcome recording).
+				r.Get("/probe-config", sh.HandleGetProbeConfig)
+				r.Post("/probe-history", sh.HandleRecordProbeHistory)
+
+				// Self-healing pipeline (provider outcome reporting + status check).
+				r.Post("/self-heal/provider-outcome", sh.HandleProviderOutcome)
+				r.Get("/self-heal/provider-status", sh.HandleProviderStatus)
 
 				// Web fetch proxy (URL fetching for agents).
 				r.Post("/web/fetch", sh.HandleWebFetch)
@@ -547,6 +578,7 @@ func (s *Server) setupRouter() {
 				// LLM proxy.
 				if s.deps.SwarmLLMProxy != nil {
 					r.Post("/llm/complete", s.deps.SwarmLLMProxy.HandleComplete)
+					r.Post("/llm/probe", s.deps.SwarmLLMProxy.HandleProbe)
 				}
 			})
 		})
@@ -576,8 +608,45 @@ func (s *Server) setupRouter() {
 			r.Get("/teams", sh.ListTeamsUser)
 			r.Get("/overview", sh.SwarmOverview)
 
+			// CI signal status (user JWT).
+			r.Get("/tasks/{id}/ci-signal", sh.HandleGetCISignal)
+			r.Get("/ci-signals", sh.HandleListCISignals)
+
+			// Team formation (user JWT).
+			r.Get("/tasks/{id}/team-formation", sh.HandleGetTeamFormation)
+
+			// Adaptive probe tuning (user JWT).
+			r.Get("/probe-configs", sh.HandleListProbeConfigs)
+			r.Get("/probe-configs/{role}", sh.HandleGetProbeConfigByRole)
+			r.Put("/probe-configs/{role}", sh.HandleUpdateProbeConfig)
+			r.Get("/probe-stats/{role}", sh.HandleGetProbeStats)
+			r.Get("/probe-history", sh.HandleListProbeHistory)
+
+			// Self-healing pipeline (user JWT).
+			r.Get("/self-heal/summary", sh.HandleSelfHealSummary)
+			r.Get("/self-heal/events", sh.HandleSelfHealEvents)
+			r.Post("/self-heal/events/{id}/resolve", sh.HandleResolveEvent)
+			r.Post("/self-heal/circuits/{provider}/reset", sh.HandleResetCircuit)
+			r.Get("/self-heal/circuits", sh.HandleListCircuits)
+
+			// Observability dashboard (user JWT).
+			r.Get("/observability/dashboard", sh.HandleObservabilityDashboard)
+			r.Get("/observability/time-series", sh.HandleObservabilityTimeSeries)
+			r.Get("/observability/providers", sh.HandleObservabilityProviders)
+			r.Get("/observability/providers/{provider}", sh.HandleObservabilityProviderDetail)
+			r.Get("/observability/cost", sh.HandleObservabilityCost)
+			r.Get("/observability/health", sh.HandleObservabilityHealth)
+			r.Put("/observability/budget", sh.HandleObservabilitySetBudget)
+
 			// Human-in-the-loop response (user JWT).
 			r.Post("/hitl/respond", sh.HandleHITLRespond)
+
+			// Cross-task consensus insights (user JWT).
+			r.Get("/insights", sh.HandleInsightRecallPublic)
+
+			// Role-based ELO leaderboard + history (user JWT).
+			r.Get("/role-elo", sh.HandleRoleELOLeaderboard)
+			r.Get("/role-elo/{role}/history", sh.HandleRoleELOHistory)
 
 			// WebSocket: real-time swarm task events
 			if s.deps.WSHub != nil {

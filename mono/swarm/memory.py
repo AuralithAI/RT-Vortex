@@ -179,6 +179,115 @@ class LongTermMemory:
         return "Relevant code from long-term memory:\n" + "\n".join(lines)
 
 
+# ── Insight categories ──────────────────────────────────────────────────
+INSIGHT_CATEGORIES = (
+    "provider_reliability",
+    "strategy_effectiveness",
+    "code_pattern",
+    "provider_agreement",
+    "quality_signal",
+)
+
+
+class ConsensusInsightMemory:
+    """Cross-task consensus insight memory, accessed via the Go API.
+
+    Stores and recalls durable lessons learned from multi-LLM consensus
+    decisions: which providers are reliable, which strategies work best,
+    quality patterns, etc.  Scoped to *repo* so insights carry across tasks.
+    """
+
+    def __init__(self, go_client: Any, repo_id: str):
+        self._go = go_client
+        self._repo_id = repo_id
+
+    async def store(
+        self,
+        task_id: str,
+        thread_id: str,
+        category: str,
+        key: str,
+        insight: str,
+        confidence: float = 0.8,
+        strategy: str = "",
+        provider: str = "",
+        metadata: dict | None = None,
+    ) -> None:
+        """Store a consensus insight."""
+        try:
+            await self._go.insight_store(
+                repo_id=self._repo_id,
+                task_id=task_id,
+                thread_id=thread_id,
+                category=category,
+                key=key,
+                insight=insight,
+                confidence=confidence,
+                strategy=strategy,
+                provider=provider,
+                metadata=metadata,
+            )
+        except Exception as e:
+            logger.warning("Consensus insight store failed: %s", e)
+
+    async def recall(
+        self,
+        category: str = "",
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Recall insights, optionally filtered by category."""
+        try:
+            return await self._go.insight_recall(
+                repo_id=self._repo_id,
+                category=category,
+                limit=limit,
+            )
+        except Exception as e:
+            logger.warning("Consensus insight recall failed: %s", e)
+            return []
+
+    async def provider_stats(self) -> list[dict[str, Any]]:
+        """Get aggregated provider reliability stats."""
+        try:
+            return await self._go.provider_stats(repo_id=self._repo_id)
+        except Exception as e:
+            logger.warning("Provider stats recall failed: %s", e)
+            return []
+
+    async def recall_as_text(self, limit: int = 10) -> str:
+        """Build a text summary of cross-task insights for prompt injection."""
+        entries = await self.recall(limit=limit)
+        if not entries:
+            return ""
+
+        by_category: dict[str, list[dict]] = {}
+        for e in entries:
+            cat = e.get("category", "general")
+            by_category.setdefault(cat, []).append(e)
+
+        sections: list[str] = []
+        cat_labels = {
+            "provider_reliability": "Provider Reliability",
+            "strategy_effectiveness": "Strategy Effectiveness",
+            "code_pattern": "Code Patterns",
+            "provider_agreement": "Provider Agreement",
+            "quality_signal": "Quality Signals",
+        }
+
+        for cat, items in by_category.items():
+            label = cat_labels.get(cat, cat.replace("_", " ").title())
+            lines = []
+            for item in items[:5]:
+                conf = item.get("confidence", 0)
+                text = item.get("insight", "")
+                prov = item.get("provider", "")
+                prefix = f"[{prov}] " if prov else ""
+                lines.append(f"  - [{conf:.0%}] {prefix}{text}")
+            sections.append(f"  {label}:\n" + "\n".join(lines))
+
+        return "Cross-task consensus insights:\n" + "\n".join(sections)
+
+
 class AgentMemory:
     """Unified three-tier memory for a single agent instance."""
 
@@ -200,6 +309,7 @@ class AgentMemory:
         self.stm = ShortTermMemory(redis_url, task_id, agent_id)
         self.mtm = MediumTermMemory(go_client, agent_role, repo_id) if go_client else None
         self.ltm = LongTermMemory(engine_client, repo_id)
+        self.insights = ConsensusInsightMemory(go_client, repo_id) if go_client else None
 
         self._reflection_count = 0
 
@@ -240,6 +350,13 @@ class AgentMemory:
             mtm_text = await self.mtm.recall_as_text(limit=8)
             if mtm_text:
                 sections.append(mtm_text)
+
+        # Cross-task consensus insights (provider reliability, strategy
+        # effectiveness, quality signals, etc.)
+        if self.insights:
+            insight_text = await self.insights.recall_as_text(limit=8)
+            if insight_text:
+                sections.append(insight_text)
 
         if task_description:
             ltm_text = await self.ltm.search_as_text(task_description, top_k=3)

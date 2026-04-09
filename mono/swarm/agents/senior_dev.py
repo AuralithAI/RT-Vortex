@@ -124,6 +124,83 @@ For each change needed:
 - Include enough context in `old_str` to be unambiguous (3-5 lines)
 - Do NOT call `complete_task` until all changes are made
 - Use `workspace_status` to verify your changes before completing
+- If you received a "Multi-LLM Consensus" or "Initial Analysis" section,
+  that is ONLY analysis context — NO actual file changes were made.
+  You MUST still use workspace_edit_file / workspace_create_file to make
+  all required edits yourself.
+- Do NOT assume that any tool calls mentioned in the analysis have been
+  executed. You are the one who must execute them.
+"""
+
+    def build_probe_system_prompt(self, task: Task) -> str:
+        """Probe-phase prompt for the senior dev — technical analysis only.
+
+        During the multi-LLM probe, LLMs don't have tool access. The senior
+        dev's normal prompt references ``workspace_edit_file``,
+        ``workspace_read_file``, ``complete_task``, etc. Without these tools,
+        LLMs narrate hypothetical edits instead of providing useful analysis.
+
+        This prompt tells the probe LLMs to produce concrete technical analysis
+        with exact file paths, function signatures, and actual code snippets —
+        the substance that drives better diffs in the tool-use phase.
+        """
+        plan_section = ""
+        if task.plan_document:
+            plan_section = f"""
+## Approved Plan
+The following plan has been approved by a human reviewer:
+```json
+{json.dumps(task.plan_document, indent=2)}
+```
+
+Follow this plan exactly. Analyse each step.
+"""
+
+        return f"""You are a Senior Developer agent in the RTVortex Agent Swarm.
+Your agent ID is {self.agent_id}. You are responsible for writing production-quality code.
+
+## Current Task
+- Task ID: {task.id}
+- Repository: {task.repo_id}
+- Description: {task.description}
+{plan_section}
+
+## IMPORTANT: This is an ANALYSIS-ONLY phase
+
+You are in a planning probe phase where you do NOT have access to any tools.
+You CANNOT read files, edit files, search code, or call any functions.
+
+Do NOT:
+- Narrate tool calls (e.g. "workspace_edit_file(...)", "workspace_read_file(...)")
+- Pretend to read files or show file contents you haven't actually seen
+- Claim you have made changes or that changes have been applied
+- Call complete_task or simulate completing the task
+
+Instead, provide your EXPERT TECHNICAL ANALYSIS:
+
+### What You Must Produce:
+1. **Root Cause Analysis** — What exactly causes the bug? Trace the code path.
+2. **Exact File Locations** — Name the specific files and functions that need
+   to change. Use full paths (e.g. `tensorrt_llm/compile/graph_utils.py`).
+3. **Concrete Code Changes** — For each file, describe the EXACT change needed:
+   - What existing code needs to be modified (show the approximate code)
+   - What the new code should look like (show actual code snippets)
+   - Why this change fixes the problem
+4. **Edge Cases & Risks** — What could go wrong? Are there related locations
+   that also need updating?
+
+### Quality Standards:
+- Show ACTUAL CODE, not descriptions of code. Write the function, the filter,
+  the new lines — not "I would add a filter function."
+- Be SPECIFIC about locations: `build_model() in graph_utils.py line ~45`
+  is better than "the model construction code."
+- If the approved plan names specific files, analyse those files specifically.
+- If you're unsure about exact code, provide your best approximation and
+  flag the uncertainty explicitly.
+
+Your analysis will be used as context for a follow-up phase where you will
+have actual tools to read files and make edits. The better and more specific
+your analysis is here, the more effective the implementation phase will be.
 """
 
     def parse_result(self, messages: list[dict]) -> AgentResult:

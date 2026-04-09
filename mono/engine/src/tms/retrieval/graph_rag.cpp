@@ -346,6 +346,17 @@ std::vector<RetrievedChunk> GraphRAGRetriever::expandAndMerge(
 // Graph confidence score (for Confidence Gate v2)
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Helper: extract the file_path component from a chunk_id.
+// chunk_id format: "repo_id:path/to/file:symbol"
+static std::string extractFilePath(const std::string& chunk_id) {
+    size_t first_colon = chunk_id.find(':');
+    if (first_colon == std::string::npos) return {};
+    size_t second_colon = chunk_id.find(':', first_colon + 1);
+    return (second_colon != std::string::npos)
+        ? chunk_id.substr(first_colon + 1, second_colon - first_colon - 1)
+        : chunk_id.substr(first_colon + 1);
+}
+
 float GraphRAGRetriever::computeGraphConfidence(
     const std::vector<std::string>& seed_chunk_ids,
     const std::vector<std::string>& result_chunk_ids,
@@ -353,72 +364,81 @@ float GraphRAGRetriever::computeGraphConfidence(
 {
     if (seed_chunk_ids.empty() || result_chunk_ids.empty()) return 0.0f;
 
+    auto t0 = std::chrono::steady_clock::now();
+
     // For each result chunk, find the shortest KG path to any seed chunk.
     // Score = mean(1 / (1 + shortest_path_length)) across all result chunks.
     // A score of 1.0 means all results are direct neighbors (1-hop).
 
-    // Build a set of seed node IDs from the KG
-    std::unordered_set<std::string> seed_node_ids;
-    for (const auto& chunk_id : seed_chunk_ids) {
-        // Look up KG nodes for this chunk
-        // We parse the chunk_id to extract file_path
-        // chunk_id format: "repo_id:path/to/file:symbol"
-        size_t first_colon = chunk_id.find(':');
-        if (first_colon == std::string::npos) continue;
-        size_t second_colon = chunk_id.find(':', first_colon + 1);
-        std::string file_path = (second_colon != std::string::npos)
-            ? chunk_id.substr(first_colon + 1, second_colon - first_colon - 1)
-            : chunk_id.substr(first_colon + 1);
-
-        auto nodes = kg_.nodesByFilePath(file_path, repo_id);
-        for (const auto& n : nodes) {
-            seed_node_ids.insert(n.id);
+    // ── Phase 1: Resolve chunk IDs → KG node IDs (batch by unique file) ──
+    // Multiple chunks can share a file_path, so de-duplicate first.
+    auto resolveNodes = [&](const std::vector<std::string>& chunk_ids)
+            -> std::pair<std::unordered_set<std::string>,                  // node_ids
+                         std::unordered_map<std::string, std::string>> {   // node_id → chunk_id
+        std::unordered_set<std::string> file_paths_seen;
+        std::unordered_set<std::string> node_ids;
+        std::unordered_map<std::string, std::string> node_to_chunk;
+        for (const auto& cid : chunk_ids) {
+            std::string fp = extractFilePath(cid);
+            if (fp.empty() || file_paths_seen.count(fp)) continue;
+            file_paths_seen.insert(fp);
+            for (const auto& n : kg_.nodesByFilePath(fp, repo_id)) {
+                node_ids.insert(n.id);
+                node_to_chunk[n.id] = cid;
+            }
         }
-    }
+        return {node_ids, node_to_chunk};
+    };
 
+    auto [seed_node_ids, seed_map] = resolveNodes(seed_chunk_ids);
     if (seed_node_ids.empty()) return 0.0f;
+
+    auto [result_node_ids, result_map] = resolveNodes(result_chunk_ids);
+    if (result_node_ids.empty()) return 0.0f;
+
+    auto t1 = std::chrono::steady_clock::now();
+    auto resolve_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t1 - t0).count();
+
+    // ── Phase 2: Batch 1-hop + 2-hop via SQL ────────────────────────────
+    // A single call that does TWO SQL queries internally — no per-node
+    // neighbor walks, so it scales to any graph size.
+    auto hop_map = kg_.batchShortestHops(repo_id, seed_node_ids, result_node_ids);
+
+    auto t2 = std::chrono::steady_clock::now();
+    auto hops_ms = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
+
+    // ── Phase 3: Aggregate per result chunk ─────────────────────────────
+    // A chunk may map to multiple KG nodes; take the best (shortest) hop.
+    std::unordered_map<std::string, int> chunk_best_hop;  // chunk_id → min hops
+    for (const auto& [node_id, hops] : hop_map) {
+        auto it = result_map.find(node_id);
+        if (it == result_map.end()) continue;
+        const std::string& cid = it->second;
+        auto cb = chunk_best_hop.find(cid);
+        if (cb == chunk_best_hop.end() || hops < cb->second)
+            chunk_best_hop[cid] = hops;
+    }
 
     float total_score = 0.0f;
     int scored = 0;
-
     for (const auto& result_id : result_chunk_ids) {
-        size_t first_colon = result_id.find(':');
-        if (first_colon == std::string::npos) continue;
-        size_t second_colon = result_id.find(':', first_colon + 1);
-        std::string file_path = (second_colon != std::string::npos)
-            ? result_id.substr(first_colon + 1, second_colon - first_colon - 1)
-            : result_id.substr(first_colon + 1);
-
-        auto result_nodes = kg_.nodesByFilePath(file_path, repo_id);
-
-        float best_path_score = 0.0f;
-
-        for (const auto& rn : result_nodes) {
-            // Check 1-hop: direct neighbor of any seed?
-            auto edges_1 = kg_.neighbors(rn.id, "");  // all edge types
-            for (const auto& e1 : edges_1) {
-                std::string neighbor_id = (e1.dst_id == rn.id) ? e1.src_id : e1.dst_id;
-                if (seed_node_ids.count(neighbor_id)) {
-                    best_path_score = std::max(best_path_score, 1.0f / (1.0f + 1.0f)); // hop=1
-                }
-            }
-
-            // If already found 1-hop, no need to check 2-hop
-            if (best_path_score >= 0.5f) break;
-
-            // Check 2-hop via neighbors2 which returns edges
-            auto edges_2 = kg_.neighbors2(rn.id, "");
-            for (const auto& e2 : edges_2) {
-                std::string neighbor_id = (e2.dst_id == rn.id) ? e2.src_id : e2.dst_id;
-                if (seed_node_ids.count(neighbor_id)) {
-                    best_path_score = std::max(best_path_score, 1.0f / (1.0f + 2.0f)); // hop=2
-                }
-            }
-        }
-
-        total_score += best_path_score;
+        auto it = chunk_best_hop.find(result_id);
+        float path_score = (it != chunk_best_hop.end())
+            ? 1.0f / (1.0f + static_cast<float>(it->second))
+            : 0.0f;
+        total_score += path_score;
         ++scored;
     }
+
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+    LOG_DEBUG("[GraphRAG] computeGraphConfidence: seeds=" + std::to_string(seed_node_ids.size())
+              + " results=" + std::to_string(result_node_ids.size())
+              + " hop_hits=" + std::to_string(hop_map.size())
+              + " score=" + std::to_string(scored > 0 ? total_score / scored : 0.0f)
+              + " resolve_ms=" + std::to_string(resolve_ms)
+              + " hops_ms=" + std::to_string(hops_ms)
+              + " total_ms=" + std::to_string(elapsed_ms));
 
     return (scored > 0) ? total_score / scored : 0.0f;
 }

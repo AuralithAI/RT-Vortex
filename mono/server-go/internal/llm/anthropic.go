@@ -43,7 +43,7 @@ func NewAnthropicProvider(cfg AnthropicConfig) *AnthropicProvider {
 	}
 	timeout := cfg.Timeout
 	if timeout == 0 {
-		timeout = 90 * time.Second
+		timeout = 5 * time.Minute
 	}
 	model := cfg.DefaultModel
 	if model == "" {
@@ -66,35 +66,38 @@ func (p *AnthropicProvider) Name() string { return "anthropic" }
 
 // ── Anthropic Messages API ──────────────────────────────────────────────────
 
+// anthropicThinkingConfig enables extended thinking for Claude models.
+type anthropicThinkingConfig struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+	Display      string `json:"display,omitempty"`
+}
+
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    json.RawMessage    `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Tools     []anthropicToolDef `json:"tools,omitempty"`
+	Model     string                   `json:"model"`
+	MaxTokens int                      `json:"max_tokens"`
+	System    json.RawMessage          `json:"system,omitempty"`
+	Messages  []anthropicMessage       `json:"messages"`
+	Tools     []anthropicToolDef       `json:"tools,omitempty"`
+	Thinking  *anthropicThinkingConfig `json:"thinking,omitempty"`
 }
 
 // anthropicMessage supports text, tool_use, and tool_result content blocks.
-// Anthropic requires Content to be either a string (simple) or an array of
-// content blocks (multi-part / tool conversations). We use json.RawMessage
-// and marshal conditionally.
 type anthropicMessage struct {
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
 }
 
-// anthropicContentBlock represents a single content block in an Anthropic message.
 type anthropicContentBlock struct {
-	Type      string          `json:"type"`                  // "text", "tool_use", "tool_result"
-	Text      string          `json:"text,omitempty"`        // for type="text"
-	ID        string          `json:"id,omitempty"`          // for type="tool_use" (tool call ID)
-	Name      string          `json:"name,omitempty"`        // for type="tool_use"
-	Input     json.RawMessage `json:"input,omitempty"`       // for type="tool_use" (arguments object)
-	ToolUseID string          `json:"tool_use_id,omitempty"` // for type="tool_result"
-	Content   string          `json:"content,omitempty"`     // for type="tool_result"
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Input     json.RawMessage `json:"input,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	Content   string          `json:"content,omitempty"`
 }
 
-// anthropicToolDef is Anthropic's tool definition format.
 type anthropicToolDef struct {
 	Name         string                 `json:"name"`
 	Description  string                 `json:"description"`
@@ -102,14 +105,12 @@ type anthropicToolDef struct {
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
-// anthropicCacheControl enables Anthropic prompt caching on a content block.
 type anthropicCacheControl struct {
-	Type string `json:"type"` // "ephemeral"
+	Type string `json:"type"`
 }
 
-// anthropicSystemBlock is a content block in the system message array.
 type anthropicSystemBlock struct {
-	Type         string                 `json:"type"` // "text"
+	Type         string                 `json:"type"`
 	Text         string                 `json:"text"`
 	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
@@ -151,7 +152,22 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
-		maxTokens = 4096
+		maxTokens = 8192
+	}
+
+	thinkingBudget := maxTokens / 4
+	if thinkingBudget < 1024 {
+		thinkingBudget = 1024
+	}
+	if thinkingBudget > 8192 {
+		thinkingBudget = 8192
+	}
+	if thinkingBudget >= maxTokens {
+		maxTokens = thinkingBudget + 1024
+	}
+	thinking := &anthropicThinkingConfig{
+		Type:         "enabled",
+		BudgetTokens: thinkingBudget,
 	}
 
 	// Anthropic separates the system message.
@@ -162,8 +178,6 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 			systemMsg = m.Content
 			continue
 		}
-		// Handle tool-result messages: Anthropic expects a content block array
-		// with type="tool_result" under role="user".
 		if m.Role == RoleTool {
 			blocks := []anthropicContentBlock{{
 				Type:      "tool_result",
@@ -173,8 +187,6 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 			msgs = append(msgs, newAnthropicBlockMessage("user", blocks))
 			continue
 		}
-		// Handle assistant messages with tool_calls: Anthropic expects
-		// tool_use content blocks.
 		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
 			var blocks []anthropicContentBlock
 			if m.Content != "" {
@@ -194,8 +206,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		msgs = append(msgs, newAnthropicTextMessage(string(m.Role), m.Content))
 	}
 
-	// Convert tool definitions: OpenAI format → Anthropic format.
-	// Mark the last tool with cache_control so Anthropic caches the tool list.
+	// Convert tool definitions.
 	var tools []anthropicToolDef
 	for _, t := range req.Tools {
 		tools = append(tools, anthropicToolDef{
@@ -208,7 +219,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		tools[len(tools)-1].CacheControl = &anthropicCacheControl{Type: "ephemeral"}
 	}
 
-	// Build system content block array with cache_control on the last block.
+	// Build system block array with cache_control.
 	var systemJSON json.RawMessage
 	if systemMsg != "" {
 		sysBlocks := []anthropicSystemBlock{{
@@ -229,12 +240,21 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		System:    systemJSON,
 		Messages:  msgs,
 		Tools:     tools,
+		Thinking:  thinking,
 	}
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
+
+	slog.Info("anthropic: Complete request",
+		"model", model,
+		"max_tokens", maxTokens,
+		"thinking_budget", thinkingBudget,
+		"tools", len(tools),
+		"messages", len(msgs),
+	)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/messages", bytes.NewReader(jsonBody))
 	if err != nil {
@@ -243,7 +263,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.apiKey)
 	httpReq.Header.Set("anthropic-version", p.apiVersion)
-	httpReq.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
+	httpReq.Header.Set("anthropic-beta", "prompt-caching-2024-07-31,interleaved-thinking-2025-05-14")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
@@ -270,16 +290,16 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	// Parse content blocks — collect text and tool_use blocks.
 	var textContent string
+	var thinkingContent string
 	var toolCalls []ToolCall
 	for _, c := range ar.Content {
 		switch c.Type {
+		case "thinking":
+			thinkingContent += c.Text
 		case "text":
 			textContent += c.Text
 		case "tool_use":
-			// Anthropic sends arguments as a JSON object in Input.
-			// OpenAI format expects a JSON string in Arguments.
 			argsStr := string(c.Input)
 			toolCalls = append(toolCalls, ToolCall{
 				ID:   c.ID,
@@ -292,12 +312,23 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 		}
 	}
 
+	if thinkingContent != "" {
+		slog.Info("anthropic: extended thinking produced",
+			"thinking_chars", len(thinkingContent),
+			"text_chars", len(textContent),
+			"tool_calls", len(toolCalls),
+		)
+	}
+
 	finishReason := ar.StopReason
 	if finishReason == "end_turn" {
 		finishReason = "stop"
 	}
 	if finishReason == "tool_use" {
 		finishReason = "tool_calls"
+	}
+	if finishReason == "max_tokens" {
+		finishReason = "length"
 	}
 
 	return &CompletionResponse{
@@ -314,7 +345,6 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *CompletionRequest
 }
 
 func (p *AnthropicProvider) ListModels(ctx context.Context) ([]string, error) {
-	// Try the Anthropic models API (beta).
 	if p.apiKey != "" {
 		url := p.baseURL + "/models?limit=50"
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -346,7 +376,7 @@ func (p *AnthropicProvider) ListModels(ctx context.Context) ([]string, error) {
 		}
 	}
 
-	// Fallback: well-known Claude models.
+	// Fallback.
 	return []string{
 		"claude-sonnet-4-20250514",
 		"claude-3-5-sonnet-20241022",
@@ -358,7 +388,6 @@ func (p *AnthropicProvider) ListModels(ctx context.Context) ([]string, error) {
 func (p *AnthropicProvider) Healthy(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	// Quick test with minimal request.
 	_, err := p.Complete(ctx, &CompletionRequest{
 		Model:     p.defaultModel,
 		Messages:  []Message{{Role: RoleUser, Content: "ping"}},
@@ -374,18 +403,16 @@ func (p *AnthropicProvider) Healthy(ctx context.Context) bool {
 // ── Anthropic Streaming ─────────────────────────────────────────────────────
 
 type anthropicStreamRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"`
-	System    json.RawMessage    `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Stream    bool               `json:"stream"`
-	Tools     []anthropicToolDef `json:"tools,omitempty"`
+	Model     string                   `json:"model"`
+	MaxTokens int                      `json:"max_tokens"`
+	System    json.RawMessage          `json:"system,omitempty"`
+	Messages  []anthropicMessage       `json:"messages"`
+	Stream    bool                     `json:"stream"`
+	Tools     []anthropicToolDef       `json:"tools,omitempty"`
+	Thinking  *anthropicThinkingConfig `json:"thinking,omitempty"`
 }
 
 // StreamComplete sends a streaming completion request using Anthropic's SSE API.
-// Supports both text content and tool calling during streaming. When the model
-// invokes tools, the final chunk's ToolCalls field is populated with the
-// accumulated tool_use blocks.
 func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {
@@ -394,7 +421,22 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
-		maxTokens = 4096
+		maxTokens = 8192
+	}
+
+	thinkingBudget := maxTokens / 4
+	if thinkingBudget < 1024 {
+		thinkingBudget = 1024
+	}
+	if thinkingBudget > 8192 {
+		thinkingBudget = 8192
+	}
+	if thinkingBudget >= maxTokens {
+		maxTokens = thinkingBudget + 1024
+	}
+	thinking := &anthropicThinkingConfig{
+		Type:         "enabled",
+		BudgetTokens: thinkingBudget,
 	}
 
 	var systemMsg string
@@ -466,12 +508,21 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 		Messages:  msgs,
 		Stream:    true,
 		Tools:     tools,
+		Thinking:  thinking,
 	}
 
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
+
+	slog.Info("anthropic: StreamComplete request",
+		"model", model,
+		"max_tokens", maxTokens,
+		"thinking_budget", thinkingBudget,
+		"tools", len(tools),
+		"messages", len(msgs),
+	)
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, p.baseURL+"/messages", bytes.NewReader(jsonBody))
 	if err != nil {
@@ -480,7 +531,7 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", p.apiKey)
 	httpReq.Header.Set("anthropic-version", p.apiVersion)
-	httpReq.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
+	httpReq.Header.Set("anthropic-beta", "prompt-caching-2024-07-31,interleaved-thinking-2025-05-14")
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
@@ -507,8 +558,6 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 		scanner := bufio.NewScanner(resp.Body)
 		var currentModel string
 
-		// Tool call accumulation: Anthropic streams tool_use blocks as
-		// content_block_start → input_json_delta(s) → content_block_stop.
 		type pendingToolCall struct {
 			ID        string
 			Name      string
@@ -516,12 +565,13 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 		}
 		var toolCalls []ToolCall
 		var activeTool *pendingToolCall
+		var inThinkingBlock bool
+		var thinkingChars int
 
 		for scanner.Scan() {
 			line := scanner.Text()
 
 			if !strings.HasPrefix(line, "data: ") {
-				// Anthropic also sends "event: " lines — skip them.
 				continue
 			}
 			data := strings.TrimPrefix(line, "data: ")
@@ -535,7 +585,6 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 
 			switch evtType {
 			case "message_start":
-				// Extract model from message_start.message.model
 				if msg, ok := evt["message"].(map[string]interface{}); ok {
 					if m, ok := msg["model"].(string); ok {
 						currentModel = m
@@ -543,13 +592,15 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 				}
 
 			case "content_block_start":
-				// A new content block is starting. Could be text or tool_use.
 				if cb, ok := evt["content_block"].(map[string]interface{}); ok {
 					blockType, _ := cb["type"].(string)
-					if blockType == "tool_use" {
+					switch blockType {
+					case "tool_use":
 						id, _ := cb["id"].(string)
 						name, _ := cb["name"].(string)
 						activeTool = &pendingToolCall{ID: id, Name: name}
+					case "thinking":
+						inThinkingBlock = true
 					}
 				}
 
@@ -564,8 +615,13 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 						case <-ctx.Done():
 							return
 						}
+					case "thinking_delta":
+						if t, ok := delta["thinking"].(string); ok {
+							thinkingChars += len(t)
+						}
+					case "signature_delta":
+						// skip
 					case "input_json_delta":
-						// Accumulate partial JSON for the active tool call.
 						if activeTool != nil {
 							partialJSON, _ := delta["partial_json"].(string)
 							activeTool.InputJSON.WriteString(partialJSON)
@@ -574,7 +630,6 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 				}
 
 			case "content_block_stop":
-				// Finalise the active tool call if one was in progress.
 				if activeTool != nil {
 					toolCalls = append(toolCalls, ToolCall{
 						ID:   activeTool.ID,
@@ -586,9 +641,15 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 					})
 					activeTool = nil
 				}
+				if inThinkingBlock {
+					inThinkingBlock = false
+					slog.Info("anthropic: thinking block complete",
+						"thinking_chars", thinkingChars,
+						"model", currentModel,
+					)
+				}
 
 			case "message_delta":
-				// Final delta with stop_reason and usage.
 				sc := StreamChunk{Model: currentModel, Done: true}
 				if delta, ok := evt["delta"].(map[string]interface{}); ok {
 					if sr, ok := delta["stop_reason"].(string); ok {
@@ -599,13 +660,16 @@ func (p *AnthropicProvider) StreamComplete(ctx context.Context, req *CompletionR
 						if sr == "tool_use" {
 							sc.FinishReason = "tool_calls"
 						}
+						if sr == "max_tokens" {
+							sc.FinishReason = "length"
+						}
 					}
 				}
 				if usage, ok := evt["usage"].(map[string]interface{}); ok {
 					outTokens := int(usage["output_tokens"].(float64))
 					sc.Usage = &Usage{CompletionTokens: outTokens}
 				}
-				// Attach accumulated tool calls to the final chunk.
+				// Attach tool calls to final chunk.
 				if len(toolCalls) > 0 {
 					sc.ToolCalls = toolCalls
 				}

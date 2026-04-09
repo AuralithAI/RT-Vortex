@@ -7,8 +7,7 @@ import (
 )
 
 // ── Grok Provider (xAI) ─────────────────────────────────────────────────────
-// Grok uses an OpenAI-compatible API, so we delegate to OpenAIProvider
-// with the xAI base URL and Grok-specific defaults.
+// Grok uses an OpenAI-compatible API via xAI.
 
 const grokDefaultBase = "https://api.x.ai/v1"
 
@@ -33,7 +32,7 @@ func NewGrokProvider(cfg GrokConfig) *GrokProvider {
 	}
 	model := cfg.DefaultModel
 	if model == "" {
-		model = "grok-3-mini"
+		model = "grok-3"
 	}
 	return &GrokProvider{
 		inner: NewOpenAIProvider(OpenAIConfig{
@@ -52,7 +51,6 @@ func (p *GrokProvider) Complete(ctx context.Context, req *CompletionRequest) (*C
 }
 
 func (p *GrokProvider) ListModels(ctx context.Context) ([]string, error) {
-	// Delegate to inner OpenAI-compatible API for dynamic model listing.
 	if p.inner.apiKey != "" {
 		models, err := p.inner.ListModels(ctx)
 		if err == nil && len(models) > 0 {
@@ -60,7 +58,7 @@ func (p *GrokProvider) ListModels(ctx context.Context) ([]string, error) {
 		}
 		slog.Debug("grok: dynamic model list failed, using fallback", "error", err)
 	}
-	// Fallback: well-known Grok models.
+	// Fallback.
 	return []string{
 		"grok-3",
 		"grok-3-mini",

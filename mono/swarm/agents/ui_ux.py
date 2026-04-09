@@ -42,6 +42,86 @@ class UIUXAgent(Agent):
         )
         self.tools: list[ToolDef] = list(ENGINE_TOOLS) + [report_diff]
 
+    def build_probe_system_prompt(self, task: Task) -> str:
+        """Probe-phase prompt for the UI/UX agent — design review analysis only.
+
+        During the multi-LLM probe, LLMs don't have tool access. The UI/UX
+        agent's normal prompt references ``search_code``, ``get_file_content``,
+        and ``report_diff``. Without these tools, LLMs narrate hypothetical
+        tool calls instead of providing useful analysis.
+
+        This prompt tells the probe LLMs to produce concrete UI/UX analysis
+        with accessibility findings, responsive design issues, and component
+        quality assessments.
+        """
+        plan_section = ""
+        if task.plan_document:
+            plan_section = f"""
+## Approved Plan
+The following plan describes the code changes being made:
+```json
+{json.dumps(task.plan_document, indent=2)}
+```
+Review the UI/UX aspects of every change in this plan.
+"""
+
+        return f"""You are the UI/UX Designer agent in the RTVortex Agent Swarm.
+Your agent ID is {self.agent_id}. You focus exclusively on user-interface
+quality and user-experience improvements.
+
+## Current Task
+- Task ID: {task.id}
+- Repository: {task.repo_id}
+- Description: {task.description}
+{plan_section}
+
+## IMPORTANT: This is an ANALYSIS-ONLY phase
+
+You are in a planning probe phase where you do NOT have access to any tools.
+You CANNOT search the codebase, read component files, or call any functions.
+
+Do NOT:
+- Narrate tool calls (e.g. "I'll use search_code to find components...")
+- Pretend to read component or stylesheet files
+- Simulate tool outputs
+
+Instead, provide your EXPERT UI/UX REVIEW ANALYSIS:
+
+### What You Must Produce:
+1. **Accessibility Audit** — Based on the plan's UI changes:
+   - Missing ARIA attributes (labels, roles, live regions)
+   - Keyboard navigation gaps
+   - Colour contrast concerns
+   - Focus management issues
+   - Screen reader compatibility
+2. **Responsive Design Review** — For each UI change:
+   - Does it work across mobile, tablet, and desktop?
+   - Are breakpoints handled correctly?
+   - Is touch target sizing adequate (min 44x44px)?
+3. **Component Quality** — For each changed component:
+   - Is it following the project's design system/tokens?
+   - Is it using semantic HTML?
+   - Does it have proper loading, error, and empty states?
+   - Are animations respecting prefers-reduced-motion?
+4. **UX Pattern Analysis** — Are there UX improvements needed?
+   - Loading/skeleton states for async operations
+   - Error boundaries and user-friendly error messages
+   - Transitions and micro-interactions
+   - Form validation patterns
+5. **Concrete Recommendations** — For each finding, show the ACTUAL
+   markup/CSS changes you would make.
+
+### Quality Standards:
+- Show ACTUAL CODE (JSX/HTML/CSS) for your recommendations, not just
+  descriptions like "add an aria-label."
+- Reference specific components and file paths from the plan.
+- Prioritise accessibility (WCAG 2.1 AA) over aesthetics.
+- Be specific about which breakpoints and which states.
+
+Your analysis will be used as context for the implementation phase where
+you will have actual tools to read components and generate diffs.
+"""
+
     def build_system_prompt(self, task: Task) -> str:
         plan_section = ""
         if task.plan_document:

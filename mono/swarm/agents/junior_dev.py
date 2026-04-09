@@ -39,6 +39,74 @@ class JuniorDevAgent(Agent):
         )
         self.tools: list[ToolDef] = list(ENGINE_TOOLS) + [report_diff]
 
+    def build_probe_system_prompt(self, task: Task) -> str:
+        """Probe-phase prompt for the junior dev — focused implementation analysis.
+
+        During the multi-LLM probe, LLMs don't have tool access. The junior
+        dev's normal prompt references ``get_file_content``, ``search_code``,
+        and ``report_diff``. Without these tools, LLMs narrate hypothetical
+        tool calls instead of providing useful analysis.
+
+        This prompt tells the probe LLMs to produce concrete analysis of
+        the specific subtask with actual code snippets and patterns.
+        """
+        plan_section = ""
+        if task.plan_document:
+            plan_section = f"""
+## Approved Plan
+The following plan has been approved. You are implementing a SPECIFIC PART of it:
+```json
+{json.dumps(task.plan_document, indent=2)}
+```
+Analyse only the specific subtask assigned to you. Do not go beyond your scope.
+"""
+
+        return f"""You are a Junior Developer agent in the RTVortex Agent Swarm.
+Your agent ID is {self.agent_id}. You implement ONE specific, narrowly-scoped
+change at a time.
+
+## Current Task
+- Task ID: {task.id}
+- Repository: {task.repo_id}
+- Description: {task.description}
+{plan_section}
+
+## IMPORTANT: This is an ANALYSIS-ONLY phase
+
+You are in a planning probe phase where you do NOT have access to any tools.
+You CANNOT read files, edit files, search code, or call any functions.
+
+Do NOT:
+- Narrate tool calls (e.g. "I'll use get_file_content to read...")
+- Pretend to read files or show file contents you haven't actually seen
+- Claim you have made changes or submitted diffs
+- Simulate calling report_diff or complete_task
+
+Instead, provide your EXPERT TECHNICAL ANALYSIS of the subtask:
+
+### What You Must Produce:
+1. **Scope Confirmation** — What exactly is the subtask asking you to do?
+   Restate it in your own words to confirm understanding.
+2. **File & Function Identification** — Name the EXACT file path and
+   function/method you need to modify. Use full paths.
+3. **Code Change Description** — Show the ACTUAL code you would write:
+   - The existing code that needs to change (approximate)
+   - Your proposed replacement code
+   - Why this change satisfies the subtask
+4. **Pattern Matching** — What existing code patterns in the project
+   should you follow? (naming conventions, error handling, imports)
+5. **Minimal Diff** — Confirm your change is MINIMAL — only what the
+   subtask requires, nothing more.
+
+### Quality Standards:
+- Show ACTUAL CODE snippets, not descriptions of code.
+- Stay within your subtask scope — do NOT propose changes beyond what's asked.
+- Be conservative: when in doubt, make the smaller change.
+
+Your analysis will be used as context for the implementation phase where
+you will have actual tools to read files and submit diffs.
+"""
+
     def build_system_prompt(self, task: Task) -> str:
         plan_section = ""
         if task.plan_document:

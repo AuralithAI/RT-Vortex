@@ -55,8 +55,12 @@ _HEARTBEAT_INTERVAL = 25
 # How long to wait between status polls while waiting for human approval.
 _APPROVAL_POLL_INTERVAL = 5
 
-# Maximum wait time for plan approval before timing out (10 minutes).
-_APPROVAL_TIMEOUT = 600
+# Maximum wait time for plan approval before timing out.
+# Human review can take minutes, hours, or until the next day — a tight
+# timeout just kills the pipeline and wastes the LLM work already done.
+# 24 hours is generous enough to cover overnight reviews while still
+# preventing zombie pipelines.
+_APPROVAL_TIMEOUT = 86_400  # 24 hours
 
 # Pre-warmed agent pool size (Orchestrator + SeniorDev ready at startup).
 _WARM_POOL_SIZE = 2
@@ -153,14 +157,25 @@ async def _wait_for_status(
     """
     cancel_statuses = cancel_statuses or {"cancelled", "failed", "timed_out"}
     elapsed = 0.0
+    # Adaptive back-off: poll quickly at first (human might approve right
+    # away), then slow down to avoid wasting cycles on long reviews.
+    #   0-60 s  →  5 s interval  (responsive)
+    #   60-300 s → 10 s interval (moderate)
+    #   300+ s   → 30 s interval (patient)
     while elapsed < timeout:
         status = await go_client.get_task_status(task_id)
         if status in target_statuses:
             return status
         if status in cancel_statuses:
             raise RuntimeError(f"Task {task_id} reached terminal status: {status}")
-        await asyncio.sleep(_APPROVAL_POLL_INTERVAL)
-        elapsed += _APPROVAL_POLL_INTERVAL
+        if elapsed < 60:
+            interval = _APPROVAL_POLL_INTERVAL       # 5 s
+        elif elapsed < 300:
+            interval = _APPROVAL_POLL_INTERVAL * 2   # 10 s
+        else:
+            interval = _APPROVAL_POLL_INTERVAL * 6   # 30 s
+        await asyncio.sleep(interval)
+        elapsed += interval
 
     raise asyncio.TimeoutError(
         f"Timed out waiting for task {task_id} to reach {target_statuses}"
@@ -370,37 +385,29 @@ async def _run_full_pipeline(
         task.status = "implementing"
 
         # ── Step 3: Determine team composition from the plan ────────────
-        # The plan's estimated_complexity and agents_needed drive team size.
-        # Use a smarter team sizing algorithm that considers
-        # the plan's affected_files count, step count, and explicit agent request.
-        plan = orch_result.plan or {}
-        complexity = plan.get("estimated_complexity", "medium")
-        agents_needed = plan.get("agents_needed", 0)
-        affected_files = len(plan.get("affected_files", []))
-        step_count = len(plan.get("steps", []))
+        # Dynamic Team Formation — uses Go's complexity scoring
+        # engine + role-based ELO tiers for optimal team composition.
+        from .complexity import recommend_team_for_task
 
-        # Dynamic team sizing:
-        # 1. If the orchestrator explicitly requested a team size, respect it.
-        # 2. Otherwise, use heuristics based on complexity + file/step count.
-        if agents_needed and isinstance(agents_needed, int) and agents_needed > 0:
-            # Orchestrator requested specific team size — map to roles.
-            if agents_needed <= 1:
-                roles = ["senior_dev"]
-            elif agents_needed <= 3:
-                roles = ["senior_dev", "qa"]
-            elif agents_needed <= 5:
-                roles = ["architect", "senior_dev", "junior_dev", "qa", "security"]
-            else:
-                roles = ["architect", "senior_dev", "senior_dev", "junior_dev", "qa", "security", "docs", "ui_ux"]
-        elif complexity == "small" or (affected_files <= 2 and step_count <= 3):
-            roles = ["senior_dev"]
-        elif complexity == "large" or affected_files > 10 or step_count > 8:
-            roles = ["architect", "senior_dev", "junior_dev", "qa", "security", "docs", "ui_ux"]
-        else:  # medium
-            roles = ["senior_dev", "qa", "security"]
+        plan = orch_result.plan or {}
+        formation = await recommend_team_for_task(
+            go_client, task.id, task.repo_id, plan,
+        )
+        roles = formation.get("recommended_roles", ["senior_dev", "qa"])
+        team_size = formation.get("team_size", len(roles) + 1)
+
+        logger.info(
+            "Team %s: Dynamic formation — complexity=%s score=%.3f roles=%s team_size=%d strategy=%s",
+            team_id[:8],
+            formation.get("complexity_label", "?"),
+            formation.get("complexity_score", 0.0),
+            roles,
+            team_size,
+            formation.get("strategy", "?"),
+        )
 
         # Declare team size to Go (pass team_id so Go can auto-assign).
-        await go_client.declare_team_size(task.id, len(roles) + 1, team_id=team_id)
+        await go_client.declare_team_size(task.id, team_size, team_id=team_id)
 
         # ── Step 4: Run implementation agents ───────────────────────────
         implementation_agents: list[Agent] = []
@@ -412,6 +419,9 @@ async def _run_full_pipeline(
             agent = _make_agent(role, team_id, agent_config)
             agent.conversation = conversation
             agent.workspace = workspace
+
+            # Inject complexity label from dynamic team formation.
+            agent._complexity_label = formation.get("complexity_label", "")
 
             # Attach memory hierarchy.
             agent_mem = AgentMemory(
@@ -427,6 +437,9 @@ async def _run_full_pipeline(
             agent.memory = agent_mem
 
             # Inject extended tools based on role.
+            # NOTE: Tool names must be globally unique in the list sent to LLM
+            # providers.  CODE_TOOLS and RESEARCH_TOOLS both contain
+            # recall_memory, so we deduplicate after assembly.
             if role in ("senior_dev", "architect", "junior_dev"):
                 agent.tools.extend(CODE_TOOLS)
                 agent.tools.extend(RESEARCH_TOOLS)
@@ -446,6 +459,16 @@ async def _run_full_pipeline(
             # MCP integration tools for roles that interact with external services.
             if role in ("ops", "senior_dev", "architect"):
                 agent.tools.extend(MCP_TOOLS)
+
+            # Deduplicate tools by name — LLM providers (Anthropic, Gemini, etc.)
+            # reject requests containing duplicate tool/function names.
+            seen_names: set[str] = set()
+            unique_tools = []
+            for t in agent.tools:
+                if t.name not in seen_names:
+                    seen_names.add(t.name)
+                    unique_tools.append(t)
+            agent.tools = unique_tools
 
             warm_id = warm_pool_cb() if warm_pool_cb else None
             if warm_id:
@@ -519,15 +542,31 @@ async def _run_full_pipeline(
                         logger.error("Team %s: Failed to submit diff for %s: %s",
                                      team_id[:8], diff["file_path"], e)
             else:
-                logger.info("Team %s: No workspace changes (no diffs)", team_id[:8])
+                logger.warning("Team %s: No workspace changes (no diffs)", team_id[:8])
 
             if agent_failures:
                 logger.warning("Team %s: %d/%d agents failed, completing with partial results",
                                team_id[:8], len(agent_failures), total_agents)
 
-            # Mark task complete — Go triggers PR creation.
-            await go_client.report_result(task.id)
-            logger.info("Team %s: Task %s completed successfully", team_id[:8], task.id)
+            if not changeset:
+                try:
+                    current_status = await go_client.get_task_status(task.id)
+                except Exception:
+                    current_status = ""
+                if current_status == "completed":
+                    logger.info("Team %s: Task %s already completed by agent",
+                                team_id[:8], task.id)
+                else:
+                    await go_client.fail_task(
+                        task.id,
+                        "Agents produced no code changes. The task may need "
+                        "clearer instructions or the target files may not exist.",
+                    )
+                    logger.warning("Team %s: Task %s failed — no diffs produced",
+                                   team_id[:8], task.id)
+            else:
+                await go_client.report_result(task.id)
+                logger.info("Team %s: Task %s completed successfully", team_id[:8], task.id)
 
     except Exception as e:
         logger.error("Team %s: Fatal pipeline error: %s", team_id[:8], e, exc_info=True)

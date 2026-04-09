@@ -199,9 +199,16 @@ async def declare_team_size(task_id: str, size: int) -> str:
     return f"Team size set to {size} for task {task_id}."
 
 
+# Track how many times complete_task was rejected for lacking changes.
+# After 2 rejections, allow completion to prevent infinite loops.
+_complete_task_rejections: dict[str, int] = {}
+
+
 @tool(description=(
-    "Mark a task as completed. Only the orchestrator should call this after "
-    "all diffs have been submitted and the team's work is finished."
+    "Mark a task as completed. Call this ONLY after you have made all required "
+    "code changes using workspace_edit_file or workspace_create_file. "
+    "If you have not edited any files, you MUST make the changes first — "
+    "do NOT call this tool until workspace_status shows your changes."
 ))
 async def complete_task(task_id: str) -> str:
     """Mark a task as completed.
@@ -210,14 +217,82 @@ async def complete_task(task_id: str) -> str:
         task_id: The task ID to complete.
 
     Returns:
-        Confirmation string.
+        Confirmation string, or a warning if no workspace changes were made.
     """
+    from .workspace_tools import _get_workspace
+    ws = _get_workspace()
+    has_changes = ws is not None and ws.has_changes()
+    if not has_changes:
+        rejections = _complete_task_rejections.get(task_id, 0)
+        if rejections < 2:
+            _complete_task_rejections[task_id] = rejections + 1
+            logger.warning(
+                "Task %s: complete_task called but workspace has NO changes "
+                "(rejection %d/2) — nudging agent to make edits",
+                task_id, rejections + 1,
+            )
+            return (
+                "WARNING: You have not made any file changes yet! "
+                "Your task requires code modifications. "
+                "Please use workspace_read_file to read the relevant files, "
+                "then use workspace_edit_file or workspace_create_file to make "
+                "the required changes, and THEN call complete_task again. "
+                "Do NOT complete the task without submitting code changes."
+            )
+        else:
+            logger.warning(
+                "Task %s: complete_task called with NO changes after %d rejections "
+                "— allowing completion to prevent infinite loop",
+                task_id, rejections,
+            )
+
+    # Clean up rejection counter.
+    _complete_task_rejections.pop(task_id, None)
+
     client = _get_client()
     await client.report_result(task_id=task_id)
     logger.info("Task %s marked complete", task_id)
     return f"Task {task_id} marked as completed."
 
 
+@tool(description=(
+    "Report CI signal results for a task. Call this after running tests or "
+    "verifying build status to feed automatic signals into the ELO system."
+))
+async def report_ci_signal(
+    task_id: str,
+    build_success: bool = False,
+    tests_passed: bool = False,
+    pr_accepted: bool = False,
+    details: str = "",
+) -> str:
+    """Report CI signal (build/test/PR result) for a task.
+
+    Args:
+        task_id: The task ID.
+        build_success: Whether the build succeeded.
+        tests_passed: Whether tests passed.
+        pr_accepted: Whether the PR was merged/accepted.
+        details: Optional human-readable details.
+
+    Returns:
+        Confirmation string.
+    """
+    client = _get_client()
+    result = await client.report_ci_signal(
+        task_id=task_id,
+        build_success=build_success,
+        tests_passed=tests_passed,
+        pr_accepted=pr_accepted,
+        details=details,
+    )
+    logger.info(
+        "CI signal reported for task %s: build=%s tests=%s pr=%s",
+        task_id, build_success, tests_passed, pr_accepted,
+    )
+    return f"CI signal reported for task {task_id}: {result}"
+
+
 # ── Collect all tools ────────────────────────────────────────────────────────
 
-TASK_TOOLS = [report_plan, report_diff, complete_task]
+TASK_TOOLS = [report_plan, report_diff, complete_task, report_ci_signal]

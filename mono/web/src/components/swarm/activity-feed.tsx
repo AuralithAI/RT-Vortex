@@ -16,6 +16,10 @@ import {
   Clock,
   Users,
   GitPullRequest,
+  MessageSquare,
+  Scale,
+  Gavel,
+  Brain,
 } from "lucide-react";
 import type { SwarmWsEvent } from "@/hooks/use-swarm-events";
 
@@ -70,6 +74,23 @@ function eventIcon(event: SwarmWsEvent) {
         return <XCircle className="h-4 w-4 text-red-500" />;
       default:
         return <FileText className="h-4 w-4 text-muted-foreground" />;
+    }
+  }
+
+  if (type === "swarm_discussion") {
+    switch (eventName) {
+      case "thread_opened":
+        return <MessageSquare className="h-4 w-4 text-blue-500" />;
+      case "provider_response":
+        return <Brain className="h-4 w-4 text-purple-500" />;
+      case "thread_completed":
+        return <CheckCircle className="h-4 w-4 text-green-500" />;
+      case "thread_synthesised":
+        return <Scale className="h-4 w-4 text-emerald-500" />;
+      case "consensus_result":
+        return <Gavel className="h-4 w-4 text-amber-500" />;
+      default:
+        return <MessageSquare className="h-4 w-4 text-muted-foreground" />;
     }
   }
 
@@ -133,6 +154,47 @@ function eventMessage(event: SwarmWsEvent): string {
     }
   }
 
+  if (event.type === "swarm_discussion") {
+    const provider = (data.provider as string) || "";
+    const model = (data.model as string) || "";
+    const strategy = (data.strategy as string) || "";
+    const threadId = (data.thread_id as string) || "";
+    const shortThread = threadId ? threadId.substring(0, 8) : "";
+
+    switch (event.event) {
+      case "thread_opened": {
+        const count = (data.provider_count as number) || 0;
+        return `Discussion thread ${shortThread} opened — querying ${count} LLM${count !== 1 ? "s" : ""}`;
+      }
+      case "provider_response": {
+        const latency = (data.latency_ms as number) || 0;
+        const label = provider && model ? `${provider}/${model}` : provider || "LLM";
+        return latency
+          ? `${label} responded (${latency}ms)`
+          : `${label} responded`;
+      }
+      case "thread_completed": {
+        const success = (data.success_count as number) || 0;
+        const total = (data.provider_count as number) || 0;
+        return `Thread ${shortThread} complete — ${success}/${total} providers responded`;
+      }
+      case "thread_synthesised": {
+        const winner = (data.selected_provider as string) || (data.provider as string) || "unknown";
+        return `Thread synthesised — selected ${winner}`;
+      }
+      case "consensus_result": {
+        const winner = (data.provider as string) || "unknown";
+        const confidence = (data.confidence as number) || 0;
+        const confPct = Math.round(confidence * 100);
+        return strategy
+          ? `Consensus (${strategy}): ${winner} selected (${confPct}% confidence)`
+          : `Consensus: ${winner} selected (${confPct}% confidence)`;
+      }
+      default:
+        return `Discussion: ${event.event}`;
+    }
+  }
+
   return event.event;
 }
 
@@ -146,7 +208,15 @@ function formatTime(timestamp: string): string {
 }
 
 export function ActivityFeed({ events, maxItems = 50 }: ActivityFeedProps) {
-  const displayed = events.slice(0, maxItems);
+  // Filter out low-value noise events that would flood the feed.
+  // provider_streaming_start is internal plumbing (spinner trigger);
+  // provider_streaming_chunk is legacy (server no longer sends it).
+  const meaningful = events.filter(
+    (e) =>
+      e.event !== "provider_streaming_start" &&
+      e.event !== "provider_streaming_chunk",
+  );
+  const displayed = meaningful.slice(0, maxItems);
 
   if (displayed.length === 0) {
     return (

@@ -364,7 +364,9 @@ CREATE TABLE IF NOT EXISTS swarm_tasks (
     submitted_by      UUID,
     retry_count       INT DEFAULT 0,
     failure_reason    TEXT,
+    team_formation    JSONB DEFAULT NULL,
     created_at        TIMESTAMPTZ DEFAULT NOW(),
+    updated_at        TIMESTAMPTZ DEFAULT NOW(),
     completed_at      TIMESTAMPTZ,
     timeout_at        TIMESTAMPTZ
 );
@@ -381,6 +383,10 @@ CREATE INDEX IF NOT EXISTS idx_swarm_tasks_timeout
     ON swarm_tasks(timeout_at)
     WHERE timeout_at IS NOT NULL
       AND status NOT IN ('completed', 'cancelled', 'failed', 'timed_out');
+
+CREATE INDEX IF NOT EXISTS idx_swarm_tasks_team_formation
+    ON swarm_tasks USING GIN (team_formation)
+    WHERE team_formation IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS swarm_task_diffs (
     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -804,6 +810,42 @@ INSERT INTO schema_info (version, description)
 SELECT 17, 'Add recovery_salt and recovery_wrapped_key columns to user_keychains'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 17);
 
+INSERT INTO schema_info (version, description)
+SELECT 18, 'Add cross-repo links tables — repo_links, repo_link_events'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 18);
+
+INSERT INTO schema_info (version, description)
+SELECT 19, 'Add swarm_consensus_insights table for cross-task learning from multi-LLM decisions'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 19);
+
+INSERT INTO schema_info (version, description)
+SELECT 20, 'Add swarm_role_elo and swarm_role_elo_history tables for role-based ELO tracking'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 20);
+
+INSERT INTO schema_info (version, description)
+SELECT 21, 'Add swarm_ci_signals table for automatic CI signal ingestion into role ELO'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 21);
+
+INSERT INTO schema_info (version, description)
+SELECT 22, 'Add team_formation JSONB column to swarm_tasks for dynamic team formation'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 22);
+
+INSERT INTO schema_info (version, description)
+SELECT 23, 'Add swarm_probe_configs and swarm_probe_history tables for adaptive probe tuning'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 23);
+
+INSERT INTO schema_info (version, description)
+SELECT 24, 'Add swarm_provider_circuit_state and swarm_self_heal_events tables for self-healing pipeline'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 24);
+
+INSERT INTO schema_info (version, description)
+SELECT 25, 'Add swarm_metrics_snapshots, swarm_provider_perf_log, swarm_cost_budget for observability dashboard'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 25);
+
+INSERT INTO schema_info (version, description)
+SELECT 26, 'Add app_config table for system-wide non-secret settings (e.g. routes_enabled)'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 26);
+
 -- ============================================================================
 -- UPDATED_AT TRIGGER
 -- ============================================================================
@@ -947,6 +989,381 @@ CREATE TRIGGER trg_repo_links_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- ============================================================================
+-- SWARM CONSENSUS INSIGHTS (Cross-Task Learning)
+-- ============================================================================
+-- Durable per-repo insights extracted from multi-LLM consensus decisions.
+-- Categories: provider_reliability, strategy_effectiveness, code_pattern,
+--             provider_agreement, quality_signal.
+-- TTL: 30 days (cleaned by the janitor).
+
+CREATE TABLE IF NOT EXISTS swarm_consensus_insights (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    repo_id     TEXT NOT NULL,
+    task_id     TEXT NOT NULL DEFAULT '',
+    thread_id   TEXT NOT NULL DEFAULT '',
+    category    TEXT NOT NULL,
+    key         TEXT NOT NULL,
+    insight     TEXT NOT NULL,
+    confidence  DOUBLE PRECISION NOT NULL DEFAULT 0.8,
+    strategy    TEXT NOT NULL DEFAULT '',
+    provider    TEXT NOT NULL DEFAULT '',
+    metadata    JSONB NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (repo_id, category, key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_consensus_insights_repo_cat
+    ON swarm_consensus_insights (repo_id, category);
+CREATE INDEX IF NOT EXISTS idx_consensus_insights_updated
+    ON swarm_consensus_insights (updated_at);
+CREATE INDEX IF NOT EXISTS idx_consensus_insights_provider
+    ON swarm_consensus_insights (provider)
+    WHERE provider != '';
+
+DROP TRIGGER IF EXISTS trg_consensus_insights_updated_at ON swarm_consensus_insights;
+CREATE TRIGGER trg_consensus_insights_updated_at
+    BEFORE UPDATE ON swarm_consensus_insights
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
+-- SWARM ROLE ELO (Phase 8)
+-- ============================================================================
+-- ELO tracking at the (role, repo_id) level instead of ephemeral agent UUIDs.
+-- When a new agent registers for a role+repo it inherits the accumulated
+-- score. Performance data survives agent lifecycles.
+
+CREATE TABLE IF NOT EXISTS swarm_role_elo (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role            TEXT NOT NULL,
+    repo_id         TEXT NOT NULL,
+    elo_score       DOUBLE PRECISION NOT NULL DEFAULT 1200,
+    tier            TEXT NOT NULL DEFAULT 'standard',  -- standard, expert, restricted
+    tasks_done      INT NOT NULL DEFAULT 0,
+    tasks_rated     INT NOT NULL DEFAULT 0,
+    avg_rating      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    wins            INT NOT NULL DEFAULT 0,
+    losses          INT NOT NULL DEFAULT 0,
+    consensus_avg   DOUBLE PRECISION NOT NULL DEFAULT 0,
+    best_strategy   TEXT NOT NULL DEFAULT '',
+    training_probes INT NOT NULL DEFAULT 0,
+    last_active     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_role_elo_role_repo UNIQUE (role, repo_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_role_elo_role     ON swarm_role_elo (role);
+CREATE INDEX IF NOT EXISTS idx_role_elo_repo     ON swarm_role_elo (repo_id);
+CREATE INDEX IF NOT EXISTS idx_role_elo_tier     ON swarm_role_elo (tier);
+CREATE INDEX IF NOT EXISTS idx_role_elo_score    ON swarm_role_elo (elo_score DESC);
+CREATE INDEX IF NOT EXISTS idx_role_elo_active   ON swarm_role_elo (last_active);
+
+-- Append-only log of every ELO change for audit, charting, and debugging.
+
+CREATE TABLE IF NOT EXISTS swarm_role_elo_history (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role        TEXT NOT NULL,
+    repo_id     TEXT NOT NULL,
+    task_id     TEXT NOT NULL DEFAULT '',
+    event_type  TEXT NOT NULL,
+    old_elo     DOUBLE PRECISION NOT NULL,
+    new_elo     DOUBLE PRECISION NOT NULL,
+    delta       DOUBLE PRECISION NOT NULL,
+    detail      JSONB,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_role_elo_hist_role_repo ON swarm_role_elo_history (role, repo_id);
+CREATE INDEX IF NOT EXISTS idx_role_elo_hist_created   ON swarm_role_elo_history (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_role_elo_hist_event     ON swarm_role_elo_history (event_type);
+
+DROP TRIGGER IF EXISTS trg_swarm_role_elo_updated_at ON swarm_role_elo;
+CREATE TRIGGER trg_swarm_role_elo_updated_at
+    BEFORE UPDATE ON swarm_role_elo
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
+-- SWARM CI SIGNALS
+-- ============================================================================
+-- Tracks per-task CI signals (PR merge state, build/test CI checks).
+-- The background CISignalPoller queries completed tasks with PRs and fills
+-- this table, then feeds the signals into the role-based ELO system.
+
+CREATE TABLE IF NOT EXISTS swarm_ci_signals (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id         UUID NOT NULL REFERENCES swarm_tasks(id) ON DELETE CASCADE,
+    repo_id         TEXT NOT NULL,
+    pr_number       INT,
+    pr_state        TEXT NOT NULL DEFAULT 'unknown',
+    pr_merged       BOOLEAN NOT NULL DEFAULT FALSE,
+    ci_state        TEXT NOT NULL DEFAULT 'unknown',
+    ci_total        INT NOT NULL DEFAULT 0,
+    ci_passed       INT NOT NULL DEFAULT 0,
+    ci_failed       INT NOT NULL DEFAULT 0,
+    ci_pending      INT NOT NULL DEFAULT 0,
+    ci_details      JSONB DEFAULT '[]'::jsonb,
+    elo_ingested    BOOLEAN NOT NULL DEFAULT FALSE,
+    elo_ingested_at TIMESTAMPTZ,
+    poll_count      INT NOT NULL DEFAULT 0,
+    last_polled_at  TIMESTAMPTZ,
+    finalized       BOOLEAN NOT NULL DEFAULT FALSE,
+    finalized_at    TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_swarm_ci_signals_task
+    ON swarm_ci_signals (task_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_ci_signals_unfinalized
+    ON swarm_ci_signals (finalized, last_polled_at) WHERE NOT finalized;
+CREATE INDEX IF NOT EXISTS idx_swarm_ci_signals_repo
+    ON swarm_ci_signals (repo_id, created_at DESC);
+
+DROP TRIGGER IF EXISTS trg_swarm_ci_signals_updated_at ON swarm_ci_signals;
+CREATE TRIGGER trg_swarm_ci_signals_updated_at
+    BEFORE UPDATE ON swarm_ci_signals
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
+-- SWARM PROBE CONFIGS (Adaptive Probe Tuning)
+-- ============================================================================
+-- Per-(role, repo_id, action_type) tuning parameters for the multi-LLM probe.
+-- The adaptive tuning engine updates these periodically based on observed
+-- probe outcomes.
+
+CREATE TABLE IF NOT EXISTS swarm_probe_configs (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    role            TEXT NOT NULL,
+    repo_id         TEXT NOT NULL DEFAULT '',
+    action_type     TEXT NOT NULL DEFAULT '',
+    num_models      INT NOT NULL DEFAULT 3,
+    preferred_providers TEXT[] NOT NULL DEFAULT '{}',
+    excluded_providers  TEXT[] NOT NULL DEFAULT '{}',
+    temperature     DOUBLE PRECISION NOT NULL DEFAULT 0.7,
+    max_tokens      INT NOT NULL DEFAULT 4096,
+    timeout_seconds INT NOT NULL DEFAULT 120,
+    budget_cap_usd  DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    tokens_spent    BIGINT NOT NULL DEFAULT 0,
+    strategy        TEXT NOT NULL DEFAULT 'adaptive',
+    confidence_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.7,
+    retries         INT NOT NULL DEFAULT 1,
+    reasoning       TEXT NOT NULL DEFAULT '',
+    last_tuned_at   TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (role, repo_id, action_type)
+);
+
+CREATE INDEX IF NOT EXISTS idx_swarm_probe_cfg_role_repo
+    ON swarm_probe_configs (role, repo_id);
+
+DROP TRIGGER IF EXISTS trg_swarm_probe_configs_updated_at ON swarm_probe_configs;
+CREATE TRIGGER trg_swarm_probe_configs_updated_at
+    BEFORE UPDATE ON swarm_probe_configs
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
+-- SWARM PROBE HISTORY (Adaptive Probe Tuning)
+-- ============================================================================
+-- Append-only log of every probe outcome.  The adaptive tuning engine
+-- consumes recent rows to compute provider statistics and adjust configs.
+
+CREATE TABLE IF NOT EXISTS swarm_probe_history (
+    id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id               UUID NOT NULL,
+    role                  TEXT NOT NULL,
+    repo_id               TEXT NOT NULL DEFAULT '',
+    action_type           TEXT NOT NULL DEFAULT '',
+    providers_queried     TEXT[] NOT NULL DEFAULT '{}',
+    providers_succeeded   TEXT[] NOT NULL DEFAULT '{}',
+    provider_winner       TEXT NOT NULL DEFAULT '',
+    strategy_used         TEXT NOT NULL DEFAULT '',
+    consensus_confidence  DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    provider_latencies    JSONB NOT NULL DEFAULT '{}',
+    provider_tokens       JSONB NOT NULL DEFAULT '{}',
+    total_ms              INT NOT NULL DEFAULT 0,
+    total_tokens          INT NOT NULL DEFAULT 0,
+    estimated_cost_usd    DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    success               BOOLEAN NOT NULL DEFAULT TRUE,
+    error_detail          TEXT NOT NULL DEFAULT '',
+    complexity_label      TEXT NOT NULL DEFAULT '',
+    num_models_used       INT NOT NULL DEFAULT 0,
+    temperature_used      DOUBLE PRECISION NOT NULL DEFAULT 0.7,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_swarm_probe_hist_role_repo
+    ON swarm_probe_history (role, repo_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_probe_hist_task
+    ON swarm_probe_history (task_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_probe_hist_created
+    ON swarm_probe_history (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_swarm_probe_hist_winner
+    ON swarm_probe_history (provider_winner);
+
+-- ============================================================================
+-- Self-Healing Pipeline Tables
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS swarm_provider_circuit_state (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider        TEXT        NOT NULL UNIQUE,
+    state           TEXT        NOT NULL DEFAULT 'closed',
+    consecutive_failures INT   NOT NULL DEFAULT 0,
+    total_failures  BIGINT     NOT NULL DEFAULT 0,
+    total_successes BIGINT     NOT NULL DEFAULT 0,
+    last_failure_at TIMESTAMPTZ,
+    last_success_at TIMESTAMPTZ,
+    open_until      TIMESTAMPTZ,
+    half_open_probes INT       NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_circuit_provider
+    ON swarm_provider_circuit_state (provider);
+CREATE INDEX IF NOT EXISTS idx_provider_circuit_state
+    ON swarm_provider_circuit_state (state);
+
+DROP TRIGGER IF EXISTS trg_provider_circuit_updated_at ON swarm_provider_circuit_state;
+CREATE TRIGGER trg_provider_circuit_updated_at
+    BEFORE UPDATE ON swarm_provider_circuit_state
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE TABLE IF NOT EXISTS swarm_self_heal_events (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_type      TEXT        NOT NULL,
+    provider        TEXT,
+    task_id         UUID,
+    agent_id        UUID,
+    details         JSONB       NOT NULL DEFAULT '{}',
+    severity        TEXT        NOT NULL DEFAULT 'info',
+    resolved        BOOLEAN     NOT NULL DEFAULT false,
+    resolved_at     TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_self_heal_type
+    ON swarm_self_heal_events (event_type);
+CREATE INDEX IF NOT EXISTS idx_self_heal_provider
+    ON swarm_self_heal_events (provider);
+CREATE INDEX IF NOT EXISTS idx_self_heal_task
+    ON swarm_self_heal_events (task_id);
+CREATE INDEX IF NOT EXISTS idx_self_heal_severity
+    ON swarm_self_heal_events (severity);
+CREATE INDEX IF NOT EXISTS idx_self_heal_created
+    ON swarm_self_heal_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_self_heal_unresolved
+    ON swarm_self_heal_events (resolved) WHERE resolved = false;
+
+-- ============================================================================
+-- SWARM OBSERVABILITY — METRIC SNAPSHOTS
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS swarm_metrics_snapshots (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    active_tasks    INT         NOT NULL DEFAULT 0,
+    pending_tasks   INT         NOT NULL DEFAULT 0,
+    completed_tasks BIGINT      NOT NULL DEFAULT 0,
+    failed_tasks    BIGINT      NOT NULL DEFAULT 0,
+    online_agents   INT         NOT NULL DEFAULT 0,
+    busy_agents     INT         NOT NULL DEFAULT 0,
+    active_teams    INT         NOT NULL DEFAULT 0,
+    busy_teams      INT         NOT NULL DEFAULT 0,
+    llm_calls       BIGINT      NOT NULL DEFAULT 0,
+    llm_tokens      BIGINT      NOT NULL DEFAULT 0,
+    llm_avg_latency_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
+    llm_error_rate  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    probe_calls     BIGINT      NOT NULL DEFAULT 0,
+    consensus_runs  BIGINT      NOT NULL DEFAULT 0,
+    consensus_avg_confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+    open_circuits   INT         NOT NULL DEFAULT 0,
+    heal_events     INT         NOT NULL DEFAULT 0,
+    estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    queue_depth     INT         NOT NULL DEFAULT 0,
+    agent_utilisation DOUBLE PRECISION NOT NULL DEFAULT 0,
+    health_score    INT         NOT NULL DEFAULT 100,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_metrics_snap_created
+    ON swarm_metrics_snapshots (created_at DESC);
+
+-- ============================================================================
+-- SWARM OBSERVABILITY — PROVIDER PERFORMANCE LOG
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS swarm_provider_perf_log (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    provider        TEXT        NOT NULL,
+    calls           INT         NOT NULL DEFAULT 0,
+    successes       INT         NOT NULL DEFAULT 0,
+    failures        INT         NOT NULL DEFAULT 0,
+    tokens_used     BIGINT      NOT NULL DEFAULT 0,
+    avg_latency_ms  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    p95_latency_ms  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    p99_latency_ms  DOUBLE PRECISION NOT NULL DEFAULT 0,
+    error_rate      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0,
+    consensus_wins  INT         NOT NULL DEFAULT 0,
+    consensus_total INT         NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_provider_perf_created
+    ON swarm_provider_perf_log (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_provider_perf_provider
+    ON swarm_provider_perf_log (provider, created_at DESC);
+
+-- ============================================================================
+-- SWARM OBSERVABILITY — COST BUDGET
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS swarm_cost_budget (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    scope           TEXT        NOT NULL DEFAULT 'global',
+    month           DATE        NOT NULL,
+    budget_usd      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    spent_usd       DOUBLE PRECISION NOT NULL DEFAULT 0,
+    alert_threshold DOUBLE PRECISION NOT NULL DEFAULT 0.8,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(scope, month)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cost_budget_scope
+    ON swarm_cost_budget (scope, month);
+
+DROP TRIGGER IF EXISTS trg_cost_budget_updated_at ON swarm_cost_budget;
+CREATE TRIGGER trg_cost_budget_updated_at
+    BEFORE UPDATE ON swarm_cost_budget
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- ============================================================================
+-- APP CONFIG — system-wide key/value settings (NOT for secrets)
+-- ============================================================================
+-- Stores non-secret application configuration such as feature flags and
+-- runtime toggles. Secrets and API keys belong in the keychain, NOT here.
+
+CREATE TABLE IF NOT EXISTS app_config (
+    key         TEXT        PRIMARY KEY,
+    value       TEXT        NOT NULL DEFAULT '',
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+DROP TRIGGER IF EXISTS trg_app_config_updated_at ON app_config;
+CREATE TRIGGER trg_app_config_updated_at
+    BEFORE UPDATE ON app_config
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- Seed defaults (idempotent).
+INSERT INTO app_config (key, value)
+SELECT 'llm_routes_enabled', 'false'
+WHERE NOT EXISTS (SELECT 1 FROM app_config WHERE key = 'llm_routes_enabled');
+
+-- ============================================================================
 -- GRANT ACCESS TO rtvortex ROLE
 -- ============================================================================
 -- Ensures the rtvortex application role has full access to all tables.
@@ -991,6 +1408,18 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE keychain_audit_log TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE repo_links TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE repo_link_events TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_consensus_insights TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_role_elo TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_role_elo_history TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_ci_signals TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_probe_configs TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_probe_history TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_provider_circuit_state TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_self_heal_events TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_metrics_snapshots TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_provider_perf_log TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_cost_budget TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE app_config TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;

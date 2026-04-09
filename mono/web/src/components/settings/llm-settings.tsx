@@ -19,8 +19,12 @@ import {
   Globe,
   AlertTriangle,
   Link,
+  Cpu,
+  HardDrive,
+  Server,
+  MonitorDot,
 } from "lucide-react";
-import { useLLMProviders } from "@/lib/api/queries";
+import { useLLMProviders, useLLMProviderStatus } from "@/lib/api/queries";
 import {
   useTestLLM,
   useConfigureLLM,
@@ -28,6 +32,12 @@ import {
   useCheckLLMBalance,
 } from "@/lib/api/mutations";
 import type { LLMBalanceResult } from "@/types/api";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -49,6 +59,15 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { getLLMIcon } from "@/components/icons/brand-icons";
 
+/** Format bytes into human-readable size (e.g. 4.1 GB) */
+function formatBytes(bytes: number): string {
+  if (!bytes || bytes === 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const val = bytes / Math.pow(1024, i);
+  return `${val.toFixed(val < 10 ? 1 : 0)} ${units[i]}`;
+}
+
 export function LLMSettings() {
   const { data: llmData, isLoading } = useLLMProviders();
   const providers = llmData?.providers ?? [];
@@ -63,6 +82,13 @@ export function LLMSettings() {
   const [selectedModels, setSelectedModels] = useState<Record<string, string>>({});
   const [baseUrls, setBaseUrls] = useState<Record<string, string>>({});
   const [balanceResults, setBalanceResults] = useState<Record<string, LLMBalanceResult>>({});
+
+  // Fetch Ollama-specific live status (running models, detailed model info)
+  const ollamaProvider = providers.find((p: any) => p.name === "ollama");
+  const ollamaStatus = useLLMProviderStatus(
+    "ollama",
+    !!ollamaProvider?.configured
+  );
 
   const handleSave = (providerName: string) => {
     const key = apiKeys[providerName];
@@ -227,7 +253,121 @@ export function LLMSettings() {
                       <Globe className="h-3 w-3" />
                       {provider.base_url}
                     </span>
+                    {isLocal && provider.name === "ollama" && ollamaStatus.data && (
+                      <>
+                        {ollamaStatus.data.models_detailed && (
+                          <span className="flex items-center gap-1">
+                            <HardDrive className="h-3 w-3" />
+                            {ollamaStatus.data.models_detailed.length} model{ollamaStatus.data.models_detailed.length !== 1 ? "s" : ""} pulled
+                          </span>
+                        )}
+                        {(ollamaStatus.data.running_count ?? 0) > 0 && (
+                          <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
+                            <MonitorDot className="h-3 w-3" />
+                            {ollamaStatus.data.running_count} running
+                          </span>
+                        )}
+                      </>
+                    )}
                   </div>
+
+                  {/* Ollama live model status */}
+                  {isLocal && provider.name === "ollama" && ollamaStatus.data && (
+                    <div className="space-y-2">
+                      {/* Running models */}
+                      {ollamaStatus.data.running_models &&
+                        ollamaStatus.data.running_models.length > 0 && (
+                          <div className="rounded-md border border-green-200 bg-green-50/50 dark:border-green-900 dark:bg-green-950/30 p-2.5 space-y-1.5">
+                            <div className="flex items-center gap-1.5 text-xs font-medium text-green-700 dark:text-green-400">
+                              <MonitorDot className="h-3.5 w-3.5" />
+                              Loaded in Memory ({ollamaStatus.data.running_count ?? ollamaStatus.data.running_models.length})
+                            </div>
+                            <div className="space-y-1">
+                              {ollamaStatus.data.running_models.map((rm: any, idx: number) => (
+                                <div
+                                  key={rm.name + idx}
+                                  className="flex items-center justify-between text-xs text-green-800 dark:text-green-300 rounded bg-green-100/60 dark:bg-green-900/40 px-2 py-1"
+                                >
+                                  <span className="font-mono font-medium">{rm.name}</span>
+                                  <div className="flex items-center gap-3 text-[11px] text-green-600 dark:text-green-400">
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <span className="flex items-center gap-0.5">
+                                            <Cpu className="h-3 w-3" />
+                                            {rm.processor || "cpu"}
+                                          </span>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="top" className="text-xs">Processor</TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <span className="flex items-center gap-0.5">
+                                            <HardDrive className="h-3 w-3" />
+                                            {formatBytes(rm.size)}
+                                          </span>
+                                        </TooltipTrigger>
+                                        <TooltipContent side="top" className="text-xs">Total Size</TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                    {rm.size_vram > 0 && (
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger asChild>
+                                            <span className="flex items-center gap-0.5">
+                                              <Server className="h-3 w-3" />
+                                              {formatBytes(rm.size_vram)} VRAM
+                                            </span>
+                                          </TooltipTrigger>
+                                          <TooltipContent side="top" className="text-xs">GPU VRAM Used</TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                      {/* Available model details */}
+                      {ollamaStatus.data.models_detailed &&
+                        ollamaStatus.data.models_detailed.length > 0 && (
+                          <div className="rounded-md border p-2.5 space-y-1.5">
+                            <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                              <HardDrive className="h-3.5 w-3.5" />
+                              Available Models ({ollamaStatus.data.models_detailed.length})
+                            </div>
+                            <div className="grid grid-cols-1 gap-1">
+                              {ollamaStatus.data.models_detailed.map((md: any) => (
+                                <div
+                                  key={md.digest || md.name}
+                                  className="flex items-center justify-between text-xs rounded px-2 py-1 bg-muted/40"
+                                >
+                                  <span className="font-mono font-medium truncate max-w-[200px]">{md.name}</span>
+                                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                                    {md.family && (
+                                      <Badge variant="outline" className="text-[10px] h-4 px-1.5">
+                                        {md.family}
+                                      </Badge>
+                                    )}
+                                    {md.parameter_size && (
+                                      <span className="tabular-nums">{md.parameter_size}</span>
+                                    )}
+                                    {md.quantization_level && (
+                                      <span className="text-muted-foreground/70">{md.quantization_level}</span>
+                                    )}
+                                    <span className="tabular-nums">{formatBytes(md.size)}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                    </div>
+                  )}
 
                   {/* Config inputs — different layout for local vs cloud */}
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

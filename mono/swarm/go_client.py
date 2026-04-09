@@ -265,6 +265,53 @@ class GoClient:
             except Exception:
                 pass  # Best-effort — don't fail the agent if WS broadcast fails.
 
+    async def post_discussion_event(self, task_id: str, event: dict) -> None:
+        """Post a discussion thread lifecycle event for WebSocket broadcast.
+
+        The Go server receives the event and broadcasts it as a
+        ``swarm_discussion`` WebSocket event so the frontend can render
+        multi-model comparison panels in real time.
+
+        Args:
+            task_id: Task UUID.
+            event: Dict with ``event`` key (``"thread_opened"``,
+                ``"provider_response"``, ``"thread_completed"``,
+                ``"thread_synthesised"``) and event-specific payload fields.
+        """
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.post(
+                    f"{self.base_url}/internal/swarm/tasks/{task_id}/discussion",
+                    headers=self._headers(),
+                    json=event,
+                )
+                resp.raise_for_status()
+            except Exception:
+                pass  # Best-effort — don't fail the agent if WS broadcast fails.
+
+    async def post_consensus_event(self, task_id: str, event: dict) -> None:
+        """Post a consensus engine result for WebSocket broadcast.
+
+        The Go server records Prometheus metrics (strategy, winner, confidence)
+        and broadcasts the consensus outcome as a ``swarm_discussion``
+        WebSocket event (sub-type ``consensus_result``).
+
+        Args:
+            task_id: Task UUID.
+            event: Dict with ``strategy``, ``provider``, ``confidence``,
+                ``reasoning``, ``scores``, etc.
+        """
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                resp = await client.post(
+                    f"{self.base_url}/internal/swarm/tasks/{task_id}/consensus",
+                    headers=self._headers(),
+                    json=event,
+                )
+                resp.raise_for_status()
+            except Exception:
+                pass  # Best-effort — don't fail the agent if WS broadcast fails.
+
     # ── MTM (Medium-Term Memory) endpoints ───────────────────────────────
 
     async def mtm_store(
@@ -308,6 +355,203 @@ class GoClient:
             resp.raise_for_status()
             data = resp.json()
             return data.get("insights", [])
+
+    # ── Consensus Insights (Cross-Task Learning) endpoints ───────────────
+
+    async def insight_store(
+        self,
+        repo_id: str,
+        task_id: str,
+        thread_id: str,
+        category: str,
+        key: str,
+        insight: str,
+        confidence: float = 0.8,
+        strategy: str = "",
+        provider: str = "",
+        metadata: dict | None = None,
+    ) -> None:
+        """Store a cross-task consensus insight via the Go API."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/memory/insights",
+                headers=self._headers(),
+                json={
+                    "repo_id": repo_id,
+                    "task_id": task_id,
+                    "thread_id": thread_id,
+                    "category": category,
+                    "key": key,
+                    "insight": insight,
+                    "confidence": confidence,
+                    "strategy": strategy,
+                    "provider": provider,
+                    "metadata": metadata or {},
+                },
+            )
+            resp.raise_for_status()
+
+    async def insight_recall(
+        self,
+        repo_id: str,
+        category: str = "",
+        limit: int = 20,
+    ) -> list[dict]:
+        """Recall cross-task consensus insights for a repository."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/memory/insights",
+                headers=self._headers(),
+                params={
+                    "repo_id": repo_id,
+                    "category": category,
+                    "limit": str(limit),
+                },
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("insights", [])
+
+    async def provider_stats(
+        self,
+        repo_id: str,
+    ) -> list[dict]:
+        """Get provider reliability stats for a repository."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/memory/provider-stats",
+                headers=self._headers(),
+                params={"repo_id": repo_id},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("stats", [])
+
+    # ── Role-Based ELO ─────────────────────────────────────────
+
+    async def report_role_outcome(
+        self,
+        role: str,
+        repo_id: str,
+        task_id: str = "",
+        human_rating: int = 0,
+        consensus_confidence: float = 0.0,
+        consensus_strategy: str = "",
+        consensus_win: bool = False,
+        tests_passed: bool = False,
+        pr_accepted: bool = False,
+        build_success: bool = False,
+    ) -> dict:
+        """Report a task outcome for role-based ELO scoring.
+
+        The Go server computes a composite reward from human rating,
+        consensus quality, and automatic metrics (tests/PR/build).
+        The result updates the persistent (role, repo_id) ELO record.
+
+        Args:
+            role: Agent role (e.g. ``senior_dev``, ``qa``, ``security``).
+            repo_id: Repository UUID.
+            task_id: Task UUID (for history tracking).
+            human_rating: User rating 1-5 (0 = not rated).
+            consensus_confidence: Consensus engine confidence 0.0-1.0.
+            consensus_strategy: Strategy used (e.g. ``multi_judge_panel``).
+            consensus_win: Whether this role's response won consensus.
+            tests_passed: Automatic signal: tests passed.
+            pr_accepted: Automatic signal: PR accepted by user.
+            build_success: Automatic signal: build succeeded.
+
+        Returns:
+            Updated RoleELO record from the server.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/role-elo/outcome",
+                headers=self._headers(),
+                json={
+                    "role": role,
+                    "repo_id": repo_id,
+                    "task_id": task_id,
+                    "human_rating": human_rating,
+                    "consensus_confidence": consensus_confidence,
+                    "consensus_strategy": consensus_strategy,
+                    "consensus_win": consensus_win,
+                    "tests_passed": tests_passed,
+                    "pr_accepted": pr_accepted,
+                    "build_success": build_success,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_role_elo(self, role: str, repo_id: str) -> dict:
+        """Get the ELO record for a (role, repo_id) pair.
+
+        Returns:
+            RoleELO record with ``elo_score``, ``tier``, ``tasks_done``,
+            ``wins``, ``losses``, ``consensus_avg``, etc.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/role-elo/{role}",
+                headers=self._headers(),
+                params={"repo_id": repo_id},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    # ── CI Signal Ingestion ──────────────────────────────────────────────
+
+    async def report_ci_signal(
+        self,
+        task_id: str,
+        build_success: bool = False,
+        tests_passed: bool = False,
+        pr_accepted: bool = False,
+        details: str = "",
+    ) -> dict:
+        """Report a CI signal (build/test/PR result) for a task.
+
+        This feeds automatic signals into the role-based ELO system,
+        closing the loop between agent-produced PRs and their CI outcomes.
+
+        Args:
+            task_id: The swarm task ID.
+            build_success: Whether the build succeeded.
+            tests_passed: Whether tests passed.
+            pr_accepted: Whether the PR was merged/accepted.
+            details: Optional human-readable details.
+
+        Returns:
+            Server acknowledgment with task_id.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/ci-signal/report",
+                headers=self._headers(),
+                json={
+                    "task_id": task_id,
+                    "build_success": build_success,
+                    "tests_passed": tests_passed,
+                    "pr_accepted": pr_accepted,
+                    "details": details,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def get_ci_signal(self, task_id: str) -> dict:
+        """Get the CI signal status for a task.
+
+        Returns:
+            CI signal record with pr_state, ci_state, etc.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/api/v1/swarm/tasks/{task_id}/ci-signal",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
 
     # ── HITL (Human-in-the-Loop) endpoints ───────────────────────────────
 
@@ -498,3 +742,227 @@ class GoClient:
             )
             resp.raise_for_status()
             return resp.json()
+
+    # ── Team Formation ───────────────────────────────────────────────────
+
+    async def recommend_team(
+        self,
+        task_id: str,
+        repo_id: str,
+        plan: dict | None = None,
+        signals: dict | None = None,
+    ) -> dict:
+        """Request an optimal team composition from the Go server.
+
+        The Go ``TeamFormationService`` analyses the plan document, computes
+        a multi-dimensional complexity score, queries role-based ELO tiers,
+        and returns an ``TeamFormation`` struct with recommended roles, team
+        size, reasoning, and strategy.
+
+        Args:
+            task_id: The swarm task ID.
+            repo_id: Repository ID (for ELO lookups).
+            plan: Optional plan dict (if None, Go loads from DB).
+            signals: Optional pre-computed complexity signals override.
+
+        Returns:
+            TeamFormation dict with ``complexity_score``, ``complexity_label``,
+            ``recommended_roles``, ``role_elos``, ``team_size``, ``reasoning``,
+            ``strategy``, ``input_signals``.
+        """
+        payload: dict = {"task_id": task_id, "repo_id": repo_id}
+        if plan is not None:
+            payload["plan"] = plan
+        if signals is not None:
+            payload["signals"] = signals
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/team-recommend",
+                headers=self._headers(),
+                json=payload,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    # ── Adaptive Probe Tuning ────────────────────────────────────────────
+
+    async def get_probe_config(
+        self,
+        role: str,
+        repo_id: str = "",
+        action_type: str = "",
+        complexity_label: str = "",
+        tier: str = "",
+    ) -> dict:
+        """Fetch adaptive probe configuration from Go.
+
+        Args:
+            role: Agent role (e.g. "senior_dev").
+            repo_id: Repository ID for repo-specific configs.
+            action_type: Optional action type filter.
+            complexity_label: Task complexity for per-probe enhancement.
+            tier: Agent's ELO tier for per-probe enhancement.
+
+        Returns:
+            ProbeConfig dict with tuned parameters.
+        """
+        params: dict[str, str] = {"role": role}
+        if repo_id:
+            params["repo_id"] = repo_id
+        if action_type:
+            params["action_type"] = action_type
+        if complexity_label:
+            params["complexity_label"] = complexity_label
+        if tier:
+            params["tier"] = tier
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/probe-config",
+                headers=self._headers(),
+                params=params,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def record_probe_history(self, outcome: dict) -> None:
+        """Record a probe outcome in the adaptive tuning history.
+
+        Args:
+            outcome: ProbeOutcome dict with all probe details.
+        """
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/probe-history",
+                headers=self._headers(),
+                json=outcome,
+            )
+            resp.raise_for_status()
+
+    # ── Self-Healing Pipeline ────────────────────────────────────────────
+
+    async def report_provider_outcome(
+        self,
+        provider: str,
+        success: bool,
+        latency_ms: float = 0.0,
+        error_msg: str = "",
+        task_id: str = "",
+        agent_id: str = "",
+    ) -> None:
+        """Report a provider call outcome for circuit-breaker tracking.
+
+        Fire-and-forget — errors are logged but not raised.
+
+        Args:
+            provider: LLM provider name (e.g. "openai", "anthropic").
+            success: Whether the call succeeded.
+            latency_ms: Call latency in milliseconds.
+            error_msg: Error message on failure.
+            task_id: Optional task context.
+            agent_id: Optional agent context.
+        """
+        payload = {
+            "provider": provider,
+            "success": success,
+            "latency_ms": latency_ms,
+            "error_msg": error_msg,
+            "task_id": task_id,
+            "agent_id": agent_id,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"{self.base_url}/internal/swarm/self-heal/provider-outcome",
+                    headers=self._headers(),
+                    json=payload,
+                )
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "self-heal: provider-outcome report failed status=%d",
+                        resp.status_code,
+                    )
+        except Exception:
+            logger.debug("self-heal: failed to report provider outcome", exc_info=True)
+
+    async def check_provider_status(self, provider: str) -> dict:
+        """Check whether a provider is available (circuit breaker check).
+
+        Args:
+            provider: LLM provider name.
+
+        Returns:
+            Dict with ``available``, ``state``, ``consecutive_failures``, ``open_until``.
+            Returns a healthy-default on failure.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"{self.base_url}/internal/swarm/self-heal/provider-status",
+                    headers=self._headers(),
+                    params={"provider": provider},
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            logger.debug("self-heal: failed to check provider status", exc_info=True)
+        return {"provider": provider, "available": True, "state": "closed"}
+
+    # ── Observability Dashboard ──────────────────────────────────────────
+
+    async def get_observability_dashboard(self, hours: int = 24) -> dict:
+        """Fetch the full observability dashboard.
+
+        Args:
+            hours: Time range for time-series data (default 24h).
+
+        Returns:
+            Dashboard dict with current, time_series, provider_perf, health_breakdown, cost_summary.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(
+                    f"{self.base_url}/api/v1/swarm/observability/dashboard",
+                    headers=self._headers(),
+                    params={"hours": hours},
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            logger.debug("observability: failed to fetch dashboard", exc_info=True)
+        return {}
+
+    async def get_health_score(self) -> dict:
+        """Fetch the current system health score breakdown.
+
+        Returns:
+            Dict with ``score``, ``task_health_pct``, ``agent_health_pct``, etc.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{self.base_url}/api/v1/swarm/observability/health",
+                    headers=self._headers(),
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            logger.debug("observability: failed to fetch health", exc_info=True)
+        return {"score": 100, "details": "unknown"}
+
+    async def get_cost_summary(self) -> dict:
+        """Fetch the current cost summary.
+
+        Returns:
+            Dict with ``today_usd``, ``this_week_usd``, ``this_month_usd``, ``by_provider``.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{self.base_url}/api/v1/swarm/observability/cost",
+                    headers=self._headers(),
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+        except Exception:
+            logger.debug("observability: failed to fetch cost", exc_info=True)
+        return {"today_usd": 0, "this_week_usd": 0, "this_month_usd": 0}

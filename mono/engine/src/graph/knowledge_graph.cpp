@@ -111,6 +111,10 @@ void KnowledgeGraph::ensureSchema() {
         CREATE INDEX IF NOT EXISTS idx_edges_dst  ON kg_edges(dst_id);
         CREATE INDEX IF NOT EXISTS idx_edges_repo ON kg_edges(repo_id);
         CREATE INDEX IF NOT EXISTS idx_edges_type ON kg_edges(edge_type);
+
+        -- Composite indexes for batch hop queries (WHERE repo_id = ? AND src/dst IN ...)
+        CREATE INDEX IF NOT EXISTS idx_edges_repo_src ON kg_edges(repo_id, src_id);
+        CREATE INDEX IF NOT EXISTS idx_edges_repo_dst ON kg_edges(repo_id, dst_id);
     )SQL";
     exec(ddl);
 }
@@ -980,6 +984,103 @@ std::vector<KGEdge> KnowledgeGraph::getEdgesBetweenNodes(
     }
     sqlite3_finalize(stmt);
     return results;
+}
+
+// ── Batch shortest-hop (Confidence Gate) ───────────────────────────────────
+
+std::unordered_map<std::string, int> KnowledgeGraph::batchShortestHops(
+    const std::string& repo_id,
+    const std::unordered_set<std::string>& seed_node_ids,
+    const std::unordered_set<std::string>& result_node_ids) const
+{
+    std::unordered_map<std::string, int> hops;
+    if (!db_ || seed_node_ids.empty() || result_node_ids.empty()) return hops;
+
+    // Strategy: use per-node index-assisted neighbor lookups (fast on indexed
+    // columns) driven from the SMALLER of the two sets. Collect all 1-hop
+    // neighbors of seeds into a hash set, then check result membership.
+    //
+    // For 2-hop: collect 1-hop neighbors of seeds, then for unresolved
+    // results, check if their 1-hop neighbors overlap the seed-neighbor set.
+    //
+    // This avoids CTEs and complex SQL that cause SQLite to do full table
+    // scans on the 5M-row kg_edges table.
+
+    // Use two separate prepared statements for neighbor lookups —
+    // one for src_id, one for dst_id. This lets SQLite use the composite
+    // indexes (repo_id, src_id) and (repo_id, dst_id) directly, avoiding
+    // the slow OR-based index merge on the 5M-row table.
+    const char* nbr_src_sql =
+        "SELECT dst_id FROM kg_edges WHERE repo_id = ? AND src_id = ?";
+    const char* nbr_dst_sql =
+        "SELECT src_id FROM kg_edges WHERE repo_id = ? AND dst_id = ?";
+    sqlite3_stmt* nbr_src_stmt = nullptr;
+    sqlite3_stmt* nbr_dst_stmt = nullptr;
+    int rc = sqlite3_prepare_v2(db_, nbr_src_sql, -1, &nbr_src_stmt, nullptr);
+    if (rc != SQLITE_OK) return hops;
+    rc = sqlite3_prepare_v2(db_, nbr_dst_sql, -1, &nbr_dst_stmt, nullptr);
+    if (rc != SQLITE_OK) { sqlite3_finalize(nbr_src_stmt); return hops; }
+
+    // Helper: get all neighbor IDs for a given node via two indexed lookups.
+    auto getNeighbors = [&](const std::string& node_id) -> std::vector<std::string> {
+        std::vector<std::string> nbrs;
+        // Edges where this node is src → get dst
+        sqlite3_reset(nbr_src_stmt);
+        sqlite3_bind_text(nbr_src_stmt, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(nbr_src_stmt, 2, node_id.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(nbr_src_stmt) == SQLITE_ROW) {
+            auto dst = reinterpret_cast<const char*>(sqlite3_column_text(nbr_src_stmt, 0));
+            if (dst) nbrs.emplace_back(dst);
+        }
+        // Edges where this node is dst → get src
+        sqlite3_reset(nbr_dst_stmt);
+        sqlite3_bind_text(nbr_dst_stmt, 1, repo_id.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(nbr_dst_stmt, 2, node_id.c_str(), -1, SQLITE_TRANSIENT);
+        while (sqlite3_step(nbr_dst_stmt) == SQLITE_ROW) {
+            auto src = reinterpret_cast<const char*>(sqlite3_column_text(nbr_dst_stmt, 0));
+            if (src) nbrs.emplace_back(src);
+        }
+        return nbrs;
+    };
+
+    // ── 1-hop: Collect all neighbors of seed nodes ──────────────────────
+    // For each seed, do one indexed lookup. Total = |seeds| lookups.
+    std::unordered_set<std::string> seed_neighbor_set;  // all 1-hop neighbors of seeds
+    for (const auto& sid : seed_node_ids) {
+        for (const auto& nbr : getNeighbors(sid)) {
+            seed_neighbor_set.insert(nbr);
+        }
+    }
+
+    // Check which result nodes are direct neighbors (1-hop)
+    for (const auto& rid : result_node_ids) {
+        if (seed_neighbor_set.count(rid)) {
+            hops[rid] = 1;
+        }
+    }
+
+    // If all results resolved at 1-hop, done.
+    if (hops.size() >= result_node_ids.size()) {
+        sqlite3_finalize(nbr_src_stmt);
+        sqlite3_finalize(nbr_dst_stmt);
+        return hops;
+    }
+
+    // ── 2-hop: For unresolved results, check if any of THEIR neighbors
+    //           is in the seed_neighbor_set ───────────────────────────────
+    for (const auto& rid : result_node_ids) {
+        if (hops.count(rid)) continue;  // already found at 1-hop
+        for (const auto& nbr : getNeighbors(rid)) {
+            if (seed_neighbor_set.count(nbr)) {
+                hops[rid] = 2;
+                break;
+            }
+        }
+    }
+
+    sqlite3_finalize(nbr_src_stmt);
+    sqlite3_finalize(nbr_dst_stmt);
+    return hops;
 }
 
 // ── File-Level Edge Inference ──────────────────────────────────────────────

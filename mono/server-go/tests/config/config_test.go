@@ -178,3 +178,90 @@ func TestReviewConfig_Fields(t *testing.T) {
 		t.Error("expected heuristics enabled")
 	}
 }
+
+// ── Priority Matrix Config Tests ────────────────────────────────────────────
+
+func TestLLMPriorityEntry_Fields(t *testing.T) {
+	entry := config.LLMPriorityEntry{
+		Provider:    "anthropic",
+		Model:       "claude-sonnet-4-20250514",
+		ActionTypes: []string{"reasoning", "code_gen"},
+	}
+
+	if entry.Provider != "anthropic" {
+		t.Errorf("expected anthropic, got %s", entry.Provider)
+	}
+	if entry.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("expected claude model, got %s", entry.Model)
+	}
+	if len(entry.ActionTypes) != 2 {
+		t.Errorf("expected 2 action types, got %d", len(entry.ActionTypes))
+	}
+}
+
+func TestLLMConfig_PriorityMatrix(t *testing.T) {
+	lc := config.LLMConfig{
+		Primary:  "openai",
+		Fallback: "anthropic",
+		PriorityMatrix: map[string][]config.LLMPriorityEntry{
+			"orchestrator": {
+				{Provider: "grok", Model: "grok-3"},
+				{Provider: "anthropic", Model: "claude-sonnet-4-20250514"},
+				{Provider: "openai", Model: "gpt-4o"},
+			},
+			"junior_dev": {
+				{Provider: "grok", Model: "grok-3-mini"},
+				{Provider: "openai", Model: "gpt-4o-mini"},
+			},
+		},
+	}
+
+	if len(lc.PriorityMatrix) != 2 {
+		t.Fatalf("expected 2 roles in matrix, got %d", len(lc.PriorityMatrix))
+	}
+
+	orch := lc.PriorityMatrix["orchestrator"]
+	if len(orch) != 3 {
+		t.Fatalf("expected 3 providers for orchestrator, got %d", len(orch))
+	}
+	if orch[0].Provider != "grok" {
+		t.Errorf("expected grok first for orchestrator, got %s", orch[0].Provider)
+	}
+	// GPT should be last
+	if orch[len(orch)-1].Provider != "openai" {
+		t.Errorf("expected openai last for orchestrator, got %s", orch[len(orch)-1].Provider)
+	}
+}
+
+func TestDefaultProviderCapabilities(t *testing.T) {
+	caps := config.DefaultProviderCapabilities()
+
+	// Should have at least grok, anthropic, gemini, openai, ollama
+	expected := []string{"grok", "anthropic", "gemini", "openai", "ollama"}
+	for _, name := range expected {
+		cap, ok := caps[name]
+		if !ok {
+			t.Errorf("missing capabilities for %s", name)
+			continue
+		}
+		if len(cap.Strengths) == 0 {
+			t.Errorf("expected non-empty strengths for %s", name)
+		}
+		if cap.LatencyTier == "" {
+			t.Errorf("expected non-empty latency tier for %s", name)
+		}
+		if cap.MaxContextTokens == 0 {
+			t.Errorf("expected non-zero max context tokens for %s", name)
+		}
+	}
+}
+
+func TestLLMProviderCapabilities_GeminiHasLargestContext(t *testing.T) {
+	caps := config.DefaultProviderCapabilities()
+	gemini := caps["gemini"]
+	openai := caps["openai"]
+	if gemini.MaxContextTokens <= openai.MaxContextTokens {
+		t.Errorf("expected gemini (%d) > openai (%d) context tokens",
+			gemini.MaxContextTokens, openai.MaxContextTokens)
+	}
+}

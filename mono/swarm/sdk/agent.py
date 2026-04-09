@@ -18,6 +18,7 @@ live UI display.
 from __future__ import annotations
 
 import logging
+import re
 import socket
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -25,15 +26,90 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from ..agents_config import get_config, _read_version
+from ..consensus import ConsensusEngine, ConsensusResult, ConsensusStrategy
+from .go_llm_client import llm_complete, llm_probe, ProbeResponse, ProbeResultItem
 from .loop import agent_loop
 from .tool import ToolDef
 
 if TYPE_CHECKING:
     from ..conversation import SharedConversation
     from ..memory import AgentMemory
+    from ..probe_tuning import AdaptiveProbeConfig
     from ..workspace import VirtualWorkspace
 
 logger = logging.getLogger(__name__)
+
+# ── Patterns that strip fake tool-call narration from probe responses ────
+#
+# During the initial multi-LLM probe phase, LLMs respond WITHOUT tools and
+# often narrate what tool calls they *would* make as plain text.  This text
+# (e.g. ``workspace_edit_file(...)``, ``complete_task(...)`` and false
+# assertions like "The changes have been applied") confuses the downstream
+# single-model tool-use loop into thinking edits were already made, causing
+# it to skip actual tool calls and produce zero diffs.
+#
+# These patterns strip or rewrite the most common narration patterns so the
+# agent loop sees a clean analysis without phantom edits.
+
+# Matches ```python\nworkspace_edit_file(...)\n``` blocks.
+_RE_FENCED_TOOL_BLOCK = re.compile(
+    r"```(?:python|bash|shell)?\s*\n"
+    r"(?:workspace_edit_file|workspace_create_file|workspace_delete_file|"
+    r"workspace_read_file|workspace_search|workspace_list_dir|workspace_status|"
+    r"complete_task|report_diff|report_plan|declare_team_size|get_file_content|"
+    r"search_code)\s*\(.*?\)\s*\n```",
+    re.DOTALL,
+)
+
+# Matches inline tool-call narration like workspace_edit_file(...) not in fences.
+_RE_INLINE_TOOL_CALL = re.compile(
+    r"(?:workspace_edit_file|workspace_create_file|workspace_delete_file|"
+    r"workspace_status|complete_task|report_diff)\s*\([^)]*\)",
+)
+
+# Matches false-completion assertions that mislead the tool loop.
+_RE_FALSE_COMPLETION = re.compile(
+    r"(?:The changes have been (?:applied|made|submitted|completed)|"
+    r"I have (?:successfully )?(?:modified|edited|created|updated|implemented|applied)|"
+    r"I will now (?:verify|complete|submit|mark)|"
+    r"The file .{1,80} has been (?:modified|updated|created|changed)|"
+    r"changes (?:are|have been) (?:ready|applied|submitted))",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_probe_for_tool_loop(content: str) -> str:
+    """Strip fake tool-call narration from probe content before injection.
+
+    The multi-LLM probe runs without tools, so LLMs narrate tool calls as text.
+    If injected verbatim, the downstream tool loop thinks edits are done.
+
+    This function:
+    1. Removes fenced code blocks containing tool-call invocations
+    2. Removes inline tool-call narration
+    3. Replaces false-completion assertions with a note
+
+    Returns:
+        Cleaned content suitable for injection as analysis context.
+    """
+    if not content:
+        return content
+
+    # Strip fenced tool-call blocks.
+    cleaned = _RE_FENCED_TOOL_BLOCK.sub("", content)
+
+    # Strip inline tool calls (workspace_edit_file(...), complete_task(...), etc.)
+    cleaned = _RE_INLINE_TOOL_CALL.sub("[tool call removed — use actual tools]", cleaned)
+
+    # Rewrite false-completion assertions.
+    cleaned = _RE_FALSE_COMPLETION.sub(
+        "[NOTE: This is analysis only — no actual changes were made]", cleaned
+    )
+
+    # Collapse runs of blank lines left by removals.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    return cleaned.strip()
 
 
 def _build_version() -> str:
@@ -90,6 +166,52 @@ class Agent:
         self.conversation: SharedConversation | None = None
         self.workspace: VirtualWorkspace | None = None
         self.memory: AgentMemory | None = None
+        self._consensus_engine: ConsensusEngine | None = None
+        self._tier: str = "standard"
+        self._elo_score: float = 1200.0
+        self._probe_count: int = 3
+        self._repo_id: str = ""
+        self._adaptive_config: AdaptiveProbeConfig | None = None
+        self._complexity_label: str = ""
+        self._use_multi_llm: bool = False
+        self._configured_providers: int = 1
+
+    @property
+    def tier(self) -> str:
+        """The role's current ELO tier (standard, expert, restricted)."""
+        return self._tier
+
+    @property
+    def elo_score(self) -> float:
+        """The role's current ELO score for this repo."""
+        return self._elo_score
+
+    @property
+    def probe_count(self) -> int:
+        """Recommended number of LLM probes based on tier.
+
+        restricted → 5 (more perspectives needed)
+        standard   → 3 (balanced)
+        expert     → 2 (trusted, lean probing)
+        """
+        return self._probe_count
+
+    @property
+    def consensus_engine(self) -> ConsensusEngine:
+        """Lazy-initialised consensus engine.
+
+        Creates the engine on first access with the agent's LLM credentials,
+        so GPT_AS_JUDGE can make an LLM call via the Go proxy and
+        MULTI_JUDGE_PANEL can fan out to all providers via the probe endpoint.
+        """
+        if self._consensus_engine is None:
+            self._consensus_engine = ConsensusEngine(
+                llm_complete=llm_complete,
+                llm_probe=llm_probe,
+                go_base_url=self.config.go_base_url,
+                agent_token=self.token or "",
+            )
+        return self._consensus_engine
 
     async def register(self) -> None:
         """Register with Go and obtain a short-lived agent JWT.
@@ -101,6 +223,10 @@ class Agent:
 
         The server may assign a canonical UUID for the agent, which replaces
         the original short-form ``agent_id``.
+
+        If ``_repo_id`` is set before calling register, the Go server will
+        look up the role's ELO tier for that repo and inject ``tier``,
+        ``elo_score``, and ``probe_count`` into the response.
         """
         cfg = get_config()
         url = f"{self.config.go_base_url}/internal/swarm/auth/register"
@@ -111,6 +237,9 @@ class Agent:
             "hostname": socket.gethostname(),
             "version": _build_version(),
         }
+        # Include repo_id for role ELO tier injection.
+        if self._repo_id:
+            payload["repo_id"] = self._repo_id
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
@@ -124,7 +253,31 @@ class Agent:
             # The server may assign a canonical UUID; always prefer it.
             if data.get("agent_id"):
                 self.agent_id = data["agent_id"]
-            logger.info("Agent %s registered (role=%s, team=%s)", self.agent_id, self.role, self.team_id)
+
+            # Parse role ELO tier if injected by Go.
+            if "tier" in data:
+                self._tier = data["tier"]
+                self._elo_score = data.get("elo_score", 1200.0)
+                self._probe_count = data.get("probe_count", 3)
+                logger.info(
+                    "Agent %s registered with role ELO: tier=%s elo=%.0f probes=%d",
+                    self.agent_id, self._tier, self._elo_score, self._probe_count,
+                )
+            else:
+                logger.info(
+                    "Agent %s registered (role=%s, team=%s)",
+                    self.agent_id, self.role, self.team_id,
+                )
+
+            # Parse multi-LLM flag: when True, the agent should use
+            # probe_and_gather + consensus instead of single-model llm_complete.
+            self._use_multi_llm = data.get("use_multi_llm", False)
+            self._configured_providers = data.get("configured_providers", 1)
+            if self._use_multi_llm:
+                logger.info(
+                    "Agent %s: multi-LLM enabled (providers=%d)",
+                    self.agent_id, self._configured_providers,
+                )
 
     async def run(self, task: Task) -> AgentResult:
         """Execute the agentic loop for the given task.
@@ -146,10 +299,33 @@ class Agent:
         Returns:
             An :class:`AgentResult` with the role-specific output.
         """
+        # Set repo_id before registration so the Go server can inject
+        # role-level ELO tier, score, and probe count for this (role, repo).
+        self._repo_id = task.repo_id
+
         if not self.token:
             await self.register()
 
         system_prompt = self.build_system_prompt(task)
+
+        # Inject role ELO context so the LLM knows its own performance tier.
+        if self._tier and self._tier != "standard":
+            system_prompt += (
+                f"\n\n=== Role Performance Tier ===\n"
+                f"Your role ({self.role}) is currently rated as: {self._tier.upper()}\n"
+                f"ELO score: {self._elo_score:.0f}  |  Training probes: {self._probe_count}\n"
+            )
+            if self._tier == "restricted":
+                system_prompt += (
+                    "⚠ Your role is on a RESTRICTED tier. Take extra care with "
+                    "accuracy and follow instructions precisely. Additional "
+                    "verification probes will be used.\n"
+                )
+            elif self._tier == "expert":
+                system_prompt += (
+                    "★ Your role is on the EXPERT tier. You have earned reduced "
+                    "oversight. Maintain high quality to keep this status.\n"
+                )
 
         # Inject conversation context so this agent sees what others did.
         if self.conversation and self.conversation.message_count > 0:
@@ -172,6 +348,97 @@ class Agent:
                                self.agent_id, e)
 
         initial_message = f"Task: {task.description}\nRepo: {task.repo_id}"
+
+        # ── Multi-LLM initial reasoning ──────────────
+        # When multi-LLM is enabled and we have ≥2 providers, probe all
+        # LLMs with the initial task + system prompt, run consensus, and
+        # inject the synthesised multi-perspective answer as context so the
+        # agent loop benefits from diverse model reasoning from the start.
+        multi_llm_context = ""
+        if self._use_multi_llm and self._configured_providers >= 2:
+            try:
+                # Use the probe-specific system prompt (no tool instructions)
+                # to prevent LLMs from narrating fake tool calls.
+                probe_system_prompt = self.build_probe_system_prompt(task)
+                probe_messages = [
+                    {"role": "system", "content": probe_system_prompt},
+                    {"role": "user", "content": initial_message},
+                ]
+                logger.info(
+                    "Agent %s: multi-LLM probe starting (%d providers)",
+                    self.agent_id, self._configured_providers,
+                )
+                probe_resp = await self.probe_and_gather(
+                    probe_messages,
+                    action_type="initial_reasoning",
+                    num_models=min(self._probe_count, self._configured_providers),
+                )
+
+                if probe_resp.successes >= 2:
+                    # Run consensus to pick/synthesise the best answer.
+                    consensus = await self.run_consensus(probe_resp)
+                    # Sanitize probe content: strip fake tool-call narration
+                    # and false-completion claims so the tool loop doesn't
+                    # think edits were already made.
+                    sanitized_content = _sanitize_probe_for_tool_loop(
+                        consensus.content
+                    )
+                    multi_llm_context = (
+                        f"\n\n=== Multi-LLM Consensus (initial reasoning) ===\n"
+                        f"Strategy: {consensus.strategy.value}\n"
+                        f"Confidence: {consensus.confidence:.0%}\n"
+                        f"Providers queried: {probe_resp.providers} "
+                        f"({probe_resp.successes} succeeded)\n"
+                        f"Selected provider: {consensus.provider}\n\n"
+                        f"⚠ IMPORTANT: The analysis below is from a PLANNING-ONLY "
+                        f"phase where the LLM had NO access to tools. Any mentions "
+                        f"of file edits, tool calls, or completed changes are "
+                        f"HYPOTHETICAL — no actual changes have been made yet. "
+                        f"You MUST use your actual tools (workspace_edit_file, "
+                        f"workspace_create_file, etc.) to implement the changes.\n\n"
+                        f"{sanitized_content}\n"
+                        f"=== End Multi-LLM Consensus ===\n"
+                    )
+                    logger.info(
+                        "Agent %s: multi-LLM consensus done — strategy=%s "
+                        "confidence=%.2f provider=%s (%d/%d succeeded)",
+                        self.agent_id, consensus.strategy.value,
+                        consensus.confidence, consensus.provider,
+                        probe_resp.successes, probe_resp.providers,
+                    )
+                elif probe_resp.successes == 1:
+                    # Only one provider succeeded — use its response directly.
+                    best = self.pick_best_probe_result(probe_resp)
+                    if best:
+                        sanitized_best = _sanitize_probe_for_tool_loop(best)
+                        multi_llm_context = (
+                            f"\n\n=== Multi-LLM Initial Analysis ===\n"
+                            f"(Only 1/{probe_resp.providers} providers responded)\n\n"
+                            f"⚠ IMPORTANT: The analysis below is from a PLANNING-ONLY "
+                            f"phase where the LLM had NO access to tools. Any mentions "
+                            f"of file edits, tool calls, or completed changes are "
+                            f"HYPOTHETICAL — no actual changes have been made yet. "
+                            f"You MUST use your actual tools to implement the changes.\n\n"
+                            f"{sanitized_best}\n"
+                            f"=== End Multi-LLM Initial Analysis ===\n"
+                        )
+                else:
+                    logger.warning(
+                        "Agent %s: all multi-LLM probes failed, "
+                        "falling back to single-model loop",
+                        self.agent_id,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "Agent %s: multi-LLM probe failed, "
+                    "falling back to single-model loop: %s",
+                    self.agent_id, e,
+                )
+
+        # If we got multi-LLM context, inject it into the initial message
+        # so the agent loop has the synthesised reasoning from day one.
+        if multi_llm_context:
+            initial_message += multi_llm_context
 
         messages = await agent_loop(
             system_prompt=system_prompt,
@@ -206,6 +473,368 @@ class Agent:
                 return await t.fn(**args)
         raise ValueError(f"Unknown tool: {name}")
 
+    # ── Multi-LLM Probe ─────────────────────────────────────────────────
+
+    async def probe_and_gather(
+        self,
+        messages: list[dict],
+        *,
+        action_type: str = "",
+        num_models: int = 0,
+        tools: list[dict] | None = None,
+        max_tokens: int | None = None,
+    ) -> ProbeResponse:
+        """Probe multiple LLMs in parallel and return all responses.
+
+        This is the agent-level entry point for multi-LLM parallel
+        querying.  The agent sends the same messages to all providers in its
+        role's priority matrix, and each provider's response is returned
+        separately.
+
+        The agent (or a future consensus engine) can then:
+        - Pick the best single response
+        - Synthesise a combined answer from multiple perspectives
+        - Use GPT (always last) as the final judge
+
+        If a :attr:`conversation` is attached, the probe is wrapped in a
+        :class:`DiscussionThread` (Phase 4) so the UI can render a structured
+        multi-model comparison panel.  Each provider's response is added to
+        the thread, and the thread is marked complete when all providers
+        have responded.
+
+        Args:
+            messages: Full message history to send to all providers.
+            action_type: Optional filter (e.g. "reasoning", "code_gen").
+            num_models: Max providers to query. 0 = all in priority matrix.
+            tools: Optional tool schemas (same tools sent to all providers).
+            max_tokens: Max tokens per provider completion.
+
+        Returns:
+            A :class:`ProbeResponse` with per-provider results in priority order.
+
+        Raises:
+            RuntimeError: If the agent has not been registered yet.
+            httpx.HTTPStatusError: On non-2xx response from the Go server.
+        """
+        if not self.token:
+            raise RuntimeError(
+                f"Agent {self.agent_id} must be registered before probing. "
+                "Call await agent.register() first."
+            )
+
+        logger.info(
+            "Agent %s probing %d models (role=%s, action=%s)",
+            self.agent_id, num_models or -1, self.role, action_type or "all",
+        )
+
+        # Fetch adaptive probe configuration from Go.
+        # This overrides tier-based defaults with data-driven parameters.
+        adaptive_cfg: AdaptiveProbeConfig | None = None
+        probe_start_ns = __import__("time").time_ns()
+        try:
+            from ..probe_tuning import fetch_probe_config
+            from ..go_client import GoClient
+
+            # Build a temporary GoClient to fetch config (uses agent's own token).
+            _go = GoClient(token=self.token or "")
+            adaptive_cfg = await fetch_probe_config(
+                _go,
+                role=self.role,
+                repo_id=self._repo_id,
+                action_type=action_type,
+                complexity_label=self._complexity_label,
+                tier=self._tier,
+            )
+            self._adaptive_config = adaptive_cfg
+            logger.info(
+                "Agent %s: adaptive probe config — models=%d temp=%.2f strategy=%s",
+                self.agent_id, adaptive_cfg.num_models, adaptive_cfg.temperature,
+                adaptive_cfg.strategy,
+            )
+        except Exception as e:
+            logger.debug("Agent %s: adaptive config fetch skipped: %s", self.agent_id, e)
+
+        # Determine num_models: caller override > adaptive config > tier-based > default.
+        if num_models == 0:
+            if adaptive_cfg and adaptive_cfg.num_models > 0:
+                num_models = adaptive_cfg.num_models
+            elif self._probe_count > 0:
+                num_models = self._probe_count
+            logger.debug(
+                "Agent %s: probe count resolved to %d (adaptive=%s, tier=%s)",
+                self.agent_id, num_models,
+                "yes" if adaptive_cfg else "no", self._tier,
+            )
+
+        # Use adaptive max_tokens if caller didn't specify.
+        if max_tokens is None and adaptive_cfg and adaptive_cfg.max_tokens > 0:
+            max_tokens = adaptive_cfg.max_tokens
+
+        # Extract the topic from the last user message for the discussion thread.
+        topic = ""
+        for m in reversed(messages):
+            if m.get("role") == "user" and m.get("content"):
+                topic = m["content"][:200]
+                break
+
+        # Open a discussion thread if conversation is attached (Phase 4).
+        discussion_thread = None
+        if self.conversation:
+            discussion_thread = await self.conversation.open_discussion(
+                agent_id=self.agent_id,
+                agent_role=self.role,
+                topic=topic or "multi-LLM probe",
+                action_type=action_type,
+            )
+
+        # Resolve task_id for real-time WS streaming from Go.
+        _probe_task_id = ""
+        if self.conversation and hasattr(self.conversation, "task_id"):
+            _probe_task_id = self.conversation.task_id or ""
+
+        probe_resp = await llm_probe(
+            messages=messages,
+            tools=tools,
+            max_tokens=max_tokens,
+            go_base_url=self.config.go_base_url,
+            agent_token=self.token,
+            agent_role=self.role,
+            action_type=action_type,
+            num_models=num_models,
+            task_id=_probe_task_id,
+            thread_id=discussion_thread.thread_id if discussion_thread else "",
+        )
+
+        # Record each provider's response in the discussion thread.
+        if self.conversation and discussion_thread:
+            for result in probe_resp.results:
+                await self.conversation.add_discussion_response(
+                    thread_id=discussion_thread.thread_id,
+                    provider=result.provider,
+                    model=result.model,
+                    content=result.content,
+                    latency_ms=result.latency_ms,
+                    finish_reason=result.finish_reason,
+                    token_usage=result.usage,
+                    error=result.error,
+                )
+
+            # Mark the discussion as complete.
+            await self.conversation.complete_discussion(
+                discussion_thread.thread_id,
+            )
+
+        # Store the thread_id on the response for downstream use.
+        probe_resp._discussion_thread_id = (
+            discussion_thread.thread_id if discussion_thread else ""
+        )
+
+        logger.info(
+            "Agent %s probe complete: %d/%d providers succeeded in %dms (thread=%s)",
+            self.agent_id,
+            probe_resp.successes,
+            probe_resp.providers,
+            probe_resp.total_ms,
+            discussion_thread.thread_id if discussion_thread else "none",
+        )
+
+        # ── Record probe outcome for adaptive tuning (fire-and-forget) ───
+        try:
+            from ..probe_tuning import build_probe_outcome, record_probe_outcome
+            from ..go_client import GoClient
+
+            _task_id = ""
+            if self.conversation and hasattr(self.conversation, "task_id"):
+                _task_id = self.conversation.task_id or ""
+
+            outcome = build_probe_outcome(
+                task_id=_task_id,
+                role=self.role,
+                repo_id=self._repo_id,
+                action_type=action_type or "",
+                probe_resp=probe_resp,
+                config=self._adaptive_config,
+                complexity_label=self._complexity_label,
+                start_time_ns=probe_start_ns,
+            )
+            _go_out = GoClient(token=self.token or "")
+            await record_probe_outcome(_go_out, outcome)
+        except Exception:
+            logger.debug(
+                "Agent %s: probe outcome recording skipped",
+                self.agent_id, exc_info=True,
+            )
+
+        # ── Report per-provider outcomes for self-healing (fire-and-forget) ─
+        try:
+            from ..self_heal import report_provider_outcome
+            from ..go_client import GoClient
+
+            _sh_go = GoClient(token=self.token or "")
+            _sh_task_id = ""
+            if self.conversation and hasattr(self.conversation, "task_id"):
+                _sh_task_id = self.conversation.task_id or ""
+            for result in probe_resp.results:
+                await report_provider_outcome(
+                    _sh_go,
+                    provider=result.provider,
+                    success=result.succeeded,
+                    latency_ms=float(result.latency_ms),
+                    error_msg=result.error,
+                    task_id=_sh_task_id,
+                    agent_id=self.agent_id,
+                )
+        except Exception:
+            logger.debug(
+                "Agent %s: self-heal outcome reporting skipped",
+                self.agent_id, exc_info=True,
+            )
+
+        return probe_resp
+
+    def pick_best_probe_result(self, probe_resp: ProbeResponse) -> str:
+        """Select the best content from a multi-LLM probe response.
+
+        Default strategy: return the first successful result (highest-priority
+        provider).  For more sophisticated selection, use
+        :meth:`run_consensus` which supports majority vote and GPT-as-judge.
+
+        Args:
+            probe_resp: The response from :meth:`probe_and_gather`.
+
+        Returns:
+            The content string from the best provider, or an empty string
+            if all providers failed.
+        """
+        best = probe_resp.best_result
+        if best:
+            logger.debug(
+                "Agent %s picked probe result from %s/%s (%dms)",
+                self.agent_id, best.provider, best.model, best.latency_ms,
+            )
+            return best.content
+        return ""
+
+    async def pick_best_and_synthesise(self, probe_resp: ProbeResponse) -> str:
+        """Select the best probe result and record it as discussion synthesis.
+
+        Like :meth:`pick_best_probe_result` but also calls
+        :meth:`SharedConversation.synthesise_discussion` so the choice is
+        broadcast to the UI and persisted in the conversation log.
+
+        Args:
+            probe_resp: The response from :meth:`probe_and_gather`.
+
+        Returns:
+            The content string from the best provider, or empty string.
+        """
+        content = self.pick_best_probe_result(probe_resp)
+        if not content:
+            return ""
+
+        best = probe_resp.best_result
+        thread_id = getattr(probe_resp, "_discussion_thread_id", "")
+
+        if self.conversation and thread_id and best:
+            await self.conversation.synthesise_discussion(
+                thread_id=thread_id,
+                content=content,
+                provider=best.provider,
+            )
+
+        return content
+
+    async def run_consensus(
+        self,
+        probe_resp: ProbeResponse,
+        strategy: ConsensusStrategy = ConsensusStrategy.AUTO,
+    ) -> ConsensusResult:
+        """Run the consensus engine on a multi-LLM probe response.
+
+        This is the Phase 5 upgrade to :meth:`pick_best_and_synthesise`.
+        Instead of always picking the first successful result, it applies
+        the chosen strategy (auto, pick-best, majority-vote, or GPT-as-judge)
+        to select or synthesise the best answer.
+
+        The result is recorded as the discussion synthesis in the conversation
+        so the UI and other agents can see both the strategy and reasoning.
+
+        Args:
+            probe_resp: The response from :meth:`probe_and_gather`.
+            strategy: Consensus strategy. ``AUTO`` picks the best strategy
+                based on how much the providers agree.
+
+        Returns:
+            A :class:`ConsensusResult` with the final answer, confidence,
+            and reasoning.
+        """
+        thread_id = getattr(probe_resp, "_discussion_thread_id", "")
+
+        # If a conversation is attached, use the DiscussionThread for richer input.
+        thread = None
+        if self.conversation and thread_id:
+            thread = self.conversation.get_discussion(thread_id)
+
+        if thread:
+            result = await self.consensus_engine.run(thread, strategy)
+        else:
+            # No discussion thread — build a lightweight one from the probe response.
+            from ..conversation import DiscussionThread, ProviderResponse as PResp
+            temp_thread = DiscussionThread(
+                agent_id=self.agent_id,
+                agent_role=self.role,
+                topic="multi-LLM probe",
+            )
+            for r in probe_resp.results:
+                temp_thread.add_response(PResp(
+                    provider=r.provider,
+                    model=r.model,
+                    content=r.content,
+                    latency_ms=r.latency_ms,
+                    error=r.error,
+                ))
+            temp_thread.complete()
+            result = await self.consensus_engine.run(temp_thread, strategy)
+
+        logger.info(
+            "Agent %s consensus: strategy=%s provider=%s confidence=%.2f",
+            self.agent_id, result.strategy.value, result.provider, result.confidence,
+        )
+
+        # Record the synthesis in the conversation.
+        if self.conversation and thread_id and result.succeeded:
+            await self.conversation.synthesise_discussion(
+                thread_id=thread_id,
+                content=result.content,
+                provider=result.provider,
+            )
+
+        # Broadcast consensus result to Go → Prometheus + WebSocket.
+        if self.conversation and hasattr(self.conversation, '_go') and self.conversation._go:
+            try:
+                event_payload: dict[str, Any] = {
+                    "thread_id": thread_id,
+                    "strategy": result.strategy.value,
+                    "provider": result.provider,
+                    "model": result.model,
+                    "confidence": result.confidence,
+                    "reasoning": result.reasoning,
+                    "scores": result.all_scores,
+                    "agent_role": self.role,
+                }
+                # Include multi-judge panel metadata when available.
+                if result.judge_count > 0:
+                    event_payload["judge_count"] = result.judge_count
+                    event_payload["judge_agreement"] = result.judge_agreement
+                await self.conversation._go.post_consensus_event(
+                    self.conversation.task_id,
+                    event_payload,
+                )
+            except Exception as e:
+                logger.debug("Failed to broadcast consensus result: %s", e)
+
+        return result
+
     def build_system_prompt(self, task: Task) -> str:
         """Override in subclass to provide role-specific system prompt."""
         return (
@@ -213,6 +842,44 @@ class Agent:
             f"Your agent ID is {self.agent_id}. "
             f"You are working on repository {task.repo_id}. "
             "Use the provided tools to accomplish the task."
+        )
+
+    def build_probe_system_prompt(self, task: Task) -> str:
+        """Return a system prompt tailored for the no-tools probe phase.
+
+        During multi-LLM probing, LLMs respond WITHOUT tool access. The
+        default system prompt references tools (``workspace_edit_file``,
+        ``report_plan``, etc.) which causes LLMs to narrate fake tool calls
+        instead of providing useful analysis.
+
+        This method returns a probe-specific prompt that:
+        1. Preserves the agent's role identity and persona
+        2. Strips tool-specific instructions
+        3. Tells the LLM to produce analysis, not narrate actions
+        4. Defines what good output looks like for this role
+
+        Subclasses should override to provide role-specific probe personas.
+        The default implementation provides a generic analysis prompt.
+
+        Args:
+            task: The task being worked on.
+
+        Returns:
+            A system prompt suitable for the no-tools probe phase.
+        """
+        return (
+            f"You are a {self.role} agent in the RTVortex Agent Swarm. "
+            f"Your agent ID is {self.agent_id}. "
+            f"You are working on repository {task.repo_id}.\n\n"
+            f"You are in an ANALYSIS-ONLY phase. You do NOT have access to "
+            f"any tools. Do NOT narrate tool calls or pretend to execute "
+            f"commands. Instead, provide your expert analysis of the task:\n"
+            f"- Identify the root cause of the problem\n"
+            f"- Name the EXACT files and functions that need to change\n"
+            f"- Describe the specific code changes needed\n"
+            f"- Estimate complexity and risk\n\n"
+            f"Your analysis will be used as context for a follow-up phase "
+            f"where actual tools are available."
         )
 
     def parse_result(self, messages: list[dict]) -> AgentResult:

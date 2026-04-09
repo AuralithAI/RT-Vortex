@@ -134,19 +134,81 @@ type OAuthProvider struct {
 
 // LLMConfig holds LLM provider settings.
 type LLMConfig struct {
-	Primary     string
-	Fallback    string
-	MaxTokens   int
-	Temperature float64
-	Timeout     time.Duration
-	Providers   map[string]LLMProviderConfig
-	Routes      map[string]LLMRouteConfig // agent role → preferred provider/model
+	Primary        string
+	Fallback       string
+	MaxTokens      int
+	Temperature    float64
+	Timeout        time.Duration
+	Providers      map[string]LLMProviderConfig
+	Routes         map[string]LLMRouteConfig     // agent role → preferred provider/model (legacy single-route)
+	PriorityMatrix map[string][]LLMPriorityEntry // role → ordered list of providers (multi-LLM)
 }
 
 // LLMRouteConfig maps an agent role to a preferred provider and optional model.
+// Retained for backward compatibility — single-provider routing.
 type LLMRouteConfig struct {
 	Provider string
 	Model    string
+}
+
+// LLMPriorityEntry is a single entry in the multi-LLM priority matrix.
+// Each agent role maps to an ordered slice of these, tried in sequence.
+// GPT/OpenAI is always placed last by convention (enforced at load time).
+type LLMPriorityEntry struct {
+	Provider    string   `json:"provider"`               // provider name, e.g. "grok", "anthropic"
+	Model       string   `json:"model,omitempty"`        // optional model override
+	ActionTypes []string `json:"action_types,omitempty"` // if set, only used for these actions (e.g. "reasoning", "code_gen")
+}
+
+// LLMProviderCapabilities describes a provider's strengths for intelligent routing.
+type LLMProviderCapabilities struct {
+	Strengths         []string `json:"strengths"`          // e.g. ["reasoning", "code_gen", "security"]
+	LatencyTier       string   `json:"latency_tier"`       // "fast", "medium", "slow"
+	MaxContextTokens  int      `json:"max_context_tokens"` // e.g. 128000, 200000
+	SupportsStreaming bool     `json:"supports_streaming"`
+	CostTier          string   `json:"cost_tier"` // "low", "medium", "high" (informational, not enforced)
+}
+
+// DefaultProviderCapabilities returns built-in capability profiles for known providers.
+// These are used when no explicit capabilities are configured.
+func DefaultProviderCapabilities() map[string]LLMProviderCapabilities {
+	return map[string]LLMProviderCapabilities{
+		"grok": {
+			Strengths:         []string{"reasoning", "analysis", "architecture", "code_gen"},
+			LatencyTier:       "fast",
+			MaxContextTokens:  131072,
+			SupportsStreaming: true,
+			CostTier:          "medium",
+		},
+		"anthropic": {
+			Strengths:         []string{"reasoning", "code_gen", "security", "architecture", "refactoring"},
+			LatencyTier:       "medium",
+			MaxContextTokens:  200000,
+			SupportsStreaming: true,
+			CostTier:          "high",
+		},
+		"gemini": {
+			Strengths:         []string{"reasoning", "analysis", "multimodal", "large_context"},
+			LatencyTier:       "medium",
+			MaxContextTokens:  1000000,
+			SupportsStreaming: true,
+			CostTier:          "medium",
+		},
+		"openai": {
+			Strengths:         []string{"code_gen", "general", "function_calling"},
+			LatencyTier:       "fast",
+			MaxContextTokens:  128000,
+			SupportsStreaming: true,
+			CostTier:          "high",
+		},
+		"ollama": {
+			Strengths:         []string{"local", "privacy", "low_latency"},
+			LatencyTier:       "fast",
+			MaxContextTokens:  32768,
+			SupportsStreaming: true,
+			CostTier:          "low",
+		},
+	}
 }
 
 // LLMProviderConfig holds settings for a single LLM provider.
@@ -347,13 +409,27 @@ type xmlLLM struct {
 }
 
 type xmlLLMRouting struct {
-	Routes []xmlLLMRoute `xml:"route"`
+	Routes         []xmlLLMRoute     `xml:"route"`
+	PriorityMatrix []xmlPriorityRole `xml:"priority-matrix>role-priority"`
 }
 
 type xmlLLMRoute struct {
 	Role     string `xml:"role,attr"`
 	Provider string `xml:"provider,attr"`
 	Model    string `xml:"model,attr"`
+}
+
+// xmlPriorityRole holds a single role's ordered list of providers.
+type xmlPriorityRole struct {
+	Role    string             `xml:"name,attr"`
+	Entries []xmlPriorityEntry `xml:"provider"`
+}
+
+// xmlPriorityEntry is one provider in the priority order for a role.
+type xmlPriorityEntry struct {
+	Name        string `xml:"name,attr"`
+	Model       string `xml:"model,attr"`
+	ActionTypes string `xml:"action-types,attr"`
 }
 
 type xmlLLMProvider struct {
@@ -674,6 +750,40 @@ func parseString(s, fallback string) string {
 	return s
 }
 
+// splitCSV splits a comma-separated string into trimmed, non-empty tokens.
+func splitCSV(s string) []string {
+	parts := strings.Split(s, ",")
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// enforceGPTLast reorders a priority list so that any OpenAI/GPT entry is last.
+// This is a system-wide invariant: GPT always gets the final word.
+func enforceGPTLast(entries []LLMPriorityEntry) []LLMPriorityEntry {
+	var gptEntries []LLMPriorityEntry
+	var rest []LLMPriorityEntry
+	for _, e := range entries {
+		if isOpenAIProvider(e.Provider) {
+			gptEntries = append(gptEntries, e)
+		} else {
+			rest = append(rest, e)
+		}
+	}
+	return append(rest, gptEntries...)
+}
+
+// isOpenAIProvider returns true for providers that are OpenAI/GPT variants.
+func isOpenAIProvider(name string) bool {
+	lower := strings.ToLower(name)
+	return lower == "openai" || lower == "azure-openai" || strings.HasPrefix(lower, "gpt")
+}
+
 // ---- Config file search ----
 
 // configSearchPaths returns directories to search for config files.
@@ -951,6 +1061,53 @@ func loadServerProps(path string) (*Config, error) {
 				Provider: provider,
 				Model:    expand(route.Model),
 			}
+		}
+	}
+
+	// Multi-LLM Priority Matrix — maps each agent role to an ordered list of
+	// providers. Agents probe all providers in the list, then GPT finalizes.
+	// If no priority-matrix is configured, we auto-generate one from the legacy
+	// single-route table so the system degrades gracefully.
+	cfg.LLM.PriorityMatrix = make(map[string][]LLMPriorityEntry)
+	for _, rp := range raw.LLM.Routing.PriorityMatrix {
+		role := expand(rp.Role)
+		if role == "" {
+			continue
+		}
+		var entries []LLMPriorityEntry
+		for _, e := range rp.Entries {
+			name := expand(e.Name)
+			if name == "" {
+				continue
+			}
+			entry := LLMPriorityEntry{
+				Provider: name,
+				Model:    expand(e.Model),
+			}
+			if at := expand(e.ActionTypes); at != "" {
+				entry.ActionTypes = splitCSV(at)
+			}
+			entries = append(entries, entry)
+		}
+		if len(entries) > 0 {
+			cfg.LLM.PriorityMatrix[role] = enforceGPTLast(entries)
+		}
+	}
+
+	// If no explicit priority matrix but legacy routes exist, build a minimal
+	// matrix: each role gets its legacy provider first, then openai last.
+	if len(cfg.LLM.PriorityMatrix) == 0 && len(cfg.LLM.Routes) > 0 {
+		for role, route := range cfg.LLM.Routes {
+			entries := []LLMPriorityEntry{
+				{Provider: route.Provider, Model: route.Model},
+			}
+			// Add all other configured providers that aren't already the route provider
+			for provName := range cfg.LLM.Providers {
+				if provName != route.Provider {
+					entries = append(entries, LLMPriorityEntry{Provider: provName})
+				}
+			}
+			cfg.LLM.PriorityMatrix[role] = enforceGPTLast(entries)
 		}
 	}
 

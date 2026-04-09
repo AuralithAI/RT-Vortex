@@ -186,8 +186,41 @@ export function MetaIcon(props: IconProps) {
 export function OllamaIcon(props: IconProps) {
   const p = defaults(props);
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" {...p}>
-      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2Zm0 3c1.66 0 3 1.34 3 3v1c0 1.66-1.34 3-3 3S9 10.66 9 9V8c0-1.66 1.34-3 3-3Zm5.5 12.5c0 .28-.22.5-.5.5H7c-.28 0-.5-.22-.5-.5C6.5 14.57 9.07 12 12 12s5.5 2.57 5.5 5.5Z" />
+    <svg viewBox="0 0 1024 1024" fill="none" {...p}>
+      {/* Ollama llama head logo — simplified from official branding */}
+      <path
+        d="M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64Z"
+        fill="#1A1A2E"
+      />
+      <g transform="translate(200, 160) scale(0.62)">
+        {/* Llama head silhouette */}
+        <path
+          d="M500 120c-60 0-110 30-140 70-20-10-45-15-70-10-50 10-85 50-95 100-5 25-2 50 8 72-40 35-65 85-65 142 0 45 15 87 42 120l-15 130c-3 25 8 50 28 66l60 48c20 16 48 18 70 5l35-20c25 10 52 15 82 15s57-5 82-15l35 20c22 13 50 11 70-5l60-48c20-16 31-41 28-66l-15-130c27-33 42-75 42-120 0-57-25-107-65-142 10-22 13-47 8-72-10-50-45-90-95-100-25-5-50 0-70 10-30-40-80-70-140-70Z"
+          fill="#FFFFFF"
+        />
+        {/* Left eye */}
+        <ellipse cx="400" cy="380" rx="35" ry="42" fill="#1A1A2E" />
+        {/* Right eye */}
+        <ellipse cx="600" cy="380" rx="35" ry="42" fill="#1A1A2E" />
+        {/* Nose/muzzle */}
+        <path
+          d="M460 470c0 0 15 35 40 35s40-35 40-35"
+          stroke="#1A1A2E"
+          strokeWidth="14"
+          strokeLinecap="round"
+          fill="none"
+        />
+        {/* Left ear tuft */}
+        <path
+          d="M310 200c-15-60-5-120 25-160 10 50 30 90 55 120"
+          fill="#E8E0D8"
+        />
+        {/* Right ear tuft */}
+        <path
+          d="M690 200c15-60 5-120-25-160-10 50-30 90-55 120"
+          fill="#E8E0D8"
+        />
+      </g>
     </svg>
   );
 }

@@ -238,6 +238,44 @@ export interface LLMBalanceResult {
   warning?: string;
 }
 
+// Ollama running model from GET /api/ps
+export interface OllamaRunningModel {
+  name: string;
+  model: string;
+  size: number;
+  size_vram: number;
+  processor: string;
+  expires_at: string;
+}
+
+// Ollama detailed model info from GET /api/tags
+export interface OllamaModelDetail {
+  name: string;
+  model: string;
+  modified_at: string;
+  size: number;
+  digest: string;
+  family?: string;
+  parameter_size?: string;
+  quantization_level?: string;
+}
+
+// Extended provider status (Ollama: running/available models)
+export interface LLMProviderStatus {
+  provider: string;
+  healthy: boolean;
+  configured: boolean;
+  base_url: string;
+  default_model: string;
+  available_models: string[];
+  models_error?: string;
+  // Ollama-specific
+  running_models?: OllamaRunningModel[];
+  running_count?: number;
+  running_error?: string;
+  models_detailed?: OllamaModelDetail[];
+}
+
 // ── Agent Orchestration ─────────────────────────────────────────────────────
 
 /** A single role → provider/model mapping. */
@@ -251,6 +289,7 @@ export interface AgentRoute {
 export interface AgentRoutesResponse {
   routes: AgentRoute[];
   primary: string;
+  routes_enabled: boolean;
 }
 
 /** All agent roles in the review swarm. */

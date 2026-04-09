@@ -99,6 +99,37 @@ type CreatePullRequestRequest struct {
 	Draft        bool   `json:"draft"`
 }
 
+// ── Commit Status (CI) ──────────────────────────────────────────────────────
+
+// CommitStatusState is the normalized CI check state.
+type CommitStatusState string
+
+const (
+	CommitStatusPending CommitStatusState = "pending"
+	CommitStatusSuccess CommitStatusState = "success"
+	CommitStatusFailure CommitStatusState = "failure"
+	CommitStatusError   CommitStatusState = "error"
+)
+
+// CommitStatus represents a single CI check / status on a commit.
+type CommitStatus struct {
+	Context     string            `json:"context"`     // e.g. "ci/build", "ci/test"
+	State       CommitStatusState `json:"state"`       // pending, success, failure, error
+	Description string            `json:"description"` // human-readable description
+	TargetURL   string            `json:"target_url"`  // link to CI run
+	CreatedAt   time.Time         `json:"created_at"`
+}
+
+// CombinedStatus is the aggregated CI status for a commit SHA.
+type CombinedStatus struct {
+	State    CommitStatusState `json:"state"`    // overall: pending, success, failure
+	Total    int               `json:"total"`    // number of checks
+	Passed   int               `json:"passed"`   // checks with state=success
+	Failed   int               `json:"failed"`   // checks with state=failure or error
+	Pending  int               `json:"pending"`  // checks with state=pending
+	Statuses []CommitStatus    `json:"statuses"` // individual checks
+}
+
 // ── Platform Interface ──────────────────────────────────────────────────────
 
 // Platform defines the contract for interacting with a VCS provider.
@@ -145,6 +176,12 @@ type Platform interface {
 
 	// GetBranchSHA returns the HEAD commit SHA for a branch.
 	GetBranchSHA(ctx context.Context, owner, repo, branch string) (string, error)
+
+	// ── CI / commit status methods ─────────────────────────────────
+
+	// GetCombinedStatus returns the aggregated CI status for a commit SHA.
+	// Platforms that don't support status checks return (nil, nil).
+	GetCombinedStatus(ctx context.Context, owner, repo, ref string) (*CombinedStatus, error)
 }
 
 // ── Platform Registry ───────────────────────────────────────────────────────

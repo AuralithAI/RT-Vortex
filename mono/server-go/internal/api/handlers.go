@@ -75,6 +75,7 @@ type Handler struct {
 	VCSPlatformRepo  *store.VCSPlatformRepo    // per-user VCS platform config (URLs, usernames)
 	MetricsCollector *engine.MetricsCollector  // engine metrics stream consumer
 	EmbedCache       *engine.EmbedCacheService // Redis-backed L2 embedding cache
+	AppConfigRepo    *store.AppConfigRepo      // system-wide non-secret settings (app_config table)
 
 	// Runtime embedding configuration — guarded by embedMu.
 	embedMu     sync.RWMutex
@@ -1726,8 +1727,9 @@ func (h *Handler) GetLLMRoutes(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"routes":  out,
-		"primary": h.LLMRegistry.PrimaryName(),
+		"routes":         out,
+		"primary":        h.LLMRegistry.PrimaryName(),
+		"routes_enabled": h.LLMRegistry.RoutesEnabled(),
 	})
 }
 
@@ -1735,7 +1737,8 @@ func (h *Handler) GetLLMRoutes(w http.ResponseWriter, _ *http.Request) {
 // PUT /api/v1/llm/routes
 //
 //	Request body:
-//	  { "routes": [{ "role": "orchestrator", "provider": "anthropic", "model": "..." }, ...] }
+//	  { "routes": [{ "role": "orchestrator", "provider": "anthropic", "model": "..." }, ...],
+//	    "routes_enabled": true }
 func (h *Handler) SetLLMRoutes(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Routes []struct {
@@ -1743,6 +1746,7 @@ func (h *Handler) SetLLMRoutes(w http.ResponseWriter, r *http.Request) {
 			Provider string `json:"provider"`
 			Model    string `json:"model"`
 		} `json:"routes"`
+		RoutesEnabled *bool `json:"routes_enabled"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -1763,6 +1767,21 @@ func (h *Handler) SetLLMRoutes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.LLMRegistry.SetRoutes(routes)
+
+	// Update routes_enabled flag if provided.
+	if req.RoutesEnabled != nil {
+		h.LLMRegistry.SetRoutesEnabled(*req.RoutesEnabled)
+		// Persist to DB (app_config table), NOT the vault.
+		if h.AppConfigRepo != nil {
+			val := "false"
+			if *req.RoutesEnabled {
+				val = "true"
+			}
+			if err := h.AppConfigRepo.Set(r.Context(), "llm_routes_enabled", val); err != nil {
+				slog.Error("failed to persist routes_enabled to DB", "error", err)
+			}
+		}
+	}
 
 	// Persist routes to the user's keychain as JSON.
 	if uid, ok := auth.UserIDFromContext(r.Context()); ok {
@@ -2290,6 +2309,71 @@ func (h *Handler) checkEmbeddingHealthViaTest(ctx context.Context, w http.Respon
 			"message": fmt.Sprintf("HTTP %d: %s", resp.StatusCode, string(body)[:min(len(body), 200)]),
 		})
 	}
+}
+
+// GetLLMProviderStatus returns extended status for a provider.
+// For Ollama this includes available models (pulled), running models (loaded
+// in VRAM), and connection health.  For cloud providers it returns basic
+// health and model list info.
+// GET /api/v1/llm/providers/{provider}/status
+func (h *Handler) GetLLMProviderStatus(w http.ResponseWriter, r *http.Request) {
+	providerName := chi.URLParam(r, "provider")
+	if providerName == "" {
+		writeError(w, http.StatusBadRequest, "provider name required")
+		return
+	}
+
+	p, ok := h.LLMRegistry.Get(providerName)
+	if !ok {
+		writeError(w, http.StatusNotFound, "provider not found: "+providerName)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	resp := map[string]interface{}{
+		"provider": providerName,
+		"healthy":  p.Healthy(ctx),
+	}
+
+	// Generic: available models.
+	models, err := p.ListModels(ctx)
+	if err != nil {
+		resp["available_models"] = []string{}
+		resp["models_error"] = err.Error()
+	} else {
+		resp["available_models"] = models
+	}
+
+	// Ollama-specific: running models + detailed model info.
+	if providerName == "ollama" {
+		op, isOllama := p.(*llm.OllamaProvider)
+		if isOllama {
+			running, err := op.ListRunningModels(ctx)
+			if err != nil {
+				resp["running_models"] = []interface{}{}
+				resp["running_error"] = err.Error()
+			} else {
+				resp["running_models"] = running
+				resp["running_count"] = len(running)
+			}
+
+			detailed, err := op.ListModelsDetailed(ctx)
+			if err == nil {
+				resp["models_detailed"] = detailed
+			}
+		}
+	}
+
+	meta, hasMeta := h.LLMRegistry.GetMeta(providerName)
+	if hasMeta {
+		resp["configured"] = meta.Configured
+		resp["base_url"] = meta.BaseURL
+		resp["default_model"] = meta.DefaultModel
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // CheckLLMBalance checks the credit/token balance for a cloud LLM provider.

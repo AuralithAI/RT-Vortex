@@ -17,7 +17,8 @@ const (
 	JanitorInterval        = 60 * time.Second
 	IdleTeamTimeout        = 10 * time.Minute
 	OfflineAgentRecycleAge = 1 * time.Hour
-	MTMMaxAge              = 7 * 24 * time.Hour // 7 days
+	MTMMaxAge              = 7 * 24 * time.Hour  // 7 days
+	InsightMaxAge          = 30 * 24 * time.Hour // 30 days
 	STMKeyPattern          = "swarm:stm:*"
 )
 
@@ -60,18 +61,20 @@ func (j *Janitor) runCycle(ctx context.Context) {
 	idleTeams := j.killIdleTeams(ctx)
 	staleHBKeys := j.clearStaleHeartbeats(ctx)
 	prunedMTM := j.pruneStaleMTM(ctx)
+	prunedInsights := j.pruneStaleInsights(ctx)
 	cleanedSTM := j.cleanOrphanedSTM(ctx)
 	recycledAgents := j.recycleOfflineAgents(ctx)
 
 	duration := time.Since(start)
 
-	total := idleTeams + staleHBKeys + prunedMTM + cleanedSTM + recycledAgents
+	total := idleTeams + staleHBKeys + prunedMTM + prunedInsights + cleanedSTM + recycledAgents
 	if total > 0 {
 		slog.Info("swarm janitor cycle complete",
 			"duration_ms", duration.Milliseconds(),
 			"idle_teams_killed", idleTeams,
 			"stale_hb_keys", staleHBKeys,
 			"pruned_mtm", prunedMTM,
+			"pruned_insights", prunedInsights,
 			"cleaned_stm", cleanedSTM,
 			"recycled_agents", recycledAgents,
 		)
@@ -139,6 +142,19 @@ func (j *Janitor) pruneStaleMTM(ctx context.Context) int64 {
 	count, err := j.memorySvc.PruneStaleMTM(ctx, MTMMaxAge)
 	if err != nil {
 		slog.Warn("janitor: prune MTM failed", "error", err)
+		return 0
+	}
+	return count
+}
+
+// pruneStaleInsights removes consensus insight entries older than 30 days.
+func (j *Janitor) pruneStaleInsights(ctx context.Context) int64 {
+	if j.memorySvc == nil {
+		return 0
+	}
+	count, err := j.memorySvc.PruneStaleInsights(ctx, InsightMaxAge)
+	if err != nil {
+		slog.Warn("janitor: prune insights failed", "error", err)
 		return 0
 	}
 	return count

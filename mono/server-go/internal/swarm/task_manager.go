@@ -85,6 +85,7 @@ type Task struct {
 	SubmittedBy    *uuid.UUID      `json:"submitted_by,omitempty"`
 	RetryCount     int             `json:"retry_count"`
 	FailureReason  string          `json:"failure_reason,omitempty"`
+	TeamFormation  json.RawMessage `json:"team_formation,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
 	CompletedAt    *time.Time      `json:"completed_at,omitempty"`
 	TimeoutAt      *time.Time      `json:"timeout_at,omitempty"`
@@ -243,6 +244,7 @@ func (m *TaskManager) GetTask(ctx context.Context, taskID uuid.UUID) (*Task, err
 		       COALESCE(pr_url, ''), COALESCE(pr_number, 0),
 		       human_rating, COALESCE(human_comment, ''), submitted_by,
 		       COALESCE(retry_count, 0), COALESCE(failure_reason, ''),
+		       team_formation,
 		       created_at, completed_at, timeout_at
 		FROM swarm_tasks WHERE id = $1`, taskID)
 
@@ -252,6 +254,7 @@ func (m *TaskManager) GetTask(ctx context.Context, taskID uuid.UUID) (*Task, err
 		&t.AssignedTeamID, &t.AssignedAgents, &t.PRUrl, &t.PRNumber,
 		&t.HumanRating, &t.HumanComment, &t.SubmittedBy,
 		&t.RetryCount, &t.FailureReason,
+		&t.TeamFormation,
 		&t.CreatedAt, &t.CompletedAt, &t.TimeoutAt,
 	)
 	if err != nil {
@@ -267,6 +270,7 @@ func (m *TaskManager) ListTasks(ctx context.Context, repoID, status string, limi
 	                 COALESCE(pr_url, ''), COALESCE(pr_number, 0),
 	                 human_rating, COALESCE(human_comment, ''), submitted_by,
 	                 COALESCE(retry_count, 0), COALESCE(failure_reason, ''),
+	                 team_formation,
 	                 created_at, completed_at, timeout_at
 	          FROM swarm_tasks WHERE 1=1`
 	args := []interface{}{}
@@ -294,7 +298,7 @@ func (m *TaskManager) ListTasks(ctx context.Context, repoID, status string, limi
 	}
 	defer rows.Close()
 
-	var tasks []Task
+	tasks := make([]Task, 0)
 	for rows.Next() {
 		var t Task
 		if err := rows.Scan(
@@ -302,6 +306,7 @@ func (m *TaskManager) ListTasks(ctx context.Context, repoID, status string, limi
 			&t.AssignedTeamID, &t.AssignedAgents, &t.PRUrl, &t.PRNumber,
 			&t.HumanRating, &t.HumanComment, &t.SubmittedBy,
 			&t.RetryCount, &t.FailureReason,
+			&t.TeamFormation,
 			&t.CreatedAt, &t.CompletedAt, &t.TimeoutAt,
 		); err != nil {
 			return nil, fmt.Errorf("scanning task: %w", err)

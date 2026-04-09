@@ -190,6 +190,12 @@
               docs          - Documentation quality, comments, READMEs
               ops           - CI/CD, deployment, infrastructure concerns
 
+            MULTI-LLM PRIORITY MATRIX (new):
+              Each role can list multiple providers in probe order. All are
+              queried in parallel; GPT/OpenAI is always placed last by the
+              system. Optional "action-types" attribute limits a provider to
+              specific action types.
+
             Example (uncomment to enable):
         -->
         <!--
@@ -202,6 +208,21 @@
             <route role="qa"           provider="openai"    model="gpt-4o"/>
             <route role="docs"         provider="gemini"    model="gemini-2.5-flash"/>
             <route role="ops"          provider="openai"    model="gpt-4o"/>
+
+            <priority-matrix>
+                <role-priority name="orchestrator">
+                    <provider name="grok"      model="grok-3"/>
+                    <provider name="anthropic"  model="claude-sonnet-4-20250514"/>
+                    <provider name="gemini"     model="gemini-2.5-pro"/>
+                    <provider name="openai"     model="gpt-4o"/>
+                </role-priority>
+                <role-priority name="senior_dev">
+                    <provider name="anthropic"  model="claude-sonnet-4-20250514"/>
+                    <provider name="grok"      model="grok-3"/>
+                    <provider name="gemini"     model="gemini-2.5-pro"/>
+                    <provider name="openai"     model="gpt-4o"/>
+                </role-priority>
+            </priority-matrix>
         </routing>
         -->
     </llm>

@@ -19,17 +19,22 @@ import (
 
 // Handler holds all dependencies needed by swarm HTTP endpoints.
 type Handler struct {
-	AuthSvc     *swarmauth.Service
-	TaskMgr     *TaskManager
-	TeamMgr     *TeamManager
-	LLMProxy    *LLMProxy
-	ELO         *ELOService
-	WS          *WSHub
-	PRCreator   *PRCreator
-	VCSResolver *vcs.Resolver
-	DB          *pgxpool.Pool
-	MemorySvc   *MemoryService
-	MCPSvc      MCPCaller
+	AuthSvc          *swarmauth.Service
+	TaskMgr          *TaskManager
+	TeamMgr          *TeamManager
+	LLMProxy         *LLMProxy
+	ELO              *ELOService
+	RoleELO          *RoleELOService
+	TeamFormSvc      *TeamFormationService
+	ProbeTuningSvc   *ProbeTuningService
+	SelfHealSvc      *SelfHealService
+	ObservabilitySvc *ObservabilityService
+	WS               *WSHub
+	PRCreator        *PRCreator
+	VCSResolver      *vcs.Resolver
+	DB               *pgxpool.Pool
+	MemorySvc        *MemoryService
+	MCPSvc           MCPCaller
 }
 
 // ── Agent Auth endpoints ────────────────────────────────────────────────────
@@ -73,8 +78,37 @@ func (h *Handler) RegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Build enriched response — inject role ELO tier and probe count.
+	enriched := map[string]interface{}{
+		"access_token": resp.AccessToken,
+		"agent_id":     resp.AgentID,
+		"expires_in":   resp.ExpiresIn,
+	}
+
+	// Tell the agent whether to use multi-LLM probing.
+	// When routes are disabled (default), agents probe multiple LLMs
+	// in parallel and use consensus to select the best response.
+	if h.LLMProxy != nil && h.LLMProxy.registry != nil {
+		enriched["use_multi_llm"] = !h.LLMProxy.registry.RoutesEnabled()
+		enriched["configured_providers"] = h.LLMProxy.registry.ConfiguredProviderCount()
+	}
+
+	// Inject role ELO if the service is available and we know the repo.
+	// The agent may send repo_id in the registration request body,
+	// or we fall back to defaults.
+	if h.RoleELO != nil && req.RepoID != "" {
+		tier, elo := h.RoleELO.TierForRole(r.Context(), req.Role, req.RepoID)
+		enriched["tier"] = tier
+		enriched["elo_score"] = elo
+		enriched["probe_count"] = ProbeCountForTier(tier)
+		slog.Info("swarm: role ELO injected at registration",
+			"role", req.Role, "repo_id", req.RepoID,
+			"tier", tier, "elo", elo,
+		)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(enriched)
 }
 
 // RevokeAgent handles DELETE /internal/swarm/auth/revoke.
@@ -783,6 +817,21 @@ func (h *Handler) RateTaskUser(w http.ResponseWriter, r *http.Request) {
 					"agents", len(agentIDs),
 				)
 			}
+
+			// Update role-based ELO for each agent's role.
+			if h.RoleELO != nil {
+				roles := h.resolveAgentRoles(r.Context(), agentIDs)
+				for _, role := range roles {
+					outcome := TaskOutcome{
+						TaskID:      taskID.String(),
+						HumanRating: body.Rating,
+					}
+					if roleErr := h.RoleELO.RecordRoleOutcome(r.Context(), role, task.RepoID, outcome); roleErr != nil {
+						slog.Error("swarm: role ELO update failed",
+							"role", role, "repo_id", task.RepoID, "error", roleErr)
+					}
+				}
+			}
 		}
 	}
 
@@ -1017,6 +1066,209 @@ func (h *Handler) AgentMessage(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
+// ── Multi-LLM Discussion Protocol ──────────────────────────────────────────
+
+// DiscussionEvent handles POST /internal/swarm/tasks/{id}/discussion.
+// Python agents post discussion thread lifecycle events here (opened, provider
+// response, completed, synthesised). Go broadcasts them via WebSocket so the
+// browser UI can render multi-model comparison panels in real time.
+func (h *Handler) DiscussionEvent(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "id")
+	if taskID == "" {
+		http.Error(w, `{"error":"missing task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	var evt struct {
+		Event             string                 `json:"event"`               // "thread_opened", "provider_response", "thread_completed", "thread_synthesised"
+		ThreadID          string                 `json:"thread_id,omitempty"` // required for all except thread_opened (where it's inside thread)
+		Thread            map[string]interface{} `json:"thread,omitempty"`    // full thread dict on thread_opened
+		Response          map[string]interface{} `json:"response,omitempty"`  // provider response on provider_response
+		Synthesis         string                 `json:"synthesis,omitempty"`
+		SynthesisProvider string                 `json:"synthesis_provider,omitempty"`
+		ProviderCount     int                    `json:"provider_count,omitempty"`
+		SuccessCount      int                    `json:"success_count,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if evt.Event == "" {
+		http.Error(w, `{"error":"event field is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("swarm discussion event",
+		"task_id", taskID,
+		"event", evt.Event,
+		"thread_id", evt.ThreadID,
+	)
+
+	// Record discussion metrics.
+	SwarmDiscussionEventsTotal.WithLabelValues(evt.Event).Inc()
+
+	// Broadcast to WebSocket subscribers.
+	if h.WS != nil {
+		data := map[string]interface{}{
+			"event": evt.Event,
+		}
+		// Include all non-zero fields.
+		if evt.ThreadID != "" {
+			data["thread_id"] = evt.ThreadID
+		}
+		if evt.Thread != nil {
+			data["thread"] = evt.Thread
+			// For thread_opened the thread_id lives inside the nested thread dict.
+			// Promote it to the top level so the frontend can always find it.
+			if evt.ThreadID == "" {
+				if tid, ok := evt.Thread["thread_id"].(string); ok && tid != "" {
+					data["thread_id"] = tid
+				}
+			}
+		}
+		if evt.Response != nil {
+			data["response"] = evt.Response
+		}
+		if evt.Synthesis != "" {
+			data["synthesis"] = evt.Synthesis
+		}
+		if evt.SynthesisProvider != "" {
+			data["synthesis_provider"] = evt.SynthesisProvider
+		}
+		if evt.ProviderCount > 0 {
+			data["provider_count"] = evt.ProviderCount
+		}
+		if evt.SuccessCount > 0 {
+			data["success_count"] = evt.SuccessCount
+		}
+		h.WS.BroadcastDiscussionEvent(taskID, evt.Event, data)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// ConsensusEvent handles POST /internal/swarm/tasks/{id}/consensus.
+// The Python consensus engine fires this after deciding on a final answer so
+// the Go server can record metrics and broadcast the outcome to the UI.
+func (h *Handler) ConsensusEvent(w http.ResponseWriter, r *http.Request) {
+	taskID := chi.URLParam(r, "id")
+	if taskID == "" {
+		http.Error(w, `{"error":"missing task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	var evt struct {
+		ThreadID       string             `json:"thread_id"`
+		AgentRole      string             `json:"agent_role,omitempty"` // role that ran this consensus (for role ELO)
+		Strategy       string             `json:"strategy"`             // "pick_best", "majority_vote", "gpt_as_judge", "multi_judge_panel"
+		Provider       string             `json:"provider"`             // winning provider or "consensus"
+		Model          string             `json:"model"`
+		Confidence     float64            `json:"confidence"`
+		Reasoning      string             `json:"reasoning"`
+		Scores         map[string]float64 `json:"scores,omitempty"`
+		LatencyMs      int64              `json:"latency_ms,omitempty"`      // consensus decision time
+		JudgeCount     int                `json:"judge_count,omitempty"`     // multi-judge panel: number of judges
+		JudgeAgreement float64            `json:"judge_agreement,omitempty"` // multi-judge panel: inter-judge agreement 0.0-1.0
+	}
+	if err := json.NewDecoder(r.Body).Decode(&evt); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if evt.Strategy == "" {
+		http.Error(w, `{"error":"strategy field is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("swarm consensus event",
+		"task_id", taskID,
+		"thread_id", evt.ThreadID,
+		"strategy", evt.Strategy,
+		"provider", evt.Provider,
+		"confidence", evt.Confidence,
+		"judge_count", evt.JudgeCount,
+		"judge_agreement", evt.JudgeAgreement,
+	)
+
+	// Record consensus metrics.
+	SwarmConsensusRunsTotal.WithLabelValues(evt.Strategy).Inc()
+	if evt.Provider != "" {
+		SwarmConsensusWinnerTotal.WithLabelValues(evt.Strategy, evt.Provider).Inc()
+	}
+	SwarmConsensusConfidence.WithLabelValues(evt.Strategy).Observe(evt.Confidence)
+	if evt.LatencyMs > 0 {
+		SwarmConsensusLatency.WithLabelValues(evt.Strategy).Observe(float64(evt.LatencyMs) / 1000.0)
+	}
+
+	// Record multi-judge panel metrics when applicable.
+	if evt.JudgeCount > 0 {
+		SwarmConsensusJudgeCount.WithLabelValues(evt.Strategy).Observe(float64(evt.JudgeCount))
+		SwarmConsensusJudgeAgreement.WithLabelValues(evt.Strategy).Observe(evt.JudgeAgreement)
+	}
+
+	// Broadcast to WebSocket subscribers.
+	if h.WS != nil {
+		data := map[string]interface{}{
+			"event":      "consensus_result",
+			"thread_id":  evt.ThreadID,
+			"strategy":   evt.Strategy,
+			"provider":   evt.Provider,
+			"model":      evt.Model,
+			"confidence": evt.Confidence,
+			"reasoning":  evt.Reasoning,
+		}
+		if evt.Scores != nil {
+			data["scores"] = evt.Scores
+		}
+		if evt.JudgeCount > 0 {
+			data["judge_count"] = evt.JudgeCount
+			data["judge_agreement"] = evt.JudgeAgreement
+		}
+		h.WS.BroadcastDiscussionEvent(taskID, "consensus_result", data)
+	}
+
+	// Auto-extract cross-task insights from every consensus decision.
+	if h.MemorySvc != nil && h.TaskMgr != nil {
+		go func() {
+			ctx := context.Background()
+			tid, parseErr := uuid.Parse(taskID)
+			if parseErr != nil {
+				return
+			}
+			task, taskErr := h.TaskMgr.GetTask(ctx, tid)
+			if taskErr != nil || task == nil {
+				return
+			}
+			repoID := task.RepoID
+			h.MemorySvc.ExtractAndStoreInsights(
+				ctx, repoID, taskID, evt.ThreadID,
+				evt.Strategy, evt.Provider, evt.Model,
+				evt.Confidence, evt.Scores,
+				evt.JudgeCount, evt.JudgeAgreement,
+			)
+
+			// Update role ELO from consensus quality signal.
+			if h.RoleELO != nil && evt.AgentRole != "" {
+				outcome := TaskOutcome{
+					TaskID:            taskID,
+					ConsensusConf:     evt.Confidence,
+					ConsensusStrategy: evt.Strategy,
+					ConsensusWin:      evt.Provider != "" && evt.Provider != "consensus",
+				}
+				if roleErr := h.RoleELO.RecordRoleOutcome(ctx, evt.AgentRole, repoID, outcome); roleErr != nil {
+					slog.Error("swarm: role ELO consensus update failed",
+						"role", evt.AgentRole, "repo_id", repoID, "error", roleErr)
+				}
+			}
+		}()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
 // ── VCS Proxy ───────────────────────────────────────────────────────────────
 
 // VCSReadFile handles POST /internal/swarm/vcs/read-file.
@@ -1149,6 +1401,35 @@ func (h *Handler) getRepoInfo(ctx context.Context, repoID uuid.UUID) (owner, nam
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+// resolveAgentRoles returns the unique set of roles for the given agent IDs.
+// Queries the swarm_agents table and deduplicates.
+func (h *Handler) resolveAgentRoles(ctx context.Context, agentIDs []uuid.UUID) []string {
+	if len(agentIDs) == 0 || h.DB == nil {
+		return nil
+	}
+
+	rows, err := h.DB.Query(ctx, `
+		SELECT DISTINCT role FROM swarm_agents
+		WHERE id = ANY($1) AND role != ''`,
+		agentIDs,
+	)
+	if err != nil {
+		slog.Error("resolve agent roles failed", "error", err)
+		return nil
+	}
+	defer rows.Close()
+
+	var roles []string
+	for rows.Next() {
+		var role string
+		if err := rows.Scan(&role); err != nil {
+			continue
+		}
+		roles = append(roles, role)
+	}
+	return roles
+}
 
 // userIDFromRequest extracts the user UUID from auth context.
 // Falls back to a nil UUID if no user auth middleware is present.

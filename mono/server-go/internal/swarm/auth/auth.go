@@ -44,6 +44,7 @@ type RegisterRequest struct {
 	AgentID  string `json:"agent_id"`
 	Role     string `json:"role"`
 	TeamID   string `json:"team_id"`
+	RepoID   string `json:"repo_id,omitempty"`
 	Hostname string `json:"hostname"`
 	Version  string `json:"version"`
 }

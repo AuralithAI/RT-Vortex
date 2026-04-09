@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/AuralithAI/rtvortex-server/internal/llm"
@@ -21,11 +23,17 @@ import (
 // dashboard. The Go llm.Registry handles all provider-specific API details.
 type LLMProxy struct {
 	registry *llm.Registry
+	wsHub    *WSHub
 }
 
 // NewLLMProxy creates an LLM proxy backed by the existing registry.
 func NewLLMProxy(reg *llm.Registry) *LLMProxy {
 	return &LLMProxy{registry: reg}
+}
+
+// SetWSHub attaches a WebSocket hub for real-time provider streaming.
+func (p *LLMProxy) SetWSHub(hub *WSHub) {
+	p.wsHub = hub
 }
 
 // ── Request / Response (OpenAI-compatible) ──────────────────────────────────
@@ -119,6 +127,376 @@ func (p *LLMProxy) Complete(ctx context.Context, req *LLMCompleteRequest) (*LLMC
 	}
 
 	return out, nil
+}
+
+// ── Multi-LLM Probe ────────────────────────────────────────────────────────
+
+// ProbeRequest is the JSON body for POST /internal/swarm/llm/probe.
+// The agent sends the same messages to multiple LLMs in parallel.
+type ProbeRequest struct {
+	Messages   []llm.Message `json:"messages"`
+	Tools      []llm.ToolDef `json:"tools,omitempty"`
+	ToolChoice string        `json:"tool_choice,omitempty"`
+	MaxTokens  int           `json:"max_tokens,omitempty"`
+	AgentRole  string        `json:"agent_role,omitempty"`
+	ActionType string        `json:"action_type,omitempty"`
+	NumModels  int           `json:"num_models,omitempty"`
+	TaskID     string        `json:"task_id,omitempty"`
+	ThreadID   string        `json:"thread_id,omitempty"`
+}
+
+// ProbeResult is the response from a single LLM provider in a multi-probe.
+type ProbeResult struct {
+	Provider     string         `json:"provider"`
+	Model        string         `json:"model"`
+	Content      string         `json:"content"`
+	FinishReason string         `json:"finish_reason"`
+	ToolCalls    []llm.ToolCall `json:"tool_calls,omitempty"`
+	Usage        LLMUsage       `json:"usage"`
+	LatencyMs    int64          `json:"latency_ms"`
+	Error        string         `json:"error,omitempty"` // non-empty if this provider failed
+}
+
+// ProbeResponse wraps the results from all probed providers.
+type ProbeResponse struct {
+	Results   []ProbeResult `json:"results"`
+	TotalMs   int64         `json:"total_ms"`   // wall-clock time for the entire probe
+	Providers int           `json:"providers"`  // number of providers probed
+	Successes int           `json:"successes"`  // number that returned successfully
+	AgentRole string        `json:"agent_role"` // echo back for caller convenience
+}
+
+// ProbeMultiple fans out completion requests to multiple LLM providers in
+// parallel, collects all responses, and returns them in priority order.
+//
+// This is the core of the multi-LLM approach: every provider
+// in the role's priority matrix is queried simultaneously, and the agent (or
+// consensus engine in Phase 5) chooses the best answer.
+func (p *LLMProxy) ProbeMultiple(ctx context.Context, req *ProbeRequest) (*ProbeResponse, error) {
+	probeStart := time.Now()
+
+	// Get the ordered provider list from the priority matrix.
+	order := p.registry.PriorityOrder(req.AgentRole, req.ActionType, req.NumModels)
+	if len(order) == 0 {
+		return nil, fmt.Errorf("llm probe: no providers configured for role %q", req.AgentRole)
+	}
+
+	slog.Info("llm probe: fanning out",
+		"role", req.AgentRole,
+		"action_type", req.ActionType,
+		"providers", len(order),
+	)
+
+	// Fan out to all providers in parallel.
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	results := make([]ProbeResult, len(order))
+
+	for i, entry := range order {
+		wg.Add(1)
+		go func(idx int, e llm.RouteEntry) {
+			defer wg.Done()
+
+			provStart := time.Now()
+
+			// Build per-provider request with the provider's model.
+			cr := &llm.CompletionRequest{
+				Messages:   req.Messages,
+				Tools:      req.Tools,
+				ToolChoice: req.ToolChoice,
+				MaxTokens:  req.MaxTokens,
+				Model:      e.Model,
+				AgentRole:  req.AgentRole,
+			}
+
+			result := ProbeResult{
+				Provider: e.Provider,
+				Model:    e.Model,
+			}
+
+			// Get the specific provider from the registry and call it directly.
+			provider, ok := p.registry.Get(e.Provider)
+			if !ok {
+				result.Error = fmt.Sprintf("provider %q not found", e.Provider)
+				result.LatencyMs = time.Since(provStart).Milliseconds()
+				mu.Lock()
+				results[idx] = result
+				mu.Unlock()
+				return
+			}
+
+			// ── Streaming path ──────────────────────────────────────
+			// We use streaming to reduce time-to-first-token, but we
+			// do NOT broadcast per-chunk WS events. Instead:
+			//   1. One "provider_streaming_start" event (UI shows spinner)
+			//   2. Accumulate content server-side (zero WS traffic)
+			//   3. One "provider_response" event with full content (UI
+			//      renders it with a lightweight typewriter animation)
+			//
+			// This is O(2) WS messages per provider regardless of
+			// response length. At 1M users × 4 providers = 8M messages
+			// total, not 1M × 176 chunks × 4 = 704M messages.
+			canStream := p.wsHub != nil && req.TaskID != "" && req.ThreadID != ""
+			sp, isStreamable := provider.(llm.StreamingProvider)
+
+			if canStream && isStreamable {
+				ch, err := sp.StreamComplete(ctx, cr)
+				if err != nil {
+					result.Error = err.Error()
+					result.LatencyMs = time.Since(provStart).Milliseconds()
+					slog.Warn("llm probe: stream open failed",
+						"provider", e.Provider,
+						"model", e.Model,
+						"error", err,
+						"latency_ms", result.LatencyMs,
+					)
+					SwarmProbeProviderLatency.WithLabelValues(e.Provider, "error").Observe(float64(result.LatencyMs) / 1000.0)
+
+					mu.Lock()
+					results[idx] = result
+					mu.Unlock()
+
+					// Notify the UI that this provider failed.
+					p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_response", map[string]interface{}{
+						"event":     "provider_response",
+						"thread_id": req.ThreadID,
+						"response": map[string]interface{}{
+							"provider":   e.Provider,
+							"model":      e.Model,
+							"error":      result.Error,
+							"latency_ms": result.LatencyMs,
+							"timestamp":  float64(time.Now().UnixMilli()) / 1000.0,
+						},
+					})
+					return
+				}
+
+				// Tell the UI this provider started generating. Single
+				// lightweight event — the tile shows a spinner until
+				// the final provider_response arrives.
+				p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_streaming_start", map[string]interface{}{
+					"event":     "provider_streaming_start",
+					"thread_id": req.ThreadID,
+					"provider":  e.Provider,
+					"model":     e.Model,
+				})
+
+				// ── Server-side accumulation (no WS traffic) ─────────
+				var contentBuf strings.Builder
+				var lastChunk llm.StreamChunk
+
+				for chunk := range ch {
+					if chunk.Content != "" {
+						contentBuf.WriteString(chunk.Content)
+					}
+					if chunk.Done {
+						lastChunk = chunk
+					}
+				}
+
+				result.LatencyMs = time.Since(provStart).Milliseconds()
+				rawContent := contentBuf.String()
+				result.Content = SanitizeLLMContent(rawContent, e.Provider)
+				result.FinishReason = lastChunk.FinishReason
+				result.ToolCalls = lastChunk.ToolCalls
+				if lastChunk.Model != "" {
+					result.Model = lastChunk.Model
+				}
+				if lastChunk.Usage != nil {
+					result.Usage = LLMUsage{
+						PromptTokens:     lastChunk.Usage.PromptTokens,
+						CompletionTokens: lastChunk.Usage.CompletionTokens,
+						TotalTokens:      lastChunk.Usage.TotalTokens,
+					}
+				}
+
+				slog.Info("llm probe: provider streamed",
+					"provider", e.Provider,
+					"model", result.Model,
+					"latency_ms", result.LatencyMs,
+					"raw_content_len", len(rawContent),
+					"sanitized_content_len", len(result.Content),
+					"tokens", result.Usage.TotalTokens,
+				)
+				SwarmProbeProviderLatency.WithLabelValues(e.Provider, "ok").Observe(float64(result.LatencyMs) / 1000.0)
+
+				mu.Lock()
+				results[idx] = result
+				mu.Unlock()
+
+				// Send the final complete response — the ONLY data-
+				// carrying WS event. The frontend typewriter animation
+				// gives the user the streaming feel without real-time
+				// chunk traffic.
+				p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_response", map[string]interface{}{
+					"event":     "provider_response",
+					"thread_id": req.ThreadID,
+					"response": map[string]interface{}{
+						"provider":      result.Provider,
+						"model":         result.Model,
+						"content":       result.Content,
+						"latency_ms":    result.LatencyMs,
+						"finish_reason": result.FinishReason,
+						"token_usage": map[string]int{
+							"prompt_tokens":     result.Usage.PromptTokens,
+							"completion_tokens": result.Usage.CompletionTokens,
+							"total_tokens":      result.Usage.TotalTokens,
+						},
+						"timestamp": float64(time.Now().UnixMilli()) / 1000.0,
+					},
+				})
+				return
+			}
+
+			// ── Non-streaming fallback ──────────────────────────────
+			// Provider doesn't support streaming or no WebSocket hub.
+			resp, err := provider.Complete(ctx, cr)
+			result.LatencyMs = time.Since(provStart).Milliseconds()
+
+			if err != nil {
+				result.Error = err.Error()
+				slog.Warn("llm probe: provider failed",
+					"provider", e.Provider,
+					"model", e.Model,
+					"error", err,
+					"latency_ms", result.LatencyMs,
+				)
+				SwarmProbeProviderLatency.WithLabelValues(e.Provider, "error").Observe(float64(result.LatencyMs) / 1000.0)
+			} else {
+				result.Content = SanitizeLLMContent(resp.Content, e.Provider)
+				result.Model = resp.Model
+				result.FinishReason = resp.FinishReason
+				result.ToolCalls = resp.ToolCalls
+				result.Usage = LLMUsage{
+					PromptTokens:     resp.Usage.PromptTokens,
+					CompletionTokens: resp.Usage.CompletionTokens,
+					TotalTokens:      resp.Usage.TotalTokens,
+				}
+				slog.Info("llm probe: provider responded",
+					"provider", e.Provider,
+					"model", resp.Model,
+					"latency_ms", result.LatencyMs,
+					"tokens", resp.Usage.TotalTokens,
+				)
+				SwarmProbeProviderLatency.WithLabelValues(e.Provider, "ok").Observe(float64(result.LatencyMs) / 1000.0)
+			}
+
+			mu.Lock()
+			results[idx] = result
+			mu.Unlock()
+
+			// Stream this result to the UI immediately via WebSocket
+			// so providers appear one-by-one as they finish.
+			if p.wsHub != nil && req.TaskID != "" && req.ThreadID != "" {
+				respData := map[string]interface{}{
+					"provider":      result.Provider,
+					"model":         result.Model,
+					"content":       result.Content,
+					"latency_ms":    result.LatencyMs,
+					"finish_reason": result.FinishReason,
+					"token_usage": map[string]int{
+						"prompt_tokens":     result.Usage.PromptTokens,
+						"completion_tokens": result.Usage.CompletionTokens,
+						"total_tokens":      result.Usage.TotalTokens,
+					},
+					"timestamp": float64(time.Now().UnixMilli()) / 1000.0,
+				}
+				if result.Error != "" {
+					respData["error"] = result.Error
+				}
+				p.wsHub.BroadcastDiscussionEvent(req.TaskID, "provider_response", map[string]interface{}{
+					"event":     "provider_response",
+					"thread_id": req.ThreadID,
+					"response":  respData,
+				})
+			}
+		}(i, entry)
+	}
+
+	wg.Wait()
+
+	totalMs := time.Since(probeStart).Milliseconds()
+	successes := 0
+	for _, r := range results {
+		if r.Error == "" {
+			successes++
+		}
+	}
+
+	return &ProbeResponse{
+		Results:   results,
+		TotalMs:   totalMs,
+		Providers: len(order),
+		Successes: successes,
+		AgentRole: req.AgentRole,
+	}, nil
+}
+
+// ── HTTP Handlers ───────────────────────────────────────────────────────────
+
+// HandleProbe is the HTTP handler for POST /internal/swarm/llm/probe.
+// It fans out completion requests to multiple providers and returns all results.
+func (p *LLMProxy) HandleProbe(w http.ResponseWriter, r *http.Request) {
+	// Probes query multiple LLMs — allow up to 5 minutes total.
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Now().Add(5 * time.Minute))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	var req ProbeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Messages) == 0 {
+		http.Error(w, `{"error":"messages array is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("swarm llm probe request",
+		"agent_role", req.AgentRole,
+		"action_type", req.ActionType,
+		"num_models", req.NumModels,
+		"messages", len(req.Messages),
+	)
+
+	start := time.Now()
+	resp, err := p.ProbeMultiple(ctx, &req)
+	duration := time.Since(start)
+
+	if err != nil {
+		slog.Error("swarm llm probe error", "error", err)
+		SwarmProbeCallsTotal.WithLabelValues("error").Inc()
+		SwarmProbeWallTime.Observe(duration.Seconds())
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
+		return
+	}
+
+	// Record aggregate metrics.
+	if resp.Successes > 0 {
+		SwarmProbeCallsTotal.WithLabelValues("ok").Inc()
+	} else {
+		SwarmProbeCallsTotal.WithLabelValues("all_failed").Inc()
+	}
+	SwarmProbeWallTime.Observe(duration.Seconds())
+	SwarmProbeProviderCount.Observe(float64(resp.Providers))
+
+	// Aggregate token usage across all providers.
+	for _, r := range resp.Results {
+		if r.Error == "" {
+			if r.Usage.PromptTokens > 0 {
+				SwarmLLMTokensTotal.WithLabelValues("prompt").Add(float64(r.Usage.PromptTokens))
+			}
+			if r.Usage.CompletionTokens > 0 {
+				SwarmLLMTokensTotal.WithLabelValues("completion").Add(float64(r.Usage.CompletionTokens))
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // ── HTTP Handler ────────────────────────────────────────────────────────────

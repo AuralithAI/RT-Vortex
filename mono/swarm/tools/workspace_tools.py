@@ -64,7 +64,10 @@ async def workspace_read_file(path: str) -> str:
         content = await ws.read_file(path)
         return content
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return json.dumps({
+            "error": f"File not found: {path}",
+            "hint": "Use workspace_list_dir or workspace_search to find the correct path.",
+        })
 
 
 @tool(description=(

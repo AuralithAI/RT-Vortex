@@ -98,10 +98,15 @@ type geminiFuncResp struct {
 }
 
 type geminiGenerationCfg struct {
-	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
-	Temperature     float64  `json:"temperature,omitempty"`
-	TopP            float64  `json:"topP,omitempty"`
-	StopSequences   []string `json:"stopSequences,omitempty"`
+	MaxOutputTokens int                `json:"maxOutputTokens,omitempty"`
+	Temperature     float64            `json:"temperature,omitempty"`
+	TopP            float64            `json:"topP,omitempty"`
+	StopSequences   []string           `json:"stopSequences,omitempty"`
+	ThinkingConfig  *geminiThinkingCfg `json:"thinkingConfig,omitempty"`
+}
+
+type geminiThinkingCfg struct {
+	ThinkingBudget int `json:"thinkingBudget"`
 }
 
 type geminiResponse struct {
@@ -114,6 +119,7 @@ type geminiResponse struct {
 	UsageMetadata struct {
 		PromptTokenCount     int `json:"promptTokenCount"`
 		CandidatesTokenCount int `json:"candidatesTokenCount"`
+		ThoughtsTokenCount   int `json:"thoughtsTokenCount"`
 		TotalTokenCount      int `json:"totalTokenCount"`
 	} `json:"usageMetadata"`
 	ModelVersion string `json:"modelVersion"`
@@ -133,9 +139,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		model = p.defaultModel
 	}
 
-	// Build a tool_call_id → function name lookup so we can resolve names
-	// for tool result messages. OpenAI's format puts the name on the
-	// assistant's tool_call, not on the tool result; Gemini requires it.
+	// Build tool_call_id → function name lookup for tool result messages.
 	tcNameByID := make(map[string]string)
 	for _, m := range req.Messages {
 		for _, tc := range m.ToolCalls {
@@ -154,12 +158,10 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			}
 			continue
 		}
-		// Handle tool result messages: Gemini expects functionResponse parts.
+		// Handle tool result messages.
 		if m.Role == RoleTool {
-			// Parse the content as JSON for the response object.
 			var respObj map[string]interface{}
 			if err := json.Unmarshal([]byte(m.Content), &respObj); err != nil {
-				// If not valid JSON, wrap in a result object.
 				respObj = map[string]interface{}{"result": m.Content}
 			}
 			funcName := m.Name
@@ -180,7 +182,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			})
 			continue
 		}
-		// Handle assistant messages with tool calls: Gemini expects functionCall parts.
+		// Handle assistant messages with tool calls.
 		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
 			var parts []geminiPart
 			if m.Content != "" {
@@ -223,6 +225,25 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		geminiTools = []geminiToolDeclarations{{FunctionDeclarations: decls}}
 	}
 
+	// Cap thinking budget for 2.5 models — without a cap the model can
+	// spend all output tokens on thinking and produce zero content.
+	var thinkingCfg *geminiThinkingCfg
+	if strings.Contains(model, "2.5") {
+		budget := req.MaxTokens / 4
+		if budget < 1024 {
+			budget = 1024
+		}
+		if budget > 8192 {
+			budget = 8192
+		}
+		thinkingCfg = &geminiThinkingCfg{ThinkingBudget: budget}
+		slog.Debug("gemini: capping thinking budget",
+			"model", model,
+			"max_output_tokens", req.MaxTokens,
+			"thinking_budget", budget,
+		)
+	}
+
 	body := geminiRequest{
 		Contents:       contents,
 		SystemInstruct: systemInstruct,
@@ -232,6 +253,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			Temperature:     req.Temperature,
 			TopP:            req.TopP,
 			StopSequences:   req.Stop,
+			ThinkingConfig:  thinkingCfg,
 		},
 	}
 
@@ -241,30 +263,67 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}
 
 	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", p.baseURL, model, p.apiKey)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("gemini request: %w", err)
-	}
-	defer resp.Body.Close()
+	// Retry loop — 503/429 with exponential backoff: 1s → 2s → 4s.
+	const maxRetries = 3
+	var respBody []byte
+	var lastErr error
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			slog.Warn("gemini: retrying after transient error",
+				"model", model,
+				"attempt", attempt+1,
+				"backoff", backoff,
+				"error", lastErr,
+			)
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("gemini request cancelled during retry: %w", ctx.Err())
+			case <-time.After(backoff):
+			}
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err := p.client.Do(httpReq)
+		if err != nil {
+			lastErr = fmt.Errorf("gemini request: %w", err)
+			continue
+		}
+
+		respBody, err = io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		resp.Body.Close()
+		if err != nil {
+			lastErr = fmt.Errorf("read response: %w", err)
+			continue
+		}
+
+		// Retryable: 429, 503.
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			var errResp geminiErrorResponse
+			_ = json.Unmarshal(respBody, &errResp)
+			lastErr = fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+			continue // retry
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			var errResp geminiErrorResponse
+			_ = json.Unmarshal(respBody, &errResp)
+			return nil, fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+		}
+
+		lastErr = nil
+		break // success
 	}
 
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, fmt.Errorf("%w: %s", ErrRateLimited, string(respBody))
-	}
-	if resp.StatusCode != http.StatusOK {
-		var errResp geminiErrorResponse
-		_ = json.Unmarshal(respBody, &errResp)
-		return nil, fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+	if lastErr != nil {
+		return nil, lastErr
 	}
 
 	var gr geminiResponse
@@ -276,7 +335,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		return nil, fmt.Errorf("gemini returned no candidates")
 	}
 
-	// Parse response parts — collect text and function calls.
+	// Parse response parts.
 	var textContent string
 	var toolCalls []ToolCall
 	for i, part := range gr.Candidates[0].Content.Parts {
@@ -300,6 +359,25 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
 	}
+	if finishReason == "max_tokens" {
+		finishReason = "length"
+	}
+
+	if gr.UsageMetadata.ThoughtsTokenCount > 0 {
+		slog.Info("gemini: thinking tokens consumed",
+			"model", model,
+			"thoughts_tokens", gr.UsageMetadata.ThoughtsTokenCount,
+			"candidates_tokens", gr.UsageMetadata.CandidatesTokenCount,
+			"total_tokens", gr.UsageMetadata.TotalTokenCount,
+			"finish_reason", finishReason,
+		)
+	}
+
+	// Report completion tokens = candidates + thoughts.
+	completionTokens := gr.UsageMetadata.CandidatesTokenCount
+	if completionTokens == 0 && gr.UsageMetadata.ThoughtsTokenCount > 0 {
+		completionTokens = gr.UsageMetadata.ThoughtsTokenCount
+	}
 
 	return &CompletionResponse{
 		Content:      textContent,
@@ -308,14 +386,13 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		ToolCalls:    toolCalls,
 		Usage: Usage{
 			PromptTokens:     gr.UsageMetadata.PromptTokenCount,
-			CompletionTokens: gr.UsageMetadata.CandidatesTokenCount,
+			CompletionTokens: completionTokens,
 			TotalTokens:      gr.UsageMetadata.TotalTokenCount,
 		},
 	}, nil
 }
 
 func (p *GeminiProvider) ListModels(ctx context.Context) ([]string, error) {
-	// Try dynamic API fetch first (requires API key).
 	if p.apiKey != "" {
 		url := p.baseURL + "/models?key=" + p.apiKey
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -326,15 +403,13 @@ func (p *GeminiProvider) ListModels(ctx context.Context) ([]string, error) {
 				if resp.StatusCode == http.StatusOK {
 					var result struct {
 						Models []struct {
-							Name string `json:"name"` // "models/gemini-2.5-flash"
+							Name string `json:"name"`
 						} `json:"models"`
 					}
 					if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && len(result.Models) > 0 {
 						models := make([]string, 0, len(result.Models))
 						for _, m := range result.Models {
-							// Strip "models/" prefix to get clean model names.
 							name := strings.TrimPrefix(m.Name, "models/")
-							// Only include generateContent-capable models.
 							if strings.HasPrefix(name, "gemini-") {
 								models = append(models, name)
 							}
@@ -348,7 +423,7 @@ func (p *GeminiProvider) ListModels(ctx context.Context) ([]string, error) {
 		}
 	}
 
-	// Fallback: return well-known models.
+	// Fallback.
 	return []string{
 		"gemini-2.5-flash",
 		"gemini-2.5-pro",
@@ -378,9 +453,7 @@ func (p *GeminiProvider) Healthy(ctx context.Context) bool {
 
 // ── Gemini Streaming ────────────────────────────────────────────────────────
 
-// StreamComplete sends a streaming request to Gemini and returns chunks via SSE.
-// Tool calling during streaming is supported — function calls returned in
-// streaming chunks are collected and emitted as ToolCalls on the final chunk.
+// StreamComplete sends a streaming request to Gemini via SSE.
 func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {
@@ -448,6 +521,19 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 		geminiTools = []geminiToolDeclarations{{FunctionDeclarations: decls}}
 	}
 
+	// Cap thinking budget for 2.5 models (same as Complete).
+	var thinkingCfg *geminiThinkingCfg
+	if strings.Contains(model, "2.5") {
+		budget := req.MaxTokens / 4
+		if budget < 1024 {
+			budget = 1024
+		}
+		if budget > 8192 {
+			budget = 8192
+		}
+		thinkingCfg = &geminiThinkingCfg{ThinkingBudget: budget}
+	}
+
 	body := geminiRequest{
 		Contents:       contents,
 		SystemInstruct: systemInstruct,
@@ -457,6 +543,7 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 			Temperature:     req.Temperature,
 			TopP:            req.TopP,
 			StopSequences:   req.Stop,
+			ThinkingConfig:  thinkingCfg,
 		},
 	}
 
@@ -466,26 +553,64 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 	}
 
 	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse&key=%s", p.baseURL, model, p.apiKey)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("gemini stream request: %w", err)
-	}
+	// Retry loop — same transient-error handling as Complete.
+	const streamMaxRetries = 3
+	var resp *http.Response
+	var lastStreamErr error
 
-	if resp.StatusCode != http.StatusOK {
-		defer resp.Body.Close()
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		if resp.StatusCode == http.StatusTooManyRequests {
-			return nil, fmt.Errorf("%w: %s", ErrRateLimited, string(respBody))
+	for attempt := 0; attempt < streamMaxRetries; attempt++ {
+		if attempt > 0 {
+			backoff := time.Duration(1<<uint(attempt-1)) * time.Second
+			slog.Warn("gemini stream: retrying after transient error",
+				"model", model,
+				"attempt", attempt+1,
+				"backoff", backoff,
+				"error", lastStreamErr,
+			)
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("gemini stream cancelled during retry: %w", ctx.Err())
+			case <-time.After(backoff):
+			}
 		}
-		var errResp geminiErrorResponse
-		_ = json.Unmarshal(respBody, &errResp)
-		return nil, fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+		if err != nil {
+			return nil, fmt.Errorf("create request: %w", err)
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err = p.client.Do(httpReq)
+		if err != nil {
+			lastStreamErr = fmt.Errorf("gemini stream request: %w", err)
+			continue
+		}
+
+		// Retryable: 429, 503.
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			var errResp geminiErrorResponse
+			_ = json.Unmarshal(respBody, &errResp)
+			lastStreamErr = fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			resp.Body.Close()
+			var errResp geminiErrorResponse
+			_ = json.Unmarshal(respBody, &errResp)
+			return nil, fmt.Errorf("%w: %d — %s", ErrProviderError, resp.StatusCode, errResp.Error.Message)
+		}
+
+		lastStreamErr = nil
+		break // success
+	}
+
+	if lastStreamErr != nil {
+		return nil, lastStreamErr
 	}
 
 	ch := make(chan StreamChunk, 64)
@@ -532,6 +657,9 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 				}
 				if gr.Candidates[0].FinishReason != "" && gr.Candidates[0].FinishReason != "STOP" {
 					sc.FinishReason = strings.ToLower(gr.Candidates[0].FinishReason)
+					if sc.FinishReason == "max_tokens" {
+						sc.FinishReason = "length"
+					}
 				}
 				if gr.Candidates[0].FinishReason == "STOP" {
 					sc.FinishReason = "stop"

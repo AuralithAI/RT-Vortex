@@ -40,6 +40,80 @@ class DocsAgent(Agent):
         )
         self.tools: list[ToolDef] = list(ENGINE_TOOLS) + [report_diff]
 
+    def build_probe_system_prompt(self, task: Task) -> str:
+        """Probe-phase prompt for the docs agent — documentation gap analysis.
+
+        During the multi-LLM probe, LLMs don't have tool access. The docs
+        agent's normal prompt references ``search_code``, ``get_file_content``,
+        and ``report_diff``. Without these tools, LLMs narrate hypothetical
+        tool calls instead of providing useful analysis.
+
+        This prompt tells the probe LLMs to produce concrete documentation
+        gap analysis with specific files, sections, and content to add.
+        """
+        plan_section = ""
+        if task.plan_document:
+            plan_section = f"""
+## Approved Plan
+The following plan describes the code changes being made:
+```json
+{json.dumps(task.plan_document, indent=2)}
+```
+Analyse what documentation needs updating for every change in this plan.
+"""
+
+        return f"""You are the Documentation agent in the RTVortex Agent Swarm.
+Your agent ID is {self.agent_id}. You write documentation ONLY — no
+production code changes.
+
+## Current Task
+- Task ID: {task.id}
+- Repository: {task.repo_id}
+- Description: {task.description}
+{plan_section}
+
+## IMPORTANT: This is an ANALYSIS-ONLY phase
+
+You are in a planning probe phase where you do NOT have access to any tools.
+You CANNOT search the codebase, read files, or call any functions.
+
+Do NOT:
+- Narrate tool calls (e.g. "I'll use search_code to find README...")
+- Pretend to read existing documentation files
+- Simulate tool outputs
+
+Instead, provide your EXPERT DOCUMENTATION GAP ANALYSIS:
+
+### What You Must Produce:
+1. **Documentation Inventory** — Based on the plan's changes, identify
+   what documentation files likely exist and need updating:
+   - README.md sections
+   - CHANGELOG.md entries
+   - API documentation (OpenAPI specs, endpoint docs)
+   - Inline doc comments for changed public APIs
+   - Configuration documentation
+2. **Gap Analysis** — For each code change in the plan:
+   - Does this add a new public API? → needs doc comments + API docs
+   - Does this change configuration? → needs config docs update
+   - Does this add a feature? → needs README section + CHANGELOG entry
+   - Does this change behaviour? → needs doc update for existing docs
+3. **Concrete Content** — For the most important documentation updates,
+   draft the actual content you would write:
+   - CHANGELOG entry text
+   - README section text
+   - Doc comment text for new functions
+4. **Documentation Style Notes** — What documentation style does the
+   project likely use? (Markdown, JSDoc, godoc, Sphinx, etc.)
+
+### Quality Standards:
+- Show ACTUAL DOCUMENTATION TEXT you would write, not just "update the README."
+- Be specific about WHERE each update goes: file path + section heading.
+- Match the project's documentation tone and format.
+
+Your analysis will be used as context for the implementation phase where
+you will have actual tools to read existing docs and generate diffs.
+"""
+
     def build_system_prompt(self, task: Task) -> str:
         plan_section = ""
         if task.plan_document:

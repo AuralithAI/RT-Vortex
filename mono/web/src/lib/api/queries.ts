@@ -234,6 +234,15 @@ export function useLLMProviders() {
   });
 }
 
+export function useLLMProviderStatus(provider: string, enabled = true) {
+  return useQuery({
+    queryKey: ["llm", "provider-status", provider] as const,
+    queryFn: () => api.llm.providerStatus(provider),
+    enabled,
+    refetchInterval: 30_000,
+  });
+}
+
 export function useLLMRoutes() {
   return useQuery({
     queryKey: queryKeys.llmRoutes,

@@ -1,7 +1,11 @@
 // ─── useSwarmEvents ──────────────────────────────────────────────────────────
 // WebSocket hook for real-time swarm events (task status changes, agent
-// activity, diff submissions, plan updates). Connects to the swarm WS
-// endpoint and dispatches typed events.
+// activity, diff submissions, plan updates, discussion events).
+//
+// With server-side streaming accumulation, the WS traffic is only structural
+// events (≤ 2 per provider per probe): provider_streaming_start and
+// provider_response. No per-token chunks are sent over WebSocket, so there
+// is no need for client-side batching or throttling.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -9,7 +13,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 // ── Event types ─────────────────────────────────────────────────────────────
 
 export interface SwarmWsEvent {
-  type: "swarm_task" | "swarm_agent" | "swarm_diff" | "swarm_plan";
+  type: "swarm_task" | "swarm_agent" | "swarm_diff" | "swarm_plan" | "swarm_discussion";
   task_id?: string;
   agent_id?: string;
   event: string;
@@ -31,20 +35,20 @@ interface SwarmEventsState {
   connected: boolean;
   /** Latest event received */
   lastEvent: SwarmWsEvent | null;
-  /** All events received (most recent first, capped at 100) */
+  /** All events received (most recent first, capped at MAX_EVENTS) */
   events: SwarmWsEvent[];
   /** Connection error */
   error: string | null;
 }
 
-const MAX_EVENTS = 100;
+const MAX_EVENTS = 200;
 
 /**
  * Hook that opens a WebSocket to stream swarm events for a task.
  *
- * @param taskId - Task ID to watch (empty/undefined for global events)
- * @param options - Connection options
- * @returns The current events state
+ * Each WS message triggers one setState. This is fine because server-side
+ * streaming accumulation limits traffic to O(providers) structural events
+ * per probe, not O(tokens × providers) chunk events.
  */
 export function useSwarmEvents(
   taskId?: string,
@@ -78,7 +82,15 @@ export function useSwarmEvents(
 
       ws.onopen = () => {
         reconnectCount.current = 0;
-        setState((prev) => ({ ...prev, connected: true, error: null }));
+        // Clear existing events on (re)connect — the server replays
+        // buffered history so we'll get everything again.
+        setState((prev) => ({
+          ...prev,
+          connected: true,
+          error: null,
+          events: [],
+          lastEvent: null,
+        }));
       };
 
       ws.onmessage = (e) => {

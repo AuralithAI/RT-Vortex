@@ -213,6 +213,22 @@ void TMSMemorySystem::initialize() {
             kg_handle_ = std::make_unique<KnowledgeGraphHandle>(config_.storage_path);
             metrics::Registry::instance().setGauge(metrics::KG_ENABLED, 1.0);
             LOG_INFO("[TMS] Knowledge Graph initialized");
+
+            // Seed KG metrics from the persisted SQLite database so the
+            // dashboard shows correct node/edge counts after a cold restart.
+            {
+                auto& kg = kg_handle_->get();
+                size_t nodes = kg.nodeCount("");  // all repos
+                size_t edges = kg.edgeCount("");
+                if (nodes > 0 || edges > 0) {
+                    metrics::Registry::instance().setGauge(
+                        metrics::KG_NODES_TOTAL, static_cast<double>(nodes));
+                    metrics::Registry::instance().setGauge(
+                        metrics::KG_EDGES_TOTAL, static_cast<double>(edges));
+                    LOG_INFO("[TMS] KG post-load metrics: nodes=" +
+                             std::to_string(nodes) + " edges=" + std::to_string(edges));
+                }
+            }
         } catch (const std::exception& e) {
             LOG_ERROR("[TMS] Failed to initialize Knowledge Graph: " + std::string(e.what()));
         }
@@ -662,6 +678,19 @@ void TMSMemorySystem::ingestChunksWithEmbeddings(
         if (chunk.id.find(repo_id + ":") != 0) {
             chunk.id = repo_id + ":" + chunk.id;
         }
+
+        // Ensure the chunk carries a "repo:<id>" tag so that save/load
+        // can persist and restore the repo association correctly.
+        {
+            bool has_repo_tag = false;
+            const std::string expected_tag = "repo:" + repo_id;
+            for (const auto& tag : chunk.tags) {
+                if (tag == expected_tag) { has_repo_tag = true; break; }
+            }
+            if (!has_repo_tag) {
+                chunk.tags.push_back(expected_tag);
+            }
+        }
         
         prepared_chunks.push_back(std::move(chunk));
     }
@@ -983,7 +1012,7 @@ TMSResponse TMSMemorySystem::forward(const TMSQuery& query) {
 
         // Compute KG graph confidence score
         float graph_score = 0.0f;
-        if (config_.knowledge_graph_enabled && kg_handle_ && !ltm_results.empty()) {
+        if (config_.knowledge_graph_enabled && kg_handle_ && !ltm_results.empty() && !isTimedOut()) {
             try {
                 auto& kg = kg_handle_->get();
                 GraphRAGConfig graph_config;
@@ -1333,10 +1362,33 @@ void TMSMemorySystem::save() {
 
 void TMSMemorySystem::load() {
     if (std::filesystem::exists(config_.storage_path)) {
+        LOG_INFO("[TMS] loading persisted data from " + config_.storage_path);
         ltm_->load();
         if (multi_vector_) multi_vector_->load();
         mtm_->load();
         embedding_engine_->loadCache();
+
+        // Log post-load summary so cold-start issues are immediately visible.
+        auto ltm_stats = ltm_->getStats();
+        LOG_INFO("[TMS] post-load: ltm_chunks=" + std::to_string(ltm_stats.total_chunks) +
+                 " repos=" + std::to_string(ltm_stats.total_repos) +
+                 " faiss_vectors=" + std::to_string(ltm_stats.index_vectors));
+
+        // ── Populate metrics registry from restored data ────────────────
+        // During fresh ingestion these gauges/counters are set by addBatch()
+        // and KnowledgeGraph::finalizeEdges().  After a cold restart we must
+        // seed them from the loaded state so the dashboard shows correct
+        // "Chunks Ingested" / "FAISS index" / KG counts immediately.
+        if (ltm_stats.total_chunks > 0) {
+            metrics::Registry::instance().incCounter(
+                metrics::CHUNKS_INGESTED,
+                static_cast<double>(ltm_stats.total_chunks));
+            metrics::Registry::instance().setGauge(
+                metrics::INDEX_SIZE_VECTORS,
+                static_cast<double>(ltm_stats.index_vectors));
+        }
+    } else {
+        LOG_INFO("[TMS] no persisted data at " + config_.storage_path + " — starting fresh");
     }
 }
 

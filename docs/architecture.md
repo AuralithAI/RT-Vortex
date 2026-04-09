@@ -705,6 +705,219 @@ The Model Context Protocol (MCP) system provides tool integrations for agents an
 - **Cross-Repo Authorizer**: Share-profile-based access control for cross-repo data exposure
 - **Network Isolation**: Engine doesn't need public access
 
+## Self-Healing Pipeline (Phase 11)
+
+Automatic resilience and recovery for the LLM agent swarm:
+
+```
+  Agent LLM Call
+        │
+        ▼
+  ┌─────────────┐    success/failure
+  │ Go Proxy    │ ──────────────────► ┌────────────────────────┐
+  │ /llm/probe  │                     │  SelfHealService       │
+  └─────────────┘                     │                        │
+                                      │  ┌──────────────────┐  │
+                                      │  │ Circuit Breakers │  │
+                                      │  │ per-provider     │  │
+                                      │  │ closed → open →  │  │
+                                      │  │ half_open → …    │  │
+                                      │  └──────────────────┘  │
+                                      │                        │
+                                      │  ┌──────────────────┐  │
+                                      │  │ Stuck Task       │  │
+                                      │  │ Detector         │  │
+                                      │  │ (30s loop)       │  │
+                                      │  └──────────────────┘  │
+                                      │                        │
+                                      │  ┌──────────────────┐  │
+                                      │  │ Audit Event Log  │  │
+                                      │  │ (PostgreSQL)     │  │
+                                      │  └──────────────────┘  │
+                                      └────────────────────────┘
+```
+
+### Circuit Breaker State Machine
+
+Each LLM provider has an independent circuit breaker:
+
+| Transition | Trigger | Effect |
+|------------|---------|--------|
+| closed → open | 5 consecutive failures | Block traffic for 2 min |
+| open → half_open | Open duration expires | Allow limited probe traffic |
+| half_open → closed | 3 successes in half_open | Fully restore traffic |
+| half_open → open | Any failure in half_open | Re-open for another 2 min |
+| * → closed | Manual reset via dashboard | Admin override |
+
+### Self-Heal Event Types
+
+| Event | Severity | Description |
+|-------|----------|-------------|
+| `circuit_opened` | critical | Provider circuit breaker tripped |
+| `circuit_half_open` | warn | Provider entering recovery probe |
+| `circuit_closed` | info | Provider recovered |
+| `stuck_task_detected` | warn | Task in-progress beyond 45 min |
+| `task_timeout_recovery` | info | Stuck task auto-resubmitted |
+| `provider_failover` | warn | Provider failed, traffic rerouted |
+
+### Endpoints
+
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `POST /internal/swarm/self-heal/provider-outcome` | Agent JWT | Report provider success/failure |
+| `GET /internal/swarm/self-heal/provider-status` | Agent JWT | Check circuit breaker state |
+| `GET /api/v1/swarm/self-heal/summary` | User JWT | Dashboard overview |
+| `GET /api/v1/swarm/self-heal/events` | User JWT | Paginated event log |
+| `POST /api/v1/swarm/self-heal/events/{id}/resolve` | User JWT | Mark event resolved |
+| `POST /api/v1/swarm/self-heal/circuits/{provider}/reset` | User JWT | Manual circuit reset |
+| `GET /api/v1/swarm/self-heal/circuits` | User JWT | List all circuit states |
+
+### Prometheus Metrics (Self-Heal)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `rtvortex_swarm_self_heal_events_total` | Counter | Events by type |
+| `rtvortex_swarm_self_heal_circuit_transitions_total` | Counter | Circuit state transitions |
+| `rtvortex_swarm_self_heal_provider_failures_total` | Counter | Provider failure reports |
+| `rtvortex_swarm_self_heal_cycle_seconds` | Histogram | Background loop duration |
+| `rtvortex_swarm_self_heal_open_circuits` | Gauge | Currently open circuits |
+
+## Observability Dashboard (Phase 12)
+
+Unified real-time observability across the entire swarm: health scoring,
+metrics time-series, per-provider performance analytics, and cost tracking
+with budget alerts.
+
+### Architecture
+
+```
+ ┌──────────────────────────────────────────────────────────────────────┐
+ │                   ObservabilityService (Go)                          │
+ │                                                                      │
+ │  Background Loop (60s)                                               │
+ │  ┌─────────────────────────────────────────────────────────────────┐ │
+ │  │ collectMetrics() ─► computeHealthScore() ─► persistSnapshot()   │ │
+ │  │        │                     │                      │           │ │
+ │  │        ▼                     ▼                      ▼           │ │
+ │  │  swarm overview       5-dimension score    swarm_metrics_       │ │
+ │  │  + LLM stats          (0-100 composite)    snapshots table      │ │
+ │  │  + probe stats                                                  │ │
+ │  │                                                                 │ │
+ │  │ persistProviderPerf() ─► gcOldData()                            │ │
+ │  │        │                      │                                 │ │
+ │  │        ▼                      ▼                                 │ │
+ │  │  swarm_provider_        DELETE WHERE                            │ │
+ │  │  perf_log table         created_at < 90d                        │ │
+ │  └─────────────────────────────────────────────────────────────────┘ │
+ │                                                                      │
+ │  HTTP Handlers                                                       │
+ │  ┌──────────────────────────────────────────────────────────────┐    │
+ │  │ GET /dashboard  → full dashboard payload (current +          │    │
+ │  │                    time-series + providers + health + cost)  │    │
+ │  │ GET /time-series → metric snapshots only                     │    │
+ │  │ GET /providers   → aggregated provider performance           │    │
+ │  │ GET /cost        → cost summary (today/week/month)           │    │
+ │  │ GET /health      → latest health score + breakdown           │    │
+ │  │ PUT /budget      → set monthly cost budget                   │    │
+ │  └──────────────────────────────────────────────────────────────┘    │
+ └──────────────────────────────────────────────────────────────────────┘
+         │                          │                        │
+         ▼                          ▼                        ▼
+ ┌───────────────┐   ┌──────────────────────┐   ┌──────────────────┐
+ │ Next.js Page  │   │ Python Client Module │   │ Prometheus       │
+ │ recharts      │   │ observability.py     │   │ 4 new metrics    │
+ │ /dashboard/   │   │ go_client.py         │   │                  │
+ │ swarm/        │   │                      │   │                  │
+ │ observability │   │                      │   │                  │
+ └───────────────┘   └──────────────────────┘   └──────────────────┘
+```
+
+### Database Tables (Migration 000025)
+
+| Table | Purpose | Key Columns |
+|-------|---------|-------------|
+| `swarm_metrics_snapshots` | Periodic system-wide metric snapshots (60s interval) | active/pending/completed/failed tasks, online/busy agents, LLM calls/tokens/latency/error rate, probe/consensus stats, circuit/heal counts, estimated cost, health score |
+| `swarm_provider_perf_log` | Per-provider performance tracking | provider, calls, successes, failures, tokens, avg/p95/p99 latency, error rate, cost, consensus wins |
+| `swarm_cost_budget` | Monthly cost budget with alert thresholds | scope, month, budget_usd, spent_usd, alert_threshold (UNIQUE on scope+month) |
+
+### Health Score Algorithm
+
+Composite score 0–100 from five equally-weighted dimensions (20 pts each):
+
+| Dimension | Source | Formula |
+|-----------|--------|---------|
+| Task Success Rate | completed / (completed + failed) | ratio × 20 |
+| Agent Availability | online_agents > 0 | online > 0 → 20, else 0 |
+| Provider Circuits | open_circuits count | 0 open → 20, ≥3 → 0 |
+| Queue Depth | pending_tasks + queue_depth | ≤10 → 20, ≥100 → 0, else linear |
+| LLM Error Rate | llm errors / total calls | 0% → 20, ≥20% → 0, else linear |
+
+### Cost Estimation
+
+Token-based cost estimation per provider (per 1K tokens):
+
+| Provider | Cost per 1K tokens |
+|----------|--------------------|
+| OpenAI | $0.005 |
+| Anthropic | $0.008 |
+| Google | $0.004 |
+| Mistral | $0.006 |
+| DeepSeek | $0.002 |
+| Cohere | $0.005 |
+| Default | $0.005 |
+
+### REST Endpoints
+
+All under `/api/v1/swarm/observability/`:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/dashboard?hours=24` | Full dashboard payload with time-series, providers, health, cost |
+| GET | `/time-series?hours=24` | Metric snapshot time-series only |
+| GET | `/providers` | Aggregated provider performance (latest snapshot) |
+| GET | `/providers/{provider}` | Single provider detail with time-series |
+| GET | `/cost` | Cost summary: today, this week, this month, by-provider |
+| GET | `/health` | Latest health score with 5-dimension breakdown |
+| PUT | `/budget` | Set or update monthly cost budget and alert threshold |
+
+### Prometheus Metrics (Observability)
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `rtvortex_swarm_observability_snapshots_total` | Counter | Total metric snapshots collected |
+| `rtvortex_swarm_observability_cycle_seconds` | Histogram | Snapshot collection cycle duration |
+| `rtvortex_swarm_observability_health_score` | Gauge | Current composite health score (0-100) |
+| `rtvortex_swarm_observability_estimated_cost_usd` | Gauge | Current estimated cost in USD |
+
+### Frontend
+
+The observability dashboard is accessible at `/dashboard/swarm/observability`
+and provides:
+
+- **Health Score Gauge** — Large circular health indicator (0-100) with color-coded status
+- **System Metrics Cards** — Active tasks, online agents, LLM calls, latency
+- **Task Activity Chart** — Stacked area chart of task states over time (recharts)
+- **LLM Performance Chart** — Dual-axis line chart: calls + latency over time
+- **Provider Performance** — Bar chart + detail table comparing providers by calls, error rate, latency, cost, consensus win rate
+- **Cost Tracking** — Today/week/month costs, per-provider horizontal bar chart, budget progress bar with alert thresholds
+- **Health Breakdown** — Five-dimension progress bars showing contribution of each dimension
+
+Auto-refreshes every 30 seconds with configurable time range (1h / 6h / 24h / 72h).
+
+### Python Client
+
+```python
+from swarm.observability import (
+    get_observability_dashboard,
+    get_health_score,
+    get_cost_summary,
+    get_provider_perf,
+    HealthBreakdown,
+    CostSummary,
+    ProviderPerfPoint,
+)
+```
+
 ## Observability
 
 ### Prometheus Metrics

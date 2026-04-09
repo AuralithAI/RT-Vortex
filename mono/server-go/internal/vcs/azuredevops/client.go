@@ -640,3 +640,72 @@ func (c *Client) GetBranchSHA(ctx context.Context, project, repo, branch string)
 	}
 	return refs.Value[0].ObjectID, nil
 }
+
+// GetCombinedStatus returns the aggregated build status for a commit in Azure DevOps.
+func (c *Client) GetCombinedStatus(ctx context.Context, project, repo, ref string) (*vcs.CombinedStatus, error) {
+	// Azure DevOps Build API: GET {project}/_apis/build/builds?repositoryType=TfsGit&repositoryId={repo}&branchName=refs/heads/...
+	// For simplicity we use the status API if available; otherwise return nil.
+	url := c.apiURL(project, repo, fmt.Sprintf("statuses/%s?api-version=7.0", ref))
+
+	var resp struct {
+		Value []struct {
+			Context struct {
+				Name string `json:"name"`
+			} `json:"context"`
+			State        string    `json:"state"` // pending, succeeded, failed, error, notSet, notApplicable
+			Description  string    `json:"description"`
+			TargetURL    string    `json:"targetUrl"`
+			CreationDate time.Time `json:"creationDate"`
+		} `json:"value"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, url, nil, &resp); err != nil {
+		slog.Debug("azuredevops commit statuses unavailable", "ref", ref, "error", err)
+		return nil, nil
+	}
+
+	result := &vcs.CombinedStatus{}
+	for _, s := range resp.Value {
+		state := mapAzureDevOpsState(s.State)
+		result.Statuses = append(result.Statuses, vcs.CommitStatus{
+			Context:     s.Context.Name,
+			State:       state,
+			Description: s.Description,
+			TargetURL:   s.TargetURL,
+			CreatedAt:   s.CreationDate,
+		})
+		result.Total++
+		switch state {
+		case vcs.CommitStatusSuccess:
+			result.Passed++
+		case vcs.CommitStatusFailure, vcs.CommitStatusError:
+			result.Failed++
+		default:
+			result.Pending++
+		}
+	}
+
+	if result.Total == 0 {
+		result.State = vcs.CommitStatusSuccess
+	} else if result.Failed > 0 {
+		result.State = vcs.CommitStatusFailure
+	} else if result.Pending > 0 {
+		result.State = vcs.CommitStatusPending
+	} else {
+		result.State = vcs.CommitStatusSuccess
+	}
+
+	return result, nil
+}
+
+func mapAzureDevOpsState(s string) vcs.CommitStatusState {
+	switch s {
+	case "succeeded":
+		return vcs.CommitStatusSuccess
+	case "failed":
+		return vcs.CommitStatusFailure
+	case "error":
+		return vcs.CommitStatusError
+	default:
+		return vcs.CommitStatusPending
+	}
+}

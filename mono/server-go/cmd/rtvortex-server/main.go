@@ -432,6 +432,10 @@ func main() {
 		llmRegistry.SetPrimary(cfg.LLM.Primary)
 	}
 
+	// App config repo — system-wide non-secret settings (feature flags, toggles).
+	// Created early so it's available during startup rehydration.
+	appConfigRepo := store.NewAppConfigRepo(db.Pool)
+
 	// ── Startup rehydration ─────────────────────────────────────────────
 	// Load any previously-persisted LLM API keys, model choices, and routes
 	// from the keychain. This is essential for background services (review
@@ -450,6 +454,18 @@ func main() {
 			loaded := llmRegistry.LoadFromVault()
 			slog.Info("startup: rehydrated LLM providers from keychain",
 				"user", uid, "loaded", loaded)
+		}
+	}
+
+	// Load routes_enabled from the DB (app_config table), NOT the vault.
+	// The vault is reserved for secrets/tokens only.
+	{
+		reVal, reErr := appConfigRepo.Get(context.Background(), "llm_routes_enabled")
+		if reErr != nil {
+			slog.Warn("startup: failed to load routes_enabled from DB", "error", reErr)
+		} else {
+			llmRegistry.SetRoutesEnabled(reVal == "true")
+			slog.Info("startup: loaded routes_enabled from DB", "enabled", reVal == "true")
 		}
 	}
 
@@ -491,6 +507,29 @@ func main() {
 		"primary", cfg.LLM.Primary,
 		"routes", len(llmRegistry.GetRoutes()),
 	)
+
+	// Apply multi-LLM priority matrix from config.
+	// The priority matrix maps each agent role to an ordered list of providers
+	// to probe in parallel (Phase 2+). GPT/OpenAI is always last.
+	if len(cfg.LLM.PriorityMatrix) > 0 {
+		matrix := make(map[string][]llm.ProviderPriority, len(cfg.LLM.PriorityMatrix))
+		for role, entries := range cfg.LLM.PriorityMatrix {
+			pp := make([]llm.ProviderPriority, len(entries))
+			for i, e := range entries {
+				pp[i] = llm.ProviderPriority{
+					Provider:    e.Provider,
+					Model:       e.Model,
+					ActionTypes: e.ActionTypes,
+				}
+			}
+			matrix[role] = pp
+		}
+		llmRegistry.SetPriorityMatrix(matrix)
+		slog.Info("LLM multi-model priority matrix configured",
+			"roles", len(matrix),
+			"configured_providers", llmRegistry.ConfiguredProviderCount(),
+		)
+	}
 
 	// VCS resolver — resolves credentials dynamically from keychain per repo.
 	var vcsVaultReader vcs.VaultReader
@@ -635,20 +674,31 @@ func main() {
 	swarmLLMProxy := swarm.NewLLMProxy(llmRegistry)
 	swarmELO := swarm.NewELOService(db.Pool)
 	swarmWSHub := swarm.NewWSHub(wsHub)
+	swarmLLMProxy.SetWSHub(swarmWSHub)
 	swarmPRCreator := swarm.NewPRCreator(db.Pool, vcsResolver, swarmTaskMgr, swarmWSHub)
 	swarmMemorySvc := swarm.NewMemoryService(db.Pool)
+	swarmRoleELO := swarm.NewRoleELOService(db.Pool)
+	swarmTeamFormSvc := swarm.NewTeamFormationService(db.Pool, swarmRoleELO)
+	swarmProbeTuningSvc := swarm.NewProbeTuningService(db.Pool, swarmRoleELO)
+	swarmSelfHealSvc := swarm.NewSelfHealService(db.Pool, swarmTaskMgr, swarmWSHub)
+	swarmObservabilitySvc := swarm.NewObservabilityService(db.Pool, swarmSelfHealSvc)
 
 	swarmHandler := &swarm.Handler{
-		AuthSvc:     swarmAuthSvc,
-		TaskMgr:     swarmTaskMgr,
-		TeamMgr:     swarmTeamMgr,
-		LLMProxy:    swarmLLMProxy,
-		ELO:         swarmELO,
-		WS:          swarmWSHub,
-		PRCreator:   swarmPRCreator,
-		VCSResolver: vcsResolver,
-		DB:          db.Pool,
-		MemorySvc:   swarmMemorySvc,
+		AuthSvc:          swarmAuthSvc,
+		TaskMgr:          swarmTaskMgr,
+		TeamMgr:          swarmTeamMgr,
+		LLMProxy:         swarmLLMProxy,
+		ELO:              swarmELO,
+		RoleELO:          swarmRoleELO,
+		TeamFormSvc:      swarmTeamFormSvc,
+		ProbeTuningSvc:   swarmProbeTuningSvc,
+		SelfHealSvc:      swarmSelfHealSvc,
+		ObservabilitySvc: swarmObservabilitySvc,
+		WS:               swarmWSHub,
+		PRCreator:        swarmPRCreator,
+		VCSResolver:      vcsResolver,
+		DB:               db.Pool,
+		MemorySvc:        swarmMemorySvc,
 	}
 
 	// Start the swarm task assignment loop.
@@ -662,6 +712,23 @@ func main() {
 	// ELO auto-promotion / demotion.
 	swarmAutoTier := swarm.NewELOAutoTierService(db.Pool)
 	go swarmAutoTier.Start(ctx)
+
+	// Role-based ELO decay: -2/day inactive, floor at 1100.
+	swarmRoleELODecay := swarm.NewRoleELODecayService(swarmRoleELO)
+	go swarmRoleELODecay.Start(ctx)
+
+	// CI signal poller: auto-ingest PR merge state + CI checks into role ELO.
+	swarmCIPoller := swarm.NewCISignalPoller(db.Pool, vcsResolver, swarmRoleELO, swarmWSHub)
+	go swarmCIPoller.Start(ctx)
+
+	// Adaptive probe tuning: periodic config adjustment based on probe history.
+	go swarmProbeTuningSvc.StartTuningLoop(ctx)
+
+	// Self-healing pipeline: circuit breakers, stuck-task recovery, auto-retry.
+	go swarmSelfHealSvc.Start(ctx)
+
+	// Observability dashboard: periodic metric snapshots, provider perf, health scoring.
+	go swarmObservabilitySvc.Start(ctx)
 
 	slog.Info("Swarm agent infrastructure initialized")
 
@@ -796,6 +863,8 @@ func main() {
 		CrossRepoHandler:      crossRepoHandler,
 		CrossRepoGraphHandler: crossRepoGraphHandler,
 		RepoLinkRepo:          repoLinkRepo,
+
+		AppConfigRepo: appConfigRepo,
 
 		ServerBase: serverBase,
 	}

@@ -30,8 +30,8 @@ CREATE TABLE IF NOT EXISTS benchmark_results (
     error_msg     TEXT
 );
 
-CREATE INDEX idx_benchmark_results_run ON benchmark_results(run_id);
-CREATE INDEX idx_benchmark_results_task ON benchmark_results(task_id);
+CREATE INDEX IF NOT EXISTS idx_benchmark_results_run ON benchmark_results(run_id);
+CREATE INDEX IF NOT EXISTS idx_benchmark_results_task ON benchmark_results(task_id);
 
 CREATE TABLE IF NOT EXISTS benchmark_elo_ratings (
     mode          TEXT PRIMARY KEY,
