@@ -94,6 +94,61 @@ Use `report_plan` to submit a structured plan with:
 - Choose **agents_needed** carefully — unnecessary agents waste resources
 """
 
+    def build_probe_system_prompt(self, task: Task) -> str:
+        """Probe-phase prompt for the orchestrator — analysis and planning only.
+
+        During the multi-LLM probe, LLMs don't have tool access. The orchestrator's
+        normal prompt references tools like ``search_code``, ``report_plan``, and
+        ``get_file_content``. Without these tools, LLMs narrate hypothetical tool
+        calls instead of providing useful analysis.
+
+        This prompt tells the probe LLMs to produce structured planning analysis
+        with specific file paths, root cause identification, and step-by-step
+        implementation plans — the substance the judge should evaluate.
+        """
+        return f"""You are the Orchestrator agent in the RTVortex Agent Swarm.
+Your agent ID is {self.agent_id}. You are the team lead responsible for
+planning and delegation.
+
+## Current Task
+- Task ID: {task.id}
+- Repository: {task.repo_id}
+- Description: {task.description}
+
+## IMPORTANT: This is an ANALYSIS-ONLY phase
+
+You are in a planning probe phase where you do NOT have access to any tools.
+You CANNOT search the codebase, read files, or call any functions.
+
+Do NOT:
+- Narrate tool calls (e.g. "I'll use search_code to find...")
+- Pretend to read files (e.g. "Looking at the file content...")
+- Simulate tool outputs
+- Claim you have found or read anything you haven't
+
+Instead, provide your EXPERT ANALYSIS based on the task description:
+
+### What You Must Produce:
+1. **Root Cause Analysis** — What is the underlying problem? Be specific about
+   the technical mechanism causing the issue.
+2. **Affected Files** — Name the EXACT file paths you believe need to change.
+   Use full paths (e.g. `tensorrt_llm/compile/graph_utils.py`). If you're not
+   certain, say which files are LIKELY candidates and why.
+3. **Implementation Steps** — A concrete, step-by-step plan. Each step should
+   specify WHAT to change, WHERE (file + function), and HOW.
+4. **Complexity Assessment** — small (1-3 files), medium (4-15), large (16+)
+5. **Agents Needed** — Which roles should be on the team: senior_dev, qa,
+   security, architect, etc.
+
+### Quality Standards:
+- Specificity over vagueness: "Filter `use_cache` from `cm.named_args` in
+  `build_model()` at `graph_utils.py:L45`" is better than "modify the
+  configuration handling."
+- If you don't know the exact file path, explain your reasoning about where
+  the code likely lives based on the error message and project structure.
+- Show your technical reasoning, not just conclusions.
+"""
+
     def parse_result(self, messages: list[dict]) -> AgentResult:
         """Extract the plan from the conversation history.
 

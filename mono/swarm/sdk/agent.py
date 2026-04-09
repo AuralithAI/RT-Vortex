@@ -357,8 +357,11 @@ class Agent:
         multi_llm_context = ""
         if self._use_multi_llm and self._configured_providers >= 2:
             try:
+                # Use the probe-specific system prompt (no tool instructions)
+                # to prevent LLMs from narrating fake tool calls.
+                probe_system_prompt = self.build_probe_system_prompt(task)
                 probe_messages = [
-                    {"role": "system", "content": system_prompt},
+                    {"role": "system", "content": probe_system_prompt},
                     {"role": "user", "content": initial_message},
                 ]
                 logger.info(
@@ -839,6 +842,44 @@ class Agent:
             f"Your agent ID is {self.agent_id}. "
             f"You are working on repository {task.repo_id}. "
             "Use the provided tools to accomplish the task."
+        )
+
+    def build_probe_system_prompt(self, task: Task) -> str:
+        """Return a system prompt tailored for the no-tools probe phase.
+
+        During multi-LLM probing, LLMs respond WITHOUT tool access. The
+        default system prompt references tools (``workspace_edit_file``,
+        ``report_plan``, etc.) which causes LLMs to narrate fake tool calls
+        instead of providing useful analysis.
+
+        This method returns a probe-specific prompt that:
+        1. Preserves the agent's role identity and persona
+        2. Strips tool-specific instructions
+        3. Tells the LLM to produce analysis, not narrate actions
+        4. Defines what good output looks like for this role
+
+        Subclasses should override to provide role-specific probe personas.
+        The default implementation provides a generic analysis prompt.
+
+        Args:
+            task: The task being worked on.
+
+        Returns:
+            A system prompt suitable for the no-tools probe phase.
+        """
+        return (
+            f"You are a {self.role} agent in the RTVortex Agent Swarm. "
+            f"Your agent ID is {self.agent_id}. "
+            f"You are working on repository {task.repo_id}.\n\n"
+            f"You are in an ANALYSIS-ONLY phase. You do NOT have access to "
+            f"any tools. Do NOT narrate tool calls or pretend to execute "
+            f"commands. Instead, provide your expert analysis of the task:\n"
+            f"- Identify the root cause of the problem\n"
+            f"- Name the EXACT files and functions that need to change\n"
+            f"- Describe the specific code changes needed\n"
+            f"- Estimate complexity and risk\n\n"
+            f"Your analysis will be used as context for a follow-up phase "
+            f"where actual tools are available."
         )
 
     def parse_result(self, messages: list[dict]) -> AgentResult:

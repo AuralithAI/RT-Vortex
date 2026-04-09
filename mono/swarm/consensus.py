@@ -266,12 +266,160 @@ Respond with EXACTLY this JSON format (no markdown fencing):
 def _build_judge_user_prompt(
     topic: str,
     responses: list["ProviderResponse"],
+    agent_role: str = "",
 ) -> str:
-    """Build the user prompt that presents all provider responses to the judge."""
-    lines = [f"## Task / Question\n{topic}\n\n## Provider Responses\n"]
+    """Build the user prompt that presents all provider responses to the judge.
+
+    Args:
+        topic: The task description or discussion topic.
+        responses: Provider responses to evaluate.
+        agent_role: The agent role being judged (e.g. "orchestrator",
+            "senior_dev"). When provided, role-specific evaluation guidance
+            is included so judges know what constitutes a good response.
+    """
+    # Role-specific evaluation guidance tells judges what to value.
+    role_guidance = ""
+    if agent_role == "orchestrator":
+        role_guidance = (
+            "\n## Agent Role Context: ORCHESTRATOR (Planning)\n"
+            "These responses are from LLMs acting as a **planning orchestrator**. "
+            "A good orchestrator response:\n"
+            "- Identifies the ROOT CAUSE of the problem with technical precision\n"
+            "- Names EXACT file paths and functions that need to change\n"
+            "- Provides a structured implementation plan with concrete steps\n"
+            "- Correctly assesses complexity and required team roles\n"
+            "- Does NOT generate code — only produces the plan\n\n"
+            "A BAD orchestrator response is vague ('modify the configuration'), "
+            "doesn't name specific files, or provides generic guidance that could "
+            "apply to any codebase.\n"
+        )
+    elif agent_role == "senior_dev":
+        role_guidance = (
+            "\n## Agent Role Context: SENIOR DEV (Implementation)\n"
+            "These responses are from LLMs acting as a **senior developer**. "
+            "A good senior dev response:\n"
+            "- Shows ACTUAL CODE changes (functions, patches, new code)\n"
+            "- Identifies the EXACT file and function to modify\n"
+            "- Explains WHY the change fixes the root cause\n"
+            "- Handles edge cases and doesn't break existing functionality\n"
+            "- Creates proper utility functions/helpers when needed\n\n"
+            "A BAD senior dev response narrates what it WOULD do without "
+            "showing code, claims to have made changes without showing them, "
+            "or makes a trivial/wrong fix at the wrong location.\n"
+        )
+    elif agent_role == "architect":
+        role_guidance = (
+            "\n## Agent Role Context: ARCHITECT (Impact Analysis)\n"
+            "These responses are from LLMs acting as an **architect**. "
+            "A good architect response:\n"
+            "- Traces dependencies and caller/callee relationships concretely\n"
+            "- Identifies breaking changes with specific function signatures\n"
+            "- Provides a risk matrix with severity levels and mitigations\n"
+            "- Covers transitive dependencies (second-order effects)\n"
+            "- Names EXACT files and symbols affected\n\n"
+            "A BAD architect response is vague ('other modules may be affected'), "
+            "doesn't trace specific dependency chains, or misses obvious "
+            "breaking changes.\n"
+        )
+    elif agent_role == "qa":
+        role_guidance = (
+            "\n## Agent Role Context: QA (Test Strategy)\n"
+            "These responses are from LLMs acting as a **QA/test** agent. "
+            "A good QA response:\n"
+            "- Identifies the correct test framework and conventions\n"
+            "- Lists SPECIFIC test cases with names and assertions\n"
+            "- Covers happy path, edge cases, AND error paths\n"
+            "- Shows ACTUAL test code, not just descriptions\n"
+            "- Names the correct test file locations\n\n"
+            "A BAD QA response is generic ('test the function works'), "
+            "doesn't show actual test code, or misses obvious edge cases.\n"
+        )
+    elif agent_role == "security":
+        role_guidance = (
+            "\n## Agent Role Context: SECURITY (Vulnerability Review)\n"
+            "These responses are from LLMs acting as a **security** agent. "
+            "A good security response:\n"
+            "- Identifies SPECIFIC vulnerability types with CWE/OWASP references\n"
+            "- Shows the VULNERABLE code pattern and the SECURE alternative\n"
+            "- Provides a severity rating with justification\n"
+            "- Covers injection, auth/authz, secrets, crypto, and data protection\n"
+            "- Traces data flow from input to vulnerability point\n\n"
+            "A BAD security response is a generic checklist without specific "
+            "findings, flags theoretical risks without tying them to actual "
+            "code, or misses obvious vulnerabilities.\n"
+        )
+    elif agent_role == "junior_dev":
+        role_guidance = (
+            "\n## Agent Role Context: JUNIOR DEV (Scoped Implementation)\n"
+            "These responses are from LLMs acting as a **junior developer**. "
+            "A good junior dev response:\n"
+            "- Stays within the narrow subtask scope — doesn't over-engineer\n"
+            "- Shows ACTUAL code changes with before/after snippets\n"
+            "- Matches existing code patterns and style exactly\n"
+            "- Identifies the EXACT file and function to modify\n"
+            "- Produces a minimal, clean diff\n\n"
+            "A BAD junior dev response goes beyond scope, proposes unnecessary "
+            "refactoring, or describes changes without showing code.\n"
+        )
+    elif agent_role == "docs":
+        role_guidance = (
+            "\n## Agent Role Context: DOCS (Documentation)\n"
+            "These responses are from LLMs acting as a **documentation** agent. "
+            "A good docs response:\n"
+            "- Identifies ALL documentation gaps from the code changes\n"
+            "- Shows ACTUAL documentation text (README sections, CHANGELOG entries)\n"
+            "- Matches the project's documentation style and format\n"
+            "- Covers API docs, inline comments, and user-facing docs\n"
+            "- Includes code examples for new public APIs\n\n"
+            "A BAD docs response is vague ('update the README'), doesn't show "
+            "actual text, or misses documentation for new public APIs.\n"
+        )
+    elif agent_role == "ops":
+        role_guidance = (
+            "\n## Agent Role Context: OPS (Infrastructure/CI-CD)\n"
+            "These responses are from LLMs acting as an **ops/infra** agent. "
+            "A good ops response:\n"
+            "- Identifies SPECIFIC infrastructure files that need updating\n"
+            "- Shows actual config changes (Dockerfile lines, CI steps, env vars)\n"
+            "- Correctly determines when NO infra changes are needed\n"
+            "- Considers build, test, deploy, and monitoring impacts\n"
+            "- Is conservative — only proposes necessary changes\n\n"
+            "A BAD ops response proposes unnecessary infrastructure changes, "
+            "misses required dependency updates, or is vague about what configs "
+            "need changing.\n"
+        )
+    elif agent_role == "ui_ux":
+        role_guidance = (
+            "\n## Agent Role Context: UI/UX (Design Review)\n"
+            "These responses are from LLMs acting as a **UI/UX** agent. "
+            "A good UI/UX response:\n"
+            "- Identifies SPECIFIC accessibility issues (WCAG 2.1 AA)\n"
+            "- Shows ACTUAL markup/CSS fixes, not just descriptions\n"
+            "- Covers responsive design across breakpoints\n"
+            "- Checks loading, error, and empty states\n"
+            "- References the project's design system/tokens\n\n"
+            "A BAD UI/UX response is a generic accessibility checklist without "
+            "specific findings, doesn't show actual code, or focuses on "
+            "aesthetics over usability.\n"
+        )
+    elif agent_role:
+        role_guidance = (
+            f"\n## Agent Role Context: {agent_role.upper()}\n"
+            f"These responses are from LLMs acting as a **{agent_role}** agent. "
+            f"Evaluate based on how well they fulfill the {agent_role} role's "
+            f"responsibilities.\n"
+        )
+
+    lines = [f"## Task / Question\n{topic}\n"]
+    if role_guidance:
+        lines.append(role_guidance)
+    lines.append("## Provider Responses\n")
     for i, r in enumerate(responses, 1):
         label = f"{r.provider}/{r.model}" if r.model else r.provider
-        lines.append(f"### Response {i} — {label} ({r.latency_ms}ms)")
+        truncation_warning = ""
+        if getattr(r, "finish_reason", "") == "length":
+            truncation_warning = " ⚠️ TRUNCATED (hit token limit — response is incomplete)"
+        lines.append(f"### Response {i} — {label} ({r.latency_ms}ms){truncation_warning}")
         lines.append(r.content)
         lines.append("")  # blank line separator
     lines.append(
@@ -284,6 +432,11 @@ def _build_judge_user_prompt(
         "- A response that is INCOMPLETE (cut off mid-sentence, or says "
         "'Let me implement...' without showing the code) should be penalised "
         "heavily on Completeness and Actionability.\n"
+        "- A response marked ⚠️ TRUNCATED was cut off by the model's token "
+        "limit. It is INCOMPLETE by definition — penalise Completeness heavily. "
+        "However, if the non-truncated portion contains higher-quality analysis "
+        "than a complete but shallow response, the truncated one can still win "
+        "on Specificity and Correctness.\n"
         "- Do NOT confuse narrative confidence ('I have successfully fixed...') "
         "with actual substance. Score based on what code was actually shown."
     )
@@ -382,9 +535,13 @@ class ConsensusEngine:
         elif strategy == ConsensusStrategy.MAJORITY_VOTE:
             return self._majority_vote(successful)
         elif strategy == ConsensusStrategy.GPT_AS_JUDGE:
-            return await self._gpt_as_judge(thread.topic, successful)
+            return await self._gpt_as_judge(
+                thread.topic, successful, agent_role=thread.agent_role,
+            )
         elif strategy == ConsensusStrategy.MULTI_JUDGE_PANEL:
-            return await self._multi_judge_panel(thread.topic, successful)
+            return await self._multi_judge_panel(
+                thread.topic, successful, agent_role=thread.agent_role,
+            )
         else:
             # Fallback — should never reach here.
             return self._pick_best(successful)
@@ -487,6 +644,7 @@ class ConsensusEngine:
         self,
         topic: str,
         responses: list["ProviderResponse"],
+        agent_role: str = "",
     ) -> ConsensusResult:
         """Send all responses to GPT for expert arbitration.
 
@@ -498,7 +656,7 @@ class ConsensusEngine:
             logger.warning("Consensus: GPT_AS_JUDGE requested but no llm_complete — falling back to majority vote")
             return self._majority_vote(responses)
 
-        user_prompt = _build_judge_user_prompt(topic, responses)
+        user_prompt = _build_judge_user_prompt(topic, responses, agent_role=agent_role)
 
         logger.info(
             "Consensus: calling GPT-as-judge for %d provider responses",
@@ -626,6 +784,7 @@ class ConsensusEngine:
         self,
         topic: str,
         responses: list["ProviderResponse"],
+        agent_role: str = "",
     ) -> ConsensusResult:
         """Send all responses to multiple independent LLM judges in parallel.
 
@@ -649,10 +808,10 @@ class ConsensusEngine:
         if self._llm_probe is None:
             logger.warning("Consensus: MULTI_JUDGE_PANEL requested but no llm_probe — falling back")
             if self._llm_complete is not None:
-                return await self._gpt_as_judge(topic, responses)
+                return await self._gpt_as_judge(topic, responses, agent_role=agent_role)
             return self._majority_vote(responses)
 
-        user_prompt = _build_judge_user_prompt(topic, responses)
+        user_prompt = _build_judge_user_prompt(topic, responses, agent_role=agent_role)
 
         logger.info(
             "Consensus: calling multi-judge panel for %d provider responses",
@@ -672,7 +831,7 @@ class ConsensusEngine:
         except Exception as e:
             logger.error("Consensus: multi-judge probe call failed: %s", e)
             if self._llm_complete is not None:
-                result = await self._gpt_as_judge(topic, responses)
+                result = await self._gpt_as_judge(topic, responses, agent_role=agent_role)
                 result.reasoning = (
                     f"Multi-judge probe failed ({e}); fell back to single GPT judge. "
                     + result.reasoning
@@ -700,7 +859,7 @@ class ConsensusEngine:
                 len(successful_verdicts), self._min_judges,
             )
             if self._llm_complete is not None:
-                result = await self._gpt_as_judge(topic, responses)
+                result = await self._gpt_as_judge(topic, responses, agent_role=agent_role)
                 result.reasoning = (
                     f"Multi-judge panel had only {len(successful_verdicts)} "
                     f"successful verdicts (min={self._min_judges}); "

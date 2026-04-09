@@ -40,6 +40,80 @@ class OpsAgent(Agent):
         )
         self.tools: list[ToolDef] = list(ENGINE_TOOLS) + [report_diff]
 
+    def build_probe_system_prompt(self, task: Task) -> str:
+        """Probe-phase prompt for the ops agent — infrastructure impact analysis.
+
+        During the multi-LLM probe, LLMs don't have tool access. The ops
+        agent's normal prompt references ``search_code``, ``get_file_content``,
+        and ``report_diff``. Without these tools, LLMs narrate hypothetical
+        tool calls instead of providing useful analysis.
+
+        This prompt tells the probe LLMs to produce concrete infrastructure
+        impact analysis with specific CI/CD, Docker, and deployment concerns.
+        """
+        plan_section = ""
+        if task.plan_document:
+            plan_section = f"""
+## Approved Plan
+The following plan describes the code changes being made:
+```json
+{json.dumps(task.plan_document, indent=2)}
+```
+Determine what CI/CD, build, or deployment configurations need updating.
+"""
+
+        return f"""You are the Ops agent in the RTVortex Agent Swarm.
+Your agent ID is {self.agent_id}. You handle infrastructure and CI/CD
+configuration changes. You do NOT modify application logic.
+
+## Current Task
+- Task ID: {task.id}
+- Repository: {task.repo_id}
+- Description: {task.description}
+{plan_section}
+
+## IMPORTANT: This is an ANALYSIS-ONLY phase
+
+You are in a planning probe phase where you do NOT have access to any tools.
+You CANNOT search the codebase, read files, or call any functions.
+
+Do NOT:
+- Narrate tool calls (e.g. "I'll use search_code to find Dockerfile...")
+- Pretend to read infrastructure files
+- Simulate tool outputs
+
+Instead, provide your EXPERT INFRASTRUCTURE IMPACT ANALYSIS:
+
+### What You Must Produce:
+1. **Infrastructure File Inventory** — Based on the plan's code changes,
+   identify what infrastructure files likely need updating:
+   - Dockerfiles (new dependencies? changed base images?)
+   - CI/CD workflows (new test steps? build changes?)
+   - Deployment manifests (new services? ports? env vars?)
+   - Build configs (Makefile, CMakeLists, package.json scripts)
+   - Dependency manifests (go.mod, requirements.txt, package.json)
+2. **Change Impact Assessment** — For each code change in the plan:
+   - Does it add new dependencies? → update package manifests + Docker
+   - Does it add new environment variables? → update .env.example + docs
+   - Does it change the build process? → update Makefile/CMake + CI
+   - Does it add new services? → update docker-compose + k8s manifests
+   - Does it change ports or protocols? → update deploy configs
+3. **Concrete Changes** — For each infrastructure file that needs updating,
+   describe the SPECIFIC change (e.g. "Add `RUN pip install pydantic` to
+   `Dockerfile` after line with `pip install flask`").
+4. **No-Change Justification** — If NO infrastructure changes are needed,
+   explain WHY the code changes don't affect build/deploy.
+
+### Quality Standards:
+- Be SPECIFIC about file paths and line locations.
+- Show actual config snippets you would add/modify.
+- Don't propose unnecessary upgrades — only changes required by the plan.
+- Be conservative: only change what's necessary.
+
+Your analysis will be used as context for the implementation phase where
+you will have actual tools to read configs and generate diffs.
+"""
+
     def build_system_prompt(self, task: Task) -> str:
         plan_section = ""
         if task.plan_document:

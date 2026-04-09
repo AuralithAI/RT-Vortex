@@ -67,11 +67,11 @@ class AdaptiveProbeConfig:
     def default_for_role(cls, role: str) -> "AdaptiveProbeConfig":
         """Local fallback defaults when Go is unreachable."""
         defaults: dict[str, dict[str, Any]] = {
-            "orchestrator": {"num_models": 3, "temperature": 0.5, "timeout_seconds": 180},
-            "architect": {"num_models": 3, "temperature": 0.6},
-            "senior_dev": {"num_models": 2, "temperature": 0.4, "timeout_seconds": 150},
-            "qa": {"num_models": 3, "temperature": 0.3, "confidence_threshold": 0.8},
-            "security": {"num_models": 3, "temperature": 0.3, "confidence_threshold": 0.8},
+            "orchestrator": {"num_models": 3, "temperature": 0.5, "timeout_seconds": 180, "max_tokens": 8192},
+            "architect": {"num_models": 3, "temperature": 0.6, "max_tokens": 8192},
+            "senior_dev": {"num_models": 2, "temperature": 0.4, "timeout_seconds": 150, "max_tokens": 8192},
+            "qa": {"num_models": 3, "temperature": 0.3, "confidence_threshold": 0.8, "max_tokens": 6144},
+            "security": {"num_models": 3, "temperature": 0.3, "confidence_threshold": 0.8, "max_tokens": 6144},
             "junior_dev": {"num_models": 2, "temperature": 0.5},
             "docs": {"num_models": 2, "temperature": 0.7, "timeout_seconds": 90},
         }
