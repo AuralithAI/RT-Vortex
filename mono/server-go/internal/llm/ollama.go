@@ -81,7 +81,7 @@ type ollamaChatResponse struct {
 	Message ollamaMessage `json:"message"`
 	Done    bool          `json:"done"`
 	Model   string        `json:"model"`
-	// Token counts (available when done=true).
+	// Token counts.
 	PromptEvalCount int `json:"prompt_eval_count"`
 	EvalCount       int `json:"eval_count"`
 }
@@ -135,7 +135,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
@@ -208,8 +208,7 @@ func (p *OllamaProvider) Healthy(ctx context.Context) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
-// OllamaRunningModel contains metadata about a model currently loaded in
-// Ollama's memory, as returned by GET /api/ps.
+// OllamaRunningModel contains metadata about a model loaded in Ollama.
 type OllamaRunningModel struct {
 	Name      string    `json:"name"`
 	Model     string    `json:"model"`
@@ -219,8 +218,7 @@ type OllamaRunningModel struct {
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// ListRunningModels queries Ollama's /api/ps endpoint to discover which
-// models are currently loaded in memory and actively serving requests.
+// ListRunningModels queries Ollama's /api/ps endpoint.
 func (p *OllamaProvider) ListRunningModels(ctx context.Context) ([]OllamaRunningModel, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/ps", nil)
 	if err != nil {
@@ -245,8 +243,7 @@ func (p *OllamaProvider) ListRunningModels(ctx context.Context) ([]OllamaRunning
 	return result.Models, nil
 }
 
-// OllamaModelDetail contains extended information about a pulled model,
-// as returned by GET /api/tags.
+// OllamaModelDetail contains extended information about a pulled model.
 type OllamaModelDetail struct {
 	Name       string    `json:"name"`
 	Model      string    `json:"model"`
@@ -258,8 +255,7 @@ type OllamaModelDetail struct {
 	Quant      string    `json:"quantization_level,omitempty"`
 }
 
-// ListModelsDetailed returns all pulled models with extended metadata
-// (size, family, quantization) instead of just names.
+// ListModelsDetailed returns all pulled models with extended metadata.
 func (p *OllamaProvider) ListModelsDetailed(ctx context.Context) ([]OllamaModelDetail, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, p.baseURL+"/api/tags", nil)
 	if err != nil {
@@ -312,7 +308,6 @@ func (p *OllamaProvider) ListModelsDetailed(ctx context.Context) ([]OllamaModelD
 // ── Ollama Streaming ────────────────────────────────────────────────────────
 
 // StreamComplete sends a streaming chat request to Ollama.
-// Ollama streams newline-delimited JSON objects when stream=true.
 func (p *OllamaProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {

@@ -139,9 +139,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		model = p.defaultModel
 	}
 
-	// Build a tool_call_id → function name lookup so we can resolve names
-	// for tool result messages. OpenAI's format puts the name on the
-	// assistant's tool_call, not on the tool result; Gemini requires it.
+	// Build tool_call_id → function name lookup for tool result messages.
 	tcNameByID := make(map[string]string)
 	for _, m := range req.Messages {
 		for _, tc := range m.ToolCalls {
@@ -160,12 +158,10 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			}
 			continue
 		}
-		// Handle tool result messages: Gemini expects functionResponse parts.
+		// Handle tool result messages.
 		if m.Role == RoleTool {
-			// Parse the content as JSON for the response object.
 			var respObj map[string]interface{}
 			if err := json.Unmarshal([]byte(m.Content), &respObj); err != nil {
-				// If not valid JSON, wrap in a result object.
 				respObj = map[string]interface{}{"result": m.Content}
 			}
 			funcName := m.Name
@@ -186,7 +182,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			})
 			continue
 		}
-		// Handle assistant messages with tool calls: Gemini expects functionCall parts.
+		// Handle assistant messages with tool calls.
 		if m.Role == RoleAssistant && len(m.ToolCalls) > 0 {
 			var parts []geminiPart
 			if m.Content != "" {
@@ -229,11 +225,8 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		geminiTools = []geminiToolDeclarations{{FunctionDeclarations: decls}}
 	}
 
-	// Build thinking config — Gemini 2.5 models use "thinking" (internal
-	// reasoning) that consumes the maxOutputTokens budget. Without a cap,
-	// the model can spend ALL output tokens on thinking, hit MAX_TOKENS,
-	// and produce zero actual content or function calls. We cap thinking
-	// at 25% of the output budget so the model has room to respond.
+	// Cap thinking budget for 2.5 models — without a cap the model can
+	// spend all output tokens on thinking and produce zero content.
 	var thinkingCfg *geminiThinkingCfg
 	if strings.Contains(model, "2.5") {
 		budget := req.MaxTokens / 4
@@ -271,8 +264,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 
 	url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", p.baseURL, model, p.apiKey)
 
-	// Retry loop — Gemini frequently returns 503 "high demand" or 429.
-	// Exponential backoff: 1s → 2s → 4s (3 attempts total).
+	// Retry loop — 503/429 with exponential backoff: 1s → 2s → 4s.
 	const maxRetries = 3
 	var respBody []byte
 	var lastErr error
@@ -312,7 +304,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 			continue
 		}
 
-		// Retryable status codes: 429 (rate limit), 503 (overloaded).
+		// Retryable: 429, 503.
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
 			var errResp geminiErrorResponse
 			_ = json.Unmarshal(respBody, &errResp)
@@ -343,7 +335,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		return nil, fmt.Errorf("gemini returned no candidates")
 	}
 
-	// Parse response parts — collect text and function calls.
+	// Parse response parts.
 	var textContent string
 	var toolCalls []ToolCall
 	for i, part := range gr.Candidates[0].Content.Parts {
@@ -367,9 +359,10 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
 	}
+	if finishReason == "max_tokens" {
+		finishReason = "length"
+	}
 
-	// Log thinking token usage for observability — Gemini 2.5 models can
-	// spend significant output budget on internal reasoning.
 	if gr.UsageMetadata.ThoughtsTokenCount > 0 {
 		slog.Info("gemini: thinking tokens consumed",
 			"model", model,
@@ -380,8 +373,7 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		)
 	}
 
-	// Report completion tokens = candidates + thoughts so callers
-	// (and the UI) see the real output token spend.
+	// Report completion tokens = candidates + thoughts.
 	completionTokens := gr.UsageMetadata.CandidatesTokenCount
 	if completionTokens == 0 && gr.UsageMetadata.ThoughtsTokenCount > 0 {
 		completionTokens = gr.UsageMetadata.ThoughtsTokenCount
@@ -401,7 +393,6 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *CompletionRequest) (
 }
 
 func (p *GeminiProvider) ListModels(ctx context.Context) ([]string, error) {
-	// Try dynamic API fetch first (requires API key).
 	if p.apiKey != "" {
 		url := p.baseURL + "/models?key=" + p.apiKey
 		httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -412,15 +403,13 @@ func (p *GeminiProvider) ListModels(ctx context.Context) ([]string, error) {
 				if resp.StatusCode == http.StatusOK {
 					var result struct {
 						Models []struct {
-							Name string `json:"name"` // "models/gemini-2.5-flash"
+							Name string `json:"name"`
 						} `json:"models"`
 					}
 					if err := json.NewDecoder(resp.Body).Decode(&result); err == nil && len(result.Models) > 0 {
 						models := make([]string, 0, len(result.Models))
 						for _, m := range result.Models {
-							// Strip "models/" prefix to get clean model names.
 							name := strings.TrimPrefix(m.Name, "models/")
-							// Only include generateContent-capable models.
 							if strings.HasPrefix(name, "gemini-") {
 								models = append(models, name)
 							}
@@ -434,7 +423,7 @@ func (p *GeminiProvider) ListModels(ctx context.Context) ([]string, error) {
 		}
 	}
 
-	// Fallback: return well-known models.
+	// Fallback.
 	return []string{
 		"gemini-2.5-flash",
 		"gemini-2.5-pro",
@@ -464,9 +453,7 @@ func (p *GeminiProvider) Healthy(ctx context.Context) bool {
 
 // ── Gemini Streaming ────────────────────────────────────────────────────────
 
-// StreamComplete sends a streaming request to Gemini and returns chunks via SSE.
-// Tool calling during streaming is supported — function calls returned in
-// streaming chunks are collected and emitted as ToolCalls on the final chunk.
+// StreamComplete sends a streaming request to Gemini via SSE.
 func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {
@@ -534,7 +521,7 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 		geminiTools = []geminiToolDeclarations{{FunctionDeclarations: decls}}
 	}
 
-	// Cap thinking budget for 2.5 models (same logic as Complete).
+	// Cap thinking budget for 2.5 models (same as Complete).
 	var thinkingCfg *geminiThinkingCfg
 	if strings.Contains(model, "2.5") {
 		budget := req.MaxTokens / 4
@@ -567,7 +554,7 @@ func (p *GeminiProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 
 	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse&key=%s", p.baseURL, model, p.apiKey)
 
-	// Retry loop — same transient-error handling as Complete().
+	// Retry loop — same transient-error handling as Complete.
 	const streamMaxRetries = 3
 	var resp *http.Response
 	var lastStreamErr error

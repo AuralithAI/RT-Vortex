@@ -166,8 +166,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		_ = json.Unmarshal(respBody, &errResp)
 		errMsg := errResp.Error.Message
 
-		// Models that reject output-limit hits with 400 instead of truncating gracefully.
-		if resp.StatusCode == http.StatusBadRequest &&
+	if resp.StatusCode == http.StatusBadRequest &&
 			(strings.Contains(errMsg, "max_tokens") ||
 				strings.Contains(errMsg, "output limit") ||
 				strings.Contains(errMsg, "max_completion_tokens")) {
@@ -200,7 +199,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *CompletionRequest) (
 		},
 	}
 
-	// Map tool calls from the response.
+	// Map tool calls.
 	if len(choice.Message.ToolCalls) > 0 {
 		out.ToolCalls = choice.Message.ToolCalls
 		if out.FinishReason == "" {
@@ -289,8 +288,7 @@ type openaiStreamChunk struct {
 	} `json:"usage"`
 }
 
-// StreamComplete sends a streaming completion request and returns a channel
-// that emits incremental content chunks via SSE.
+// StreamComplete sends a streaming completion request via SSE.
 func (p *OpenAIProvider) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	model := req.Model
 	if model == "" {
@@ -361,10 +359,7 @@ func (p *OpenAIProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 
 		scanner := bufio.NewScanner(resp.Body)
 
-		// OpenAI streams tool calls incrementally: each delta may contain a
-		// tool_calls array with an index, and either an id+name (first delta
-		// for that call) or an arguments fragment (subsequent deltas).
-		// We accumulate them in a map keyed by index.
+		// OpenAI streams tool calls incrementally by index.
 		type pendingTC struct {
 			ID        string
 			Name      string
@@ -375,7 +370,6 @@ func (p *OpenAIProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 		for scanner.Scan() {
 			line := scanner.Text()
 
-			// SSE format: lines starting with "data: "
 			if !strings.HasPrefix(line, "data: ") {
 				continue
 			}
@@ -417,7 +411,6 @@ func (p *OpenAIProvider) StreamComplete(ctx context.Context, req *CompletionRequ
 					sc.FinishReason = *chunk.Choices[0].FinishReason
 					sc.Done = true
 
-					// On finish, attach accumulated tool calls.
 					if len(toolCallMap) > 0 {
 						for _, ptc := range toolCallMap {
 							sc.ToolCalls = append(sc.ToolCalls, ToolCall{

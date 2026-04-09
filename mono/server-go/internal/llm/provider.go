@@ -194,18 +194,13 @@ func NewRegistry() *Registry {
 	}
 }
 
-// SetRoutes configures role-based model routing. Each key is an agent role
-// (e.g. "orchestrator", "senior_dev") and the value specifies which provider
-// and optionally which model to use for that role. Routes are persisted to the
-// vault so they survive restarts.
+// SetRoutes configures role-based model routing.
 func (r *Registry) SetRoutes(routes map[string]ModelRoute) {
 	r.routes = routes
 	r.persistRoutes()
 }
 
 // SetRoutesEnabled controls whether per-role model routes are active.
-// When false, agents ignore role routes and use multi-LLM probing instead.
-// Persistence is handled by the caller (API handler → app_config DB table).
 func (r *Registry) SetRoutesEnabled(enabled bool) {
 	r.routesEnabled = enabled
 }
@@ -233,13 +228,8 @@ func (r *Registry) GetPriorityMatrix() map[string][]ProviderPriority {
 	return out
 }
 
-// PriorityOrder returns an ordered list of provider/model pairs to probe for the
-// given agent role and optional action type. If a priority matrix is configured
-// for this role, it is used; otherwise falls back to the legacy single-route.
-//
-// The list is filtered to only include configured, healthy providers.
-// If numModels > 0, at most that many providers are returned.
-// GPT/OpenAI is always placed last (enforced at config load time, verified here).
+// PriorityOrder returns an ordered list of provider/model pairs for the given
+// agent role and optional action type, filtered to configured providers.
 func (r *Registry) PriorityOrder(role, actionType string, numModels int) []RouteEntry {
 	// Try the priority matrix first.
 	if matrix, ok := r.priorityMatrix[role]; ok && len(matrix) > 0 {
@@ -259,25 +249,22 @@ func (r *Registry) PriorityOrder(role, actionType string, numModels int) []Route
 	return out
 }
 
-// matrixToRouteEntries converts priority matrix entries to RouteEntries,
-// filtering by action type and skipping unconfigured providers.
+// matrixToRouteEntries converts priority matrix entries to RouteEntries.
 func (r *Registry) matrixToRouteEntries(matrix []ProviderPriority, actionType string) []RouteEntry {
 	entries := make([]RouteEntry, 0, len(matrix))
 
 	for _, pp := range matrix {
-		// Skip if action type filtering is active and doesn't match.
 		if actionType != "" && len(pp.ActionTypes) > 0 {
 			if !containsStr(pp.ActionTypes, actionType) {
 				continue
 			}
 		}
 
-		// Skip providers that aren't registered.
 		if _, ok := r.providers[pp.Provider]; !ok {
 			continue
 		}
 
-		// Skip unconfigured providers (no API key when one is required).
+		// Skip unconfigured providers.
 		if m, mOK := r.meta[pp.Provider]; mOK && m.RequiresKey && !m.Configured {
 			slog.Debug("llm: priority matrix skipping unconfigured provider",
 				"provider", pp.Provider)
@@ -290,8 +277,7 @@ func (r *Registry) matrixToRouteEntries(matrix []ProviderPriority, actionType st
 	return entries
 }
 
-// ConfiguredProviderCount returns the number of providers that are currently
-// registered and configured (have API keys or don't need them).
+// ConfiguredProviderCount returns the number of configured providers.
 func (r *Registry) ConfiguredProviderCount() int {
 	count := 0
 	for name := range r.providers {
@@ -300,7 +286,6 @@ func (r *Registry) ConfiguredProviderCount() int {
 				count++
 			}
 		} else {
-			// No meta — assume configured (e.g. custom provider).
 			count++
 		}
 	}
@@ -375,7 +360,7 @@ func (r *Registry) RegisterWithMeta(p Provider, m ProviderMeta) {
 	r.meta[p.Name()] = m
 }
 
-// SetPrimary changes the primary provider and persists the choice.
+// SetPrimary changes the primary provider.
 func (r *Registry) SetPrimary(name string) {
 	r.primary = name
 
@@ -411,7 +396,6 @@ func (r *Registry) GetMeta(name string) (ProviderMeta, bool) {
 }
 
 // UpdateAPIKey replaces the API key for a provider at runtime and marks it configured.
-// If a vault is attached, the key is persisted for survival across restarts.
 func (r *Registry) UpdateAPIKey(name, apiKey string) bool {
 	m, ok := r.meta[name]
 	if !ok {
@@ -421,7 +405,7 @@ func (r *Registry) UpdateAPIKey(name, apiKey string) bool {
 	m.APIKey = apiKey
 	r.meta[name] = m
 
-	// Re-create the provider with the new key, preserving the rest.
+	// Re-create the provider with the new key.
 	switch name {
 	case "openai":
 		r.providers[name] = NewOpenAIProvider(OpenAIConfig{
@@ -466,10 +450,8 @@ func (r *Registry) UpdateAPIKey(name, apiKey string) bool {
 	return true
 }
 
-// LoadFromVault loads any previously-persisted API keys from the vault and
-// applies them to the registered providers. Called once at startup after all
-// providers are registered. Environment variables take precedence — vault
-// values are only used when the env var is empty.
+// LoadFromVault loads persisted API keys from the vault and applies them.
+// Environment variables take precedence.
 func (r *Registry) LoadFromVault() int {
 	if r.vault == nil {
 		return 0
@@ -483,7 +465,6 @@ func (r *Registry) LoadFromVault() int {
 
 	loaded := 0
 	for vaultKey, value := range secrets {
-		// Restore persisted primary provider choice.
 		if vaultKey == "llm.primary" {
 			if _, ok := r.providers[value]; ok {
 				r.primary = value
@@ -504,20 +485,17 @@ func (r *Registry) LoadFromVault() int {
 
 		switch parts[2] {
 		case "api_key":
-			// Skip if the provider already has a key (from env var).
 			if m, ok := r.meta[providerName]; ok && m.Configured && m.APIKey != "" {
 				slog.Debug("vault: skipping — env var already set", "provider", providerName)
 				continue
 			}
 			if value != "" {
-				// Apply without re-persisting (avoid write loop).
 				r.updateAPIKeyInternal(providerName, value)
 				slog.Info("vault: loaded API key for provider", "provider", providerName)
 				loaded++
 			}
 
 		case "model":
-			// Restore user's model choice (UI-configured overrides code defaults).
 			if value != "" {
 				if m, ok := r.meta[providerName]; ok {
 					m.DefaultModel = value
@@ -528,7 +506,7 @@ func (r *Registry) LoadFromVault() int {
 		}
 	}
 
-	// Load persisted routes (UI-configured overrides XML defaults).
+	// Load persisted routes.
 	if routeJSON, err := r.vault.Get("llm.routes"); err == nil && routeJSON != "" {
 		var vaultRoutes map[string]ModelRoute
 		if err := json.Unmarshal([]byte(routeJSON), &vaultRoutes); err == nil && len(vaultRoutes) > 0 {
@@ -537,14 +515,10 @@ func (r *Registry) LoadFromVault() int {
 		}
 	}
 
-	// NOTE: routes_enabled is loaded from the app_config DB table at startup,
-	// NOT from the vault. See main.go startup rehydration.
-
 	return loaded
 }
 
 // updateAPIKeyInternal applies an API key without persisting back to vault.
-// Used during vault loading to avoid write loops.
 func (r *Registry) updateAPIKeyInternal(name, apiKey string) bool {
 	m, ok := r.meta[name]
 	if !ok {
@@ -581,17 +555,12 @@ func (r *Registry) updateAPIKeyInternal(name, apiKey string) bool {
 	return true
 }
 
-// ApplyAPIKey applies an API key to a provider without persisting back to vault.
-// This is the exported counterpart of updateAPIKeyInternal, intended for
-// cross-package callers (e.g. lazy rehydration from the API handler layer)
-// that already own the secret and just need to configure the in-memory provider.
+// ApplyAPIKey applies an API key to a provider without persisting to vault.
 func (r *Registry) ApplyAPIKey(name, apiKey string) bool {
 	return r.updateAPIKeyInternal(name, apiKey)
 }
 
-// ApplyModel updates the default model for a provider in-memory only, without
-// persisting to vault. Used during rehydration when the value already lives in
-// the caller's keychain.
+// ApplyModel updates the default model for a provider in-memory only.
 func (r *Registry) ApplyModel(name, model string) bool {
 	m, ok := r.meta[name]
 	if !ok {
@@ -602,8 +571,7 @@ func (r *Registry) ApplyModel(name, model string) bool {
 	return true
 }
 
-// ApplyBaseURL updates the base URL for a provider in-memory only, without
-// persisting to vault. Used during rehydration.
+// ApplyBaseURL updates the base URL for a provider in-memory only.
 func (r *Registry) ApplyBaseURL(name, baseURL string) bool {
 	m, ok := r.meta[name]
 	if !ok {
@@ -628,8 +596,7 @@ func splitVaultKey(key string) []string {
 	return parts
 }
 
-// UpdateModel updates the default model for a provider at runtime and persists
-// the choice to vault so it survives restarts.
+// UpdateModel updates the default model for a provider and persists to vault.
 func (r *Registry) UpdateModel(name, model string) bool {
 	m, ok := r.meta[name]
 	if !ok {
@@ -650,9 +617,7 @@ func (r *Registry) UpdateModel(name, model string) bool {
 	return true
 }
 
-// UpdateBaseURL updates the base URL for a provider at runtime and re-creates
-// the provider instance. Used for local providers like Ollama where the user
-// configures the URL instead of an API key.
+// UpdateBaseURL updates the base URL for a provider and re-creates it.
 func (r *Registry) UpdateBaseURL(name, baseURL string) bool {
 	m, ok := r.meta[name]
 	if !ok {
@@ -684,12 +649,7 @@ func (r *Registry) PrimaryName() string {
 }
 
 // Complete tries the best provider for the request (role-based routing),
-// then falls back on error or truncation.
-//
-// Routing priority:
-//  1. If the request specifies AgentRole and a route exists → use that provider.
-//  2. Otherwise use the primary provider.
-//  3. On error or truncated response (finish_reason == "length") → try next provider.
+// then falls back on error or truncation (finish_reason == "length").
 func (r *Registry) Complete(ctx context.Context, req *CompletionRequest) (*CompletionResponse, error) {
 	order := r.routeOrder(req)
 	var lastErr error
@@ -700,13 +660,13 @@ func (r *Registry) Complete(ctx context.Context, req *CompletionRequest) (*Compl
 			continue
 		}
 
-		// Check that this provider is configured (has an API key or doesn't need one).
+		// Check that this provider is configured.
 		if m, mOK := r.meta[entry.provider]; mOK && m.RequiresKey && !m.Configured {
 			slog.Debug("llm: skipping unconfigured provider", "provider", entry.provider)
 			continue
 		}
 
-		// Apply model override for this route if the request didn't specify one.
+		// Apply model override if the request didn't specify one.
 		routeReq := *req
 		if entry.model != "" && routeReq.Model == "" {
 			routeReq.Model = entry.model
@@ -720,8 +680,7 @@ func (r *Registry) Complete(ctx context.Context, req *CompletionRequest) (*Compl
 			continue
 		}
 
-		// Check for truncated response — finish_reason == "length" means the
-		// model hit its output token limit before completing the answer.
+		// Truncated response — retry with next provider.
 		if resp.FinishReason == "length" && attempt < len(order)-1 {
 			slog.Warn("llm: response truncated (finish_reason=length), retrying with next provider",
 				"provider", entry.provider, "model", resp.Model,
@@ -753,15 +712,11 @@ type RouteEntry struct {
 }
 
 // routeOrder determines the provider try-order for a request.
-// If a role-based route is configured AND routes are enabled, that provider
-// goes first, then the normal primary+fallbacks order (skipping duplicates).
-// When routes are disabled, role-based routes are ignored so the agent uses
-// multi-LLM probing instead of being pinned to a single provider.
 func (r *Registry) routeOrder(req *CompletionRequest) []routeEntry {
 	entries := make([]routeEntry, 0, len(r.providers))
 	seen := make(map[string]bool, len(r.providers))
 
-	// 1. If there's a role-based route AND routes are enabled, try that provider first.
+	// 1. Role-based route if enabled.
 	if r.routesEnabled && req.AgentRole != "" {
 		if route, ok := r.routes[req.AgentRole]; ok {
 			if _, provOK := r.providers[route.Provider]; provOK {
@@ -773,7 +728,7 @@ func (r *Registry) routeOrder(req *CompletionRequest) []routeEntry {
 		}
 	}
 
-	// 2. Primary (if not already added by role routing).
+	// 2. Primary.
 	if r.primary != "" && !seen[r.primary] {
 		entries = append(entries, routeEntry{provider: r.primary})
 		seen[r.primary] = true
@@ -790,13 +745,11 @@ func (r *Registry) routeOrder(req *CompletionRequest) []routeEntry {
 	return entries
 }
 
-// ListProviders returns the names of all registered providers in stable order
-// (primary first, then fallbacks, then any remaining).
+// ListProviders returns all registered provider names in stable order.
 func (r *Registry) ListProviders() []string {
 	seen := make(map[string]bool, len(r.providers))
 	names := make([]string, 0, len(r.providers))
 
-	// Primary first.
 	if r.primary != "" {
 		if _, ok := r.providers[r.primary]; ok {
 			names = append(names, r.primary)
@@ -804,7 +757,6 @@ func (r *Registry) ListProviders() []string {
 		}
 	}
 
-	// Then fallbacks in order.
 	for _, fb := range r.fallbacks {
 		if !seen[fb] {
 			names = append(names, fb)
@@ -812,7 +764,6 @@ func (r *Registry) ListProviders() []string {
 		}
 	}
 
-	// Then any remaining (shouldn't happen, but be safe).
 	for name := range r.providers {
 		if !seen[name] {
 			names = append(names, name)
@@ -832,7 +783,7 @@ func (r *Registry) AllMeta() map[string]ProviderMeta {
 }
 
 // StreamComplete tries streaming from the primary provider, falls back to
-// non-streaming providers by converting the full response into a single chunk.
+// non-streaming by converting the full response into a single chunk.
 func (r *Registry) StreamComplete(ctx context.Context, req *CompletionRequest) (<-chan StreamChunk, error) {
 	// Try primary first.
 	if p, ok := r.providers[r.primary]; ok {
