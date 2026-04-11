@@ -18,17 +18,20 @@ import (
 // ── Task Statuses ───────────────────────────────────────────────────────────
 
 const (
-	StatusSubmitted    = "submitted"
-	StatusPlanning     = "planning"
-	StatusPlanReview   = "plan_review"
-	StatusImplementing = "implementing"
-	StatusSelfReview   = "self_review"
-	StatusDiffReview   = "diff_review"
-	StatusPRCreating   = "pr_creating"
-	StatusCompleted    = "completed"
-	StatusCancelled    = "cancelled"
-	StatusFailed       = "failed"
-	StatusTimedOut     = "timed_out"
+	StatusSubmitted       = "submitted"
+	StatusPlanning        = "planning"
+	StatusPlanReview      = "plan_review"
+	StatusImplementing    = "implementing"
+	StatusSelfReview      = "self_review"
+	StatusDiffReview      = "diff_review"
+	StatusBuildValidating = "build_validating"
+	StatusBuildFailed     = "build_failed"
+	StatusBuildBlocked    = "build_blocked"
+	StatusPRCreating      = "pr_creating"
+	StatusCompleted       = "completed"
+	StatusCancelled       = "cancelled"
+	StatusFailed          = "failed"
+	StatusTimedOut        = "timed_out"
 )
 
 // TaskTimeout is the maximum time a task can run before being marked timed_out.

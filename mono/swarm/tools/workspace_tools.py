@@ -141,6 +141,68 @@ async def workspace_delete_file(path: str) -> str:
 
 
 @tool(description=(
+    "Edit a file if it exists, or create it if it doesn't. "
+    "Use this instead of workspace_edit_file when you're not sure whether "
+    "the file already exists. If the file exists, old_str must match exactly "
+    "and will be replaced with new_str. If the file doesn't exist, a new file "
+    "is created with new_str as its full content."
+))
+async def workspace_edit_or_create(path: str, old_str: str, new_str: str) -> str:
+    """Edit a file if it exists, or create it with new_str if it doesn't.
+
+    Args:
+        path: File path relative to the repository root.
+        old_str: The exact string to find and replace (used only if file exists).
+        new_str: The replacement string, or full content for a new file.
+
+    Returns:
+        Confirmation message describing the action taken.
+    """
+    ws = _get_ws()
+    try:
+        result = await ws.edit_or_create_file(path, old_str, new_str)
+        return result
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        return json.dumps({"error": f"Edit-or-create failed: {e}"})
+
+
+@tool(description=(
+    "Create multiple files at once as a single module. Use this when you need "
+    "to create an entire package or module with several files (e.g. a Go "
+    "package with 5-6 files). Provide a JSON array of objects, each with "
+    "'path' and 'content' keys. All files are created atomically so the "
+    "module is never half-written."
+))
+async def workspace_create_module(files: str) -> str:
+    """Create multiple files as a single module.
+
+    Args:
+        files: JSON string — array of {"path": "...", "content": "..."} objects.
+
+    Returns:
+        Summary of all created files.
+    """
+    ws = _get_ws()
+    try:
+        parsed = json.loads(files)
+        if not isinstance(parsed, list):
+            return json.dumps({"error": "files must be a JSON array"})
+        for entry in parsed:
+            if not isinstance(entry, dict) or "path" not in entry or "content" not in entry:
+                return json.dumps({
+                    "error": "Each entry must be an object with 'path' and 'content' keys"
+                })
+        result = await ws.create_module(parsed)
+        return result
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid JSON: {e}"})
+    except Exception as e:
+        return json.dumps({"error": f"Create module failed: {e}"})
+
+
+@tool(description=(
     "List the contents of a directory in the repository. "
     "Returns file and directory names. Use this to explore the repository structure."
 ))
@@ -213,6 +275,8 @@ WORKSPACE_TOOLS = [
     workspace_read_file,
     workspace_edit_file,
     workspace_create_file,
+    workspace_edit_or_create,
+    workspace_create_module,
     workspace_delete_file,
     workspace_list_dir,
     workspace_search,

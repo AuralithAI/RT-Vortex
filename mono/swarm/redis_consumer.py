@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from typing import Any, Callable, Coroutine
 
@@ -23,6 +24,7 @@ import redis.asyncio as aioredis
 
 from .agents_config import get_config
 from .agents.architect import ArchitectAgent
+from .agents.builder import BuilderAgent
 from .agents.docs import DocsAgent
 from .agents.junior_dev import JuniorDevAgent
 from .agents.ops import OpsAgent
@@ -565,6 +567,68 @@ async def _run_full_pipeline(
                     logger.warning("Team %s: Task %s failed — no diffs produced",
                                    team_id[:8], task.id)
             else:
+                # ── Builder validation (pipeline stage) ─────────
+                # The builder is NOT a team member — it runs as a pipeline
+                # stage after diffs are produced.  It validates build
+                # feasibility, scans for env vars, and (in future phases)
+                # triggers ephemeral container builds.
+                #
+                # Feature flag: skip builder when sandbox is disabled.
+                sandbox_enabled = os.environ.get(
+                    "RTVORTEX_SANDBOX_ENABLED", "false"
+                ).lower() in ("true", "1", "yes")
+
+                if sandbox_enabled:
+                    from .agents.builder import BuilderAgent, affects_build_system
+
+                    changed_files = workspace.changed_files()
+                    full_validation = affects_build_system(changed_files)
+
+                    logger.info(
+                        "Team %s: Builder validation — mode=%s, changed_files=%d",
+                        team_id[:8],
+                        "full" if full_validation else "fast-scan",
+                        len(changed_files),
+                    )
+
+                    builder = BuilderAgent(
+                        agent_id=f"bldr-{team_id[:8]}-{uuid.uuid4().hex[:4]}",
+                        team_id=team_id,
+                        agent_config=agent_config,
+                    )
+                    builder.conversation = conversation
+                    builder.workspace = workspace
+
+                    await builder.register()
+                    agent_ids.append(builder.agent_id)
+
+                    try:
+                        builder_result = await builder.run(task)
+                        if builder_result.error:
+                            logger.warning(
+                                "Team %s: Builder validation reported issues: %s",
+                                team_id[:8], builder_result.error,
+                            )
+                        else:
+                            logger.info(
+                                "Team %s: Builder validation passed",
+                                team_id[:8],
+                            )
+                    except Exception as e:
+                        # Builder failure is non-fatal — log and proceed.
+                        # The build is advisory; blocking PRs on builder
+                        # errors requires opt-in via config.
+                        logger.warning(
+                            "Team %s: Builder validation failed (non-fatal): %s",
+                            team_id[:8], e,
+                        )
+                else:
+                    logger.debug(
+                        "Team %s: Builder validation skipped "
+                        "(RTVORTEX_SANDBOX_ENABLED != true)",
+                        team_id[:8],
+                    )
+
                 await go_client.report_result(task.id)
                 logger.info("Team %s: Task %s completed successfully", team_id[:8], task.id)
 

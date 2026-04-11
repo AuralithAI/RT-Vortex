@@ -38,6 +38,7 @@ type Config struct {
 	Storage  StorageConfig
 	Log      LogConfig
 	MCP      MCPConfig
+	Sandbox  SandboxConfig
 }
 
 // ServerConfig holds HTTP server settings.
@@ -268,6 +269,17 @@ type MCPOAuthProviderConfig struct {
 	TokenURL     string
 }
 
+// SandboxConfig holds settings for the ephemeral container build system.
+type SandboxConfig struct {
+	Enabled         bool          // Master switch — must be true to run sandbox builds.
+	AlwaysValidate  bool          // When true, builder runs on every task (not just build-file changes).
+	DefaultSandbox  bool          // When true, workspace is mounted read-only (sandbox mode).
+	MaxTimeoutSec   int           // Maximum build timeout in seconds (default 600 = 10 min).
+	MaxMemoryMB     int           // Maximum container memory in MB (default 2048 = 2 GB).
+	MaxCPU          int           // Maximum container CPU cores (default 2).
+	MaxRetries      int           // Maximum build retry attempts (default 2).
+}
+
 // ---- XML intermediate types ----
 // These mirror the XML structure and are unmarshalled first, then converted.
 
@@ -287,6 +299,22 @@ type xmlServerProps struct {
 	Repos         xmlRepositories  `xml:"repositories"`
 	Logging       xmlLogging       `xml:"logging"`
 	MCP           xmlMCP           `xml:"mcp"`
+	Sandbox       xmlSandbox       `xml:"sandbox"`
+}
+
+// xmlSandbox maps the <sandbox> element in rtserverprops.xml.
+//
+//	<sandbox enabled="true" always-validate="true" default-sandbox-mode="true"
+//	         max-timeout-seconds="600" max-memory-mb="2048" max-cpu="2"
+//	         max-retries="2" />
+type xmlSandbox struct {
+	Enabled           string `xml:"enabled,attr"`
+	AlwaysValidate    string `xml:"always-validate,attr"`
+	DefaultSandboxMode string `xml:"default-sandbox-mode,attr"`
+	MaxTimeoutSec     string `xml:"max-timeout-seconds,attr"`
+	MaxMemoryMB       string `xml:"max-memory-mb,attr"`
+	MaxCPU            string `xml:"max-cpu,attr"`
+	MaxRetries        string `xml:"max-retries,attr"`
 }
 
 type xmlServer struct {
@@ -1390,6 +1418,17 @@ func loadServerProps(path string) (*Config, error) {
 				TokenURL:     op.tokenURL,
 			}
 		}
+	}
+
+	// -- Sandbox (ephemeral container build system) --
+	cfg.Sandbox = SandboxConfig{
+		Enabled:        parseBool(raw.Sandbox.Enabled, false),
+		AlwaysValidate: parseBool(raw.Sandbox.AlwaysValidate, false),
+		DefaultSandbox: parseBool(raw.Sandbox.DefaultSandboxMode, true),
+		MaxTimeoutSec:  parseInt(raw.Sandbox.MaxTimeoutSec, 600),
+		MaxMemoryMB:    parseInt(raw.Sandbox.MaxMemoryMB, 2048),
+		MaxCPU:         parseInt(raw.Sandbox.MaxCPU, 2),
+		MaxRetries:     parseInt(raw.Sandbox.MaxRetries, 2),
 	}
 
 	return cfg, nil

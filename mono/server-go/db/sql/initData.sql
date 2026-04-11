@@ -712,13 +712,17 @@ CREATE TABLE IF NOT EXISTS keychain_secrets (
     name            TEXT NOT NULL,
     ciphertext      BYTEA NOT NULL,
     wrapped_dek     BYTEA,
+    repo_id         UUID REFERENCES repositories(id) ON DELETE CASCADE,
     version         BIGINT NOT NULL DEFAULT 1,
     category        TEXT NOT NULL DEFAULT 'custom',
     metadata        TEXT NOT NULL DEFAULT '{}',
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (user_id, name)
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Unique per (user, name, repo).  COALESCE lets NULL repo_id participate.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_keychain_secrets_user_name_repo
+    ON keychain_secrets(user_id, name, COALESCE(repo_id, '00000000-0000-0000-0000-000000000000'));
 
 CREATE INDEX IF NOT EXISTS idx_keychain_secrets_user
     ON keychain_secrets(user_id);
@@ -726,6 +730,8 @@ CREATE INDEX IF NOT EXISTS idx_keychain_secrets_user_category
     ON keychain_secrets(user_id, category);
 CREATE INDEX IF NOT EXISTS idx_keychain_secrets_user_version
     ON keychain_secrets(user_id, version);
+CREATE INDEX IF NOT EXISTS idx_keychain_secrets_repo
+    ON keychain_secrets(user_id, repo_id) WHERE repo_id IS NOT NULL;
 
 -- Immutable audit log
 CREATE TABLE IF NOT EXISTS keychain_audit_log (
@@ -742,6 +748,38 @@ CREATE INDEX IF NOT EXISTS idx_keychain_audit_user
     ON keychain_audit_log(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_keychain_audit_action
     ON keychain_audit_log(action, created_at DESC);
+
+-- ============================================================================
+-- SANDBOX BUILD RESULTS
+-- ============================================================================
+-- Each sandbox build execution is recorded here for auditing, metrics, and
+-- the UI build tab.  secret_names stores key names only — never values.
+
+CREATE TABLE IF NOT EXISTS swarm_builds (
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    task_id         UUID NOT NULL REFERENCES swarm_tasks(id) ON DELETE CASCADE,
+    repo_id         TEXT NOT NULL,
+    user_id         UUID REFERENCES users(id) ON DELETE SET NULL,
+    build_system    TEXT NOT NULL DEFAULT 'unknown',
+    command         TEXT NOT NULL DEFAULT '',
+    base_image      TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'pending',  -- pending, running, success, failed, blocked
+    exit_code       INTEGER,
+    log_summary     TEXT NOT NULL DEFAULT '',
+    secret_names    TEXT[] NOT NULL DEFAULT '{}',       -- names only, never values
+    sandbox_mode    BOOLEAN NOT NULL DEFAULT true,
+    retry_count     INTEGER NOT NULL DEFAULT 0,
+    duration_ms     INTEGER,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at    TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_swarm_builds_task
+    ON swarm_builds(task_id);
+CREATE INDEX IF NOT EXISTS idx_swarm_builds_repo
+    ON swarm_builds(repo_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_swarm_builds_status
+    ON swarm_builds(status) WHERE status NOT IN ('success', 'failed');
 
 -- ============================================================================
 -- SCHEMA VERSION TRACKING
@@ -845,6 +883,10 @@ WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 25);
 INSERT INTO schema_info (version, description)
 SELECT 26, 'Add app_config table for system-wide non-secret settings (e.g. routes_enabled)'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 26);
+
+INSERT INTO schema_info (version, description)
+SELECT 27, 'Add repo_id to keychain_secrets + swarm_builds table for sandbox builder'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 27);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
@@ -1420,6 +1462,7 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE swarm_provider_perf_log TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_cost_budget TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE app_config TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_builds TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;

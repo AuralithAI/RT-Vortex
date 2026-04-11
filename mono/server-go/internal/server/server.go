@@ -32,6 +32,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/store"
 	"github.com/AuralithAI/rtvortex-server/internal/swarm"
 	swarmauth "github.com/AuralithAI/rtvortex-server/internal/swarm/auth"
+	"github.com/AuralithAI/rtvortex-server/internal/sandbox"
 	"github.com/AuralithAI/rtvortex-server/internal/tracing"
 	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
 	"github.com/AuralithAI/rtvortex-server/internal/vcs"
@@ -574,6 +575,18 @@ func (s *Server) setupRouter() {
 				// VCS proxy for agent workspace reads.
 				r.Post("/vcs/read-file", sh.VCSReadFile)
 				r.Post("/vcs/list-dir", sh.VCSListDir)
+
+				// Sandbox builder (ephemeral container builds).
+				if s.deps.Config != nil && s.deps.Config.Sandbox.Enabled {
+					sandboxHandler := sandbox.NewHandler(
+						sandbox.NewDockerRuntime(nil),
+						nil,
+					)
+					r.Post("/sandbox/plan", sandboxHandler.HandleGeneratePlan)
+					r.Post("/sandbox/execute", sandboxHandler.HandleExecute)
+					r.Get("/sandbox/status/{id}", sandboxHandler.HandleStatus)
+					r.Get("/sandbox/logs/{id}", sandboxHandler.HandleLogs)
+				}
 
 				// LLM proxy.
 				if s.deps.SwarmLLMProxy != nil {
