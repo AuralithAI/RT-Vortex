@@ -7,6 +7,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+
 	"github.com/AuralithAI/rtvortex-server/internal/auth"
 	"github.com/AuralithAI/rtvortex-server/internal/metrics"
 	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
@@ -512,4 +515,146 @@ func (h *Handler) ListKeychainAuditLog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ── Repo-Scoped Build Secrets ───────────────────────────────────────────────
+
+type buildSecretPutRequest struct {
+	Name     string `json:"name"`
+	Value    string `json:"value"`
+	Metadata string `json:"metadata,omitempty"`
+}
+
+type buildSecretListEntry struct {
+	Name      string `json:"name"`
+	Version   int64  `json:"version"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// PutBuildSecret stores a repo-scoped build secret.
+// PUT /api/v1/repos/{repoID}/build-secrets
+func (h *Handler) PutBuildSecret(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
+	if h.KeychainService == nil {
+		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
+		return
+	}
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repo_id")
+		return
+	}
+
+	var req buildSecretPutRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	if req.Name == "" || req.Value == "" {
+		writeError(w, http.StatusBadRequest, "name and value are required")
+		return
+	}
+
+	metadata := req.Metadata
+	if metadata == "" {
+		metadata = "{}"
+	}
+
+	if err := h.KeychainService.PutBuildSecret(r.Context(), userID, repoID, req.Name, []byte(req.Value), metadata); err != nil {
+		slog.Warn("keychain put build secret failed", "user_id", userID, "repo_id", repoID, "name", req.Name, "error", err)
+		metrics.RecordKeychainOp("put_build_secret", "error", time.Since(start))
+		writeError(w, http.StatusInternalServerError, "failed to store build secret")
+		return
+	}
+
+	metrics.RecordKeychainOp("put_build_secret", "ok", time.Since(start))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stored"})
+}
+
+// ListBuildSecrets returns metadata for all build secrets scoped to a repo.
+// GET /api/v1/repos/{repoID}/build-secrets
+func (h *Handler) ListBuildSecrets(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
+	if h.KeychainService == nil {
+		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
+		return
+	}
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repo_id")
+		return
+	}
+
+	versions, err := h.KeychainService.ListBuildSecretNames(r.Context(), userID, repoID)
+	if err != nil {
+		metrics.RecordKeychainOp("list_build_secrets", "error", time.Since(start))
+		writeError(w, http.StatusInternalServerError, "failed to list build secrets")
+		return
+	}
+
+	entries := make([]buildSecretListEntry, 0, len(versions))
+	for _, v := range versions {
+		entries = append(entries, buildSecretListEntry{
+			Name:      v.Name,
+			Version:   v.Version,
+			UpdatedAt: v.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		})
+	}
+
+	metrics.RecordKeychainOp("list_build_secrets", "ok", time.Since(start))
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// DeleteBuildSecret removes a repo-scoped build secret.
+// DELETE /api/v1/repos/{repoID}/build-secrets/{name}
+func (h *Handler) DeleteBuildSecret(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+
+	if h.KeychainService == nil {
+		writeError(w, http.StatusServiceUnavailable, "keychain service not configured")
+		return
+	}
+
+	userID, ok := auth.UserIDFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	repoID, err := uuid.Parse(chi.URLParam(r, "repoID"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid repo_id")
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "secret name is required")
+		return
+	}
+
+	if err := h.KeychainService.DeleteBuildSecret(r.Context(), userID, repoID, name); err != nil {
+		metrics.RecordKeychainOp("delete_build_secret", "error", time.Since(start))
+		writeError(w, http.StatusInternalServerError, "failed to delete build secret")
+		return
+	}
+
+	metrics.RecordKeychainOp("delete_build_secret", "ok", time.Since(start))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

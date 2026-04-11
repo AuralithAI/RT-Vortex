@@ -50,6 +50,9 @@ func (m *mockPlatform) GetDefaultBranch(_ context.Context, _, _ string) (string,
 func (m *mockPlatform) GetBranchSHA(_ context.Context, _, _, _ string) (string, error) {
 	return "", nil
 }
+func (m *mockPlatform) GetCombinedStatus(_ context.Context, _, _, _ string) (*vcs.CombinedStatus, error) {
+	return nil, nil
+}
 
 // ── Registry Tests ──────────────────────────────────────────────────────────
 

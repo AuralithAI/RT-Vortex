@@ -7,22 +7,25 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
+	"github.com/AuralithAI/rtvortex-server/internal/vault/keychain"
 )
 
 // ── Handler ─────────────────────────────────────────────────────────────────
 
 // Handler serves sandbox-related HTTP endpoints.
 type Handler struct {
-	Runtime ContainerRuntime
-	Logger  *slog.Logger
+	Runtime         ContainerRuntime
+	KeychainService *keychain.Service
+	Logger          *slog.Logger
 }
 
 // NewHandler creates a sandbox HTTP handler.
-func NewHandler(runtime ContainerRuntime, logger *slog.Logger) *Handler {
+func NewHandler(runtime ContainerRuntime, keychainSvc *keychain.Service, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{Runtime: runtime, Logger: logger}
+	return &Handler{Runtime: runtime, KeychainService: keychainSvc, Logger: logger}
 }
 
 // ── POST /internal/swarm/sandbox/plan ────────────────────────────────────────
@@ -133,5 +136,52 @@ func (h *Handler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"id":   buildID,
 		"logs": "not_implemented",
+	})
+}
+
+// ── GET /internal/swarm/sandbox/secrets ──────────────────────────────────────
+
+// HandleListBuildSecrets returns the secret names (never values) for a repo+user.
+func (h *Handler) HandleListBuildSecrets(w http.ResponseWriter, r *http.Request) {
+	if h.KeychainService == nil {
+		http.Error(w, `{"error":"keychain service not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	repoIDStr := r.URL.Query().Get("repo_id")
+	userIDStr := r.URL.Query().Get("user_id")
+	if repoIDStr == "" || userIDStr == "" {
+		http.Error(w, `{"error":"repo_id and user_id query params required"}`, http.StatusBadRequest)
+		return
+	}
+
+	repoID, err := uuid.Parse(repoIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid repo_id"}`, http.StatusBadRequest)
+		return
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user_id"}`, http.StatusBadRequest)
+		return
+	}
+
+	versions, err := h.KeychainService.ListBuildSecretNames(r.Context(), userID, repoID)
+	if err != nil {
+		h.Logger.Error("sandbox: failed to list build secrets", "error", err, "repo_id", repoID, "user_id", userID)
+		http.Error(w, `{"error":"failed to list secrets"}`, http.StatusInternalServerError)
+		return
+	}
+
+	names := make([]string, 0, len(versions))
+	for _, v := range versions {
+		names = append(names, v.Name)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"repo_id": repoID,
+		"user_id": userID,
+		"secrets": names,
 	})
 }

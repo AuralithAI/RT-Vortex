@@ -289,6 +289,13 @@ func (s *Server) setupRouter() {
 					r.Post("/members", h.AddRepoMember)
 					r.Delete("/members/{userID}", h.RemoveRepoMember)
 
+					// Repo-scoped build secrets (stored in user keychain with repo_id)
+					r.Route("/build-secrets", func(r chi.Router) {
+						r.Put("/", h.PutBuildSecret)
+						r.Get("/", h.ListBuildSecrets)
+						r.Delete("/{name}", h.DeleteBuildSecret)
+					})
+
 					// Pull Request discovery & management
 					r.Route("/pull-requests", func(r chi.Router) {
 						r.Get("/", h.ListPullRequests)
@@ -580,12 +587,14 @@ func (s *Server) setupRouter() {
 				if s.deps.Config != nil && s.deps.Config.Sandbox.Enabled {
 					sandboxHandler := sandbox.NewHandler(
 						sandbox.NewDockerRuntime(nil),
+						s.deps.KeychainService,
 						nil,
 					)
 					r.Post("/sandbox/plan", sandboxHandler.HandleGeneratePlan)
 					r.Post("/sandbox/execute", sandboxHandler.HandleExecute)
 					r.Get("/sandbox/status/{id}", sandboxHandler.HandleStatus)
 					r.Get("/sandbox/logs/{id}", sandboxHandler.HandleLogs)
+					r.Get("/sandbox/secrets", sandboxHandler.HandleListBuildSecrets)
 				}
 
 				// LLM proxy.
