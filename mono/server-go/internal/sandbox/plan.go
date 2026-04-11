@@ -11,15 +11,15 @@ import (
 
 // PlanOptions configures build plan generation.
 type PlanOptions struct {
-	TaskID      uuid.UUID
-	RepoID      string
-	RepoFiles   []string          // list of files in the repository root
-	ChangedFiles []string         // list of files modified by the diffs
-	SecretNames []string          // secret names available for this repo
-	SandboxMode bool              // true = read-only workspace
-	Timeout     time.Duration     // 0 = use DefaultTimeout
-	MemoryLimit string            // "" = use DefaultMemoryLimit
-	CPULimit    string            // "" = use DefaultCPULimit
+	TaskID       uuid.UUID
+	RepoID       string
+	RepoFiles    []string      // list of files in the repository root
+	ChangedFiles []string      // list of files modified by the diffs
+	SecretNames  []string      // secret names available for this repo
+	SandboxMode  bool          // true = read-only workspace
+	Timeout      time.Duration // 0 = use DefaultTimeout
+	MemoryLimit  string        // "" = use DefaultMemoryLimit
+	CPULimit     string        // "" = use DefaultCPULimit
 }
 
 // GeneratePlan creates a BuildPlan from repository analysis.

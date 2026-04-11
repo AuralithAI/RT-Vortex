@@ -271,13 +271,13 @@ type MCPOAuthProviderConfig struct {
 
 // SandboxConfig holds settings for the ephemeral container build system.
 type SandboxConfig struct {
-	Enabled         bool          // Master switch — must be true to run sandbox builds.
-	AlwaysValidate  bool          // When true, builder runs on every task (not just build-file changes).
-	DefaultSandbox  bool          // When true, workspace is mounted read-only (sandbox mode).
-	MaxTimeoutSec   int           // Maximum build timeout in seconds (default 600 = 10 min).
-	MaxMemoryMB     int           // Maximum container memory in MB (default 2048 = 2 GB).
-	MaxCPU          int           // Maximum container CPU cores (default 2).
-	MaxRetries      int           // Maximum build retry attempts (default 2).
+	Enabled        bool // Master switch — must be true to run sandbox builds.
+	AlwaysValidate bool // When true, builder runs on every task (not just build-file changes).
+	DefaultSandbox bool // When true, workspace is mounted read-only (sandbox mode).
+	MaxTimeoutSec  int  // Maximum build timeout in seconds (default 600 = 10 min).
+	MaxMemoryMB    int  // Maximum container memory in MB (default 2048 = 2 GB).
+	MaxCPU         int  // Maximum container CPU cores (default 2).
+	MaxRetries     int  // Maximum build retry attempts (default 2).
 }
 
 // ---- XML intermediate types ----
@@ -308,13 +308,13 @@ type xmlServerProps struct {
 //	         max-timeout-seconds="600" max-memory-mb="2048" max-cpu="2"
 //	         max-retries="2" />
 type xmlSandbox struct {
-	Enabled           string `xml:"enabled,attr"`
-	AlwaysValidate    string `xml:"always-validate,attr"`
+	Enabled            string `xml:"enabled,attr"`
+	AlwaysValidate     string `xml:"always-validate,attr"`
 	DefaultSandboxMode string `xml:"default-sandbox-mode,attr"`
-	MaxTimeoutSec     string `xml:"max-timeout-seconds,attr"`
-	MaxMemoryMB       string `xml:"max-memory-mb,attr"`
-	MaxCPU            string `xml:"max-cpu,attr"`
-	MaxRetries        string `xml:"max-retries,attr"`
+	MaxTimeoutSec      string `xml:"max-timeout-seconds,attr"`
+	MaxMemoryMB        string `xml:"max-memory-mb,attr"`
+	MaxCPU             string `xml:"max-cpu,attr"`
+	MaxRetries         string `xml:"max-retries,attr"`
 }
 
 type xmlServer struct {
