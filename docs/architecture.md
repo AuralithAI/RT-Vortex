@@ -705,6 +705,27 @@ The Model Context Protocol (MCP) system provides tool integrations for agents an
 - **Cross-Repo Authorizer**: Share-profile-based access control for cross-repo data exposure
 - **Network Isolation**: Engine doesn't need public access
 
+## Sandbox Builder
+
+Ephemeral container-based build validation for code changes produced by
+swarm agents.  Runs as a pipeline stage between diff production and PR
+creation.  See [docs/sandbox-builder.md](sandbox-builder.md) for full
+architecture, implementation status, and gap analysis.
+
+Key components:
+- **Go package** (`internal/sandbox/`): 14 files, 4,056 lines — handlers, executor, plan, store, complexity scoring, fingerprinting, caching, redaction, audit
+- **Python agent** (`agents/builder.py`): 845 lines — probe, HITL confirmation, execute, analyse+retry
+- **11 REST endpoints** under `/internal/swarm/sandbox/`
+- **22 Prometheus metrics** for build lifecycle, secrets, caching, complexity, audit
+- **10 audit event types** with structured slog + optional DB persistence
+- **Config-driven limits** from `rtserverprops.xml` `<sandbox>` element
+
+```
+implementing → self_review → diff_review
+    → build_validating → [success] → pr_creating
+    → build_validating → [fail] → build_failed → retry (×2) → build_blocked
+```
+
 ## Self-Healing Pipeline (Phase 11)
 
 Automatic resilience and recovery for the LLM agent swarm:
