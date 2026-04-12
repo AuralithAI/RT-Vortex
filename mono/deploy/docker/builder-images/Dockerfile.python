@@ -1,0 +1,8 @@
+FROM python:3.12-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates build-essential && \
+    rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir pip setuptools wheel tox pytest
+RUN useradd -m -s /bin/bash builder
+USER builder
+WORKDIR /workspace

@@ -781,6 +781,28 @@ CREATE INDEX IF NOT EXISTS idx_swarm_builds_repo
 CREATE INDEX IF NOT EXISTS idx_swarm_builds_status
     ON swarm_builds(status) WHERE status NOT IN ('success', 'failed');
 
+-- Sandbox audit trail — every security-relevant sandbox action is persisted
+-- here for compliance, incident review, and the audit query endpoint.
+
+CREATE TABLE IF NOT EXISTS swarm_audit_events (
+    id         UUID           PRIMARY KEY DEFAULT uuid_generate_v4(),
+    action     TEXT           NOT NULL,
+    user_id    TEXT           NOT NULL DEFAULT '',
+    repo_id    TEXT           NOT NULL DEFAULT '',
+    build_id   TEXT           NOT NULL DEFAULT '',
+    detail     JSONB          NOT NULL DEFAULT '{}',
+    created_at TIMESTAMPTZ    NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_swarm_audit_events_build
+    ON swarm_audit_events(build_id) WHERE build_id != '';
+CREATE INDEX IF NOT EXISTS idx_swarm_audit_events_user
+    ON swarm_audit_events(user_id) WHERE user_id != '';
+CREATE INDEX IF NOT EXISTS idx_swarm_audit_events_action
+    ON swarm_audit_events(action);
+CREATE INDEX IF NOT EXISTS idx_swarm_audit_events_created
+    ON swarm_audit_events(created_at DESC);
+
 -- ============================================================================
 -- SCHEMA VERSION TRACKING
 -- ============================================================================
@@ -887,6 +909,10 @@ WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 26);
 INSERT INTO schema_info (version, description)
 SELECT 27, 'Add repo_id to keychain_secrets + swarm_builds table for sandbox builder'
 WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 27);
+
+INSERT INTO schema_info (version, description)
+SELECT 28, 'Add swarm_audit_events table for sandbox audit trail'
+WHERE NOT EXISTS (SELECT 1 FROM schema_info WHERE version = 28);
 
 -- ============================================================================
 -- UPDATED_AT TRIGGER
@@ -1463,6 +1489,7 @@ BEGIN
     GRANT ALL PRIVILEGES ON TABLE swarm_cost_budget TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE app_config TO rtvortex;
     GRANT ALL PRIVILEGES ON TABLE swarm_builds TO rtvortex;
+    GRANT ALL PRIVILEGES ON TABLE swarm_audit_events TO rtvortex;
     GRANT ALL PRIVILEGES ON SEQUENCE embedding_model_config_id_seq TO rtvortex;
 EXCEPTION WHEN OTHERS THEN
     RAISE NOTICE 'GRANT failed (non-fatal): %', SQLERRM;

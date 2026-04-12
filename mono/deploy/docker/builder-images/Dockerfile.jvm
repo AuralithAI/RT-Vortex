@@ -1,0 +1,7 @@
+FROM eclipse-temurin:21-jdk-jammy
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git ca-certificates maven gradle && \
+    rm -rf /var/lib/apt/lists/*
+RUN useradd -m -s /bin/bash builder
+USER builder
+WORKDIR /workspace

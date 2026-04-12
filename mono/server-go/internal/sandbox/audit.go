@@ -185,3 +185,65 @@ func countDirFiles(dir string) int {
 	}
 	return count
 }
+
+// AuditQuery holds optional filter parameters for querying audit events.
+type AuditQuery struct {
+	BuildID string
+	UserID  string
+	Action  string
+	Limit   int
+}
+
+// Query retrieves persisted audit events matching the given filters.
+func (a *AuditLogger) Query(ctx context.Context, q AuditQuery) ([]AuditEvent, error) {
+	if a.pool == nil {
+		return nil, fmt.Errorf("no database configured for audit")
+	}
+	if q.Limit <= 0 || q.Limit > 500 {
+		q.Limit = 50
+	}
+
+	query := `SELECT id, action, user_id, repo_id, build_id, detail, created_at
+		FROM swarm_audit_events WHERE 1=1`
+	args := []any{}
+	idx := 1
+
+	if q.BuildID != "" {
+		query += fmt.Sprintf(" AND build_id = $%d", idx)
+		args = append(args, q.BuildID)
+		idx++
+	}
+	if q.UserID != "" {
+		query += fmt.Sprintf(" AND user_id = $%d", idx)
+		args = append(args, q.UserID)
+		idx++
+	}
+	if q.Action != "" {
+		query += fmt.Sprintf(" AND action = $%d", idx)
+		args = append(args, q.Action)
+		idx++
+	}
+
+	query += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", idx)
+	args = append(args, q.Limit)
+
+	rows, err := a.pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("audit query: %w", err)
+	}
+	defer rows.Close()
+
+	var events []AuditEvent
+	for rows.Next() {
+		var e AuditEvent
+		var detailJSON []byte
+		if err := rows.Scan(&e.ID, &e.Action, &e.UserID, &e.RepoID, &e.BuildID, &detailJSON, &e.Timestamp); err != nil {
+			return nil, fmt.Errorf("audit scan: %w", err)
+		}
+		if len(detailJSON) > 0 {
+			json.Unmarshal(detailJSON, &e.Detail)
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}

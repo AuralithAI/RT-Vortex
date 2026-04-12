@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1121,4 +1122,40 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(resp)
+}
+
+// ── GET /internal/swarm/sandbox/audit ────────────────────────────────────────
+
+// HandleAuditEvents queries persisted audit events with optional filters.
+func (h *Handler) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
+	if h.Audit == nil {
+		http.Error(w, `{"error":"audit not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	q := r.URL.Query()
+	limit := 50
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 500 {
+			limit = n
+		}
+	}
+
+	events, err := h.Audit.Query(r.Context(), AuditQuery{
+		BuildID: q.Get("build_id"),
+		UserID:  q.Get("user_id"),
+		Action:  q.Get("action"),
+		Limit:   limit,
+	})
+	if err != nil {
+		h.Logger.Warn("sandbox: audit query failed", "error", err)
+		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"events": events,
+		"count":  len(events),
+	})
 }

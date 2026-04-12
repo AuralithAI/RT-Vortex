@@ -617,6 +617,7 @@ func (s *Server) setupRouter() {
 					r.Get("/sandbox/secrets", sandboxHandler.HandleListBuildSecrets)
 					r.Get("/sandbox/artifacts/{id}", sandboxHandler.HandleListArtifacts)
 					r.Get("/sandbox/complexity/{repo_id}", sandboxHandler.HandleBuildComplexity)
+					r.Get("/sandbox/audit", sandboxHandler.HandleAuditEvents)
 					r.Get("/sandbox/health", sandboxHandler.HandleHealth)
 				}
 
