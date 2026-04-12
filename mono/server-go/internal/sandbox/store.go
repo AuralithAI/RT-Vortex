@@ -102,6 +102,30 @@ func (s *BuildStore) GetBuildByTask(ctx context.Context, taskID uuid.UUID) (*Bui
 	return scanBuildRecord(row)
 }
 
+// ListBuildsByTask returns all builds for a given task, newest first.
+func (s *BuildStore) ListBuildsByTask(ctx context.Context, taskID uuid.UUID) ([]*BuildRecord, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, task_id, repo_id, user_id, build_system, command, base_image,
+		       status, exit_code, log_summary, secret_names, sandbox_mode,
+		       retry_count, duration_ms, created_at, completed_at
+		FROM swarm_builds WHERE task_id = $1
+		ORDER BY created_at DESC`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox store: list builds by task: %w", err)
+	}
+	defer rows.Close()
+
+	var builds []*BuildRecord
+	for rows.Next() {
+		rec, err := scanBuildRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		builds = append(builds, rec)
+	}
+	return builds, nil
+}
+
 // ListBuildsByRepo returns recent builds for a repo, newest first.
 func (s *BuildStore) ListBuildsByRepo(ctx context.Context, repoID string, limit int) ([]*BuildRecord, error) {
 	if limit <= 0 {

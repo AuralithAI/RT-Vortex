@@ -654,6 +654,12 @@ func (s *Server) setupRouter() {
 			r.Get("/teams", sh.ListTeamsUser)
 			r.Get("/overview", sh.SwarmOverview)
 
+			if s.deps.DB != nil && s.deps.Config != nil && s.deps.Config.Sandbox.Enabled {
+				userBuildHandler := sandbox.NewHandler(nil, nil, sandbox.NewBuildStore(s.deps.DB.Pool), nil)
+				r.Get("/tasks/{id}/builds", userBuildHandler.HandleListTaskBuilds)
+				r.Get("/tasks/{id}/builds/{buildId}/logs", userBuildHandler.HandleGetBuildLogs)
+			}
+
 			// CI signal status (user JWT).
 			r.Get("/tasks/{id}/ci-signal", sh.HandleGetCISignal)
 			r.Get("/ci-signals", sh.HandleListCISignals)

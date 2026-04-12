@@ -1159,3 +1159,94 @@ func (h *Handler) HandleAuditEvents(w http.ResponseWriter, r *http.Request) {
 		"count":  len(events),
 	})
 }
+
+// ── GET /api/v1/swarm/tasks/{id}/builds ──────────────────────────────────────
+
+// HandleListTaskBuilds returns all sandbox builds for a given task.
+func (h *Handler) HandleListTaskBuilds(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil {
+		http.Error(w, `{"error":"store not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	taskID, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid task id"}`, http.StatusBadRequest)
+		return
+	}
+
+	builds, err := h.Store.ListBuildsByTask(r.Context(), taskID)
+	if err != nil {
+		h.Logger.Warn("sandbox: list task builds", "error", err)
+		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if builds == nil {
+		builds = []*BuildRecord{}
+	}
+
+	var summary buildsSummary
+	for _, b := range builds {
+		summary.Total++
+		switch b.Status {
+		case "success":
+			summary.Passed++
+		case "failed":
+			summary.Failed++
+		case "running":
+			summary.Running++
+		default:
+			summary.Pending++
+		}
+		if b.DurationMS != nil {
+			summary.TotalDurationMS += *b.DurationMS
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"builds":  builds,
+		"summary": summary,
+	})
+}
+
+type buildsSummary struct {
+	Total           int `json:"total"`
+	Passed          int `json:"passed"`
+	Failed          int `json:"failed"`
+	Running         int `json:"running"`
+	Pending         int `json:"pending"`
+	TotalDurationMS int `json:"total_duration_ms"`
+}
+
+// ── GET /api/v1/swarm/tasks/{id}/builds/{buildId}/logs ───────────────────────
+
+// HandleGetBuildLogs returns the log_summary for a specific build.
+func (h *Handler) HandleGetBuildLogs(w http.ResponseWriter, r *http.Request) {
+	if h.Store == nil {
+		http.Error(w, `{"error":"store not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	buildID, err := uuid.Parse(chi.URLParam(r, "buildId"))
+	if err != nil {
+		http.Error(w, `{"error":"invalid build id"}`, http.StatusBadRequest)
+		return
+	}
+
+	rec, err := h.Store.GetBuild(r.Context(), buildID)
+	if err != nil {
+		http.Error(w, `{"error":"build not found"}`, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"build_id":   rec.ID,
+		"status":     rec.Status,
+		"log":        rec.LogSummary,
+		"exit_code":  rec.ExitCode,
+		"created_at": rec.CreatedAt,
+	})
+}

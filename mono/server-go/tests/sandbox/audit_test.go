@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/AuralithAI/rtvortex-server/internal/sandbox"
+	"github.com/google/uuid"
 )
 
 func TestHandleAuditEvents_NoAudit(t *testing.T) {
@@ -108,5 +109,40 @@ func TestAuditEvent_AllActions(t *testing.T) {
 		if decoded != a {
 			t.Errorf("action round-trip: got %q, want %q", decoded, a)
 		}
+	}
+}
+
+func TestHandleListTaskBuilds_NoStore(t *testing.T) {
+	h := sandbox.NewHandler(nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/swarm/tasks/"+uuid.New().String()+"/builds", nil)
+	w := httptest.NewRecorder()
+	h.HandleListTaskBuilds(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", w.Code)
+	}
+}
+
+func TestHandleGetBuildLogs_NoStore(t *testing.T) {
+	h := sandbox.NewHandler(nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/builds/"+uuid.New().String()+"/logs", nil)
+	w := httptest.NewRecorder()
+	h.HandleGetBuildLogs(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("expected 503, got %d", w.Code)
+	}
+}
+
+func TestBuildsSummary_JSONFields(t *testing.T) {
+	data := `{"total":3,"passed":1,"failed":1,"running":1,"pending":0,"total_duration_ms":5000}`
+	var m map[string]any
+	if err := json.Unmarshal([]byte(data), &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if m["total"] != float64(3) {
+		t.Errorf("total = %v, want 3", m["total"])
 	}
 }
