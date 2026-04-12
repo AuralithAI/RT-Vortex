@@ -277,6 +277,7 @@ class BuilderAgent(Agent):
         user_id: str,
         probe_result: dict,
         changed_files: list[str] | None = None,
+        workspace_files: dict[str, str] | None = None,
     ) -> dict:
         """Request HITL confirmation of the build plan and execute if approved.
 
@@ -411,6 +412,8 @@ class BuilderAgent(Agent):
                 secret_refs=secret_refs,
                 sandbox_mode=True,
                 changed_files=changed_files or [],
+                workspace_files=workspace_files or {},
+                collect_artifacts=True,
             )
             self._build_result = result
 
@@ -465,6 +468,8 @@ class BuilderAgent(Agent):
                             "duration": result.get("duration", ""),
                             "resolved_secrets": result.get("resolved_secrets", []),
                             "failed_secrets": result.get("failed_secrets", []),
+                            "artifacts": result.get("artifacts", []),
+                            "workspace_injected": result.get("workspace_injected", False),
                         },
                     },
                 )
@@ -479,6 +484,8 @@ class BuilderAgent(Agent):
                 "resolved_secrets": result.get("resolved_secrets", []),
                 "failed_secrets": result.get("failed_secrets", []),
                 "logs_truncated": len(result.get("logs", "")) > 1024,
+                "artifacts": result.get("artifacts", []),
+                "workspace_injected": result.get("workspace_injected", False),
             }
 
             if build_status == "failed":

@@ -1,15 +1,21 @@
 package sandbox
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ── DockerRuntime ───────────────────────────────────────────────────────────
@@ -148,6 +154,12 @@ func (d *DockerRuntime) BuildDockerArgs(plan *BuildPlan) (args []string, redacte
 		args = append(args, cacheArgs...)
 	}
 
+	// Workspace volume mount (host dir bind-mounted at /workspace).
+	if plan.WorkspaceDir != "" {
+		args = append(args, "-v", plan.WorkspaceDir+":/workspace:ro")
+		args = append(args, "-w", "/workspace")
+	}
+
 	// Copy for safe logging before we add secret env vars.
 	redactedArgs = make([]string, len(args))
 	copy(redactedArgs, args)
@@ -283,6 +295,132 @@ func (d *DockerRuntime) Destroy(ctx context.Context, containerID string) error {
 	cmd := exec.CommandContext(ctx, "docker", "rm", "-f", "rtvortex-build-"+containerID[:8])
 	_ = cmd.Run()
 	return nil
+}
+
+// ── Workspace preparation ───────────────────────────────────────────────────
+
+// PrepareWorkspace writes the WorkspaceFS file map to a temp directory on
+// the host and sets plan.WorkspaceDir.  The caller MUST call
+// CleanupWorkspace when done.
+func PrepareWorkspace(plan *BuildPlan) error {
+	if len(plan.WorkspaceFS) == 0 {
+		return nil
+	}
+
+	dir, err := os.MkdirTemp("", "rtvortex-ws-*")
+	if err != nil {
+		return fmt.Errorf("sandbox: create workspace tmpdir: %w", err)
+	}
+
+	for relPath, content := range plan.WorkspaceFS {
+		if content == "" {
+			continue
+		}
+		cleanPath := strings.TrimLeft(relPath, "/")
+		fullPath := filepath.Join(dir, cleanPath)
+
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+			os.RemoveAll(dir)
+			return fmt.Errorf("sandbox: mkdir %s: %w", filepath.Dir(fullPath), err)
+		}
+
+		if err := os.WriteFile(fullPath, []byte(content), 0644); err != nil {
+			os.RemoveAll(dir)
+			return fmt.Errorf("sandbox: write %s: %w", fullPath, err)
+		}
+	}
+
+	plan.WorkspaceDir = dir
+	return nil
+}
+
+// CleanupWorkspace removes the temp workspace directory.
+func CleanupWorkspace(plan *BuildPlan) {
+	if plan.WorkspaceDir != "" {
+		os.RemoveAll(plan.WorkspaceDir)
+		plan.WorkspaceDir = ""
+	}
+}
+
+// ExtractContainerArtifacts collects build artifacts from a container
+// that was created WITHOUT --rm (to allow docker cp before removal).
+// For the exec-based runtime, containers are created with --rm,
+// so artifacts must be collected from the build logs or workspace
+// output directory.  This method uses `docker cp` for containers
+// started with a non-auto-remove lifecycle.
+func (d *DockerRuntime) ExtractContainerArtifacts(ctx context.Context, containerName string, buildID uuid.UUID, cfg *ArtifactCollectorConfig) ([]*BuildArtifact, error) {
+	var paths []string
+	if cfg != nil && len(cfg.Paths) > 0 {
+		paths = cfg.Paths
+	}
+	return CollectArtifacts(ctx, containerName, buildID, paths)
+}
+
+// ParseArtifactsFromLogs extracts inline artifact data from build logs.
+// Build systems that produce structured output (e.g. JUnit XML, coverage)
+// can embed them in stdout with delimiters.  This is the fallback for
+// --rm containers where docker cp is not available.
+func ParseArtifactsFromLogs(logs string, buildID uuid.UUID) []*BuildArtifact {
+	var artifacts []*BuildArtifact
+
+	// Look for coverage percentage in Go test output.
+	for _, line := range strings.Split(logs, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "coverage:") || strings.Contains(trimmed, "% of statements") {
+			artifacts = append(artifacts, &BuildArtifact{
+				ID:        uuid.New(),
+				BuildID:   buildID,
+				Kind:      ArtifactCoverage,
+				Path:      "inline/coverage-summary.txt",
+				SizeBytes: int64(len(trimmed)),
+				Data:      []byte(trimmed),
+				CreatedAt: time.Now().UTC(),
+			})
+		}
+	}
+
+	return artifacts
+}
+
+// DecompressWorkspaceArchive extracts a gzipped tar archive into a map
+// of file path → content.  Used by the handler to decode workspace_tar
+// from the request.
+func DecompressWorkspaceArchive(data []byte) (map[string]string, error) {
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("artifact: gzip open: %w", err)
+	}
+	defer gr.Close()
+
+	result := make(map[string]string)
+	tr := tar.NewReader(gr)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return result, fmt.Errorf("artifact: tar read: %w", err)
+		}
+
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+
+		if header.Size > MaxArtifactSize {
+			continue
+		}
+
+		buf := make([]byte, header.Size)
+		if _, err := io.ReadFull(tr, buf); err != nil {
+			continue
+		}
+
+		result[header.Name] = string(buf)
+	}
+
+	return result, nil
 }
 
 // ── MockRuntime ─────────────────────────────────────────────────────────────

@@ -159,20 +159,23 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 // resolveExecuteRequest is the payload for HandleResolveAndExecute.
 type resolveExecuteRequest struct {
-	TaskID       string   `json:"task_id"`
-	RepoID       string   `json:"repo_id"`
-	UserID       string   `json:"user_id"`
-	BuildSystem  string   `json:"build_system"`
-	Command      string   `json:"command"`
-	PreCommands  []string `json:"pre_commands"`
-	SecretRefs   []string `json:"secret_refs"`
-	BaseImage    string   `json:"base_image"`
-	SandboxMode  bool     `json:"sandbox_mode"`
-	TimeoutSec   int      `json:"timeout_sec"`
-	MemoryLimit  string   `json:"memory_limit"`
-	CPULimit     string   `json:"cpu_limit"`
-	ChangedFiles []string `json:"changed_files"`
-	SkipCache    bool     `json:"skip_cache"`
+	TaskID           string            `json:"task_id"`
+	RepoID           string            `json:"repo_id"`
+	UserID           string            `json:"user_id"`
+	BuildSystem      string            `json:"build_system"`
+	Command          string            `json:"command"`
+	PreCommands      []string          `json:"pre_commands"`
+	SecretRefs       []string          `json:"secret_refs"`
+	BaseImage        string            `json:"base_image"`
+	SandboxMode      bool              `json:"sandbox_mode"`
+	TimeoutSec       int               `json:"timeout_sec"`
+	MemoryLimit      string            `json:"memory_limit"`
+	CPULimit         string            `json:"cpu_limit"`
+	ChangedFiles     []string          `json:"changed_files"`
+	SkipCache        bool              `json:"skip_cache"`
+	WorkspaceFiles   map[string]string `json:"workspace_files"`
+	ArtifactPaths    []string          `json:"artifact_paths"`
+	CollectArtifacts bool              `json:"collect_artifacts"`
 }
 
 // HandleResolveAndExecute resolves secret values from the keychain, populates
@@ -258,6 +261,29 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		MemoryLimit: req.MemoryLimit,
 		CPULimit:    req.CPULimit,
 		EnvVars:     make(map[string]string),
+		WorkspaceFS: req.WorkspaceFiles,
+	}
+
+	// Prepare workspace: validate size, extract to temp dir.
+	if len(plan.WorkspaceFS) > 0 {
+		if WorkspaceSize(plan.WorkspaceFS) > MaxWorkspaceBytes {
+			http.Error(w, `{"error":"workspace changeset exceeds size limit"}`, http.StatusBadRequest)
+			return
+		}
+		if err := PrepareWorkspace(plan); err != nil {
+			h.Logger.Error("sandbox: workspace preparation failed", "error", err)
+			http.Error(w, `{"error":"workspace preparation failed"}`, http.StatusInternalServerError)
+			return
+		}
+		defer CleanupWorkspace(plan)
+		WorkspaceInjections.Inc()
+		h.Logger.Info("sandbox: workspace injected",
+			"files", len(plan.WorkspaceFS), "task_id", taskID)
+	}
+
+	// Artifact collection configuration.
+	if req.CollectArtifacts {
+		plan.ArtifactCfg = &ArtifactCollectorConfig{Paths: req.ArtifactPaths}
 	}
 
 	// Resolve dependency cache.
@@ -393,6 +419,27 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// Collect build artifacts from logs.
+	var artifactSummaries []map[string]any
+	if plan.ArtifactCfg != nil || req.CollectArtifacts {
+		logArtifacts := ParseArtifactsFromLogs(result.Logs, buildID)
+		for _, a := range logArtifacts {
+			if h.Store != nil {
+				_ = h.Store.InsertArtifact(r.Context(), a)
+			}
+			ArtifactsCollected.Inc()
+			ArtifactBytes.Add(float64(a.SizeBytes))
+			artifactSummaries = append(artifactSummaries, map[string]any{
+				"id":         a.ID,
+				"kind":       a.Kind,
+				"path":       a.Path,
+				"size_bytes": a.SizeBytes,
+			})
+		}
+		h.Logger.Info("sandbox: artifacts collected",
+			"count", len(logArtifacts), "build_id", buildID)
+	}
+
 	// Enrich response with resolution metadata.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -403,6 +450,8 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		"secret_refs":      result.SecretRefs,
 		"resolved_secrets": resolved,
 		"failed_secrets":   failed,
+		"artifacts":        artifactSummaries,
+		"workspace_injected": len(plan.WorkspaceFS) > 0,
 	})
 }
 
@@ -746,4 +795,48 @@ func (h *Handler) HandleProbeEnv(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+// ── GET /internal/swarm/sandbox/artifacts/{id} ───────────────────────────────
+
+// HandleListArtifacts returns the list of build artifacts for a build ID.
+func (h *Handler) HandleListArtifacts(w http.ResponseWriter, r *http.Request) {
+	buildID := chi.URLParam(r, "id")
+
+	if h.Store == nil {
+		http.Error(w, `{"error":"build store not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	id, err := uuid.Parse(buildID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid build id"}`, http.StatusBadRequest)
+		return
+	}
+
+	artifacts, err := h.Store.ListArtifacts(r.Context(), id)
+	if err != nil {
+		h.Logger.Warn("sandbox: failed to list artifacts", "build_id", buildID, "error", err)
+		http.Error(w, `{"error":"failed to list artifacts"}`, http.StatusInternalServerError)
+		return
+	}
+
+	items := make([]map[string]any, 0, len(artifacts))
+	for _, a := range artifacts {
+		items = append(items, map[string]any{
+			"id":         a.ID,
+			"build_id":   a.BuildID,
+			"kind":       a.Kind,
+			"path":       a.Path,
+			"size_bytes": a.SizeBytes,
+			"created_at": a.CreatedAt,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"build_id":  id,
+		"artifacts": items,
+		"count":     len(items),
+	})
 }

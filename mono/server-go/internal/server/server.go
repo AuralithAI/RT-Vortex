@@ -603,6 +603,7 @@ func (s *Server) setupRouter() {
 					r.Get("/sandbox/status/{id}", sandboxHandler.HandleStatus)
 					r.Get("/sandbox/logs/{id}", sandboxHandler.HandleLogs)
 					r.Get("/sandbox/secrets", sandboxHandler.HandleListBuildSecrets)
+					r.Get("/sandbox/artifacts/{id}", sandboxHandler.HandleListArtifacts)
 				}
 
 				// LLM proxy.

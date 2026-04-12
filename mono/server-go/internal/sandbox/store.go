@@ -153,3 +153,58 @@ func scanBuildRecord(row pgx.Row) (*BuildRecord, error) {
 	}
 	return &rec, nil
 }
+
+// InsertArtifact persists a build artifact to the swarm_build_artifacts table.
+func (s *BuildStore) InsertArtifact(ctx context.Context, a *BuildArtifact) error {
+	if a.ID == uuid.Nil {
+		a.ID = uuid.New()
+	}
+	a.CreatedAt = time.Now().UTC()
+
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO swarm_build_artifacts
+			(id, build_id, kind, path, size_bytes, data, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		a.ID, a.BuildID, string(a.Kind), a.Path, a.SizeBytes, a.Data, a.CreatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("sandbox store: insert artifact: %w", err)
+	}
+	return nil
+}
+
+// ListArtifacts returns all artifacts for a build, excluding the raw data
+// blob (which can be large).  Use GetArtifact to fetch data for a single one.
+func (s *BuildStore) ListArtifacts(ctx context.Context, buildID uuid.UUID) ([]*BuildArtifact, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, build_id, kind, path, size_bytes, created_at
+		FROM swarm_build_artifacts WHERE build_id = $1
+		ORDER BY created_at`, buildID)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox store: list artifacts: %w", err)
+	}
+	defer rows.Close()
+
+	var artifacts []*BuildArtifact
+	for rows.Next() {
+		var a BuildArtifact
+		if err := rows.Scan(&a.ID, &a.BuildID, &a.Kind, &a.Path, &a.SizeBytes, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("sandbox store: scan artifact: %w", err)
+		}
+		artifacts = append(artifacts, &a)
+	}
+	return artifacts, nil
+}
+
+// GetArtifact retrieves a single artifact including its data blob.
+func (s *BuildStore) GetArtifact(ctx context.Context, id uuid.UUID) (*BuildArtifact, error) {
+	var a BuildArtifact
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, build_id, kind, path, size_bytes, data, created_at
+		FROM swarm_build_artifacts WHERE id = $1`, id).
+		Scan(&a.ID, &a.BuildID, &a.Kind, &a.Path, &a.SizeBytes, &a.Data, &a.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox store: get artifact: %w", err)
+	}
+	return &a, nil
+}

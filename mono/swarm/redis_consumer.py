@@ -641,12 +641,22 @@ async def _run_full_pipeline(
                     # Phase 4: HITL confirmation + build execution.
                     build_exec_result: dict = {}
                     if probe_result and probe_result.get("build_system", "unknown") != "unknown":
+                        # Collect workspace changeset for container injection.
+                        workspace_files: dict[str, str] = {}
+                        if workspace.has_changes():
+                            for change in workspace.get_changeset():
+                                fpath = change.get("file_path", "")
+                                proposed = change.get("proposed", "")
+                                if fpath and proposed:
+                                    workspace_files[fpath] = proposed
+
                         try:
                             build_exec_result = await builder.confirm_and_execute(
                                 task=task,
                                 user_id=user_id,
                                 probe_result=probe_result,
                                 changed_files=changed_files,
+                                workspace_files=workspace_files,
                             )
                             build_status = build_exec_result.get("status", "unknown")
                             logger.info(

@@ -287,6 +287,9 @@ class GoClient:
         cpu_limit: str = "2",
         changed_files: list[str] | None = None,
         skip_cache: bool = False,
+        workspace_files: dict[str, str] | None = None,
+        artifact_paths: list[str] | None = None,
+        collect_artifacts: bool = False,
     ) -> dict:
         """Resolve secrets and execute a sandboxed build in one call.
 
@@ -313,6 +316,9 @@ class GoClient:
                     "cpu_limit": cpu_limit,
                     "changed_files": changed_files or [],
                     "skip_cache": skip_cache,
+                    "workspace_files": workspace_files or {},
+                    "artifact_paths": artifact_paths or [],
+                    "collect_artifacts": collect_artifacts,
                 },
             )
             resp.raise_for_status()
@@ -348,6 +354,17 @@ class GoClient:
             )
             resp.raise_for_status()
             return resp.json()
+
+    async def sandbox_list_artifacts(self, build_id: str) -> list[dict]:
+        """List build artifacts for a sandbox build (metadata only)."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/artifacts/{build_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("artifacts", [])
 
     # ── VCS proxy methods ────────────────────────────────────────────────
 

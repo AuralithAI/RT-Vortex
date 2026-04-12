@@ -427,3 +427,176 @@ func TestHandleResolveAndExecute_ResponseContainsBuildID(t *testing.T) {
 		t.Errorf("build_id %q is not a valid UUID: %v", bid, err)
 	}
 }
+
+// ── Workspace injection ─────────────────────────────────────────────────────
+
+func TestHandleResolveAndExecute_WorkspaceInjected(t *testing.T) {
+	mock := sandbox.NewMockRuntime()
+	mock.WaitResult = &sandbox.BuildResult{
+		ExitCode: 0,
+		Logs:     "BUILD OK",
+		Duration: 2 * time.Second,
+	}
+
+	h := sandbox.NewHandler(mock, nil, nil, nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"task_id":      uuid.New().String(),
+		"repo_id":      uuid.New().String(),
+		"user_id":      uuid.New().String(),
+		"build_system": "go",
+		"command":      "go build ./...",
+		"base_image":   "golang:1.22",
+		"workspace_files": map[string]string{
+			"main.go":     "package main\nfunc main() {}\n",
+			"util/lib.go": "package util\n",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/resolve-execute", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleResolveAndExecute(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	injected, ok := resp["workspace_injected"].(bool)
+	if !ok || !injected {
+		t.Error("expected workspace_injected=true")
+	}
+
+	// Verify the plan had WorkspaceFS set.
+	if len(mock.CreatedPlans) != 1 {
+		t.Fatalf("expected 1 plan, got %d", len(mock.CreatedPlans))
+	}
+	plan := mock.CreatedPlans[0]
+	if len(plan.WorkspaceFS) != 2 {
+		t.Errorf("plan WorkspaceFS has %d files, want 2", len(plan.WorkspaceFS))
+	}
+}
+
+func TestHandleResolveAndExecute_NoWorkspaceNoInjection(t *testing.T) {
+	mock := sandbox.NewMockRuntime()
+	h := sandbox.NewHandler(mock, nil, nil, nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"task_id":      uuid.New().String(),
+		"repo_id":      uuid.New().String(),
+		"user_id":      uuid.New().String(),
+		"build_system": "go",
+		"command":      "go build ./...",
+		"base_image":   "golang:1.22",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/resolve-execute", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleResolveAndExecute(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	injected, _ := resp["workspace_injected"].(bool)
+	if injected {
+		t.Error("expected workspace_injected=false when no workspace files")
+	}
+}
+
+func TestHandleResolveAndExecute_CollectArtifactsWithCoverage(t *testing.T) {
+	mock := sandbox.NewMockRuntime()
+	mock.WaitResult = &sandbox.BuildResult{
+		ExitCode: 0,
+		Logs:     "ok  \tmypackage\t0.5s\tcoverage: 92.1% of statements\nPASS",
+		Duration: 2 * time.Second,
+	}
+
+	h := sandbox.NewHandler(mock, nil, nil, nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"task_id":           uuid.New().String(),
+		"repo_id":           uuid.New().String(),
+		"user_id":           uuid.New().String(),
+		"build_system":      "go",
+		"command":           "go test -cover ./...",
+		"base_image":        "golang:1.22",
+		"collect_artifacts": true,
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/resolve-execute", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleResolveAndExecute(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	artifacts, ok := resp["artifacts"].([]any)
+	if !ok || len(artifacts) == 0 {
+		t.Error("expected at least one artifact for coverage output")
+	}
+}
+
+func TestHandleResolveAndExecute_NoArtifactsWhenNotRequested(t *testing.T) {
+	mock := sandbox.NewMockRuntime()
+	mock.WaitResult = &sandbox.BuildResult{
+		ExitCode: 0,
+		Logs:     "coverage: 100% of statements",
+		Duration: time.Second,
+	}
+
+	h := sandbox.NewHandler(mock, nil, nil, nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"task_id":      uuid.New().String(),
+		"repo_id":      uuid.New().String(),
+		"user_id":      uuid.New().String(),
+		"build_system": "go",
+		"command":      "go test ./...",
+		"base_image":   "golang:1.22",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/resolve-execute", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleResolveAndExecute(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	// artifacts should be null/nil when not requested.
+	if resp["artifacts"] != nil {
+		t.Errorf("expected nil artifacts when collect_artifacts not set, got %v", resp["artifacts"])
+	}
+}
+
+// ── HandleListArtifacts ─────────────────────────────────────────────────────
+
+func TestHandleListArtifacts_NoStore(t *testing.T) {
+	h := sandbox.NewHandler(sandbox.NewMockRuntime(), nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/sandbox/artifacts/"+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+
+	h.HandleListArtifacts(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}

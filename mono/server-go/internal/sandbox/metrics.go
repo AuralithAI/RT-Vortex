@@ -99,4 +99,28 @@ var (
 		Name:      "secret_resolutions_total",
 		Help:      "Secret resolution attempts by result (resolved, failed).",
 	}, []string{"result"})
+
+	// ArtifactsCollected counts build artifacts collected after builds.
+	ArtifactsCollected = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "artifacts_collected_total",
+		Help:      "Total build artifacts collected from sandbox containers.",
+	})
+
+	// ArtifactBytes tracks total bytes of collected artifacts.
+	ArtifactBytes = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "artifact_bytes_total",
+		Help:      "Total bytes of collected build artifacts.",
+	})
+
+	// WorkspaceInjections counts workspace changeset injections into containers.
+	WorkspaceInjections = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "workspace_injections_total",
+		Help:      "Total workspace changeset injections into sandbox containers.",
+	})
 )

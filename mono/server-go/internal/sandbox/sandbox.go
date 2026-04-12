@@ -46,6 +46,9 @@ type BuildPlan struct {
 	MemoryLimit string            `json:"memory_limit"` // e.g. "2g"
 	CPULimit    string            `json:"cpu_limit"`    // e.g. "2"
 	Cache       *CacheConfig      `json:"-"`            // dependency layer cache volume (nil = no cache)
+	WorkspaceFS map[string]string `json:"-"`            // file path → content to inject into /workspace
+	WorkspaceDir string           `json:"-"`            // host temp dir with workspace files (set by PrepareWorkspace)
+	ArtifactCfg *ArtifactCollectorConfig `json:"-"`     // paths to collect after build (nil = defaults)
 }
 
 // DefaultTimeout is the default build timeout.

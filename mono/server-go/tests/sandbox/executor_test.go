@@ -298,6 +298,59 @@ func TestDockerRuntime_BuildDockerArgs_NoCache(t *testing.T) {
 	}
 }
 
+func TestDockerRuntime_BuildDockerArgs_WithWorkspace(t *testing.T) {
+	rt := sandbox.NewDockerRuntime(nil)
+
+	plan := &sandbox.BuildPlan{
+		ID:           uuid.New(),
+		BaseImage:    "golang:1.22",
+		Command:      "go build ./...",
+		MemoryLimit:  "2g",
+		CPULimit:     "2",
+		WorkspaceDir: "/tmp/rtvortex-ws-test",
+	}
+
+	args, _ := rt.BuildDockerArgs(plan)
+
+	// Should contain workspace bind mount.
+	foundMount := false
+	foundWorkdir := false
+	for i, a := range args {
+		if a == "-v" && i+1 < len(args) && strings.Contains(args[i+1], "/tmp/rtvortex-ws-test:/workspace:ro") {
+			foundMount = true
+		}
+		if a == "-w" && i+1 < len(args) && args[i+1] == "/workspace" {
+			foundWorkdir = true
+		}
+	}
+	if !foundMount {
+		t.Error("expected workspace bind mount in args")
+	}
+	if !foundWorkdir {
+		t.Error("expected -w /workspace in args")
+	}
+}
+
+func TestDockerRuntime_BuildDockerArgs_NoWorkspace(t *testing.T) {
+	rt := sandbox.NewDockerRuntime(nil)
+
+	plan := &sandbox.BuildPlan{
+		ID:          uuid.New(),
+		BaseImage:   "golang:1.22",
+		Command:     "go build ./...",
+		MemoryLimit: "2g",
+		CPULimit:    "2",
+	}
+
+	args, _ := rt.BuildDockerArgs(plan)
+
+	for _, a := range args {
+		if strings.Contains(a, "/workspace") {
+			t.Error("should not contain /workspace mount when WorkspaceDir is empty")
+		}
+	}
+}
+
 // ── helpers ─────────────────────────────────────────────────────────────────
 
 func assertContains(t *testing.T, args []string, values ...string) {
