@@ -83,4 +83,20 @@ var (
 		Name:      "probe_missing_secrets_total",
 		Help:      "Total missing secrets detected across all probes.",
 	})
+
+	// HITLConfirmations counts build plan confirmation requests sent to humans.
+	HITLConfirmations = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "hitl_confirmations_total",
+		Help:      "Build plan HITL confirmations by outcome (approved, rejected, timeout).",
+	}, []string{"outcome"})
+
+	// SecretResolutions counts secret resolution attempts by result.
+	SecretResolutions = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "secret_resolutions_total",
+		Help:      "Secret resolution attempts by result (resolved, failed).",
+	}, []string{"result"})
 )

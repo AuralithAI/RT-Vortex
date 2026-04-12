@@ -62,6 +62,20 @@ func NewDockerRuntime(logger *slog.Logger) *DockerRuntime {
 	}
 }
 
+// PlanCount returns the number of stored plans (for testing).
+func (d *DockerRuntime) PlanCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return len(d.plans)
+}
+
+// GetPlan returns the plan for a container ID, or nil if not found (for testing).
+func (d *DockerRuntime) GetPlan(containerID string) *BuildPlan {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.plans[containerID]
+}
+
 // HealthCheck verifies Docker is available by running `docker info`.
 func (d *DockerRuntime) HealthCheck(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, "docker", "info", "--format", "{{.ServerVersion}}")
@@ -104,10 +118,10 @@ func (d *DockerRuntime) Start(ctx context.Context, containerID string) error {
 	return nil
 }
 
-// buildDockerArgs constructs the full `docker run` argument list from a
+// BuildDockerArgs constructs the full `docker run` argument list from a
 // BuildPlan.  This is separated for testability and for safe logging
 // (the returned redactedArgs replaces secret values with "***").
-func (d *DockerRuntime) buildDockerArgs(plan *BuildPlan) (args []string, redactedArgs []string) {
+func (d *DockerRuntime) BuildDockerArgs(plan *BuildPlan) (args []string, redactedArgs []string) {
 	args = []string{
 		"run", "--rm",
 		"--name", "rtvortex-build-" + plan.ID.String()[:8],
@@ -166,7 +180,7 @@ func (d *DockerRuntime) Wait(ctx context.Context, containerID string, timeout ti
 		timeout = DefaultTimeout
 	}
 
-	args, redactedArgs := d.buildDockerArgs(plan)
+	args, redactedArgs := d.BuildDockerArgs(plan)
 
 	d.logger.Info("sandbox: executing docker run",
 		"container_id", containerID,

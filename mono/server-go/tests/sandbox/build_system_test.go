@@ -1,9 +1,13 @@
-package sandbox
+package sandbox_test
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/AuralithAI/rtvortex-server/internal/sandbox"
+)
 
 func TestDetectBuildSystem_Go(t *testing.T) {
-	info := DetectBuildSystem([]string{"go.mod", "main.go", "internal/server/server.go"})
+	info := sandbox.DetectBuildSystem([]string{"go.mod", "main.go", "internal/server/server.go"})
 	if info == nil {
 		t.Fatal("expected go build system, got nil")
 	}
@@ -16,8 +20,7 @@ func TestDetectBuildSystem_Go(t *testing.T) {
 }
 
 func TestDetectBuildSystem_GradlePriority(t *testing.T) {
-	// Gradle should win over Makefile because it appears first in rules.
-	info := DetectBuildSystem([]string{"build.gradle.kts", "Makefile", "src/main.java"})
+	info := sandbox.DetectBuildSystem([]string{"build.gradle.kts", "Makefile", "src/main.java"})
 	if info == nil {
 		t.Fatal("expected gradle, got nil")
 	}
@@ -27,7 +30,7 @@ func TestDetectBuildSystem_GradlePriority(t *testing.T) {
 }
 
 func TestDetectBuildSystem_CustomSandbox(t *testing.T) {
-	info := DetectBuildSystem([]string{"SANDBOX.md", "go.mod"})
+	info := sandbox.DetectBuildSystem([]string{"SANDBOX.md", "go.mod"})
 	if info == nil {
 		t.Fatal("expected custom, got nil")
 	}
@@ -37,15 +40,14 @@ func TestDetectBuildSystem_CustomSandbox(t *testing.T) {
 }
 
 func TestDetectBuildSystem_Unknown(t *testing.T) {
-	info := DetectBuildSystem([]string{"README.md", "LICENSE"})
+	info := sandbox.DetectBuildSystem([]string{"README.md", "LICENSE"})
 	if info != nil {
 		t.Errorf("expected nil for unknown project, got %+v", info)
 	}
 }
 
 func TestDetectBuildSystem_NestedPath(t *testing.T) {
-	// path.Base("services/api/package.json") == "package.json"
-	info := DetectBuildSystem([]string{"services/api/package.json"})
+	info := sandbox.DetectBuildSystem([]string{"services/api/package.json"})
 	if info == nil {
 		t.Fatal("expected node, got nil")
 	}
@@ -70,7 +72,7 @@ func TestAffectsBuildSystem(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := AffectsBuildSystem(tt.files)
+			got := sandbox.AffectsBuildSystem(tt.files)
 			if got != tt.affects {
 				t.Errorf("AffectsBuildSystem(%v) = %v, want %v", tt.files, got, tt.affects)
 			}

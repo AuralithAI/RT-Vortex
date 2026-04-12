@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -123,6 +124,165 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"id":     buildID,
 		"status": "not_implemented",
+	})
+}
+
+// ── POST /internal/swarm/sandbox/resolve-execute ─────────────────────────────
+
+// resolveExecuteRequest is the payload for HandleResolveAndExecute.
+type resolveExecuteRequest struct {
+	TaskID      string   `json:"task_id"`
+	RepoID      string   `json:"repo_id"`
+	UserID      string   `json:"user_id"`
+	BuildSystem string   `json:"build_system"`
+	Command     string   `json:"command"`
+	PreCommands []string `json:"pre_commands"`
+	SecretRefs  []string `json:"secret_refs"`
+	BaseImage   string   `json:"base_image"`
+	SandboxMode bool     `json:"sandbox_mode"`
+	TimeoutSec  int      `json:"timeout_sec"`
+	MemoryLimit string   `json:"memory_limit"`
+	CPULimit    string   `json:"cpu_limit"`
+}
+
+// HandleResolveAndExecute resolves secret values from the keychain, populates
+// the build plan, executes the container, and zeroes secret memory.
+// This is the Phase 4 endpoint that agents call after HITL confirmation.
+func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request) {
+	var req resolveExecuteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	taskID, err := uuid.Parse(req.TaskID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid task_id"}`, http.StatusBadRequest)
+		return
+	}
+	userID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid user_id"}`, http.StatusBadRequest)
+		return
+	}
+	repoID, err := uuid.Parse(req.RepoID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid repo_id"}`, http.StatusBadRequest)
+		return
+	}
+
+	if req.BaseImage == "" || req.Command == "" {
+		http.Error(w, `{"error":"base_image and command are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Build the plan.
+	plan := &BuildPlan{
+		ID:          uuid.New(),
+		TaskID:      taskID,
+		RepoID:      req.RepoID,
+		BuildSystem: req.BuildSystem,
+		Command:     req.Command,
+		PreCommands: req.PreCommands,
+		SecretRefs:  req.SecretRefs,
+		BaseImage:   req.BaseImage,
+		SandboxMode: req.SandboxMode,
+		MemoryLimit: req.MemoryLimit,
+		CPULimit:    req.CPULimit,
+		EnvVars:     make(map[string]string),
+	}
+	if req.TimeoutSec > 0 {
+		plan.Timeout = time.Duration(req.TimeoutSec) * time.Second
+	} else {
+		plan.Timeout = DefaultTimeout
+	}
+	if plan.MemoryLimit == "" {
+		plan.MemoryLimit = DefaultMemoryLimit
+	}
+	if plan.CPULimit == "" {
+		plan.CPULimit = DefaultCPULimit
+	}
+
+	// Resolve secrets from the keychain.
+	var resolved, failed []string
+	if h.KeychainService != nil && len(req.SecretRefs) > 0 {
+		for _, name := range req.SecretRefs {
+			val, kerr := h.KeychainService.GetBuildSecret(r.Context(), userID, repoID, name)
+			if kerr != nil {
+				h.Logger.Warn("sandbox: could not resolve secret",
+					"name", name, "user_id", userID, "repo_id", repoID, "error", kerr)
+				failed = append(failed, name)
+				continue
+			}
+			plan.EnvVars[name] = string(val)
+			resolved = append(resolved, name)
+		}
+		BuildSecretInjects.Add(float64(len(resolved)))
+	}
+
+	h.Logger.Info("sandbox: secrets resolved",
+		"resolved", len(resolved), "failed", len(failed),
+		"task_id", taskID, "repo_id", repoID)
+
+	// Execute the container.
+	BuildContainersActive.Inc()
+	defer BuildContainersActive.Dec()
+
+	containerID, err := h.Runtime.Create(r.Context(), plan)
+	if err != nil {
+		h.Logger.Error("sandbox: failed to create container", "error", err)
+		http.Error(w, `{"error":"container creation failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.Runtime.Start(r.Context(), containerID); err != nil {
+		h.Logger.Error("sandbox: failed to start container", "error", err, "container_id", containerID)
+		_ = h.Runtime.Destroy(r.Context(), containerID)
+		http.Error(w, `{"error":"container start failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	start := time.Now()
+	result, waitErr := h.Runtime.Wait(r.Context(), containerID, plan.Timeout)
+
+	// Always destroy.
+	destroyErr := h.Runtime.Destroy(r.Context(), containerID)
+	if destroyErr != nil {
+		h.Logger.Warn("sandbox: container cleanup failed", "error", destroyErr, "container_id", containerID)
+	}
+
+	// Zero secret values from memory.
+	for k := range plan.EnvVars {
+		plan.EnvVars[k] = ""
+	}
+	plan.EnvVars = nil
+
+	if waitErr != nil {
+		h.Logger.Error("sandbox: build execution failed", "error", waitErr)
+		if result == nil {
+			http.Error(w, `{"error":"build execution failed"}`, http.StatusInternalServerError)
+			return
+		}
+	}
+
+	duration := time.Since(start)
+	BuildDuration.Observe(duration.Seconds())
+
+	status := "success"
+	if result.ExitCode != 0 {
+		status = "failed"
+	}
+	BuildTotal.WithLabelValues(status).Inc()
+
+	// Enrich response with resolution metadata.
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"exit_code":        result.ExitCode,
+		"logs":             result.Logs,
+		"duration":         result.Duration.String(),
+		"secret_refs":      result.SecretRefs,
+		"resolved_secrets": resolved,
+		"failed_secrets":   failed,
 	})
 }
 

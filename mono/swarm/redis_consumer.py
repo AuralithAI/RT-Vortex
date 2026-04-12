@@ -638,6 +638,34 @@ async def _run_full_pipeline(
                             ", ".join(probe_result["missing_secrets"]),
                         )
 
+                    # Phase 4: HITL confirmation + build execution.
+                    build_exec_result: dict = {}
+                    if probe_result and probe_result.get("build_system", "unknown") != "unknown":
+                        try:
+                            build_exec_result = await builder.confirm_and_execute(
+                                task=task,
+                                user_id=user_id,
+                                probe_result=probe_result,
+                            )
+                            build_status = build_exec_result.get("status", "unknown")
+                            logger.info(
+                                "Team %s: Build execution — status=%s, exit_code=%s",
+                                team_id[:8],
+                                build_status,
+                                build_exec_result.get("exit_code", "n/a"),
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Team %s: Build confirm+execute failed (non-fatal): %s",
+                                team_id[:8], e,
+                            )
+                    else:
+                        logger.info(
+                            "Team %s: Skipping build execution — "
+                            "no probe result or unknown build system",
+                            team_id[:8],
+                        )
+
                     try:
                         builder_result = await builder.run(task)
                         if builder_result.error:
@@ -647,9 +675,10 @@ async def _run_full_pipeline(
                             )
                         else:
                             logger.info(
-                                "Team %s: Builder validation passed (ready=%s)",
+                                "Team %s: Builder validation passed (ready=%s, build=%s)",
                                 team_id[:8],
                                 probe_result.get("ready", "unknown"),
+                                build_exec_result.get("status", "not_run"),
                             )
                     except Exception as e:
                         logger.warning(

@@ -68,63 +68,63 @@ func GeneratePlan(ctx context.Context, opts PlanOptions) *BuildPlan {
 type ProbeOptions struct {
 	TaskID       uuid.UUID
 	RepoID       string
-	RepoFiles    []string // all files in the repo
-	ChangedFiles []string // files modified by the diffs
-	SecretNames  []string // secret names the user has stored for this repo
+	RepoFiles    []string          // all files in the repo
+	ChangedFiles []string          // files modified by the diffs
+	SecretNames  []string          // secret names the user has stored for this repo
 	FileContents map[string]string // filename → content for env-var scanning
 }
 
 // ProbeResult is the output of the pre-build environment probe.
 type ProbeResult struct {
-	BuildSystem    string            `json:"build_system"`
-	BuildCommand   string            `json:"build_command"`
-	BaseImage      string            `json:"base_image"`
-	DetectedEnvs   []DetectedEnvVar  `json:"detected_envs"`
-	MatchedSecrets []string          `json:"matched_secrets"`
-	MissingSecrets []string          `json:"missing_secrets"`
-	WellKnownEnvs  map[string]string `json:"well_known_envs"`
-	Recommendations []string         `json:"recommendations"`
-	Ready          bool              `json:"ready"`
+	BuildSystem     string            `json:"build_system"`
+	BuildCommand    string            `json:"build_command"`
+	BaseImage       string            `json:"base_image"`
+	DetectedEnvs    []DetectedEnvVar  `json:"detected_envs"`
+	MatchedSecrets  []string          `json:"matched_secrets"`
+	MissingSecrets  []string          `json:"missing_secrets"`
+	WellKnownEnvs   map[string]string `json:"well_known_envs"`
+	Recommendations []string          `json:"recommendations"`
+	Ready           bool              `json:"ready"`
 }
 
 // DetectedEnvVar records an env-var reference found in source code.
 type DetectedEnvVar struct {
-	Name   string `json:"name"`
-	File   string `json:"file"`
-	Kind   string `json:"kind"` // "explicit", "dockerfile", "cmake"
+	Name string `json:"name"`
+	File string `json:"file"`
+	Kind string `json:"kind"` // "explicit", "dockerfile", "cmake"
 }
 
 // wellKnownDefaults are env vars with safe default values that don't require secrets.
 var wellKnownDefaults = map[string]string{
-	"JAVA_HOME":        "/usr/lib/jvm/java-17",
+	"JAVA_HOME":         "/usr/lib/jvm/java-17",
 	"CMAKE_PREFIX_PATH": "/usr/local",
-	"GOPATH":           "/go",
-	"GOROOT":           "/usr/local/go",
-	"PYTHONPATH":       "",
-	"NODE_PATH":        "",
-	"PATH":             "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-	"HOME":             "/home/builder",
-	"LANG":             "C.UTF-8",
-	"CI":               "true",
+	"GOPATH":            "/go",
+	"GOROOT":            "/usr/local/go",
+	"PYTHONPATH":        "",
+	"NODE_PATH":         "",
+	"PATH":              "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	"HOME":              "/home/builder",
+	"LANG":              "C.UTF-8",
+	"CI":                "true",
 }
 
 // envScanPatterns maps file extensions to env-var extraction patterns.
 var envScanPatterns = map[string][]string{
-	".py":          {"os.getenv(", "os.environ[", "os.environ.get("},
-	".js":          {"process.env."},
-	".ts":          {"process.env."},
-	".java":        {"System.getenv(", "System.getProperty("},
-	".go":          {"os.Getenv(", "viper.Get("},
-	".c":           {"getenv("},
-	".cpp":         {"getenv(", "std::getenv("},
-	".h":           {"getenv("},
-	".rs":          {"env::var(", "env::var_os("},
-	".rb":          {"ENV[", "ENV.fetch("},
-	"Dockerfile":   {"ENV ", "ARG "},
-	"docker-compose.yml": {"environment:"},
+	".py":                 {"os.getenv(", "os.environ[", "os.environ.get("},
+	".js":                 {"process.env."},
+	".ts":                 {"process.env."},
+	".java":               {"System.getenv(", "System.getProperty("},
+	".go":                 {"os.Getenv(", "viper.Get("},
+	".c":                  {"getenv("},
+	".cpp":                {"getenv(", "std::getenv("},
+	".h":                  {"getenv("},
+	".rs":                 {"env::var(", "env::var_os("},
+	".rb":                 {"ENV[", "ENV.fetch("},
+	"Dockerfile":          {"ENV ", "ARG "},
+	"docker-compose.yml":  {"environment:"},
 	"docker-compose.yaml": {"environment:"},
-	"CMakeLists.txt": {"$ENV{", "set(CMAKE_"},
-	".env.example":  {"="},
+	"CMakeLists.txt":      {"$ENV{", "set(CMAKE_"},
+	".env.example":        {"="},
 }
 
 // RunProbe performs a pre-build environment probe: detects the build system,
@@ -132,10 +132,10 @@ var envScanPatterns = map[string][]string{
 // available secrets.
 func RunProbe(ctx context.Context, opts ProbeOptions) *ProbeResult {
 	result := &ProbeResult{
-		DetectedEnvs:   make([]DetectedEnvVar, 0),
-		MatchedSecrets: make([]string, 0),
-		MissingSecrets: make([]string, 0),
-		WellKnownEnvs:  make(map[string]string),
+		DetectedEnvs:    make([]DetectedEnvVar, 0),
+		MatchedSecrets:  make([]string, 0),
+		MissingSecrets:  make([]string, 0),
+		WellKnownEnvs:   make(map[string]string),
 		Recommendations: make([]string, 0),
 	}
 
@@ -175,7 +175,7 @@ func RunProbe(ctx context.Context, opts ProbeOptions) *ProbeResult {
 				if idx < 0 {
 					continue
 				}
-				envName := extractEnvName(trimmed, idx+len(pattern), base)
+				envName := ExtractEnvName(trimmed, idx+len(pattern), base)
 				if envName == "" {
 					continue
 				}
@@ -235,8 +235,8 @@ func RunProbe(ctx context.Context, opts ProbeOptions) *ProbeResult {
 	return result
 }
 
-// extractEnvName pulls the env-var name from a source line starting after a pattern match.
-func extractEnvName(line string, offset int, basename string) string {
+// ExtractEnvName pulls the env-var name from a source line starting after a pattern match.
+func ExtractEnvName(line string, offset int, basename string) string {
 	if offset >= len(line) {
 		return ""
 	}
@@ -246,28 +246,27 @@ func extractEnvName(line string, offset int, basename string) string {
 	// Dockerfile: "ENV FOO=bar" or "ARG FOO=bar" — name is the first token.
 	if basename == "Dockerfile" {
 		rest = strings.TrimSpace(rest)
-		name := extractToken(rest)
+		name := ExtractToken(rest)
 		if eqIdx := strings.Index(name, "="); eqIdx > 0 {
 			name = name[:eqIdx]
 		}
-		return sanitiseEnvName(name)
+		return SanitiseEnvName(name)
 	}
 
 	// .env.example: "FOO_BAR=value" — name is everything before '='.
 	if strings.HasSuffix(basename, ".env.example") {
-		// We matched '=' so the name is the text before offset.
 		before := strings.TrimSpace(line[:offset])
-		return sanitiseEnvName(before)
+		return SanitiseEnvName(before)
 	}
 
 	// Strip leading quote or bracket: getenv("FOO"), os.environ["FOO"], ENV["FOO"]
 	rest = strings.TrimLeft(rest, `"'[`)
-	name := extractToken(rest)
-	return sanitiseEnvName(name)
+	name := ExtractToken(rest)
+	return SanitiseEnvName(name)
 }
 
-// extractToken reads an identifier-like token (A-Z, a-z, 0-9, _) from the start of s.
-func extractToken(s string) string {
+// ExtractToken reads an identifier-like token (A-Z, a-z, 0-9, _) from the start of s.
+func ExtractToken(s string) string {
 	var b strings.Builder
 	for _, ch := range s {
 		if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' {
@@ -279,8 +278,8 @@ func extractToken(s string) string {
 	return b.String()
 }
 
-// sanitiseEnvName returns a cleaned env-var name, or "" if it's too short or suspicious.
-func sanitiseEnvName(s string) string {
+// SanitiseEnvName returns a cleaned env-var name, or "" if it's too short or suspicious.
+func SanitiseEnvName(s string) string {
 	s = strings.TrimSpace(s)
 	if len(s) < 2 || len(s) > 128 {
 		return ""

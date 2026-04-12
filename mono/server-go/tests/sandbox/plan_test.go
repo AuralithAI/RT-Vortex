@@ -1,14 +1,15 @@
-package sandbox
+package sandbox_test
 
 import (
 	"context"
 	"testing"
 
+	"github.com/AuralithAI/rtvortex-server/internal/sandbox"
 	"github.com/google/uuid"
 )
 
 func TestGeneratePlan_Defaults(t *testing.T) {
-	plan := GeneratePlan(context.Background(), PlanOptions{
+	plan := sandbox.GeneratePlan(context.Background(), sandbox.PlanOptions{
 		TaskID:    uuid.New(),
 		RepoID:    "test-repo",
 		RepoFiles: []string{"go.mod", "main.go"},
@@ -16,16 +17,16 @@ func TestGeneratePlan_Defaults(t *testing.T) {
 	if plan.BuildSystem != "go" {
 		t.Errorf("BuildSystem = %q, want %q", plan.BuildSystem, "go")
 	}
-	if plan.Timeout != DefaultTimeout {
-		t.Errorf("Timeout = %v, want %v", plan.Timeout, DefaultTimeout)
+	if plan.Timeout != sandbox.DefaultTimeout {
+		t.Errorf("Timeout = %v, want %v", plan.Timeout, sandbox.DefaultTimeout)
 	}
-	if plan.MemoryLimit != DefaultMemoryLimit {
-		t.Errorf("MemoryLimit = %q, want %q", plan.MemoryLimit, DefaultMemoryLimit)
+	if plan.MemoryLimit != sandbox.DefaultMemoryLimit {
+		t.Errorf("MemoryLimit = %q, want %q", plan.MemoryLimit, sandbox.DefaultMemoryLimit)
 	}
 }
 
 func TestRunProbe_DetectsEnvVars(t *testing.T) {
-	result := RunProbe(context.Background(), ProbeOptions{
+	result := sandbox.RunProbe(context.Background(), sandbox.ProbeOptions{
 		TaskID:    uuid.New(),
 		RepoID:    "test-repo",
 		RepoFiles: []string{"go.mod", "main.go", "cmd/server.go"},
@@ -52,7 +53,6 @@ func main() {
 		t.Fatalf("detected %d env vars, want 3", len(result.DetectedEnvs))
 	}
 
-	// DATABASE_URL should be matched.
 	found := false
 	for _, s := range result.MatchedSecrets {
 		if s == "DATABASE_URL" {
@@ -63,12 +63,10 @@ func main() {
 		t.Error("DATABASE_URL should be in matched secrets")
 	}
 
-	// HOME should be well-known.
 	if _, ok := result.WellKnownEnvs["HOME"]; !ok {
 		t.Error("HOME should be in well-known envs")
 	}
 
-	// PORT should be missing.
 	found = false
 	for _, s := range result.MissingSecrets {
 		if s == "PORT" {
@@ -85,7 +83,7 @@ func main() {
 }
 
 func TestRunProbe_AllSecretsMatched(t *testing.T) {
-	result := RunProbe(context.Background(), ProbeOptions{
+	result := sandbox.RunProbe(context.Background(), sandbox.ProbeOptions{
 		TaskID:    uuid.New(),
 		RepoID:    "test-repo",
 		RepoFiles: []string{"package.json", "src/index.js"},
@@ -104,7 +102,7 @@ func TestRunProbe_AllSecretsMatched(t *testing.T) {
 }
 
 func TestRunProbe_Dockerfile(t *testing.T) {
-	result := RunProbe(context.Background(), ProbeOptions{
+	result := sandbox.RunProbe(context.Background(), sandbox.ProbeOptions{
 		TaskID:    uuid.New(),
 		RepoID:    "test-repo",
 		RepoFiles: []string{"Dockerfile", "app.py"},
@@ -135,7 +133,7 @@ RUN pip install -r requirements.txt
 }
 
 func TestRunProbe_Python(t *testing.T) {
-	result := RunProbe(context.Background(), ProbeOptions{
+	result := sandbox.RunProbe(context.Background(), sandbox.ProbeOptions{
 		TaskID:    uuid.New(),
 		RepoID:    "test-repo",
 		RepoFiles: []string{"pyproject.toml", "app.py"},
@@ -158,7 +156,7 @@ key = os.environ["SECRET_KEY"]
 }
 
 func TestRunProbe_UnknownBuildSystem(t *testing.T) {
-	result := RunProbe(context.Background(), ProbeOptions{
+	result := sandbox.RunProbe(context.Background(), sandbox.ProbeOptions{
 		TaskID:       uuid.New(),
 		RepoID:       "test-repo",
 		RepoFiles:    []string{"README.md"},
@@ -177,7 +175,7 @@ func TestRunProbe_UnknownBuildSystem(t *testing.T) {
 }
 
 func TestRunProbe_CaseInsensitiveSecretMatch(t *testing.T) {
-	result := RunProbe(context.Background(), ProbeOptions{
+	result := sandbox.RunProbe(context.Background(), sandbox.ProbeOptions{
 		TaskID:    uuid.New(),
 		RepoID:    "test-repo",
 		RepoFiles: []string{"go.mod", "main.go"},
@@ -210,9 +208,9 @@ func TestExtractEnvName(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := extractEnvName(tt.line, tt.offset, tt.basename)
+		got := sandbox.ExtractEnvName(tt.line, tt.offset, tt.basename)
 		if got != tt.want {
-			t.Errorf("extractEnvName(%q, %d, %q) = %q, want %q",
+			t.Errorf("ExtractEnvName(%q, %d, %q) = %q, want %q",
 				tt.line, tt.offset, tt.basename, got, tt.want)
 		}
 	}
@@ -224,16 +222,16 @@ func TestSanitiseEnvName(t *testing.T) {
 		want  string
 	}{
 		{"FOO_BAR", "FOO_BAR"},
-		{"a", ""},       // too short
-		{"123ABC", ""},  // starts with digit
+		{"a", ""},
+		{"123ABC", ""},
 		{"_PRIVATE", "_PRIVATE"},
 		{"", ""},
 	}
 
 	for _, tt := range tests {
-		got := sanitiseEnvName(tt.input)
+		got := sandbox.SanitiseEnvName(tt.input)
 		if got != tt.want {
-			t.Errorf("sanitiseEnvName(%q) = %q, want %q", tt.input, got, tt.want)
+			t.Errorf("SanitiseEnvName(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }

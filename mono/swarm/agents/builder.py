@@ -145,6 +145,190 @@ class BuilderAgent(Agent):
 
         self._probe_result: dict | None = None
         self._user_id: str = ""
+        self._build_result: dict | None = None
+
+    async def confirm_and_execute(
+        self,
+        task: Task,
+        user_id: str,
+        probe_result: dict,
+    ) -> dict:
+        """Request HITL confirmation of the build plan and execute if approved.
+
+        Sends a structured question to the human with the probe summary.
+        If missing secrets exist the human can approve (proceed without them),
+        reject (abort the build), or add the secrets first and re-probe.
+        On approval (or timeout) the build executes via resolve-execute.
+        """
+        from ..go_client import GoClient
+
+        go_client: GoClient | None = getattr(self, "_go_client", None)
+        if go_client is None:
+            logger.warning("builder: no go_client, skipping confirm_and_execute")
+            return {"status": "skipped", "reason": "no_go_client"}
+
+        build_system = probe_result.get("build_system", "unknown")
+        build_command = probe_result.get("build_command", "")
+        base_image = probe_result.get("base_image", "")
+        matched = probe_result.get("matched_secrets", [])
+        missing = probe_result.get("missing_secrets", [])
+        ready = probe_result.get("ready", False)
+        recommendations = probe_result.get("recommendations", [])
+
+        # Build a human-readable plan summary for HITL.
+        lines = [
+            f"**Build System:** {build_system}",
+            f"**Command:** `{build_command}`",
+            f"**Base Image:** `{base_image}`",
+        ]
+        if matched:
+            lines.append(f"**Secrets Available:** {', '.join(matched)}")
+        if missing:
+            lines.append(f"**⚠ Missing Secrets:** {', '.join(missing)}")
+        if recommendations:
+            lines.append("**Recommendations:**")
+            for rec in recommendations:
+                lines.append(f"  - {rec}")
+
+        if ready:
+            lines.append("\n✅ Build is ready to execute.")
+        else:
+            lines.append(
+                "\n⚠ Build may fail — missing secrets or unknown build system."
+            )
+
+        plan_summary = "\n".join(lines)
+
+        # Determine HITL question urgency and timeout.
+        if missing:
+            urgency = "high"
+            question = (
+                "The sandbox build plan has **missing secrets**. "
+                "Should I proceed with the build anyway?\n\n"
+                + plan_summary
+                + "\n\nReply **yes** to proceed, **no** to abort, "
+                "or **add secrets** if you want to add them first."
+            )
+        else:
+            urgency = "normal"
+            question = (
+                "Ready to run a sandbox build. Please confirm:\n\n"
+                + plan_summary
+                + "\n\nReply **yes** to proceed or **no** to skip the build."
+            )
+
+        # Post the plan summary as an agent message for the UI.
+        try:
+            await go_client.post_agent_message(
+                task_id=task.id,
+                message={
+                    "agent_id": self.agent_id,
+                    "agent_role": "builder",
+                    "kind": "build_plan",
+                    "content": plan_summary,
+                    "metadata": {
+                        "build_system": build_system,
+                        "ready": ready,
+                        "missing_secrets": missing,
+                        "matched_secrets": matched,
+                    },
+                },
+            )
+        except Exception:
+            pass
+
+        # Ask the human for confirmation.
+        try:
+            hitl_resp = await go_client.ask_human(
+                question=question,
+                context=f"Sandbox build for task {task.id}",
+                urgency=urgency,
+                timeout=120,
+            )
+        except Exception as e:
+            logger.warning("builder: HITL ask failed: %s — auto-approving", e)
+            hitl_resp = {"response": "yes", "timed_out": "true"}
+
+        response_text = hitl_resp.get("response", "").strip().lower()
+        timed_out = hitl_resp.get("timed_out", "false") == "true"
+
+        # Parse the human response.
+        approved = response_text.startswith("yes") or timed_out
+        rejected = response_text.startswith("no")
+        wants_secrets = "add secret" in response_text
+
+        if wants_secrets:
+            logger.info("builder: human wants to add secrets first — aborting build")
+            return {
+                "status": "pending_secrets",
+                "reason": "human requested adding secrets before build",
+                "missing_secrets": missing,
+            }
+
+        if rejected:
+            logger.info("builder: human rejected the build plan")
+            return {"status": "rejected", "reason": "human rejected build plan"}
+
+        # Approved — execute the build.
+        logger.info(
+            "builder: build approved (timed_out=%s) — executing", timed_out
+        )
+
+        secret_refs = matched + missing  # attempt all — Go resolves what it can
+        try:
+            result = await go_client.sandbox_resolve_execute(
+                task_id=task.id,
+                repo_id=task.repo_id,
+                user_id=user_id,
+                build_system=build_system,
+                command=build_command,
+                base_image=base_image,
+                secret_refs=secret_refs,
+                sandbox_mode=True,
+            )
+            self._build_result = result
+
+            exit_code = result.get("exit_code", -1)
+            logger.info(
+                "builder: build finished — exit_code=%d, resolved=%s, failed=%s",
+                exit_code,
+                result.get("resolved_secrets", []),
+                result.get("failed_secrets", []),
+            )
+
+            # Post build result as agent message.
+            build_status = "success" if exit_code == 0 else "failed"
+            try:
+                await go_client.post_agent_message(
+                    task_id=task.id,
+                    message={
+                        "agent_id": self.agent_id,
+                        "agent_role": "builder",
+                        "kind": "build_result",
+                        "content": f"Build {build_status} (exit code {exit_code})",
+                        "metadata": {
+                            "exit_code": exit_code,
+                            "duration": result.get("duration", ""),
+                            "resolved_secrets": result.get("resolved_secrets", []),
+                            "failed_secrets": result.get("failed_secrets", []),
+                        },
+                    },
+                )
+            except Exception:
+                pass
+
+            return {
+                "status": build_status,
+                "exit_code": exit_code,
+                "duration": result.get("duration", ""),
+                "resolved_secrets": result.get("resolved_secrets", []),
+                "failed_secrets": result.get("failed_secrets", []),
+                "logs_truncated": len(result.get("logs", "")) > 1024,
+            }
+
+        except Exception as e:
+            logger.error("builder: build execution failed: %s", e)
+            return {"status": "error", "reason": str(e)}
 
     async def run_probe(
         self,
@@ -327,5 +511,9 @@ Be specific and cite common patterns. Do NOT narrate tool calls.
         # Attach probe result as structured metadata in the output.
         if self._probe_result:
             combined += f"\n\n---\n## Probe Result (structured)\n```json\n{json.dumps(self._probe_result, indent=2)}\n```"
+
+        # Attach build result if a build was executed.
+        if self._build_result:
+            combined += f"\n\n---\n## Build Result (structured)\n```json\n{json.dumps(self._build_result, indent=2)}\n```"
 
         return AgentResult(output=combined)

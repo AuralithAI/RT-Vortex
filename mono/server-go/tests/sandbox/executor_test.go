@@ -1,39 +1,38 @@
-package sandbox
+package sandbox_test
 
 import (
 	"context"
 	"testing"
 	"time"
 
+	"github.com/AuralithAI/rtvortex-server/internal/sandbox"
 	"github.com/google/uuid"
 )
 
 // ── MockRuntime lifecycle ───────────────────────────────────────────────────
 
 func TestMockRuntime_FullLifecycle(t *testing.T) {
-	rt := NewMockRuntime()
+	rt := sandbox.NewMockRuntime()
 	ctx := context.Background()
 
-	plan := &BuildPlan{
+	plan := &sandbox.BuildPlan{
 		ID:          uuid.New(),
 		TaskID:      uuid.New(),
 		RepoID:      "test-repo",
 		BuildSystem: "go",
 		Command:     "go build ./...",
 		BaseImage:   "golang:1.22",
-		MemoryLimit: DefaultMemoryLimit,
-		CPULimit:    DefaultCPULimit,
+		MemoryLimit: sandbox.DefaultMemoryLimit,
+		CPULimit:    sandbox.DefaultCPULimit,
 		Timeout:     30 * time.Second,
 		EnvVars:     map[string]string{"GOPROXY": "off"},
 		SecretRefs:  []string{"GOPROXY"},
 	}
 
-	// Health check.
 	if err := rt.HealthCheck(ctx); err != nil {
 		t.Fatalf("HealthCheck: %v", err)
 	}
 
-	// Create.
 	cid, err := rt.Create(ctx, plan)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -45,7 +44,6 @@ func TestMockRuntime_FullLifecycle(t *testing.T) {
 		t.Fatalf("expected 1 created plan, got %d", len(rt.CreatedPlans))
 	}
 
-	// Start.
 	if err := rt.Start(ctx, cid); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -53,7 +51,6 @@ func TestMockRuntime_FullLifecycle(t *testing.T) {
 		t.Errorf("StartedIDs = %v, want [%s]", rt.StartedIDs, cid)
 	}
 
-	// Wait.
 	result, err := rt.Wait(ctx, cid, plan.Timeout)
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
@@ -65,7 +62,6 @@ func TestMockRuntime_FullLifecycle(t *testing.T) {
 		t.Error("Success() = false, want true")
 	}
 
-	// Destroy.
 	if err := rt.Destroy(ctx, cid); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
@@ -75,21 +71,21 @@ func TestMockRuntime_FullLifecycle(t *testing.T) {
 }
 
 func TestMockRuntime_CreateError(t *testing.T) {
-	rt := NewMockRuntime()
-	rt.CreateErr = ErrRuntimeUnavailable
+	rt := sandbox.NewMockRuntime()
+	rt.CreateErr = sandbox.ErrRuntimeUnavailable
 
-	_, err := rt.Create(context.Background(), &BuildPlan{ID: uuid.New()})
+	_, err := rt.Create(context.Background(), &sandbox.BuildPlan{ID: uuid.New()})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
 }
 
 func TestMockRuntime_WaitError(t *testing.T) {
-	rt := NewMockRuntime()
-	rt.WaitErr = ErrBuildTimeout
+	rt := sandbox.NewMockRuntime()
+	rt.WaitErr = sandbox.ErrBuildTimeout
 
 	_, err := rt.Wait(context.Background(), "abc", time.Minute)
-	if err != ErrBuildTimeout {
+	if err != sandbox.ErrBuildTimeout {
 		t.Errorf("Wait error = %v, want ErrBuildTimeout", err)
 	}
 }
@@ -97,11 +93,11 @@ func TestMockRuntime_WaitError(t *testing.T) {
 // ── DockerRuntime unit tests (no Docker required) ───────────────────────────
 
 func TestDockerRuntime_CreateValidation(t *testing.T) {
-	rt := NewDockerRuntime(nil)
+	rt := sandbox.NewDockerRuntime(nil)
 	ctx := context.Background()
 
 	// Missing image.
-	_, err := rt.Create(ctx, &BuildPlan{
+	_, err := rt.Create(ctx, &sandbox.BuildPlan{
 		ID:      uuid.New(),
 		Command: "make",
 	})
@@ -110,7 +106,7 @@ func TestDockerRuntime_CreateValidation(t *testing.T) {
 	}
 
 	// Missing command.
-	_, err = rt.Create(ctx, &BuildPlan{
+	_, err = rt.Create(ctx, &sandbox.BuildPlan{
 		ID:        uuid.New(),
 		BaseImage: "ubuntu:22.04",
 	})
@@ -120,10 +116,10 @@ func TestDockerRuntime_CreateValidation(t *testing.T) {
 }
 
 func TestDockerRuntime_CreateStoresPlan(t *testing.T) {
-	rt := NewDockerRuntime(nil)
+	rt := sandbox.NewDockerRuntime(nil)
 	ctx := context.Background()
 
-	plan := &BuildPlan{
+	plan := &sandbox.BuildPlan{
 		ID:          uuid.New(),
 		BaseImage:   "golang:1.22",
 		Command:     "go build",
@@ -136,11 +132,8 @@ func TestDockerRuntime_CreateStoresPlan(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	rt.mu.Lock()
-	stored, ok := rt.plans[cid]
-	rt.mu.Unlock()
-
-	if !ok {
+	stored := rt.GetPlan(cid)
+	if stored == nil {
 		t.Fatal("plan not stored after Create")
 	}
 	if stored.BaseImage != "golang:1.22" {
@@ -149,7 +142,7 @@ func TestDockerRuntime_CreateStoresPlan(t *testing.T) {
 }
 
 func TestDockerRuntime_WaitUnknownContainer(t *testing.T) {
-	rt := NewDockerRuntime(nil)
+	rt := sandbox.NewDockerRuntime(nil)
 	_, err := rt.Wait(context.Background(), "nonexistent", time.Minute)
 	if err == nil {
 		t.Error("expected error for unknown container")
@@ -157,10 +150,10 @@ func TestDockerRuntime_WaitUnknownContainer(t *testing.T) {
 }
 
 func TestDockerRuntime_BuildDockerArgs(t *testing.T) {
-	rt := NewDockerRuntime(nil)
+	rt := sandbox.NewDockerRuntime(nil)
 	planID := uuid.MustParse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
 
-	plan := &BuildPlan{
+	plan := &sandbox.BuildPlan{
 		ID:          planID,
 		BaseImage:   "node:20",
 		Command:     "npm test",
@@ -172,7 +165,7 @@ func TestDockerRuntime_BuildDockerArgs(t *testing.T) {
 		SecretRefs:  []string{"NPM_TOKEN"},
 	}
 
-	args, redacted := rt.buildDockerArgs(plan)
+	args, redacted := rt.BuildDockerArgs(plan)
 
 	// Check container name includes plan ID prefix.
 	found := false
@@ -192,7 +185,7 @@ func TestDockerRuntime_BuildDockerArgs(t *testing.T) {
 	assertContains(t, args, "--security-opt", "no-new-privileges:true")
 	assertContains(t, args, "--memory", "4g")
 	assertContains(t, args, "--cpus", "2")
-	assertContains(t, args, "--read-only") // SandboxMode=true
+	assertContains(t, args, "--read-only")
 
 	// Check secret is in real args but redacted in logged args.
 	secretInArgs := false
@@ -225,10 +218,10 @@ func TestDockerRuntime_BuildDockerArgs(t *testing.T) {
 }
 
 func TestDockerRuntime_DestroyCleansPlan(t *testing.T) {
-	rt := NewDockerRuntime(nil)
+	rt := sandbox.NewDockerRuntime(nil)
 	ctx := context.Background()
 
-	plan := &BuildPlan{
+	plan := &sandbox.BuildPlan{
 		ID:          uuid.New(),
 		BaseImage:   "alpine",
 		Command:     "echo ok",
@@ -238,21 +231,13 @@ func TestDockerRuntime_DestroyCleansPlan(t *testing.T) {
 
 	cid, _ := rt.Create(ctx, plan)
 
-	// Plan exists.
-	rt.mu.Lock()
-	_, ok := rt.plans[cid]
-	rt.mu.Unlock()
-	if !ok {
+	if rt.PlanCount() != 1 {
 		t.Fatal("plan should exist after Create")
 	}
 
-	// Destroy removes it (Docker rm will fail since no real container — that's fine).
 	_ = rt.Destroy(ctx, cid)
 
-	rt.mu.Lock()
-	_, ok = rt.plans[cid]
-	rt.mu.Unlock()
-	if ok {
+	if rt.PlanCount() != 0 {
 		t.Error("plan should be removed after Destroy")
 	}
 }
@@ -264,7 +249,7 @@ func assertContains(t *testing.T, args []string, values ...string) {
 	for i, a := range args {
 		if a == values[0] {
 			if len(values) == 1 {
-				return // flag-only match (e.g. "--read-only")
+				return
 			}
 			if i+1 < len(args) && args[i+1] == values[1] {
 				return

@@ -271,6 +271,49 @@ class GoClient:
             data = resp.json()
             return data.get("secrets", [])
 
+    async def sandbox_resolve_execute(
+        self,
+        task_id: str,
+        repo_id: str,
+        user_id: str,
+        build_system: str,
+        command: str,
+        base_image: str,
+        secret_refs: list[str] | None = None,
+        pre_commands: list[str] | None = None,
+        sandbox_mode: bool = True,
+        timeout_sec: int = 600,
+        memory_limit: str = "2g",
+        cpu_limit: str = "2",
+    ) -> dict:
+        """Resolve secrets and execute a sandboxed build in one call.
+
+        The Go server resolves secret values from the keychain, injects
+        them as container env vars, runs the build, and zeroes memory.
+        Secret values never leave the Go process boundary.
+        """
+        async with httpx.AsyncClient(timeout=float(timeout_sec + 30)) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/sandbox/resolve-execute",
+                headers=self._headers(),
+                json={
+                    "task_id": task_id,
+                    "repo_id": repo_id,
+                    "user_id": user_id,
+                    "build_system": build_system,
+                    "command": command,
+                    "base_image": base_image,
+                    "secret_refs": secret_refs or [],
+                    "pre_commands": pre_commands or [],
+                    "sandbox_mode": sandbox_mode,
+                    "timeout_sec": timeout_sec,
+                    "memory_limit": memory_limit,
+                    "cpu_limit": cpu_limit,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     # ── VCS proxy methods ────────────────────────────────────────────────
 
     async def vcs_read_file(self, repo_id: str, path: str, ref: str = "") -> str:
