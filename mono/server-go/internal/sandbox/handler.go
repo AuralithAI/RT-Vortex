@@ -891,9 +891,9 @@ func (h *Handler) HandleBuildComplexity(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"repo_id":            repoID,
-		"historical_stats":   stats,
-		"resource_hints":     refined,
-		"build_count":        len(records),
+		"repo_id":          repoID,
+		"historical_stats": stats,
+		"resource_hints":   refined,
+		"build_count":      len(records),
 	})
 }
