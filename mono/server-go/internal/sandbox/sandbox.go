@@ -32,23 +32,23 @@ import (
 
 // BuildPlan describes everything needed to execute a sandboxed build.
 type BuildPlan struct {
-	ID          uuid.UUID         `json:"id"`
-	TaskID      uuid.UUID         `json:"task_id"`
-	RepoID      string            `json:"repo_id"`
-	BuildSystem string            `json:"build_system"` // "gradle", "cmake", "python", etc.
-	Command     string            `json:"command"`      // e.g. "gradle build"
-	PreCommands []string          `json:"pre_commands"` // e.g. ["chmod +x gradlew"]
-	EnvVars     map[string]string `json:"-"`            // populated at runtime from secrets — NEVER serialised
-	SecretRefs  []string          `json:"secret_refs"`  // key names only — ["JAVA_HOME", "DB_URL"]
-	BaseImage   string            `json:"base_image"`   // e.g. "rtvortex/builder-jvm:17"
-	SandboxMode bool              `json:"sandbox_mode"` // read-only workspace mount
-	Timeout     time.Duration     `json:"timeout"`      // default 10 min
-	MemoryLimit string            `json:"memory_limit"` // e.g. "2g"
-	CPULimit    string            `json:"cpu_limit"`    // e.g. "2"
-	Cache       *CacheConfig      `json:"-"`            // dependency layer cache volume (nil = no cache)
-	WorkspaceFS map[string]string `json:"-"`            // file path → content to inject into /workspace
-	WorkspaceDir string           `json:"-"`            // host temp dir with workspace files (set by PrepareWorkspace)
-	ArtifactCfg *ArtifactCollectorConfig `json:"-"`     // paths to collect after build (nil = defaults)
+	ID           uuid.UUID                `json:"id"`
+	TaskID       uuid.UUID                `json:"task_id"`
+	RepoID       string                   `json:"repo_id"`
+	BuildSystem  string                   `json:"build_system"` // "gradle", "cmake", "python", etc.
+	Command      string                   `json:"command"`      // e.g. "gradle build"
+	PreCommands  []string                 `json:"pre_commands"` // e.g. ["chmod +x gradlew"]
+	EnvVars      map[string]string        `json:"-"`            // populated at runtime from secrets — NEVER serialised
+	SecretRefs   []string                 `json:"secret_refs"`  // key names only — ["JAVA_HOME", "DB_URL"]
+	BaseImage    string                   `json:"base_image"`   // e.g. "rtvortex/builder-jvm:17"
+	SandboxMode  bool                     `json:"sandbox_mode"` // read-only workspace mount
+	Timeout      time.Duration            `json:"timeout"`      // default 10 min
+	MemoryLimit  string                   `json:"memory_limit"` // e.g. "2g"
+	CPULimit     string                   `json:"cpu_limit"`    // e.g. "2"
+	Cache        *CacheConfig             `json:"-"`            // dependency layer cache volume (nil = no cache)
+	WorkspaceFS  map[string]string        `json:"-"`            // file path → content to inject into /workspace
+	WorkspaceDir string                   `json:"-"`            // host temp dir with workspace files (set by PrepareWorkspace)
+	ArtifactCfg  *ArtifactCollectorConfig `json:"-"`            // paths to collect after build (nil = defaults)
 }
 
 // DefaultTimeout is the default build timeout.

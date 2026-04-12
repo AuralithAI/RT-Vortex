@@ -103,7 +103,7 @@ func TestWorkspaceArchive_RoundTrip(t *testing.T) {
 
 func TestWorkspaceArchive_SkipsDeletedFiles(t *testing.T) {
 	changeset := map[string]string{
-		"keep.go":   "package main\n",
+		"keep.go":    "package main\n",
 		"deleted.go": "",
 	}
 

@@ -443,14 +443,14 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 	// Enrich response with resolution metadata.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"build_id":         buildID,
-		"exit_code":        result.ExitCode,
-		"logs":             result.Logs,
-		"duration":         result.Duration.String(),
-		"secret_refs":      result.SecretRefs,
-		"resolved_secrets": resolved,
-		"failed_secrets":   failed,
-		"artifacts":        artifactSummaries,
+		"build_id":           buildID,
+		"exit_code":          result.ExitCode,
+		"logs":               result.Logs,
+		"duration":           result.Duration.String(),
+		"secret_refs":        result.SecretRefs,
+		"resolved_secrets":   resolved,
+		"failed_secrets":     failed,
+		"artifacts":          artifactSummaries,
 		"workspace_injected": len(plan.WorkspaceFS) > 0,
 	})
 }
