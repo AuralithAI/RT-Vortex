@@ -261,6 +261,50 @@ func TestHandleLogs_NoStore(t *testing.T) {
 	}
 }
 
+// ── HandleRetry ─────────────────────────────────────────────────────────────
+
+func TestHandleRetry_NoStore(t *testing.T) {
+	h := sandbox.NewHandler(sandbox.NewMockRuntime(), nil, nil, nil)
+
+	body, _ := json.Marshal(map[string]string{"build_id": uuid.New().String()})
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/retry", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleRetry(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleRetry_InvalidBody(t *testing.T) {
+	h := sandbox.NewHandler(sandbox.NewMockRuntime(), nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/retry", bytes.NewReader([]byte("{")))
+	rec := httptest.NewRecorder()
+
+	h.HandleRetry(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleRetry_InvalidBuildID(t *testing.T) {
+	h := sandbox.NewHandler(sandbox.NewMockRuntime(), nil, nil, nil)
+
+	body, _ := json.Marshal(map[string]string{"build_id": "not-a-uuid"})
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/retry", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleRetry(rec, req)
+
+	// invalid build_id → 400 (checked before store nil check).
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
 // ── build_id in response ────────────────────────────────────────────────────
 
 func TestHandleResolveAndExecute_ResponseContainsBuildID(t *testing.T) {

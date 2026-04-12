@@ -599,6 +599,7 @@ func (s *Server) setupRouter() {
 					r.Post("/sandbox/probe", sandboxHandler.HandleProbeEnv)
 					r.Post("/sandbox/execute", sandboxHandler.HandleExecute)
 					r.Post("/sandbox/resolve-execute", sandboxHandler.HandleResolveAndExecute)
+					r.Post("/sandbox/retry", sandboxHandler.HandleRetry)
 					r.Get("/sandbox/status/{id}", sandboxHandler.HandleStatus)
 					r.Get("/sandbox/logs/{id}", sandboxHandler.HandleLogs)
 					r.Get("/sandbox/secrets", sandboxHandler.HandleListBuildSecrets)

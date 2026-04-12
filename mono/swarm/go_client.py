@@ -334,6 +334,17 @@ class GoClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def sandbox_retry_build(self, build_id: str) -> dict:
+        """Retry a failed sandbox build."""
+        async with httpx.AsyncClient(timeout=660) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/sandbox/retry",
+                headers=self._headers(),
+                json={"build_id": build_id},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     # ── VCS proxy methods ────────────────────────────────────────────────
 
     async def vcs_read_file(self, repo_id: str, path: str, ref: str = "") -> str:

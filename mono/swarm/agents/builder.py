@@ -119,6 +119,130 @@ def _is_scannable(filepath: str) -> bool:
     return False
 
 
+# ── Build failure analysis ───────────────────────────────────────────────────
+
+# Patterns that indicate a transient (retryable) failure vs. a code error.
+_TRANSIENT_PATTERNS = [
+    "connection refused",
+    "connection reset",
+    "timeout",
+    "timed out",
+    "network unreachable",
+    "temporary failure",
+    "could not resolve host",
+    "no space left on device",
+    "cannot allocate memory",
+    "oom",
+    "killed",
+    "signal: killed",
+    "429 too many requests",
+    "502 bad gateway",
+    "503 service unavailable",
+]
+
+_COMPILE_ERROR_PATTERNS = [
+    "error:",
+    "undefined reference",
+    "cannot find symbol",
+    "syntax error",
+    "compilation failed",
+    "build failed",
+    "type mismatch",
+    "undeclared identifier",
+    "no such module",
+    "import error",
+    "modulenotfounderror",
+]
+
+_DEPENDENCY_PATTERNS = [
+    "could not resolve dependencies",
+    "no matching version",
+    "package not found",
+    "module not found",
+    "404 not found",
+    "failed to fetch",
+    "unable to locate package",
+    "no matching distribution",
+    "unresolved dependency",
+]
+
+_SECRET_PATTERNS = [
+    "authentication failed",
+    "unauthorized",
+    "401",
+    "403 forbidden",
+    "permission denied",
+    "access denied",
+    "invalid token",
+    "bad credentials",
+]
+
+
+def _analyse_build_failure(logs: str, exit_code: int) -> dict:
+    """Classify a build failure from log output.
+
+    Returns a dict with: category, root_cause, suggestion, retryable.
+    """
+    lower = logs.lower() if logs else ""
+
+    # Check secret / auth failures first — not retryable without human action.
+    for pat in _SECRET_PATTERNS:
+        if pat in lower:
+            return {
+                "category": "authentication",
+                "root_cause": f"Authentication or permission error detected (matched: '{pat}')",
+                "suggestion": "Check that all required secrets are added and valid in the Build Secrets UI.",
+                "retryable": False,
+            }
+
+    # Transient infrastructure failures — retryable.
+    for pat in _TRANSIENT_PATTERNS:
+        if pat in lower:
+            return {
+                "category": "transient",
+                "root_cause": f"Transient infrastructure error (matched: '{pat}')",
+                "suggestion": "This looks like a temporary failure. Retrying may resolve it.",
+                "retryable": True,
+            }
+
+    # Dependency resolution — sometimes retryable (registry flake).
+    for pat in _DEPENDENCY_PATTERNS:
+        if pat in lower:
+            return {
+                "category": "dependency",
+                "root_cause": f"Dependency resolution failed (matched: '{pat}')",
+                "suggestion": "A required dependency could not be resolved. Check version constraints or registry availability.",
+                "retryable": True,
+            }
+
+    # Compile / syntax errors — not retryable without code changes.
+    for pat in _COMPILE_ERROR_PATTERNS:
+        if pat in lower:
+            return {
+                "category": "compilation",
+                "root_cause": f"Compilation or type error detected (matched: '{pat}')",
+                "suggestion": "The code has compilation errors that require code changes to fix.",
+                "retryable": False,
+            }
+
+    # Timeout (exit code -1 is our convention from sandbox.go).
+    if exit_code == -1:
+        return {
+            "category": "timeout",
+            "root_cause": "Build exceeded the timeout limit",
+            "suggestion": "Consider increasing the timeout or optimising the build.",
+            "retryable": True,
+        }
+
+    # Unknown failure.
+    return {
+        "category": "unknown",
+        "root_cause": f"Build failed with exit code {exit_code}",
+        "suggestion": "Review the build logs for details.",
+        "retryable": True,
+    }
+
+
 class BuilderAgent(Agent):
     """Build validation agent — runs as a pipeline stage after diffs."""
 
@@ -320,7 +444,7 @@ class BuilderAgent(Agent):
             except Exception:
                 pass
 
-            return {
+            initial = {
                 "status": build_status,
                 "build_id": build_id,
                 "exit_code": exit_code,
@@ -330,9 +454,154 @@ class BuilderAgent(Agent):
                 "logs_truncated": len(result.get("logs", "")) > 1024,
             }
 
+            if build_status == "failed":
+                return await self.analyse_and_retry(task, initial)
+
+            return initial
+
         except Exception as e:
             logger.error("builder: build execution failed: %s", e)
             return {"status": "error", "reason": str(e)}
+
+    async def analyse_and_retry(
+        self,
+        task: Task,
+        build_result: dict,
+        max_retries: int = 2,
+    ) -> dict:
+        """Analyse a failed build and retry up to max_retries times.
+
+        For each retry:
+        1. Fetch full logs from the Go server
+        2. Analyse the failure (extract error category + root cause)
+        3. Post the analysis as an agent message for the UI
+        4. Trigger a retry via the Go retry endpoint
+        5. If the retry succeeds, return the result
+
+        Returns the final build result dict (success or last failure).
+        """
+        from ..go_client import GoClient
+
+        go_client: GoClient | None = getattr(self, "_go_client", None)
+        if go_client is None:
+            return build_result
+
+        current = build_result
+        build_id = current.get("build_id", "")
+        if not build_id:
+            logger.warning("builder: no build_id for retry — skipping")
+            return current
+
+        for attempt in range(1, max_retries + 1):
+            exit_code = current.get("exit_code", -1)
+            if exit_code == 0:
+                return current
+
+            # Fetch full logs for analysis.
+            logs = current.get("logs", "")
+            if not logs and build_id:
+                try:
+                    log_data = await go_client.sandbox_build_logs(build_id)
+                    logs = log_data.get("logs", "")
+                except Exception:
+                    pass
+
+            # Analyse the failure.
+            analysis = _analyse_build_failure(logs, exit_code)
+
+            logger.info(
+                "builder: retry %d/%d — category=%s, build_id=%s",
+                attempt, max_retries, analysis["category"], build_id,
+            )
+
+            # Post analysis as agent message.
+            try:
+                await go_client.post_agent_message(
+                    task_id=task.id,
+                    message={
+                        "agent_id": self.agent_id,
+                        "agent_role": "builder",
+                        "kind": "build_failure_analysis",
+                        "content": (
+                            f"**Build failed** (exit code {exit_code}, "
+                            f"attempt {attempt}/{max_retries})\n\n"
+                            f"**Category:** {analysis['category']}\n"
+                            f"**Root cause:** {analysis['root_cause']}\n"
+                            f"**Suggestion:** {analysis['suggestion']}"
+                        ),
+                        "metadata": {
+                            "build_id": build_id,
+                            "attempt": attempt,
+                            "max_retries": max_retries,
+                            "category": analysis["category"],
+                        },
+                    },
+                )
+            except Exception:
+                pass
+
+            # If the failure is not retryable, stop.
+            if not analysis["retryable"]:
+                logger.info(
+                    "builder: failure not retryable (category=%s) — stopping",
+                    analysis["category"],
+                )
+                return current
+
+            # Trigger retry via Go.
+            try:
+                retry_result = await go_client.sandbox_retry_build(build_id)
+                build_id = retry_result.get("build_id", build_id)
+                self._build_result = retry_result
+
+                retry_exit = retry_result.get("exit_code", -1)
+                retry_status = "success" if retry_exit == 0 else "failed"
+
+                logger.info(
+                    "builder: retry %d result — exit_code=%d, build_id=%s",
+                    attempt, retry_exit, build_id,
+                )
+
+                try:
+                    await go_client.post_agent_message(
+                        task_id=task.id,
+                        message={
+                            "agent_id": self.agent_id,
+                            "agent_role": "builder",
+                            "kind": "build_retry_result",
+                            "content": (
+                                f"Retry {attempt}/{max_retries}: "
+                                f"**{retry_status}** (exit code {retry_exit})"
+                            ),
+                            "metadata": {
+                                "build_id": build_id,
+                                "attempt": attempt,
+                                "exit_code": retry_exit,
+                            },
+                        },
+                    )
+                except Exception:
+                    pass
+
+                current = {
+                    "status": retry_status,
+                    "build_id": build_id,
+                    "exit_code": retry_exit,
+                    "duration": retry_result.get("duration", ""),
+                    "logs": retry_result.get("logs", ""),
+                    "resolved_secrets": retry_result.get("resolved_secrets", []),
+                    "failed_secrets": retry_result.get("failed_secrets", []),
+                    "retry_count": retry_result.get("retry_count", attempt),
+                }
+
+                if retry_exit == 0:
+                    return current
+
+            except Exception as e:
+                logger.error("builder: retry %d failed: %s", attempt, e)
+                return current
+
+        return current
 
     async def run_probe(
         self,

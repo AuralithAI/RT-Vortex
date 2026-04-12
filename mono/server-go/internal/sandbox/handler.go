@@ -356,6 +356,206 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 	})
 }
 
+// ── POST /internal/swarm/sandbox/retry ───────────────────────────────────────
+
+// HandleRetry re-executes a failed or errored build, up to MaxRetries times.
+// It reads the original build record, increments retry_count, and re-runs
+// the container with the same plan parameters.
+func (h *Handler) HandleRetry(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BuildID string `json:"build_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	buildID, err := uuid.Parse(req.BuildID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid build_id"}`, http.StatusBadRequest)
+		return
+	}
+
+	if h.Store == nil {
+		http.Error(w, `{"error":"build store not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	// Fetch the original build record.
+	rec, err := h.Store.GetBuild(r.Context(), buildID)
+	if err != nil {
+		h.Logger.Warn("sandbox: build not found for retry", "id", buildID, "error", err)
+		http.Error(w, `{"error":"build not found"}`, http.StatusNotFound)
+		return
+	}
+
+	// Only failed or errored builds can be retried.
+	if rec.Status != "failed" && rec.Status != "error" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error":       "build is not retryable",
+			"status":      rec.Status,
+			"retry_count": rec.RetryCount,
+		})
+		return
+	}
+
+	if rec.RetryCount >= MaxRetries {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]any{
+			"error":       "max retries exceeded",
+			"max_retries": MaxRetries,
+			"retry_count": rec.RetryCount,
+		})
+		return
+	}
+
+	// Increment retry count.
+	if err := h.Store.IncrementRetry(r.Context(), buildID); err != nil {
+		h.Logger.Warn("sandbox: failed to increment retry", "id", buildID, "error", err)
+	}
+	BuildRetries.Inc()
+
+	// Rebuild the plan from the stored record.
+	var userID *uuid.UUID
+	if rec.UserID != nil {
+		userID = rec.UserID
+	}
+
+	plan := &BuildPlan{
+		ID:          uuid.New(),
+		TaskID:      rec.TaskID,
+		RepoID:      rec.RepoID,
+		BuildSystem: rec.BuildSystem,
+		Command:     rec.Command,
+		BaseImage:   rec.BaseImage,
+		SandboxMode: rec.SandboxMode,
+		SecretRefs:  rec.SecretNames,
+		Timeout:     DefaultTimeout,
+		MemoryLimit: DefaultMemoryLimit,
+		CPULimit:    DefaultCPULimit,
+		EnvVars:     make(map[string]string),
+	}
+
+	// Resolve secrets again.
+	var resolved, failed []string
+	if h.KeychainService != nil && userID != nil && len(rec.SecretNames) > 0 {
+		repoUUID, rerr := uuid.Parse(rec.RepoID)
+		if rerr == nil {
+			for _, name := range rec.SecretNames {
+				val, kerr := h.KeychainService.GetBuildSecret(r.Context(), *userID, repoUUID, name)
+				if kerr != nil {
+					failed = append(failed, name)
+					continue
+				}
+				plan.EnvVars[name] = string(val)
+				resolved = append(resolved, name)
+			}
+			BuildSecretInjects.Add(float64(len(resolved)))
+		}
+	}
+
+	// Persist a new build record for the retry.
+	retryBuildID := plan.ID
+	retryRec := &BuildRecord{
+		ID:          retryBuildID,
+		TaskID:      rec.TaskID,
+		RepoID:      rec.RepoID,
+		UserID:      userID,
+		BuildSystem: rec.BuildSystem,
+		Command:     rec.Command,
+		BaseImage:   rec.BaseImage,
+		Status:      "running",
+		SecretNames: rec.SecretNames,
+		SandboxMode: rec.SandboxMode,
+		RetryCount:  rec.RetryCount + 1,
+	}
+	if err := h.Store.InsertBuild(r.Context(), retryRec); err != nil {
+		h.Logger.Warn("sandbox: failed to persist retry build record", "error", err)
+	}
+
+	h.Logger.Info("sandbox: retrying build",
+		"original_id", buildID, "retry_id", retryBuildID,
+		"retry_count", rec.RetryCount+1, "max", MaxRetries)
+
+	// Execute the container.
+	BuildContainersActive.Inc()
+	defer BuildContainersActive.Dec()
+
+	containerID, cerr := h.Runtime.Create(r.Context(), plan)
+	if cerr != nil {
+		h.Logger.Error("sandbox: retry container create failed", "error", cerr)
+		if h.Store != nil {
+			_ = h.Store.CompleteBuild(r.Context(), retryBuildID, "error", -1, cerr.Error(), 0)
+		}
+		http.Error(w, `{"error":"container creation failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	if serr := h.Runtime.Start(r.Context(), containerID); serr != nil {
+		h.Logger.Error("sandbox: retry container start failed", "error", serr)
+		_ = h.Runtime.Destroy(r.Context(), containerID)
+		if h.Store != nil {
+			_ = h.Store.CompleteBuild(r.Context(), retryBuildID, "error", -1, serr.Error(), 0)
+		}
+		http.Error(w, `{"error":"container start failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	start := time.Now()
+	result, waitErr := h.Runtime.Wait(r.Context(), containerID, plan.Timeout)
+
+	destroyErr := h.Runtime.Destroy(r.Context(), containerID)
+	if destroyErr != nil {
+		h.Logger.Warn("sandbox: retry container cleanup failed", "error", destroyErr)
+	}
+
+	// Zero secrets.
+	for k := range plan.EnvVars {
+		plan.EnvVars[k] = ""
+	}
+	plan.EnvVars = nil
+
+	if waitErr != nil && result == nil {
+		if h.Store != nil {
+			_ = h.Store.CompleteBuild(r.Context(), retryBuildID, "error", -1, waitErr.Error(), int(time.Since(start).Milliseconds()))
+		}
+		http.Error(w, `{"error":"build execution failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	duration := time.Since(start)
+	BuildDuration.Observe(duration.Seconds())
+
+	status := "success"
+	if result.ExitCode != 0 {
+		status = "failed"
+	}
+	BuildTotal.WithLabelValues(status).Inc()
+
+	if h.Store != nil {
+		logSummary := result.Logs
+		if len(logSummary) > 8192 {
+			logSummary = logSummary[:8192] + "\n... [truncated for DB]"
+		}
+		_ = h.Store.CompleteBuild(r.Context(), retryBuildID, status, result.ExitCode, logSummary, int(duration.Milliseconds()))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"build_id":         retryBuildID,
+		"original_build":   buildID,
+		"retry_count":      rec.RetryCount + 1,
+		"exit_code":        result.ExitCode,
+		"logs":             result.Logs,
+		"duration":         result.Duration.String(),
+		"resolved_secrets": resolved,
+		"failed_secrets":   failed,
+	})
+}
+
 // ── GET /internal/swarm/sandbox/logs/{id} ────────────────────────────────────
 
 // HandleLogs returns build logs from the swarm_builds table.
