@@ -440,6 +440,21 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 			"count", len(logArtifacts), "build_id", buildID)
 	}
 
+	// Compute build complexity scoring.
+	result.Duration = duration
+	complexity := ComputeBuildComplexity(plan, result)
+	BuildComplexityDistribution.WithLabelValues(string(complexity.Label)).Inc()
+	BuildComplexityScore.Observe(complexity.Score)
+	BuildFailureProbability.Observe(complexity.FailureProbablity)
+
+	if h.Store != nil {
+		if err := h.Store.UpdateBuildComplexity(r.Context(), buildID, complexity); err != nil {
+			h.Logger.Warn("sandbox: failed to persist complexity", "error", err)
+		}
+	}
+	h.Logger.Info("sandbox: "+BuildComplexitySummary(complexity),
+		"build_id", buildID)
+
 	// Enrich response with resolution metadata.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
@@ -452,6 +467,7 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		"failed_secrets":     failed,
 		"artifacts":          artifactSummaries,
 		"workspace_injected": len(plan.WorkspaceFS) > 0,
+		"complexity":         complexity,
 	})
 }
 
@@ -838,5 +854,46 @@ func (h *Handler) HandleListArtifacts(w http.ResponseWriter, r *http.Request) {
 		"build_id":  id,
 		"artifacts": items,
 		"count":     len(items),
+	})
+}
+
+// ── GET /internal/swarm/sandbox/complexity/{repo_id} ─────────────────────────
+
+// HandleBuildComplexity returns historical build complexity stats for a repo.
+func (h *Handler) HandleBuildComplexity(w http.ResponseWriter, r *http.Request) {
+	repoID := chi.URLParam(r, "repo_id")
+
+	if h.Store == nil {
+		http.Error(w, `{"error":"build store not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	if repoID == "" {
+		http.Error(w, `{"error":"repo_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	records, err := h.Store.ListBuildsByRepo(r.Context(), repoID, 50)
+	if err != nil {
+		h.Logger.Warn("sandbox: failed to list builds for complexity",
+			"repo_id", repoID, "error", err)
+		http.Error(w, `{"error":"failed to list builds"}`, http.StatusInternalServerError)
+		return
+	}
+
+	stats := ComputeHistoricalStats(records)
+	baseHints := ResourceHints{
+		TimeoutSec:  int(DefaultTimeout.Seconds()),
+		MemoryLimit: DefaultMemoryLimit,
+		CPULimit:    DefaultCPULimit,
+	}
+	refined := RefineResourceHints(baseHints, stats)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"repo_id":            repoID,
+		"historical_stats":   stats,
+		"resource_hints":     refined,
+		"build_count":        len(records),
 	})
 }

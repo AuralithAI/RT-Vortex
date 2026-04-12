@@ -123,4 +123,30 @@ var (
 		Name:      "workspace_injections_total",
 		Help:      "Total workspace changeset injections into sandbox containers.",
 	})
+
+	// BuildComplexityDistribution tracks build complexity label distribution.
+	BuildComplexityDistribution = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "build_complexity_total",
+		Help:      "Build complexity scoring distribution by label.",
+	}, []string{"label"})
+
+	// BuildComplexityScore observes the raw complexity score (0.0–1.0).
+	BuildComplexityScore = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "build_complexity_score",
+		Help:      "Raw build complexity score distribution.",
+		Buckets:   []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0},
+	})
+
+	// BuildFailureProbability observes estimated failure probability.
+	BuildFailureProbability = promauto.NewHistogram(prometheus.HistogramOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "build_failure_probability",
+		Help:      "Estimated build failure probability.",
+		Buckets:   []float64{0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5},
+	})
 )

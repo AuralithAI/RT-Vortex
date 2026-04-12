@@ -670,6 +670,22 @@ async def _run_full_pipeline(
                                 "Team %s: Build confirm+execute failed (non-fatal): %s",
                                 team_id[:8], e,
                             )
+
+                        # Fetch build complexity history and attach to task context.
+                        if build_exec_result.get("complexity"):
+                            try:
+                                hist = await go_client.sandbox_build_complexity(task.repo_id)
+                                build_exec_result["complexity_history"] = hist
+                                logger.info(
+                                    "Team %s: Build complexity — label=%s score=%.3f "
+                                    "historical_success_rate=%.2f",
+                                    team_id[:8],
+                                    build_exec_result["complexity"].get("label", "?"),
+                                    build_exec_result["complexity"].get("score", 0.0),
+                                    hist.get("stats", {}).get("success_rate", 0.0),
+                                )
+                            except Exception:
+                                pass
                     else:
                         logger.info(
                             "Team %s: Skipping build execution — "

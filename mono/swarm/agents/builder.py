@@ -444,10 +444,13 @@ class BuilderAgent(Agent):
 
             exit_code = result.get("exit_code", -1)
             build_id = result.get("build_id", "")
+            complexity = result.get("complexity")
             logger.info(
-                "builder: build finished — exit_code=%d, build_id=%s, resolved=%s, failed=%s",
+                "builder: build finished — exit_code=%d, build_id=%s, "
+                "complexity=%s, resolved=%s, failed=%s",
                 exit_code,
                 build_id,
+                complexity.get("label", "?") if complexity else "n/a",
                 result.get("resolved_secrets", []),
                 result.get("failed_secrets", []),
             )
@@ -470,6 +473,7 @@ class BuilderAgent(Agent):
                             "failed_secrets": result.get("failed_secrets", []),
                             "artifacts": result.get("artifacts", []),
                             "workspace_injected": result.get("workspace_injected", False),
+                            "complexity": complexity,
                         },
                     },
                 )
@@ -486,6 +490,7 @@ class BuilderAgent(Agent):
                 "logs_truncated": len(result.get("logs", "")) > 1024,
                 "artifacts": result.get("artifacts", []),
                 "workspace_injected": result.get("workspace_injected", False),
+                "complexity": complexity,
             }
 
             if build_status == "failed":

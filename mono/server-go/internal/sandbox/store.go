@@ -2,6 +2,7 @@ package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -207,4 +208,20 @@ func (s *BuildStore) GetArtifact(ctx context.Context, id uuid.UUID) (*BuildArtif
 		return nil, fmt.Errorf("sandbox store: get artifact: %w", err)
 	}
 	return &a, nil
+}
+
+// UpdateBuildComplexity stores the complexity analysis on the build record.
+func (s *BuildStore) UpdateBuildComplexity(ctx context.Context, buildID uuid.UUID, complexity *BuildComplexity) error {
+	data, err := json.Marshal(complexity)
+	if err != nil {
+		return fmt.Errorf("sandbox store: marshal complexity: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE swarm_builds SET complexity = $1 WHERE id = $2`,
+		data, buildID,
+	)
+	if err != nil {
+		return fmt.Errorf("sandbox store: update complexity: %w", err)
+	}
+	return nil
 }

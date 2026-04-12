@@ -366,6 +366,20 @@ class GoClient:
             data = resp.json()
             return data.get("artifacts", [])
 
+    async def sandbox_build_complexity(self, repo_id: str) -> dict:
+        """Fetch historical build complexity stats for a repo.
+
+        Returns historical_stats (success_rate, avg_duration, p95_duration),
+        resource_hints (timeout, memory, cpu), and build_count.
+        """
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/complexity/{repo_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     # ── VCS proxy methods ────────────────────────────────────────────────
 
     async def vcs_read_file(self, repo_id: str, path: str, ref: str = "") -> str:
