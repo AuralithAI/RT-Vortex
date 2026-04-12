@@ -17,10 +17,10 @@ import (
 
 // SandboxLimits holds config-driven limits applied to every build.
 type SandboxLimits struct {
-	MaxTimeoutSec int
-	MaxMemoryMB   int
-	MaxCPU        int
-	MaxRetries    int
+	MaxTimeoutSec  int
+	MaxMemoryMB    int
+	MaxCPU         int
+	MaxRetries     int
 	DefaultSandbox bool
 }
 
@@ -31,6 +31,7 @@ type Handler struct {
 	Store           *BuildStore
 	Logger          *slog.Logger
 	Limits          *SandboxLimits
+	Audit           *AuditLogger
 }
 
 // NewHandler creates a sandbox HTTP handler.
@@ -368,7 +369,12 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 			http.Error(w, `{"error":"workspace preparation failed"}`, http.StatusInternalServerError)
 			return
 		}
-		defer CleanupWorkspace(plan)
+		defer func() {
+			removed := SecureCleanupWorkspace(plan)
+			if h.Audit != nil && removed > 0 {
+				h.Audit.LogWorkspaceScrub(r.Context(), plan.ID.String(), removed)
+			}
+		}()
 		WorkspaceInjections.Inc()
 		h.Logger.Info("sandbox: workspace injected",
 			"files", len(plan.WorkspaceFS), "task_id", taskID)
@@ -429,6 +435,7 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 
 	// Resolve secrets from the keychain.
 	var resolved, failed []string
+	secretSnapshot := make(map[string]string)
 	if h.KeychainService != nil && len(req.SecretRefs) > 0 {
 		for _, name := range req.SecretRefs {
 			val, kerr := h.KeychainService.GetBuildSecret(r.Context(), userID, repoID, name)
@@ -436,10 +443,17 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 				h.Logger.Warn("sandbox: could not resolve secret",
 					"name", name, "user_id", userID, "repo_id", repoID, "error", kerr)
 				failed = append(failed, name)
+				if h.Audit != nil {
+					h.Audit.LogSecretDenied(r.Context(), userID.String(), repoID.String(), name, kerr.Error())
+				}
 				continue
 			}
 			plan.EnvVars[name] = string(val)
+			secretSnapshot[name] = string(val)
 			resolved = append(resolved, name)
+			if h.Audit != nil {
+				h.Audit.LogSecretAccess(r.Context(), userID.String(), repoID.String(), plan.ID.String(), name)
+			}
 		}
 		BuildSecretInjects.Add(float64(len(resolved)))
 	}
@@ -483,6 +497,10 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if h.Audit != nil {
+		h.Audit.LogContainerCreated(r.Context(), buildID.String(), plan.BaseImage, plan.SandboxMode)
+	}
+
 	if err := h.Runtime.Start(r.Context(), containerID); err != nil {
 		h.Logger.Error("sandbox: failed to start container", "error", err, "container_id", containerID)
 		_ = h.Runtime.Destroy(r.Context(), containerID)
@@ -501,12 +519,36 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 	if destroyErr != nil {
 		h.Logger.Warn("sandbox: container cleanup failed", "error", destroyErr, "container_id", containerID)
 	}
+	if h.Audit != nil {
+		h.Audit.LogContainerDestroyed(r.Context(), buildID.String())
+	}
 
 	// Zero secret values from memory.
 	for k := range plan.EnvVars {
 		plan.EnvVars[k] = ""
 	}
 	plan.EnvVars = nil
+
+	// Redact secrets and PII from build logs before persistence or response.
+	logsRedacted := false
+	if result != nil && result.Logs != "" {
+		if ContainsSecret(result.Logs, secretSnapshot) {
+			SecretLeakDetections.Inc()
+		}
+		before := result.Logs
+		result.Logs = RedactLogs(result.Logs, secretSnapshot)
+		logsRedacted = result.Logs != before
+		LogRedactions.Inc()
+		if h.Audit != nil {
+			h.Audit.LogRedaction(r.Context(), buildID.String(), len(redactPatterns))
+		}
+	}
+
+	// Wipe the secret snapshot from memory.
+	for k := range secretSnapshot {
+		secretSnapshot[k] = ""
+	}
+	secretSnapshot = nil
 
 	if waitErr != nil {
 		h.Logger.Error("sandbox: build execution failed", "error", waitErr)
@@ -589,6 +631,7 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		"build_id":           buildID,
 		"exit_code":          result.ExitCode,
 		"logs":               result.Logs,
+		"logs_redacted":      logsRedacted,
 		"duration":           result.Duration.String(),
 		"secret_refs":        result.SecretRefs,
 		"resolved_secrets":   resolved,

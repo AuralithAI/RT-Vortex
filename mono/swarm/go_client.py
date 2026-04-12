@@ -390,6 +390,35 @@ class GoClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def sandbox_audit_events(
+        self,
+        build_id: str = "",
+        user_id: str = "",
+        action: str = "",
+        limit: int = 50,
+    ) -> list[dict]:
+        """Query audit events for sandbox operations.
+
+        Returns audit trail entries filtered by optional build_id, user_id,
+        or action type. Used for compliance reporting and incident review.
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if build_id:
+            params["build_id"] = build_id
+        if user_id:
+            params["user_id"] = user_id
+        if action:
+            params["action"] = action
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/audit",
+                headers=self._headers(),
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("events", [])
+
     # ── VCS proxy methods ────────────────────────────────────────────────
 
     async def vcs_read_file(self, repo_id: str, path: str, ref: str = "") -> str:

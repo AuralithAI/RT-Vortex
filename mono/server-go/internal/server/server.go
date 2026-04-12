@@ -602,6 +602,11 @@ func (s *Server) setupRouter() {
 						MaxRetries:     s.deps.Config.Sandbox.MaxRetries,
 						DefaultSandbox: s.deps.Config.Sandbox.DefaultSandbox,
 					}
+					if s.deps.DB != nil {
+						sandboxHandler.Audit = sandbox.NewAuditLogger(nil, s.deps.DB.Pool)
+					} else {
+						sandboxHandler.Audit = sandbox.NewAuditLogger(nil, nil)
+					}
 					r.Post("/sandbox/plan", sandboxHandler.HandleGeneratePlan)
 					r.Post("/sandbox/probe", sandboxHandler.HandleProbeEnv)
 					r.Post("/sandbox/execute", sandboxHandler.HandleExecute)

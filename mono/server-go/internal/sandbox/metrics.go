@@ -173,4 +173,36 @@ var (
 		Name:      "build_config_limits_applied_total",
 		Help:      "Total builds where server config limits overrode request values.",
 	})
+
+	// AuditEventsTotal counts audit trail events by action type.
+	AuditEventsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "audit_events_total",
+		Help:      "Total security audit events by action.",
+	}, []string{"action"})
+
+	// LogRedactions counts log redaction operations.
+	LogRedactions = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "log_redactions_total",
+		Help:      "Total log redaction operations applied to build output.",
+	})
+
+	// SecretLeakDetections counts times a secret value was found verbatim in logs.
+	SecretLeakDetections = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "secret_leak_detections_total",
+		Help:      "Total times a secret value was detected verbatim in build output.",
+	})
+
+	// OwnershipCheckFailures counts failed build ownership validations.
+	OwnershipCheckFailures = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "ownership_check_failures_total",
+		Help:      "Total failed build ownership validation attempts.",
+	})
 )

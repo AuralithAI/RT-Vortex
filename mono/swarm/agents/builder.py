@@ -448,13 +448,15 @@ class BuilderAgent(Agent):
             fast_path = result.get("fast_path", False)
             fingerprint = result.get("fingerprint")
             image_tag = result.get("image_tag", "")
+            logs_redacted = result.get("logs_redacted", False)
             logger.info(
                 "builder: build finished — exit_code=%d, build_id=%s, "
-                "complexity=%s, fast_path=%s, resolved=%s, failed=%s",
+                "complexity=%s, fast_path=%s, logs_redacted=%s, resolved=%s, failed=%s",
                 exit_code,
                 build_id,
                 complexity.get("label", "?") if complexity else "n/a",
                 fast_path,
+                logs_redacted,
                 result.get("resolved_secrets", []),
                 result.get("failed_secrets", []),
             )
@@ -477,6 +479,7 @@ class BuilderAgent(Agent):
                             "failed_secrets": result.get("failed_secrets", []),
                             "artifacts": result.get("artifacts", []),
                             "workspace_injected": result.get("workspace_injected", False),
+                            "logs_redacted": logs_redacted,
                             "complexity": complexity,
                             "fast_path": fast_path,
                             "fingerprint": fingerprint,
@@ -495,6 +498,7 @@ class BuilderAgent(Agent):
                 "resolved_secrets": result.get("resolved_secrets", []),
                 "failed_secrets": result.get("failed_secrets", []),
                 "logs_truncated": len(result.get("logs", "")) > 1024,
+                "logs_redacted": logs_redacted,
                 "artifacts": result.get("artifacts", []),
                 "workspace_injected": result.get("workspace_injected", False),
                 "complexity": complexity,

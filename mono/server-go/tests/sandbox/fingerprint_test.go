@@ -14,8 +14,8 @@ import (
 
 func TestComputeBuildFingerprint_GoModule(t *testing.T) {
 	ws := map[string]string{
-		"go.mod": "module example.com/app\ngo 1.22\n",
-		"go.sum": "golang.org/x/text v0.15.0 h1:abc\n",
+		"go.mod":  "module example.com/app\ngo 1.22\n",
+		"go.sum":  "golang.org/x/text v0.15.0 h1:abc\n",
 		"main.go": "package main\nfunc main() {}\n",
 	}
 	fp := sandbox.ComputeBuildFingerprint("go", ws)
