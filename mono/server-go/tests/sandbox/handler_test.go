@@ -22,7 +22,7 @@ func TestHandleResolveAndExecute_Success(t *testing.T) {
 		Duration: 3 * time.Second,
 	}
 
-	h := sandbox.NewHandler(mock, nil, nil)
+	h := sandbox.NewHandler(mock, nil, nil, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"task_id":      uuid.New().String(),
@@ -54,7 +54,7 @@ func TestHandleResolveAndExecute_Success(t *testing.T) {
 }
 
 func TestHandleResolveAndExecute_MissingBaseImage(t *testing.T) {
-	h := sandbox.NewHandler(sandbox.NewMockRuntime(), nil, nil)
+	h := sandbox.NewHandler(sandbox.NewMockRuntime(), nil, nil, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"task_id": uuid.New().String(),
@@ -74,7 +74,7 @@ func TestHandleResolveAndExecute_MissingBaseImage(t *testing.T) {
 }
 
 func TestHandleResolveAndExecute_InvalidTaskID(t *testing.T) {
-	h := sandbox.NewHandler(sandbox.NewMockRuntime(), nil, nil)
+	h := sandbox.NewHandler(sandbox.NewMockRuntime(), nil, nil, nil)
 
 	body, _ := json.Marshal(map[string]string{
 		"task_id": "not-a-uuid",
@@ -94,7 +94,7 @@ func TestHandleResolveAndExecute_InvalidTaskID(t *testing.T) {
 
 func TestHandleResolveAndExecute_NoKeychainSkipsSecrets(t *testing.T) {
 	mock := sandbox.NewMockRuntime()
-	h := sandbox.NewHandler(mock, nil, nil)
+	h := sandbox.NewHandler(mock, nil, nil, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"task_id":      uuid.New().String(),
@@ -131,7 +131,7 @@ func TestHandleResolveAndExecute_ContainerCreateError(t *testing.T) {
 	mock := sandbox.NewMockRuntime()
 	mock.CreateErr = sandbox.ErrRuntimeUnavailable
 
-	h := sandbox.NewHandler(mock, nil, nil)
+	h := sandbox.NewHandler(mock, nil, nil, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"task_id":      uuid.New().String(),
@@ -160,7 +160,7 @@ func TestHandleResolveAndExecute_BuildFailed(t *testing.T) {
 		Duration: 5 * time.Second,
 	}
 
-	h := sandbox.NewHandler(mock, nil, nil)
+	h := sandbox.NewHandler(mock, nil, nil, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"task_id":      uuid.New().String(),
@@ -190,7 +190,7 @@ func TestHandleResolveAndExecute_BuildFailed(t *testing.T) {
 
 func TestHandleResolveAndExecute_Defaults(t *testing.T) {
 	mock := sandbox.NewMockRuntime()
-	h := sandbox.NewHandler(mock, nil, nil)
+	h := sandbox.NewHandler(mock, nil, nil, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"task_id":      uuid.New().String(),
@@ -223,5 +223,84 @@ func TestHandleResolveAndExecute_Defaults(t *testing.T) {
 	}
 	if plan.Timeout != sandbox.DefaultTimeout {
 		t.Errorf("Timeout = %v, want %v", plan.Timeout, sandbox.DefaultTimeout)
+	}
+}
+
+// ── HandleStatus ────────────────────────────────────────────────────────────
+
+func TestHandleStatus_NoStore(t *testing.T) {
+	h := sandbox.NewHandler(sandbox.NewMockRuntime(), nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/sandbox/status/"+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+
+	h.HandleStatus(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleStatus_InvalidID(t *testing.T) {
+	// DB-dependent tests are skipped in unit tests — the nil-store path is covered above.
+	t.Skip("requires live BuildStore; covered by integration tests")
+}
+
+// ── HandleLogs ──────────────────────────────────────────────────────────────
+
+func TestHandleLogs_NoStore(t *testing.T) {
+	h := sandbox.NewHandler(sandbox.NewMockRuntime(), nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/sandbox/logs/"+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+
+	h.HandleLogs(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
+}
+
+// ── build_id in response ────────────────────────────────────────────────────
+
+func TestHandleResolveAndExecute_ResponseContainsBuildID(t *testing.T) {
+	mock := sandbox.NewMockRuntime()
+	mock.WaitResult = &sandbox.BuildResult{
+		ExitCode: 0,
+		Logs:     "OK",
+		Duration: time.Second,
+	}
+
+	h := sandbox.NewHandler(mock, nil, nil, nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"task_id":      uuid.New().String(),
+		"repo_id":      uuid.New().String(),
+		"user_id":      uuid.New().String(),
+		"build_system": "go",
+		"command":      "go build ./...",
+		"base_image":   "golang:1.22",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/resolve-execute", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleResolveAndExecute(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	bid, ok := resp["build_id"].(string)
+	if !ok || bid == "" {
+		t.Errorf("expected non-empty build_id in response, got %v", resp["build_id"])
+	}
+
+	// Validate it's a parseable UUID.
+	if _, err := uuid.Parse(bid); err != nil {
+		t.Errorf("build_id %q is not a valid UUID: %v", bid, err)
 	}
 }

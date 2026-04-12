@@ -18,15 +18,16 @@ import (
 type Handler struct {
 	Runtime         ContainerRuntime
 	KeychainService *keychain.Service
+	Store           *BuildStore
 	Logger          *slog.Logger
 }
 
 // NewHandler creates a sandbox HTTP handler.
-func NewHandler(runtime ContainerRuntime, keychainSvc *keychain.Service, logger *slog.Logger) *Handler {
+func NewHandler(runtime ContainerRuntime, keychainSvc *keychain.Service, buildStore *BuildStore, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Handler{Runtime: runtime, KeychainService: keychainSvc, Logger: logger}
+	return &Handler{Runtime: runtime, KeychainService: keychainSvc, Store: buildStore, Logger: logger}
 }
 
 // ── POST /internal/swarm/sandbox/plan ────────────────────────────────────────
@@ -116,14 +117,41 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 
 // ── GET /internal/swarm/sandbox/status/{id} ──────────────────────────────────
 
-// HandleStatus returns the status of a build.
-// Placeholder — will query swarm_builds table in Phase 6.
+// HandleStatus returns the status of a build from the swarm_builds table.
 func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	buildID := chi.URLParam(r, "id")
+
+	if h.Store == nil {
+		http.Error(w, `{"error":"build store not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	id, err := uuid.Parse(buildID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid build id"}`, http.StatusBadRequest)
+		return
+	}
+
+	rec, err := h.Store.GetBuild(r.Context(), id)
+	if err != nil {
+		h.Logger.Warn("sandbox: build not found", "id", buildID, "error", err)
+		http.Error(w, `{"error":"build not found"}`, http.StatusNotFound)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"id":     buildID,
-		"status": "not_implemented",
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":           rec.ID,
+		"task_id":      rec.TaskID,
+		"repo_id":      rec.RepoID,
+		"build_system": rec.BuildSystem,
+		"status":       rec.Status,
+		"exit_code":    rec.ExitCode,
+		"retry_count":  rec.RetryCount,
+		"duration_ms":  rec.DurationMS,
+		"sandbox_mode": rec.SandboxMode,
+		"created_at":   rec.CreatedAt,
+		"completed_at": rec.CompletedAt,
 	})
 }
 
@@ -224,6 +252,27 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		"resolved", len(resolved), "failed", len(failed),
 		"task_id", taskID, "repo_id", repoID)
 
+	// Persist build record before execution.
+	buildID := plan.ID
+	if h.Store != nil {
+		rec := &BuildRecord{
+			ID:          buildID,
+			TaskID:      taskID,
+			RepoID:      req.RepoID,
+			UserID:      &userID,
+			BuildSystem: req.BuildSystem,
+			Command:     req.Command,
+			BaseImage:   req.BaseImage,
+			Status:      "running",
+			SecretNames: req.SecretRefs,
+			SandboxMode: req.SandboxMode,
+		}
+		if err := h.Store.InsertBuild(r.Context(), rec); err != nil {
+			h.Logger.Warn("sandbox: failed to persist build record", "error", err)
+			// Non-fatal — proceed with execution.
+		}
+	}
+
 	// Execute the container.
 	BuildContainersActive.Inc()
 	defer BuildContainersActive.Dec()
@@ -231,6 +280,9 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 	containerID, err := h.Runtime.Create(r.Context(), plan)
 	if err != nil {
 		h.Logger.Error("sandbox: failed to create container", "error", err)
+		if h.Store != nil {
+			_ = h.Store.CompleteBuild(r.Context(), buildID, "error", -1, err.Error(), 0)
+		}
 		http.Error(w, `{"error":"container creation failed"}`, http.StatusInternalServerError)
 		return
 	}
@@ -238,6 +290,9 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 	if err := h.Runtime.Start(r.Context(), containerID); err != nil {
 		h.Logger.Error("sandbox: failed to start container", "error", err, "container_id", containerID)
 		_ = h.Runtime.Destroy(r.Context(), containerID)
+		if h.Store != nil {
+			_ = h.Store.CompleteBuild(r.Context(), buildID, "error", -1, err.Error(), 0)
+		}
 		http.Error(w, `{"error":"container start failed"}`, http.StatusInternalServerError)
 		return
 	}
@@ -260,6 +315,9 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 	if waitErr != nil {
 		h.Logger.Error("sandbox: build execution failed", "error", waitErr)
 		if result == nil {
+			if h.Store != nil {
+				_ = h.Store.CompleteBuild(r.Context(), buildID, "error", -1, waitErr.Error(), int(time.Since(start).Milliseconds()))
+			}
 			http.Error(w, `{"error":"build execution failed"}`, http.StatusInternalServerError)
 			return
 		}
@@ -274,9 +332,21 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 	}
 	BuildTotal.WithLabelValues(status).Inc()
 
+	// Persist build completion.
+	if h.Store != nil {
+		logSummary := result.Logs
+		if len(logSummary) > 8192 {
+			logSummary = logSummary[:8192] + "\n... [truncated for DB]"
+		}
+		if err := h.Store.CompleteBuild(r.Context(), buildID, status, result.ExitCode, logSummary, int(duration.Milliseconds())); err != nil {
+			h.Logger.Warn("sandbox: failed to persist build completion", "error", err)
+		}
+	}
+
 	// Enrich response with resolution metadata.
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
+		"build_id":         buildID,
 		"exit_code":        result.ExitCode,
 		"logs":             result.Logs,
 		"duration":         result.Duration.String(),
@@ -288,14 +358,36 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 
 // ── GET /internal/swarm/sandbox/logs/{id} ────────────────────────────────────
 
-// HandleLogs returns build logs.
-// Placeholder — will query swarm_builds table in Phase 6.
+// HandleLogs returns build logs from the swarm_builds table.
 func (h *Handler) HandleLogs(w http.ResponseWriter, r *http.Request) {
 	buildID := chi.URLParam(r, "id")
+
+	if h.Store == nil {
+		http.Error(w, `{"error":"build store not configured"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	id, err := uuid.Parse(buildID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid build id"}`, http.StatusBadRequest)
+		return
+	}
+
+	rec, err := h.Store.GetBuild(r.Context(), id)
+	if err != nil {
+		h.Logger.Warn("sandbox: build not found for logs", "id", buildID, "error", err)
+		http.Error(w, `{"error":"build not found"}`, http.StatusNotFound)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"id":   buildID,
-		"logs": "not_implemented",
+	json.NewEncoder(w).Encode(map[string]any{
+		"id":         rec.ID,
+		"task_id":    rec.TaskID,
+		"status":     rec.Status,
+		"exit_code":  rec.ExitCode,
+		"logs":       rec.LogSummary,
+		"created_at": rec.CreatedAt,
 	})
 }
 

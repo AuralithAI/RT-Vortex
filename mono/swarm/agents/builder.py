@@ -289,9 +289,11 @@ class BuilderAgent(Agent):
             self._build_result = result
 
             exit_code = result.get("exit_code", -1)
+            build_id = result.get("build_id", "")
             logger.info(
-                "builder: build finished — exit_code=%d, resolved=%s, failed=%s",
+                "builder: build finished — exit_code=%d, build_id=%s, resolved=%s, failed=%s",
                 exit_code,
+                build_id,
                 result.get("resolved_secrets", []),
                 result.get("failed_secrets", []),
             )
@@ -307,6 +309,7 @@ class BuilderAgent(Agent):
                         "kind": "build_result",
                         "content": f"Build {build_status} (exit code {exit_code})",
                         "metadata": {
+                            "build_id": build_id,
                             "exit_code": exit_code,
                             "duration": result.get("duration", ""),
                             "resolved_secrets": result.get("resolved_secrets", []),
@@ -319,6 +322,7 @@ class BuilderAgent(Agent):
 
             return {
                 "status": build_status,
+                "build_id": build_id,
                 "exit_code": exit_code,
                 "duration": result.get("duration", ""),
                 "resolved_secrets": result.get("resolved_secrets", []),

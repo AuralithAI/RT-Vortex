@@ -314,6 +314,26 @@ class GoClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def sandbox_build_status(self, build_id: str) -> dict:
+        """Fetch the current status of a sandbox build."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/status/{build_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_build_logs(self, build_id: str) -> dict:
+        """Fetch the logs of a sandbox build."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/logs/{build_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     # ── VCS proxy methods ────────────────────────────────────────────────
 
     async def vcs_read_file(self, repo_id: str, path: str, ref: str = "") -> str:

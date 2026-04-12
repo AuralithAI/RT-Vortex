@@ -585,9 +585,14 @@ func (s *Server) setupRouter() {
 
 				// Sandbox builder (ephemeral container builds).
 				if s.deps.Config != nil && s.deps.Config.Sandbox.Enabled {
+					var buildStore *sandbox.BuildStore
+					if s.deps.DB != nil {
+						buildStore = sandbox.NewBuildStore(s.deps.DB.Pool)
+					}
 					sandboxHandler := sandbox.NewHandler(
 						sandbox.NewDockerRuntime(nil),
 						s.deps.KeychainService,
+						buildStore,
 						nil,
 					)
 					r.Post("/sandbox/plan", sandboxHandler.HandleGeneratePlan)
