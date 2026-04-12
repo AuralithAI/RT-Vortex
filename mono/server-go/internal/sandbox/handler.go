@@ -185,3 +185,62 @@ func (h *Handler) HandleListBuildSecrets(w http.ResponseWriter, r *http.Request)
 		"secrets": names,
 	})
 }
+
+// ── POST /internal/swarm/sandbox/probe ───────────────────────────────────────
+
+// HandleProbeEnv runs the pre-build environment probe.
+func (h *Handler) HandleProbeEnv(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		TaskID       string            `json:"task_id"`
+		RepoID       string            `json:"repo_id"`
+		UserID       string            `json:"user_id"`
+		RepoFiles    []string          `json:"repo_files"`
+		ChangedFiles []string          `json:"changed_files"`
+		FileContents map[string]string `json:"file_contents"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid request body"}`, http.StatusBadRequest)
+		return
+	}
+
+	taskID, err := uuid.Parse(req.TaskID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid task_id"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Fetch secret names for this repo+user if keychain is available.
+	var secretNames []string
+	if h.KeychainService != nil && req.UserID != "" && req.RepoID != "" {
+		userID, uerr := uuid.Parse(req.UserID)
+		repoID, rerr := uuid.Parse(req.RepoID)
+		if uerr == nil && rerr == nil {
+			versions, kerr := h.KeychainService.ListBuildSecretNames(r.Context(), userID, repoID)
+			if kerr == nil {
+				for _, v := range versions {
+					secretNames = append(secretNames, v.Name)
+				}
+			} else {
+				h.Logger.Warn("sandbox: probe could not fetch secrets", "error", kerr)
+			}
+		}
+	}
+
+	ProbeTotal.Inc()
+
+	result := RunProbe(r.Context(), ProbeOptions{
+		TaskID:       taskID,
+		RepoID:       req.RepoID,
+		RepoFiles:    req.RepoFiles,
+		ChangedFiles: req.ChangedFiles,
+		SecretNames:  secretNames,
+		FileContents: req.FileContents,
+	})
+
+	if len(result.MissingSecrets) > 0 {
+		ProbeMissingSecrets.Add(float64(len(result.MissingSecrets)))
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}

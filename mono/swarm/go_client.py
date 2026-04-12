@@ -198,6 +198,81 @@ class GoClient:
 
     # ── VCS proxy methods ────────────────────────────────────────────────
 
+    # ── Sandbox builder methods ──────────────────────────────────────────
+
+    async def sandbox_probe(
+        self,
+        task_id: str,
+        repo_id: str,
+        user_id: str,
+        repo_files: list[str],
+        changed_files: list[str],
+        file_contents: dict[str, str] | None = None,
+    ) -> dict:
+        """Run the pre-build environment probe via the Go sandbox service.
+
+        Detects the build system, scans file contents for env-var references,
+        cross-references with the user's repo-scoped secrets, and returns a
+        readiness assessment.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/sandbox/probe",
+                headers=self._headers(),
+                json={
+                    "task_id": task_id,
+                    "repo_id": repo_id,
+                    "user_id": user_id,
+                    "repo_files": repo_files,
+                    "changed_files": changed_files,
+                    "file_contents": file_contents or {},
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_generate_plan(
+        self,
+        task_id: str,
+        repo_id: str,
+        repo_files: list[str],
+        changed_files: list[str],
+        secret_names: list[str] | None = None,
+    ) -> dict:
+        """Generate a build plan via the Go sandbox service."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/sandbox/plan",
+                headers=self._headers(),
+                json={
+                    "task_id": task_id,
+                    "repo_id": repo_id,
+                    "repo_files": repo_files,
+                    "changed_files": changed_files,
+                    "secret_names": secret_names or [],
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_list_secrets(
+        self,
+        repo_id: str,
+        user_id: str,
+    ) -> list[str]:
+        """List build secret names (never values) for a repo+user."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/secrets",
+                headers=self._headers(),
+                params={"repo_id": repo_id, "user_id": user_id},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("secrets", [])
+
+    # ── VCS proxy methods ────────────────────────────────────────────────
+
     async def vcs_read_file(self, repo_id: str, path: str, ref: str = "") -> str:
         """Read a file's content via the Go VCS proxy.
 

@@ -598,9 +598,45 @@ async def _run_full_pipeline(
                     )
                     builder.conversation = conversation
                     builder.workspace = workspace
+                    builder._go_client = go_client
 
                     await builder.register()
                     agent_ids.append(builder.agent_id)
+
+                    # Phase 3: Run pre-build environment probe.
+                    user_id = task_data.get("user_id", "")
+                    repo_files = list(workspace._file_cache.keys())
+                    try:
+                        root_entries = await workspace.list_dir("")
+                        for entry in root_entries:
+                            name = entry.get("name", "")
+                            if name and name not in repo_files:
+                                repo_files.append(name)
+                    except Exception:
+                        pass
+
+                    probe_result: dict = {}
+                    try:
+                        probe_result = await builder.run_probe(
+                            task=task,
+                            user_id=user_id,
+                            repo_files=repo_files,
+                            changed_files=changed_files,
+                            workspace=workspace,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Team %s: Pre-build probe failed (non-fatal): %s",
+                            team_id[:8], e,
+                        )
+
+                    if probe_result.get("missing_secrets"):
+                        logger.warning(
+                            "Team %s: Probe found %d missing secrets: %s",
+                            team_id[:8],
+                            len(probe_result["missing_secrets"]),
+                            ", ".join(probe_result["missing_secrets"]),
+                        )
 
                     try:
                         builder_result = await builder.run(task)
@@ -611,13 +647,11 @@ async def _run_full_pipeline(
                             )
                         else:
                             logger.info(
-                                "Team %s: Builder validation passed",
+                                "Team %s: Builder validation passed (ready=%s)",
                                 team_id[:8],
+                                probe_result.get("ready", "unknown"),
                             )
                     except Exception as e:
-                        # Builder failure is non-fatal — log and proceed.
-                        # The build is advisory; blocking PRs on builder
-                        # errors requires opt-in via config.
                         logger.warning(
                             "Team %s: Builder validation failed (non-fatal): %s",
                             team_id[:8], e,

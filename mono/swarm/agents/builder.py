@@ -33,7 +33,6 @@ from ..tools.engine_tools import ENGINE_TOOLS
 
 logger = logging.getLogger(__name__)
 
-# Build-related file patterns that trigger mandatory builder validation.
 BUILD_FILE_PATTERNS = frozenset({
     "Makefile",
     "CMakeLists.txt",
@@ -59,17 +58,27 @@ BUILD_FILE_PATTERNS = frozenset({
     ".rtvortex/build.yml",
 })
 
-# Env-var patterns to search for per language ecosystem.
+# File extensions worth scanning for env-var references.
+_SCANNABLE_EXTENSIONS = frozenset({
+    ".py", ".js", ".ts", ".java", ".go", ".c", ".cpp", ".h",
+    ".rs", ".rb", ".env.example",
+})
+
+# Basenames that are always worth scanning regardless of extension.
+_SCANNABLE_BASENAMES = frozenset({
+    "Dockerfile", "docker-compose.yml", "docker-compose.yaml",
+    "CMakeLists.txt", ".env.example",
+})
+
 ENV_SCAN_QUERIES = [
-    "os.getenv OR os.environ OR process.env",           # Python / Node
-    "System.getenv OR System.getProperty",               # Java
-    "std::getenv OR getenv",                             # C/C++
-    "os.Getenv OR viper.Get",                            # Go
-    "ENV OR ARG",                                        # Dockerfile
-    "cmake -D OR set(CMAKE",                             # CMake
+    "os.getenv OR os.environ OR process.env",
+    "System.getenv OR System.getProperty",
+    "std::getenv OR getenv",
+    "os.Getenv OR viper.Get",
+    "ENV OR ARG",
+    "cmake -D OR set(CMAKE",
 ]
 
-# Well-known env vars with safe defaults.
 WELL_KNOWN_ENV_VARS: dict[str, str] = {
     "JAVA_HOME": "/usr/lib/jvm/java-17",
     "CMAKE_PREFIX_PATH": "/usr/local",
@@ -80,37 +89,38 @@ WELL_KNOWN_ENV_VARS: dict[str, str] = {
     "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 }
 
+# Max bytes of file content to send to the probe endpoint per file.
+_MAX_FILE_SIZE_FOR_PROBE = 64 * 1024
+
+# Max total files to scan for env vars.
+_MAX_SCAN_FILES = 50
+
 
 def affects_build_system(affected_files: list[str]) -> bool:
-    """Return True if any affected file matches a build-related pattern.
-
-    Used by the pipeline to decide whether to run the builder in full
-    validation mode vs. fast-scan mode.
-    """
+    """Return True if any affected file matches a build-related pattern."""
     for fpath in affected_files:
-        # Check basename match.
         basename = fpath.rsplit("/", 1)[-1] if "/" in fpath else fpath
         if basename in BUILD_FILE_PATTERNS:
             return True
-        # Check full-path match (e.g. .rtvortex/build.yml).
         if fpath in BUILD_FILE_PATTERNS:
             return True
     return False
 
 
+def _is_scannable(filepath: str) -> bool:
+    """Return True if a file is worth scanning for env-var references."""
+    basename = filepath.rsplit("/", 1)[-1] if "/" in filepath else filepath
+    if basename in _SCANNABLE_BASENAMES:
+        return True
+    dot_idx = basename.rfind(".")
+    if dot_idx >= 0:
+        ext = basename[dot_idx:]
+        return ext in _SCANNABLE_EXTENSIONS
+    return False
+
+
 class BuilderAgent(Agent):
-    """Build validation agent — runs as a pipeline stage after diffs.
-
-    Capabilities:
-    - Search code semantically via the engine (for env-var discovery)
-    - Read workspace files (build configs, SANDBOX.md)
-    - Inspect the changeset to determine what build systems are affected
-    - Post env-var discovery results to team discussion for HITL confirmation
-
-    Does NOT have:
-    - Workspace write tools (no edit_file, create_file, delete_file)
-    - The ability to modify code directly
-    """
+    """Build validation agent — runs as a pipeline stage after diffs."""
 
     def __init__(self, agent_id: str, team_id: str, **kwargs: Any):
         super().__init__(
@@ -119,8 +129,6 @@ class BuilderAgent(Agent):
             team_id=team_id,
             **kwargs,
         )
-        # Builder gets read-only workspace tools + engine search tools.
-        # Import here to avoid circular imports at module level.
         from ..tools.workspace_tools import (
             workspace_read_file,
             workspace_search,
@@ -135,6 +143,86 @@ class BuilderAgent(Agent):
             workspace_status,
         ] + list(ENGINE_TOOLS)
 
+        self._probe_result: dict | None = None
+        self._user_id: str = ""
+
+    async def run_probe(
+        self,
+        task: Task,
+        user_id: str,
+        repo_files: list[str],
+        changed_files: list[str],
+        workspace: Any | None = None,
+    ) -> dict:
+        """Run the pre-build environment probe via the Go sandbox service.
+
+        Collects scannable file contents from the workspace cache and sends
+        them to the Go probe endpoint for env-var detection and secret
+        cross-referencing.
+        """
+        from ..go_client import GoClient
+
+        go_client: GoClient | None = getattr(self, "_go_client", None)
+        if go_client is None and hasattr(self, "config"):
+            from ..agents_config import get_config
+            go_client = GoClient(self.token or "")
+
+        if go_client is None:
+            logger.warning("builder: no go_client available, skipping probe")
+            return {}
+
+        file_contents: dict[str, str] = {}
+        scan_count = 0
+
+        if workspace is not None:
+            # Collect from workspace cache — files already fetched by agents.
+            for fpath, content in workspace._file_cache.items():
+                if scan_count >= _MAX_SCAN_FILES:
+                    break
+                if _is_scannable(fpath) and len(content) <= _MAX_FILE_SIZE_FOR_PROBE:
+                    file_contents[fpath] = content
+                    scan_count += 1
+
+            # Also try to read build config files and Dockerfiles if not cached.
+            for fpath in repo_files:
+                if scan_count >= _MAX_SCAN_FILES:
+                    break
+                basename = fpath.rsplit("/", 1)[-1] if "/" in fpath else fpath
+                if basename in BUILD_FILE_PATTERNS and fpath not in file_contents:
+                    try:
+                        content = await workspace.read_file(fpath)
+                        if len(content) <= _MAX_FILE_SIZE_FOR_PROBE:
+                            file_contents[fpath] = content
+                            scan_count += 1
+                    except Exception:
+                        pass
+
+        self._user_id = user_id
+
+        try:
+            probe = await go_client.sandbox_probe(
+                task_id=task.id,
+                repo_id=task.repo_id,
+                user_id=user_id,
+                repo_files=repo_files,
+                changed_files=changed_files,
+                file_contents=file_contents,
+            )
+            self._probe_result = probe
+            logger.info(
+                "builder: probe complete — build_system=%s, detected_envs=%d, "
+                "matched=%d, missing=%d, ready=%s",
+                probe.get("build_system", "?"),
+                len(probe.get("detected_envs", [])),
+                len(probe.get("matched_secrets", [])),
+                len(probe.get("missing_secrets", [])),
+                probe.get("ready", False),
+            )
+            return probe
+        except Exception as e:
+            logger.warning("builder: probe failed: %s", e)
+            return {}
+
     def build_system_prompt(self, task: Task) -> str:
         plan_section = ""
         if task.plan_document:
@@ -143,6 +231,24 @@ class BuilderAgent(Agent):
 ```json
 {json.dumps(task.plan_document, indent=2)}
 ```
+"""
+
+        probe_section = ""
+        if self._probe_result:
+            probe_section = f"""
+## Pre-Build Probe Results
+```json
+{json.dumps(self._probe_result, indent=2)}
+```
+
+Use these probe results in your analysis. The probe has already:
+- Detected the build system and recommended command
+- Scanned source files for environment variable references
+- Cross-referenced detected env vars with the user's repo secrets
+- Identified missing secrets that may need to be added
+
+Focus on validating the probe findings and identifying any additional
+build risks not covered by the automated scan.
 """
 
         return f"""You are the Builder Agent in the RTVortex Agent Swarm.
@@ -158,41 +264,26 @@ You are NOT a code author — you validate, you do not modify code.
 - Task ID: {task.id}
 - Repository: {task.repo_id}
 - Description: {task.description}
-{plan_section}
+{plan_section}{probe_section}
 
 ## What You Must Do
 
-### Step 1: Detect Build System
-Read the repository root to identify the build system:
-- `Makefile` → Make
-- `CMakeLists.txt` → CMake
-- `build.gradle` / `build.gradle.kts` → Gradle
-- `pom.xml` → Maven
-- `pyproject.toml` / `setup.py` → Python (pip/poetry)
-- `package.json` → Node.js (npm/yarn)
-- `go.mod` → Go modules
-- `Cargo.toml` → Rust (cargo)
-- `SANDBOX.md` / `BUILD.md` → Custom build instructions
+### Step 1: Review Probe Results
+If probe results are available above, review them for accuracy.
+Otherwise detect the build system by reading repository root files.
 
-Also check for `.rtvortex/build.yml` which provides structured build config.
+### Step 2: Validate Environment Variables
+Confirm the probe's env-var findings by searching the codebase:
+- Are there env vars the probe missed?
+- Are any "missing" secrets actually optional or have defaults in code?
 
-### Step 2: Scan for Environment Variables
-Use `workspace_search` and `search_code` to find env-var references:
-- Python: `os.getenv`, `os.environ`
-- Java: `System.getenv`, `System.getProperty`
-- C/C++: `std::getenv`, `getenv`
-- Go: `os.Getenv`, `viper.Get`
-- Node: `process.env`
-- Docker: `ENV`, `ARG`
-- CMake: `cmake -D`, `$ENV{{}}`
-
-### Step 3: Report Findings
-Summarise your analysis:
-1. Build system detected (command, base image recommendation)
-2. Environment variables found (name, file, line)
-3. Which env vars are in repo secrets vs. missing
+### Step 3: Assess Build Readiness
+Based on the probe and your analysis:
+1. Build system (command, base image)
+2. Environment variables found (name, file)
+3. Which env vars are covered by repo secrets vs. missing
 4. Recommended build command
-5. Any potential build issues from the proposed diffs
+5. Build risk assessment for the proposed diffs
 
 ### Step 4: Complete
 Call `complete_task` with your analysis summary.
@@ -205,7 +296,6 @@ Call `complete_task` with your analysis summary.
 """
 
     def build_probe_system_prompt(self, task: Task) -> str:
-        """Probe prompt for multi-LLM analysis (no tools available)."""
         return f"""You are a Build Validation specialist analysing a code change.
 
 Task: {task.description}
@@ -221,7 +311,6 @@ Be specific and cite common patterns. Do NOT narrate tool calls.
 """
 
     def parse_result(self, messages: list[dict]) -> AgentResult:
-        """Extract the build analysis from the agent's messages."""
         output_parts: list[str] = []
         for msg in messages:
             if msg.get("role") == "assistant" and msg.get("content"):
@@ -233,4 +322,10 @@ Be specific and cite common patterns. Do NOT narrate tool calls.
                         if isinstance(block, dict) and block.get("type") == "text":
                             output_parts.append(block["text"])
 
-        return AgentResult(output="\n\n".join(output_parts))
+        combined = "\n\n".join(output_parts)
+
+        # Attach probe result as structured metadata in the output.
+        if self._probe_result:
+            combined += f"\n\n---\n## Probe Result (structured)\n```json\n{json.dumps(self._probe_result, indent=2)}\n```"
+
+        return AgentResult(output=combined)

@@ -591,6 +591,7 @@ func (s *Server) setupRouter() {
 						nil,
 					)
 					r.Post("/sandbox/plan", sandboxHandler.HandleGeneratePlan)
+					r.Post("/sandbox/probe", sandboxHandler.HandleProbeEnv)
 					r.Post("/sandbox/execute", sandboxHandler.HandleExecute)
 					r.Get("/sandbox/status/{id}", sandboxHandler.HandleStatus)
 					r.Get("/sandbox/logs/{id}", sandboxHandler.HandleLogs)

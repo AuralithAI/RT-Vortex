@@ -67,4 +67,20 @@ var (
 		Name:      "build_skipped_total",
 		Help:      "Total builds skipped (non-code-only diffs).",
 	})
+
+	// ProbeTotal counts pre-build environment probe invocations.
+	ProbeTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "probe_total",
+		Help:      "Total pre-build environment probes executed.",
+	})
+
+	// ProbeMissingSecrets counts env vars detected that have no matching secret.
+	ProbeMissingSecrets = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "probe_missing_secrets_total",
+		Help:      "Total missing secrets detected across all probes.",
+	})
 )
