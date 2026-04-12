@@ -276,6 +276,7 @@ class BuilderAgent(Agent):
         task: Task,
         user_id: str,
         probe_result: dict,
+        changed_files: list[str] | None = None,
     ) -> dict:
         """Request HITL confirmation of the build plan and execute if approved.
 
@@ -409,8 +410,34 @@ class BuilderAgent(Agent):
                 base_image=base_image,
                 secret_refs=secret_refs,
                 sandbox_mode=True,
+                changed_files=changed_files or [],
             )
             self._build_result = result
+
+            # Handle skip response from Go.
+            if result.get("skipped"):
+                logger.info(
+                    "builder: build skipped — %s", result.get("reason", "")
+                )
+                try:
+                    await go_client.post_agent_message(
+                        task_id=task.id,
+                        message={
+                            "agent_id": self.agent_id,
+                            "agent_role": "builder",
+                            "kind": "build_skipped",
+                            "content": result.get("reason", "build skipped"),
+                            "metadata": {"build_id": result.get("build_id", "")},
+                        },
+                    )
+                except Exception:
+                    pass
+                return {
+                    "status": "skipped",
+                    "build_id": result.get("build_id", ""),
+                    "reason": result.get("reason", ""),
+                    "exit_code": 0,
+                }
 
             exit_code = result.get("exit_code", -1)
             build_id = result.get("build_id", "")

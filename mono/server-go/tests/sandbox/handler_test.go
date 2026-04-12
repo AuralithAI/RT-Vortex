@@ -305,6 +305,85 @@ func TestHandleRetry_InvalidBuildID(t *testing.T) {
 	}
 }
 
+// ── Build skip ──────────────────────────────────────────────────────────────
+
+func TestHandleResolveAndExecute_SkipNonCodeChanges(t *testing.T) {
+	mock := sandbox.NewMockRuntime()
+	h := sandbox.NewHandler(mock, nil, nil, nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"task_id":       uuid.New().String(),
+		"repo_id":       uuid.New().String(),
+		"user_id":       uuid.New().String(),
+		"build_system":  "go",
+		"command":       "go build ./...",
+		"base_image":    "golang:1.22",
+		"changed_files": []string{"README.md", "docs/setup.md", "LICENSE"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/resolve-execute", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleResolveAndExecute(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	skipped, _ := resp["skipped"].(bool)
+	if !skipped {
+		t.Error("expected skipped=true for docs-only changes")
+	}
+
+	if ec, ok := resp["exit_code"].(float64); !ok || int(ec) != 0 {
+		t.Errorf("exit_code = %v, want 0", resp["exit_code"])
+	}
+
+	// Runtime should NOT have been called.
+	if len(mock.CreatedPlans) != 0 {
+		t.Errorf("expected 0 container creates for skipped build, got %d", len(mock.CreatedPlans))
+	}
+}
+
+func TestHandleResolveAndExecute_NoSkipWithCode(t *testing.T) {
+	mock := sandbox.NewMockRuntime()
+	h := sandbox.NewHandler(mock, nil, nil, nil)
+
+	body, _ := json.Marshal(map[string]any{
+		"task_id":       uuid.New().String(),
+		"repo_id":       uuid.New().String(),
+		"user_id":       uuid.New().String(),
+		"build_system":  "go",
+		"command":       "go build ./...",
+		"base_image":    "golang:1.22",
+		"changed_files": []string{"README.md", "main.go"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/sandbox/resolve-execute", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.HandleResolveAndExecute(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var resp map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+
+	if resp["skipped"] != nil {
+		t.Error("expected no 'skipped' key when code files are present")
+	}
+
+	// Runtime SHOULD have been called.
+	if len(mock.CreatedPlans) != 1 {
+		t.Errorf("expected 1 container create, got %d", len(mock.CreatedPlans))
+	}
+}
+
 // ── build_id in response ────────────────────────────────────────────────────
 
 func TestHandleResolveAndExecute_ResponseContainsBuildID(t *testing.T) {

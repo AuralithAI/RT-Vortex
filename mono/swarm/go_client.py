@@ -285,6 +285,8 @@ class GoClient:
         timeout_sec: int = 600,
         memory_limit: str = "2g",
         cpu_limit: str = "2",
+        changed_files: list[str] | None = None,
+        skip_cache: bool = False,
     ) -> dict:
         """Resolve secrets and execute a sandboxed build in one call.
 
@@ -309,6 +311,8 @@ class GoClient:
                     "timeout_sec": timeout_sec,
                     "memory_limit": memory_limit,
                     "cpu_limit": cpu_limit,
+                    "changed_files": changed_files or [],
+                    "skip_cache": skip_cache,
                 },
             )
             resp.raise_for_status()

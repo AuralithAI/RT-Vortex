@@ -45,6 +45,7 @@ type BuildPlan struct {
 	Timeout     time.Duration     `json:"timeout"`      // default 10 min
 	MemoryLimit string            `json:"memory_limit"` // e.g. "2g"
 	CPULimit    string            `json:"cpu_limit"`    // e.g. "2"
+	Cache       *CacheConfig      `json:"-"`            // dependency layer cache volume (nil = no cache)
 }
 
 // DefaultTimeout is the default build timeout.

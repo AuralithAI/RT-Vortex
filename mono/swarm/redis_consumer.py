@@ -646,6 +646,7 @@ async def _run_full_pipeline(
                                 task=task,
                                 user_id=user_id,
                                 probe_result=probe_result,
+                                changed_files=changed_files,
                             )
                             build_status = build_exec_result.get("status", "unknown")
                             logger.info(

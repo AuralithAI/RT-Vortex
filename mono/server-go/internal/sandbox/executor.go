@@ -143,6 +143,11 @@ func (d *DockerRuntime) BuildDockerArgs(plan *BuildPlan) (args []string, redacte
 		args = append(args, "--read-only")
 	}
 
+	// Dependency cache volume mount.
+	if cacheArgs := CacheDockerArgs(plan.Cache); len(cacheArgs) > 0 {
+		args = append(args, cacheArgs...)
+	}
+
 	// Copy for safe logging before we add secret env vars.
 	redactedArgs = make([]string, len(args))
 	copy(redactedArgs, args)

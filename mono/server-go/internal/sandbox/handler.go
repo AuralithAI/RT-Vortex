@@ -159,18 +159,20 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 // resolveExecuteRequest is the payload for HandleResolveAndExecute.
 type resolveExecuteRequest struct {
-	TaskID      string   `json:"task_id"`
-	RepoID      string   `json:"repo_id"`
-	UserID      string   `json:"user_id"`
-	BuildSystem string   `json:"build_system"`
-	Command     string   `json:"command"`
-	PreCommands []string `json:"pre_commands"`
-	SecretRefs  []string `json:"secret_refs"`
-	BaseImage   string   `json:"base_image"`
-	SandboxMode bool     `json:"sandbox_mode"`
-	TimeoutSec  int      `json:"timeout_sec"`
-	MemoryLimit string   `json:"memory_limit"`
-	CPULimit    string   `json:"cpu_limit"`
+	TaskID       string   `json:"task_id"`
+	RepoID       string   `json:"repo_id"`
+	UserID       string   `json:"user_id"`
+	BuildSystem  string   `json:"build_system"`
+	Command      string   `json:"command"`
+	PreCommands  []string `json:"pre_commands"`
+	SecretRefs   []string `json:"secret_refs"`
+	BaseImage    string   `json:"base_image"`
+	SandboxMode  bool     `json:"sandbox_mode"`
+	TimeoutSec   int      `json:"timeout_sec"`
+	MemoryLimit  string   `json:"memory_limit"`
+	CPULimit     string   `json:"cpu_limit"`
+	ChangedFiles []string `json:"changed_files"`
+	SkipCache    bool     `json:"skip_cache"`
 }
 
 // HandleResolveAndExecute resolves secret values from the keychain, populates
@@ -204,6 +206,44 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Smart skip: if all changed files are non-code, skip the build entirely.
+	if len(req.ChangedFiles) > 0 && CanSkipBuild(req.ChangedFiles) {
+		BuildSkipped.Inc()
+		BuildTotal.WithLabelValues("skipped").Inc()
+		h.Logger.Info("sandbox: build skipped — non-code changes only",
+			"task_id", taskID, "changed_files", len(req.ChangedFiles))
+
+		buildID := uuid.New()
+		if h.Store != nil {
+			rec := &BuildRecord{
+				ID:          buildID,
+				TaskID:      taskID,
+				RepoID:      req.RepoID,
+				UserID:      &userID,
+				BuildSystem: req.BuildSystem,
+				Command:     req.Command,
+				BaseImage:   req.BaseImage,
+				Status:      "skipped",
+				SecretNames: req.SecretRefs,
+				SandboxMode: req.SandboxMode,
+			}
+			_ = h.Store.InsertBuild(r.Context(), rec)
+			_ = h.Store.CompleteBuild(r.Context(), buildID, "skipped", 0,
+				SkipReason(req.ChangedFiles), 0)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"build_id":  buildID,
+			"exit_code": 0,
+			"logs":      SkipReason(req.ChangedFiles),
+			"duration":  "0s",
+			"skipped":   true,
+			"reason":    SkipReason(req.ChangedFiles),
+		})
+		return
+	}
+
 	// Build the plan.
 	plan := &BuildPlan{
 		ID:          uuid.New(),
@@ -218,6 +258,16 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		MemoryLimit: req.MemoryLimit,
 		CPULimit:    req.CPULimit,
 		EnvVars:     make(map[string]string),
+	}
+
+	// Resolve dependency cache.
+	if !req.SkipCache {
+		plan.Cache = ResolveCacheConfig(req.RepoID, req.BuildSystem)
+		if plan.Cache != nil {
+			BuildCacheHits.Inc()
+			h.Logger.Info("sandbox: cache enabled",
+				"volume", plan.Cache.VolumeName, "path", plan.Cache.ContainerPath)
+		}
 	}
 	if req.TimeoutSec > 0 {
 		plan.Timeout = time.Duration(req.TimeoutSec) * time.Second
@@ -437,6 +487,7 @@ func (h *Handler) HandleRetry(w http.ResponseWriter, r *http.Request) {
 		MemoryLimit: DefaultMemoryLimit,
 		CPULimit:    DefaultCPULimit,
 		EnvVars:     make(map[string]string),
+		Cache:       ResolveCacheConfig(rec.RepoID, rec.BuildSystem),
 	}
 
 	// Resolve secrets again.

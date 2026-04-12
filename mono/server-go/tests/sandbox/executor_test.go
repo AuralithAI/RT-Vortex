@@ -2,6 +2,7 @@ package sandbox_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -239,6 +240,61 @@ func TestDockerRuntime_DestroyCleansPlan(t *testing.T) {
 
 	if rt.PlanCount() != 0 {
 		t.Error("plan should be removed after Destroy")
+	}
+}
+
+func TestDockerRuntime_BuildDockerArgs_WithCache(t *testing.T) {
+	rt := sandbox.NewDockerRuntime(nil)
+
+	cache := sandbox.ResolveCacheConfig("test-repo-id", "go")
+	if cache == nil {
+		t.Fatal("expected cache config for go")
+	}
+
+	plan := &sandbox.BuildPlan{
+		ID:          uuid.New(),
+		BaseImage:   "golang:1.22",
+		Command:     "go build ./...",
+		MemoryLimit: "2g",
+		CPULimit:    "2",
+		Cache:       cache,
+	}
+
+	args, _ := rt.BuildDockerArgs(plan)
+
+	// Should contain the -v volume mount for the cache.
+	assertContains(t, args, "-v")
+
+	foundCache := false
+	for _, a := range args {
+		if len(a) > 2 && a[0] != '-' && strings.Contains(a, ":/go/pkg/mod") {
+			foundCache = true
+			break
+		}
+	}
+	if !foundCache {
+		t.Error("expected cache volume mount for /go/pkg/mod in docker args")
+	}
+}
+
+func TestDockerRuntime_BuildDockerArgs_NoCache(t *testing.T) {
+	rt := sandbox.NewDockerRuntime(nil)
+
+	plan := &sandbox.BuildPlan{
+		ID:          uuid.New(),
+		BaseImage:   "golang:1.22",
+		Command:     "go build ./...",
+		MemoryLimit: "2g",
+		CPULimit:    "2",
+		Cache:       nil,
+	}
+
+	args, _ := rt.BuildDockerArgs(plan)
+
+	for _, a := range args {
+		if strings.Contains(a, "rtvortex-depcache") {
+			t.Error("should not contain cache volume when cache is nil")
+		}
 	}
 }
 
