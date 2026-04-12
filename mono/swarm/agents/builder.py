@@ -445,12 +445,16 @@ class BuilderAgent(Agent):
             exit_code = result.get("exit_code", -1)
             build_id = result.get("build_id", "")
             complexity = result.get("complexity")
+            fast_path = result.get("fast_path", False)
+            fingerprint = result.get("fingerprint")
+            image_tag = result.get("image_tag", "")
             logger.info(
                 "builder: build finished — exit_code=%d, build_id=%s, "
-                "complexity=%s, resolved=%s, failed=%s",
+                "complexity=%s, fast_path=%s, resolved=%s, failed=%s",
                 exit_code,
                 build_id,
                 complexity.get("label", "?") if complexity else "n/a",
+                fast_path,
                 result.get("resolved_secrets", []),
                 result.get("failed_secrets", []),
             )
@@ -474,6 +478,9 @@ class BuilderAgent(Agent):
                             "artifacts": result.get("artifacts", []),
                             "workspace_injected": result.get("workspace_injected", False),
                             "complexity": complexity,
+                            "fast_path": fast_path,
+                            "fingerprint": fingerprint,
+                            "image_tag": image_tag,
                         },
                     },
                 )
@@ -491,6 +498,9 @@ class BuilderAgent(Agent):
                 "artifacts": result.get("artifacts", []),
                 "workspace_injected": result.get("workspace_injected", False),
                 "complexity": complexity,
+                "fast_path": fast_path,
+                "fingerprint": fingerprint,
+                "image_tag": image_tag,
             }
 
             if build_status == "failed":

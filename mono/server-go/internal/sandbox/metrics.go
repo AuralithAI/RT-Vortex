@@ -149,4 +149,28 @@ var (
 		Help:      "Estimated build failure probability.",
 		Buckets:   []float64{0.05, 0.1, 0.15, 0.2, 0.3, 0.4, 0.5},
 	})
+
+	// BuildFastPathTotal counts builds that took the fast path (dep-install skipped).
+	BuildFastPathTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "build_fast_path_total",
+		Help:      "Total builds that skipped dependency installation (fast path).",
+	})
+
+	// BuildFingerprintHits counts fingerprint cache hits.
+	BuildFingerprintHits = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "build_fingerprint_hits_total",
+		Help:      "Total builds where the build-config fingerprint matched the previous successful build.",
+	})
+
+	// BuildConfigLimitsApplied counts builds where config-driven limits were applied.
+	BuildConfigLimitsApplied = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: metricsNS,
+		Subsystem: metricsSub,
+		Name:      "build_config_limits_applied_total",
+		Help:      "Total builds where server config limits overrode request values.",
+	})
 )

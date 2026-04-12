@@ -380,6 +380,16 @@ class GoClient:
             resp.raise_for_status()
             return resp.json()
 
+    async def sandbox_health(self) -> dict:
+        """Fetch sandbox runtime health and config limits."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/health",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     # ── VCS proxy methods ────────────────────────────────────────────────
 
     async def vcs_read_file(self, repo_id: str, path: str, ref: str = "") -> str:

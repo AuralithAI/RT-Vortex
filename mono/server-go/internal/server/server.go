@@ -595,6 +595,13 @@ func (s *Server) setupRouter() {
 						buildStore,
 						nil,
 					)
+					sandboxHandler.Limits = &sandbox.SandboxLimits{
+						MaxTimeoutSec:  s.deps.Config.Sandbox.MaxTimeoutSec,
+						MaxMemoryMB:    s.deps.Config.Sandbox.MaxMemoryMB,
+						MaxCPU:         s.deps.Config.Sandbox.MaxCPU,
+						MaxRetries:     s.deps.Config.Sandbox.MaxRetries,
+						DefaultSandbox: s.deps.Config.Sandbox.DefaultSandbox,
+					}
 					r.Post("/sandbox/plan", sandboxHandler.HandleGeneratePlan)
 					r.Post("/sandbox/probe", sandboxHandler.HandleProbeEnv)
 					r.Post("/sandbox/execute", sandboxHandler.HandleExecute)
@@ -605,6 +612,7 @@ func (s *Server) setupRouter() {
 					r.Get("/sandbox/secrets", sandboxHandler.HandleListBuildSecrets)
 					r.Get("/sandbox/artifacts/{id}", sandboxHandler.HandleListArtifacts)
 					r.Get("/sandbox/complexity/{repo_id}", sandboxHandler.HandleBuildComplexity)
+					r.Get("/sandbox/health", sandboxHandler.HandleHealth)
 				}
 
 				// LLM proxy.

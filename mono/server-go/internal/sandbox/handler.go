@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -14,12 +15,22 @@ import (
 
 // ── Handler ─────────────────────────────────────────────────────────────────
 
+// SandboxLimits holds config-driven limits applied to every build.
+type SandboxLimits struct {
+	MaxTimeoutSec int
+	MaxMemoryMB   int
+	MaxCPU        int
+	MaxRetries    int
+	DefaultSandbox bool
+}
+
 // Handler serves sandbox-related HTTP endpoints.
 type Handler struct {
 	Runtime         ContainerRuntime
 	KeychainService *keychain.Service
 	Store           *BuildStore
 	Logger          *slog.Logger
+	Limits          *SandboxLimits
 }
 
 // NewHandler creates a sandbox HTTP handler.
@@ -28,6 +39,88 @@ func NewHandler(runtime ContainerRuntime, keychainSvc *keychain.Service, buildSt
 		logger = slog.Default()
 	}
 	return &Handler{Runtime: runtime, KeychainService: keychainSvc, Store: buildStore, Logger: logger}
+}
+
+// applyLimits clamps request values to server-configured maximums.
+func (h *Handler) applyLimits(timeoutSec *int, memoryLimit *string, cpuLimit *string, sandboxMode *bool) bool {
+	if h.Limits == nil {
+		return false
+	}
+	applied := false
+
+	if h.Limits.MaxTimeoutSec > 0 && *timeoutSec > h.Limits.MaxTimeoutSec {
+		*timeoutSec = h.Limits.MaxTimeoutSec
+		applied = true
+	}
+
+	if h.Limits.MaxMemoryMB > 0 {
+		maxMem := memoryLimitString(h.Limits.MaxMemoryMB)
+		if parseMemoryMB(*memoryLimit) > h.Limits.MaxMemoryMB {
+			*memoryLimit = maxMem
+			applied = true
+		}
+	}
+
+	if h.Limits.MaxCPU > 0 {
+		if parseCPU(*cpuLimit) > h.Limits.MaxCPU {
+			*cpuLimit = intToStr(h.Limits.MaxCPU)
+			applied = true
+		}
+	}
+
+	if h.Limits.DefaultSandbox && !*sandboxMode {
+		*sandboxMode = true
+		applied = true
+	}
+
+	if applied {
+		BuildConfigLimitsApplied.Inc()
+	}
+	return applied
+}
+
+// ApplyLimits is the exported version of applyLimits for testing.
+func (h *Handler) ApplyLimits(timeoutSec int, memoryLimit, cpuLimit string, sandboxMode bool) (int, string, string, bool) {
+	h.applyLimits(&timeoutSec, &memoryLimit, &cpuLimit, &sandboxMode)
+	return timeoutSec, memoryLimit, cpuLimit, sandboxMode
+}
+
+func parseMemoryMB(s string) int {
+	if s == "" {
+		return 0
+	}
+	s = strings.TrimSpace(s)
+	multiplier := 1
+	if strings.HasSuffix(s, "g") || strings.HasSuffix(s, "G") {
+		multiplier = 1024
+		s = s[:len(s)-1]
+	} else if strings.HasSuffix(s, "m") || strings.HasSuffix(s, "M") {
+		s = s[:len(s)-1]
+	}
+	n := 0
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			n = n*10 + int(c-'0')
+		}
+	}
+	return n * multiplier
+}
+
+func parseCPU(s string) int {
+	n := 0
+	for _, c := range s {
+		if c >= '0' && c <= '9' {
+			n = n*10 + int(c-'0')
+		}
+	}
+	return n
+}
+
+func memoryLimitString(mb int) string {
+	if mb >= 1024 && mb%1024 == 0 {
+		return intToStr(mb/1024) + "g"
+	}
+	return intToStr(mb) + "m"
 }
 
 // ── POST /internal/swarm/sandbox/plan ────────────────────────────────────────
@@ -307,6 +400,33 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		plan.CPULimit = DefaultCPULimit
 	}
 
+	// Apply config-driven limits from rtserverprops.xml <sandbox> element.
+	timeoutSec := int(plan.Timeout.Seconds())
+	h.applyLimits(&timeoutSec, &plan.MemoryLimit, &plan.CPULimit, &plan.SandboxMode)
+	plan.Timeout = time.Duration(timeoutSec) * time.Second
+
+	// Build fingerprinting: compare build-config file hashes to detect
+	// whether dependency installation can be skipped (fast path).
+	var fingerprint *BuildFingerprint
+	fastPath := false
+	if len(plan.WorkspaceFS) > 0 {
+		fingerprint = ComputeBuildFingerprint(req.BuildSystem, plan.WorkspaceFS)
+		if fingerprint.Hash != "" && h.Store != nil {
+			prev, err := h.Store.GetLatestFingerprint(r.Context(), req.RepoID, req.BuildSystem)
+			if err == nil && prev != nil {
+				AnnotateFastPath(fingerprint, prev)
+				fastPath = fingerprint.FastPath
+			}
+		}
+		if fastPath {
+			plan.Command = FastPathCommand(req.BuildSystem, plan.Command, true)
+			BuildFastPathTotal.Inc()
+			BuildFingerprintHits.Inc()
+			h.Logger.Info("sandbox: fast path — deps unchanged, skipping install",
+				"build_system", req.BuildSystem, "fingerprint", fingerprint.Hash[:12])
+		}
+	}
+
 	// Resolve secrets from the keychain.
 	var resolved, failed []string
 	if h.KeychainService != nil && len(req.SecretRefs) > 0 {
@@ -452,8 +572,16 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 			h.Logger.Warn("sandbox: failed to persist complexity", "error", err)
 		}
 	}
+
+	// Persist build fingerprint for future fast-path detection.
+	if fingerprint != nil && fingerprint.Hash != "" && h.Store != nil {
+		if err := h.Store.UpdateBuildFingerprint(r.Context(), buildID, fingerprint); err != nil {
+			h.Logger.Warn("sandbox: failed to persist fingerprint", "error", err)
+		}
+	}
+
 	h.Logger.Info("sandbox: "+BuildComplexitySummary(complexity),
-		"build_id", buildID)
+		"build_id", buildID, "fast_path", fastPath)
 
 	// Enrich response with resolution metadata.
 	w.Header().Set("Content-Type", "application/json")
@@ -468,6 +596,9 @@ func (h *Handler) HandleResolveAndExecute(w http.ResponseWriter, r *http.Request
 		"artifacts":          artifactSummaries,
 		"workspace_injected": len(plan.WorkspaceFS) > 0,
 		"complexity":         complexity,
+		"fingerprint":        fingerprint,
+		"fast_path":          fastPath,
+		"image_tag":          ImageTag(req.RepoID, fingerprint),
 	})
 }
 
@@ -896,4 +1027,55 @@ func (h *Handler) HandleBuildComplexity(w http.ResponseWriter, r *http.Request) 
 		"resource_hints":   refined,
 		"build_count":      len(records),
 	})
+}
+
+// ── GET /internal/swarm/sandbox/health ───────────────────────────────────────
+
+// HandleHealth returns the sandbox runtime health status and current config.
+func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	runtimeHealthy := false
+	runtimeErr := ""
+	if h.Runtime != nil {
+		if err := h.Runtime.HealthCheck(r.Context()); err != nil {
+			runtimeErr = err.Error()
+		} else {
+			runtimeHealthy = true
+		}
+	}
+
+	storeHealthy := h.Store != nil
+
+	resp := map[string]any{
+		"runtime_healthy": runtimeHealthy,
+		"store_healthy":   storeHealthy,
+		"defaults": map[string]any{
+			"timeout_sec":  int(DefaultTimeout.Seconds()),
+			"memory_limit": DefaultMemoryLimit,
+			"cpu_limit":    DefaultCPULimit,
+			"max_retries":  MaxRetries,
+		},
+	}
+
+	if runtimeErr != "" {
+		resp["runtime_error"] = runtimeErr
+	}
+
+	if h.Limits != nil {
+		resp["config_limits"] = map[string]any{
+			"max_timeout_sec": h.Limits.MaxTimeoutSec,
+			"max_memory_mb":   h.Limits.MaxMemoryMB,
+			"max_cpu":         h.Limits.MaxCPU,
+			"max_retries":     h.Limits.MaxRetries,
+			"default_sandbox": h.Limits.DefaultSandbox,
+		}
+	}
+
+	status := http.StatusOK
+	if !runtimeHealthy {
+		status = http.StatusServiceUnavailable
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(resp)
 }

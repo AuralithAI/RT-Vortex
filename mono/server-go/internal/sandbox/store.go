@@ -225,3 +225,40 @@ func (s *BuildStore) UpdateBuildComplexity(ctx context.Context, buildID uuid.UUI
 	}
 	return nil
 }
+
+// UpdateBuildFingerprint stores the build fingerprint hash on the build record.
+func (s *BuildStore) UpdateBuildFingerprint(ctx context.Context, buildID uuid.UUID, fp *BuildFingerprint) error {
+	data, err := json.Marshal(fp)
+	if err != nil {
+		return fmt.Errorf("sandbox store: marshal fingerprint: %w", err)
+	}
+	_, err = s.pool.Exec(ctx, `
+		UPDATE swarm_builds SET fingerprint = $1 WHERE id = $2`,
+		data, buildID,
+	)
+	if err != nil {
+		return fmt.Errorf("sandbox store: update fingerprint: %w", err)
+	}
+	return nil
+}
+
+// GetLatestFingerprint returns the most recent successful build fingerprint
+// for a repo+build_system pair.
+func (s *BuildStore) GetLatestFingerprint(ctx context.Context, repoID, buildSystem string) (*BuildFingerprint, error) {
+	var data []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT fingerprint FROM swarm_builds
+		WHERE repo_id = $1 AND build_system = $2 AND status = 'success'
+		  AND fingerprint IS NOT NULL
+		ORDER BY created_at DESC LIMIT 1`,
+		repoID, buildSystem,
+	).Scan(&data)
+	if err != nil {
+		return nil, fmt.Errorf("sandbox store: get latest fingerprint: %w", err)
+	}
+	var fp BuildFingerprint
+	if err := json.Unmarshal(data, &fp); err != nil {
+		return nil, fmt.Errorf("sandbox store: unmarshal fingerprint: %w", err)
+	}
+	return &fp, nil
+}

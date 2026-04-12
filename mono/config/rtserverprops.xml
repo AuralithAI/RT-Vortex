@@ -465,5 +465,16 @@
          twilio-client-secret="${MCP_TWILIO_CLIENT_SECRET:}"
          twilio-oauth-scopes="${MCP_TWILIO_OAUTH_SCOPES:}"/>
 
+    <!-- ===================================================================== -->
+    <!-- Sandbox Builder                                                       -->
+    <!-- ===================================================================== -->
+    <sandbox enabled="${RTVORTEX_SANDBOX_ENABLED:false}"
+             always-validate="false"
+             default-sandbox-mode="true"
+             max-timeout-seconds="600"
+             max-memory-mb="2048"
+             max-cpu="2"
+             max-retries="2"/>
+
 </serverproperties>
 
