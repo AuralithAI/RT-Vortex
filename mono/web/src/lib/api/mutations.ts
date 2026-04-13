@@ -505,6 +505,32 @@ export function useSyncKeychain() {
   });
 }
 
+// ── Repo-Scoped Build Secrets ────────────────────────────────────────────────
+
+/** Store a build secret scoped to a specific repo. */
+export function usePutBuildSecret() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, data }: { repoId: string; data: { name: string; value: string; metadata?: string } }) =>
+      api.buildSecrets.put(repoId, data),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.buildSecrets(repoId) });
+    },
+  });
+}
+
+/** Delete a build secret by name from a repo. */
+export function useDeleteBuildSecret() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ repoId, name }: { repoId: string; name: string }) =>
+      api.buildSecrets.delete(repoId, name),
+    onSuccess: (_data, { repoId }) => {
+      qc.invalidateQueries({ queryKey: queryKeys.buildSecrets(repoId) });
+    },
+  });
+}
+
 // ── Cross-Repo Observatory ──────────────────────────────────────────────────
 
 /** Create a cross-repo link from a source repo. */

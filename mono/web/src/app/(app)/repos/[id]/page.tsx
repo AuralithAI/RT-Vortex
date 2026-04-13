@@ -60,6 +60,7 @@ import { CrossRepoDeps } from "@/components/dashboard/cross-repo-deps";
 import { CrossRepoSearch } from "@/components/dashboard/cross-repo-search";
 import { CrossRepoDepGraph } from "@/components/dashboard/cross-repo-dep-graph";
 import { IntraRepoFileMap } from "@/components/dashboard/intra-repo-file-map";
+import { BuildSecretsManager } from "@/components/dashboard/build-secrets-manager";
 
 export default function RepoDetailPage({
   params,
@@ -552,6 +553,9 @@ export default function RepoDetailPage({
 
       {/* Tracked Pull Requests */}
       <PullRequestList repoId={id} />
+
+      {/* ── Sandbox Build Secrets ────────────────────────────────────────── */}
+      <BuildSecretsManager repoId={id} />
 
       {/* ── Intra-Repo File Map (Knowledge Graph) ────────────────────────── */}
       <IntraRepoFileMap repoId={id} />

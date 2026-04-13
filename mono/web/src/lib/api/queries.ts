@@ -67,6 +67,10 @@ export const queryKeys = {
     ["orgs", orgId, "cross-repo", "links"] as const,
   orgCrossRepoEvents: (orgId: string) =>
     ["orgs", orgId, "cross-repo", "events"] as const,
+
+  // Build Secrets
+  buildSecrets: (repoId: string) =>
+    ["repos", repoId, "build-secrets"] as const,
 } as const;
 
 // ── Auth ────────────────────────────────────────────────────────────────────
@@ -506,5 +510,16 @@ export function useOrgCrossRepoEvents(orgId: string) {
     queryKey: queryKeys.orgCrossRepoEvents(orgId),
     queryFn: () => api.crossRepo.listOrgEvents(orgId),
     enabled: !!orgId,
+  });
+}
+
+// ── Build Secrets ───────────────────────────────────────────────────────────
+
+/** List build secret names for a repo (never returns values). */
+export function useBuildSecrets(repoId: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.buildSecrets(repoId),
+    queryFn: () => api.buildSecrets.list(repoId),
+    enabled: !!repoId && enabled,
   });
 }

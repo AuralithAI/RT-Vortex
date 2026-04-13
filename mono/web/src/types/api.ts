@@ -1121,3 +1121,19 @@ export interface RepoFileMap {
   /** True when the server capped the response (more nodes exist in the KG). */
   truncated: boolean;
 }
+
+// ── Repo-Scoped Build Secrets ───────────────────────────────────────────────
+
+/** A repo-scoped build secret entry (name + metadata only, never the value). */
+export interface BuildSecretEntry {
+  name: string;
+  version: number;
+  updated_at: string;
+}
+
+/** Request body for PUT /repos/{repoID}/build-secrets. */
+export interface BuildSecretPutRequest {
+  name: string;
+  value: string;
+  metadata?: string;
+}
