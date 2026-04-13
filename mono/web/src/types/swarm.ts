@@ -24,7 +24,8 @@ export type AgentRole =
   | "security"
   | "ops"
   | "docs"
-  | "ui_ux";
+  | "ui_ux"
+  | "builder";
 
 export type AgentStatus = "offline" | "idle" | "busy" | "errored";
 export type TeamStatus = "idle" | "busy" | "offline";
@@ -645,4 +646,49 @@ export interface ObservabilityDashboardData {
   health_breakdown: HealthBreakdownData | null;
   cost_summary: CostSummaryData | null;
   uptime_seconds: number;
+}
+
+// ─── Sandbox Build Validation Types ───────────────────────────────
+
+export type BuildStatus = "pending" | "running" | "success" | "failed" | "blocked";
+
+export interface SandboxBuild {
+  id: string;
+  task_id: string;
+  repo_id: string;
+  user_id?: string;
+  build_system: string;
+  command: string;
+  base_image: string;
+  status: BuildStatus;
+  exit_code?: number;
+  log_summary: string;
+  secret_names: string[];
+  sandbox_mode: boolean;
+  retry_count: number;
+  duration_ms?: number;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface BuildsSummary {
+  total: number;
+  passed: number;
+  failed: number;
+  running: number;
+  pending: number;
+  total_duration_ms: number;
+}
+
+export interface BuildsResponse {
+  builds: SandboxBuild[];
+  summary: BuildsSummary;
+}
+
+export interface BuildLogResponse {
+  build_id: string;
+  status: string;
+  log: string;
+  exit_code?: number;
+  created_at: string;
 }

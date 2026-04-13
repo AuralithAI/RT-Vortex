@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import uuid
 from typing import Any, Callable, Coroutine
 
@@ -23,6 +24,7 @@ import redis.asyncio as aioredis
 
 from .agents_config import get_config
 from .agents.architect import ArchitectAgent
+from .agents.builder import BuilderAgent
 from .agents.docs import DocsAgent
 from .agents.junior_dev import JuniorDevAgent
 from .agents.ops import OpsAgent
@@ -565,6 +567,158 @@ async def _run_full_pipeline(
                     logger.warning("Team %s: Task %s failed — no diffs produced",
                                    team_id[:8], task.id)
             else:
+                # ── Builder validation (pipeline stage) ─────────
+                # The builder is NOT a team member — it runs as a pipeline
+                # stage after diffs are produced.  It validates build
+                # feasibility, scans for env vars, and (in future phases)
+                # triggers ephemeral container builds.
+                #
+                # Feature flag: skip builder when sandbox is disabled.
+                sandbox_enabled = os.environ.get(
+                    "RTVORTEX_SANDBOX_ENABLED", "false"
+                ).lower() in ("true", "1", "yes")
+
+                if sandbox_enabled:
+                    from .agents.builder import BuilderAgent, affects_build_system
+
+                    changed_files = workspace.changed_files()
+                    full_validation = affects_build_system(changed_files)
+
+                    logger.info(
+                        "Team %s: Builder validation — mode=%s, changed_files=%d",
+                        team_id[:8],
+                        "full" if full_validation else "fast-scan",
+                        len(changed_files),
+                    )
+
+                    builder = BuilderAgent(
+                        agent_id=f"bldr-{team_id[:8]}-{uuid.uuid4().hex[:4]}",
+                        team_id=team_id,
+                        agent_config=agent_config,
+                    )
+                    builder.conversation = conversation
+                    builder.workspace = workspace
+                    builder._go_client = go_client
+
+                    await builder.register()
+                    agent_ids.append(builder.agent_id)
+
+                    # Phase 3: Run pre-build environment probe.
+                    user_id = task_data.get("user_id", "")
+                    repo_files = list(workspace._file_cache.keys())
+                    try:
+                        root_entries = await workspace.list_dir("")
+                        for entry in root_entries:
+                            name = entry.get("name", "")
+                            if name and name not in repo_files:
+                                repo_files.append(name)
+                    except Exception:
+                        pass
+
+                    probe_result: dict = {}
+                    try:
+                        probe_result = await builder.run_probe(
+                            task=task,
+                            user_id=user_id,
+                            repo_files=repo_files,
+                            changed_files=changed_files,
+                            workspace=workspace,
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Team %s: Pre-build probe failed (non-fatal): %s",
+                            team_id[:8], e,
+                        )
+
+                    if probe_result.get("missing_secrets"):
+                        logger.warning(
+                            "Team %s: Probe found %d missing secrets: %s",
+                            team_id[:8],
+                            len(probe_result["missing_secrets"]),
+                            ", ".join(probe_result["missing_secrets"]),
+                        )
+
+                    # Phase 4: HITL confirmation + build execution.
+                    build_exec_result: dict = {}
+                    if probe_result and probe_result.get("build_system", "unknown") != "unknown":
+                        # Collect workspace changeset for container injection.
+                        workspace_files: dict[str, str] = {}
+                        if workspace.has_changes():
+                            for change in workspace.get_changeset():
+                                fpath = change.get("file_path", "")
+                                proposed = change.get("proposed", "")
+                                if fpath and proposed:
+                                    workspace_files[fpath] = proposed
+
+                        try:
+                            build_exec_result = await builder.confirm_and_execute(
+                                task=task,
+                                user_id=user_id,
+                                probe_result=probe_result,
+                                changed_files=changed_files,
+                                workspace_files=workspace_files,
+                            )
+                            build_status = build_exec_result.get("status", "unknown")
+                            logger.info(
+                                "Team %s: Build execution — status=%s, exit_code=%s",
+                                team_id[:8],
+                                build_status,
+                                build_exec_result.get("exit_code", "n/a"),
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "Team %s: Build confirm+execute failed (non-fatal): %s",
+                                team_id[:8], e,
+                            )
+
+                        # Fetch build complexity history and attach to task context.
+                        if build_exec_result.get("complexity"):
+                            try:
+                                hist = await go_client.sandbox_build_complexity(task.repo_id)
+                                build_exec_result["complexity_history"] = hist
+                                logger.info(
+                                    "Team %s: Build complexity — label=%s score=%.3f "
+                                    "historical_success_rate=%.2f",
+                                    team_id[:8],
+                                    build_exec_result["complexity"].get("label", "?"),
+                                    build_exec_result["complexity"].get("score", 0.0),
+                                    hist.get("stats", {}).get("success_rate", 0.0),
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        logger.info(
+                            "Team %s: Skipping build execution — "
+                            "no probe result or unknown build system",
+                            team_id[:8],
+                        )
+
+                    try:
+                        builder_result = await builder.run(task)
+                        if builder_result.error:
+                            logger.warning(
+                                "Team %s: Builder validation reported issues: %s",
+                                team_id[:8], builder_result.error,
+                            )
+                        else:
+                            logger.info(
+                                "Team %s: Builder validation passed (ready=%s, build=%s)",
+                                team_id[:8],
+                                probe_result.get("ready", "unknown"),
+                                build_exec_result.get("status", "not_run"),
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            "Team %s: Builder validation failed (non-fatal): %s",
+                            team_id[:8], e,
+                        )
+                else:
+                    logger.debug(
+                        "Team %s: Builder validation skipped "
+                        "(RTVORTEX_SANDBOX_ENABLED != true)",
+                        team_id[:8],
+                    )
+
                 await go_client.report_result(task.id)
                 logger.info("Team %s: Task %s completed successfully", team_id[:8], task.id)
 

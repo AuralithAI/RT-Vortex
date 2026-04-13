@@ -198,6 +198,28 @@ def _parse_server_props(xml_path: str) -> dict[str, Any]:
         if jwt_secret:
             props["jwt_secret"] = jwt_secret
 
+    # <sandbox enabled="..." max-timeout-seconds="..." ...>
+    sandbox_el = root.find("sandbox")
+    if sandbox_el is not None:
+        props["sandbox_enabled"] = _resolve_xml_var(
+            sandbox_el.get("enabled", "false")
+        ).lower() == "true"
+        mts = _resolve_xml_var(sandbox_el.get("max-timeout-seconds", ""))
+        if mts:
+            props["sandbox_timeout"] = int(mts)
+        mmb = _resolve_xml_var(sandbox_el.get("max-memory-mb", ""))
+        if mmb:
+            props["sandbox_max_memory_mb"] = int(mmb)
+        mc = _resolve_xml_var(sandbox_el.get("max-cpu", ""))
+        if mc:
+            props["sandbox_max_cpu"] = int(mc)
+        mr = _resolve_xml_var(sandbox_el.get("max-retries", ""))
+        if mr:
+            props["sandbox_max_retries"] = int(mr)
+        props["sandbox_default_mode"] = _resolve_xml_var(
+            sandbox_el.get("default-sandbox-mode", "true")
+        ).lower() == "true"
+
     return props
 
 
@@ -252,6 +274,12 @@ class AgentsConfig:
     heartbeat_interval: int = 30
     task_poll_interval: float = 1.0
     version: str = "0.0.0"
+    sandbox_enabled: bool = False
+    sandbox_timeout: int = 600
+    sandbox_max_memory_mb: int = 2048
+    sandbox_max_cpu: int = 2
+    sandbox_max_retries: int = 2
+    sandbox_default_mode: bool = True
 
     @classmethod
     def load(cls, xml_path: str = "") -> "AgentsConfig":
@@ -324,6 +352,12 @@ class AgentsConfig:
             heartbeat_interval=30,
             task_poll_interval=1.0,
             version=version,
+            sandbox_enabled=xml.get("sandbox_enabled", False),
+            sandbox_timeout=xml.get("sandbox_timeout", 600),
+            sandbox_max_memory_mb=xml.get("sandbox_max_memory_mb", 2048),
+            sandbox_max_cpu=xml.get("sandbox_max_cpu", 2),
+            sandbox_max_retries=xml.get("sandbox_max_retries", 2),
+            sandbox_default_mode=xml.get("sandbox_default_mode", True),
         )
 
 

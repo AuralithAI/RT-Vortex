@@ -18,6 +18,8 @@ import {
   Eye,
   Activity,
   Brain,
+  Hammer,
+  CircleDot,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -32,13 +34,14 @@ import { InsightMemoryPanel } from "@/components/swarm/insight-memory-panel";
 import { RoleELOLeaderboard } from "@/components/swarm/role-elo-leaderboard";
 import { CISignalBadge } from "@/components/swarm/ci-signal-badge";
 import { TeamFormationCard } from "@/components/swarm/team-formation-card";
+import { BuildValidationCard } from "@/components/swarm/build-validation-card";
 import { useSwarmEvents } from "@/hooks/use-swarm-events";
 import { useDiscussionEvents } from "@/hooks/use-discussion-events";
 import type { SwarmTask, SwarmDiff, PlanDocument } from "@/types/swarm";
 import type { LLMProvider } from "@/types/api";
 
 // ── Tab types for the main content area ─────────────────────────────────────
-type ContentTab = "reasoning" | "conversation" | "diffs";
+type ContentTab = "reasoning" | "conversation" | "diffs" | "builds";
 
 // ── Derive agent label from the task's agents ───────────────────────────────
 function deriveAgentLabel(task: SwarmTask | null): string {
@@ -377,6 +380,26 @@ export default function SwarmTaskDetailPage() {
                   </span>
                 )}
               </button>
+              <button
+                onClick={() => setActiveTab("builds")}
+                className={`flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all ${
+                  activeTab === "builds"
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Hammer className="h-4 w-4" />
+                Builds
+                {events.filter((e) => e.type === "swarm_agent" && e.event === "build_plan").length > 0 && (
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                    activeTab === "builds"
+                      ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300"
+                      : "bg-muted text-muted-foreground"
+                  }`}>
+                    <CircleDot className="inline h-2.5 w-2.5" />
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Tab content */}
@@ -454,6 +477,14 @@ export default function SwarmTaskDetailPage() {
                     </div>
                   )}
                 </div>
+              )}
+
+              {activeTab === "builds" && (
+                <BuildValidationCard
+                  taskId={params.id}
+                  refreshInterval={10000}
+                  events={events}
+                />
               )}
             </div>
           </div>

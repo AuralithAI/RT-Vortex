@@ -29,6 +29,9 @@ func (m *mockPlatform) PostReviewSummary(_ context.Context, _, _ string, _ int, 
 func (m *mockPlatform) GetFileContent(_ context.Context, _, _, _, _ string) ([]byte, error) {
 	return nil, nil
 }
+func (m *mockPlatform) ListDirectory(_ context.Context, _, _, _, _ string) ([]vcs.DirEntry, error) {
+	return nil, nil
+}
 func (m *mockPlatform) ValidateWebhookSignature(_ []byte, _ string) bool {
 	return true
 }
@@ -49,6 +52,9 @@ func (m *mockPlatform) GetDefaultBranch(_ context.Context, _, _ string) (string,
 }
 func (m *mockPlatform) GetBranchSHA(_ context.Context, _, _, _ string) (string, error) {
 	return "", nil
+}
+func (m *mockPlatform) GetCombinedStatus(_ context.Context, _, _, _ string) (*vcs.CombinedStatus, error) {
+	return nil, nil
 }
 
 // ── Registry Tests ──────────────────────────────────────────────────────────

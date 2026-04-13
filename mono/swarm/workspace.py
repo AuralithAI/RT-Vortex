@@ -150,6 +150,104 @@ class VirtualWorkspace:
             )
         return f"Created {path} ({len(content)} chars)."
 
+    async def edit_or_create_file(
+        self, path: str, old_str: str, new_str: str
+    ) -> str:
+        """Edit a file if it exists, otherwise create it with *new_str*.
+
+        This eliminates the "file not found" dead-end that agents hit when
+        they try ``edit_file`` on a file that doesn't exist yet.  If the
+        file exists and *old_str* is found, a normal search-and-replace is
+        performed.  If the file does not exist (VCS 404), it is created
+        with *new_str* as its full content.
+
+        Returns:
+            A confirmation string describing the action taken.
+        """
+        path = _normalize_path(path)
+        async with self._lock:
+            # Try to fetch from cache or VCS.
+            if path not in self._file_cache:
+                try:
+                    content = await self._go.vcs_read_file(self.repo_id, path)
+                    self._file_cache[path] = content
+                except Exception:
+                    # File doesn't exist — create it.
+                    self._file_cache[path] = new_str
+                    self._changeset[path] = FileChange(
+                        change_type=ChangeType.ADDED,
+                        original="",
+                        proposed=new_str,
+                    )
+                    return (
+                        f"File {path} not found — created with "
+                        f"{len(new_str)} chars."
+                    )
+
+            current = self._file_cache[path]
+            if old_str not in current:
+                raise ValueError(
+                    f"String not found in {path}. "
+                    f"The file is {len(current)} chars long. "
+                    f"Make sure old_str exactly matches the existing content "
+                    f"(including whitespace and indentation)."
+                )
+
+            new_content = current.replace(old_str, new_str, 1)
+            self._file_cache[path] = new_content
+
+            if path in self._changeset:
+                self._changeset[path].proposed = new_content
+            else:
+                self._changeset[path] = FileChange(
+                    change_type=ChangeType.MODIFIED,
+                    original=current,
+                    proposed=new_content,
+                )
+        return f"Edited {path}: replaced {len(old_str)} chars with {len(new_str)} chars."
+
+    async def create_module(
+        self, files: list[dict[str, str]]
+    ) -> str:
+        """Atomically create multiple files as a single module.
+
+        Accepts a list of ``{"path": "...", "content": "..."}`` dicts and
+        creates all of them in one operation under the workspace lock.  This
+        prevents partial module creation when an agent needs to produce an
+        entire package (e.g. 6 new files in ``internal/sandbox/``).
+
+        Parent directories are implicit — the VCS layer (and Git) tracks
+        files, not directories.
+
+        .. note::
+
+            Atomicity is at the **in-memory changeset** level, not the VCS
+            level.  All files are added to the changeset under a single lock
+            acquisition so that concurrent readers never see a half-written
+            module.
+
+        Returns:
+            A summary string listing all created files.
+        """
+        if not files:
+            return "No files provided."
+
+        created: list[str] = []
+        async with self._lock:
+            for entry in files:
+                path = _normalize_path(entry["path"])
+                content = entry["content"]
+                self._file_cache[path] = content
+                self._changeset[path] = FileChange(
+                    change_type=ChangeType.ADDED,
+                    original="",
+                    proposed=content,
+                )
+                created.append(path)
+
+        summary = ", ".join(created)
+        return f"Created {len(created)} files: {summary}"
+
     async def delete_file(self, path: str) -> str:
         """Mark a file for deletion.
 

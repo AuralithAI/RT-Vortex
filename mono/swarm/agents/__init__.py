@@ -1,6 +1,7 @@
 """Swarm agent roles — each module implements one agent persona."""
 
 from .architect import ArchitectAgent
+from .builder import BuilderAgent
 from .docs import DocsAgent
 from .junior_dev import JuniorDevAgent
 from .ops import OpsAgent
@@ -12,6 +13,7 @@ from .ui_ux import UIUXAgent
 
 __all__ = [
     "ArchitectAgent",
+    "BuilderAgent",
     "DocsAgent",
     "JuniorDevAgent",
     "OpsAgent",

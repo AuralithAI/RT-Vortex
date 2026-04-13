@@ -401,6 +401,12 @@ func (c *Client) GetFileContent(ctx context.Context, project, repo, path, ref st
 	return io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB limit
 }
 
+// ListDirectory returns directory entries.  Azure DevOps implementation is a
+// stub that returns an empty list — build system detection falls back to file cache.
+func (c *Client) ListDirectory(_ context.Context, _, _, _, _ string) ([]vcs.DirEntry, error) {
+	return []vcs.DirEntry{}, nil
+}
+
 // ── Webhook Validation ──────────────────────────────────────────────────────
 
 // ValidateWebhookSignature validates Azure DevOps service hook payloads.

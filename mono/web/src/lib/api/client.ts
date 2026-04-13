@@ -78,6 +78,8 @@ import type {
   BuildGraphRequest,
   BuildGraphResponse,
   RepoFileMap,
+  BuildSecretEntry,
+  BuildSecretPutRequest,
 } from "@/types/api";
 
 // ── Error classes ───────────────────────────────────────────────────────────
@@ -948,7 +950,28 @@ const crossRepo = {
     }),
 };
 
+// ── Repo-Scoped Build Secrets ────────────────────────────────────────────────
+
+export const buildSecrets = {
+  /** List all build secret names for a repo (no values). */
+  list: (repoId: string) =>
+    request<BuildSecretEntry[]>(`/api/v1/repos/${repoId}/build-secrets`),
+
+  /** Store a repo-scoped build secret. */
+  put: (repoId: string, data: BuildSecretPutRequest) =>
+    request<{ status: string }>(`/api/v1/repos/${repoId}/build-secrets`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
+
+  /** Delete a repo-scoped build secret by name. */
+  delete: (repoId: string, name: string) =>
+    request<{ status: string }>(`/api/v1/repos/${repoId}/build-secrets/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    }),
+};
+
 // ── Convenience export ──────────────────────────────────────────────────────
 
-const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms, assets, integrations, keychain, crossRepo };
+const api = { auth, users, orgs, repos, reviews, llm, embeddings, admin, pullRequests, chat, vcsPlatforms, assets, integrations, keychain, crossRepo, buildSecrets };
 export default api;

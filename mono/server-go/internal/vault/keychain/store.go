@@ -16,11 +16,12 @@ import (
 type SecretEntry struct {
 	ID         uuid.UUID
 	UserID     uuid.UUID
+	RepoID     *uuid.UUID
 	Name       string
 	Ciphertext []byte // nonce || AES-256-GCM ciphertext
 	WrappedDEK []byte // nonce || AES-256-GCM(encryption_key, DEK)
 	Version    int64
-	Category   string // "vcs", "llm", "mcp", "custom"
+	Category   string // "vcs", "llm", "mcp", "custom", "build"
 	Metadata   string // non-secret metadata JSON (provider name, etc.)
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
@@ -116,9 +117,7 @@ func (s *Store) UpdateRecoveryWrappedKey(ctx context.Context, userID uuid.UUID, 
 
 // ── Secret CRUD ─────────────────────────────────────────────────────────────
 
-// PutSecret stores or updates an encrypted secret. Uses CRDT-style versioning:
-// the write succeeds only if the provided version is greater than the stored
-// version (or the secret does not yet exist).
+// PutSecret stores or updates an encrypted secret with CRDT-style versioning.
 func (s *Store) PutSecret(ctx context.Context, entry *SecretEntry) error {
 	now := time.Now().UTC()
 	entry.UpdatedAt = now
@@ -129,9 +128,9 @@ func (s *Store) PutSecret(ctx context.Context, entry *SecretEntry) error {
 
 	tag, err := s.pool.Exec(ctx,
 		`INSERT INTO keychain_secrets
-			(id, user_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		 ON CONFLICT (user_id, name) DO UPDATE SET
+			(id, user_id, repo_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		 ON CONFLICT (user_id, name, COALESCE(repo_id, '00000000-0000-0000-0000-000000000000'::uuid)) DO UPDATE SET
 		     ciphertext  = EXCLUDED.ciphertext,
 		     wrapped_dek = EXCLUDED.wrapped_dek,
 		     version     = EXCLUDED.version,
@@ -139,7 +138,7 @@ func (s *Store) PutSecret(ctx context.Context, entry *SecretEntry) error {
 		     metadata    = EXCLUDED.metadata,
 		     updated_at  = EXCLUDED.updated_at
 		 WHERE keychain_secrets.version < EXCLUDED.version`,
-		entry.ID, entry.UserID, entry.Name, entry.Ciphertext,
+		entry.ID, entry.UserID, entry.RepoID, entry.Name, entry.Ciphertext,
 		entry.WrappedDEK, entry.Version, entry.Category, entry.Metadata,
 		entry.CreatedAt, entry.UpdatedAt,
 	)
@@ -154,14 +153,24 @@ func (s *Store) PutSecret(ctx context.Context, entry *SecretEntry) error {
 	return nil
 }
 
-// GetSecret retrieves a single encrypted secret by user and name.
-func (s *Store) GetSecret(ctx context.Context, userID uuid.UUID, name string) (*SecretEntry, error) {
+// GetSecret retrieves a single encrypted secret by user, name, and optional repo scope.
+func (s *Store) GetSecret(ctx context.Context, userID uuid.UUID, name string, repoID *uuid.UUID) (*SecretEntry, error) {
 	var e SecretEntry
-	err := s.pool.QueryRow(ctx,
-		`SELECT id, user_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at
-		 FROM keychain_secrets WHERE user_id = $1 AND name = $2`,
-		userID, name,
-	).Scan(&e.ID, &e.UserID, &e.Name, &e.Ciphertext, &e.WrappedDEK,
+	var query string
+	var args []any
+
+	if repoID != nil {
+		query = `SELECT id, user_id, repo_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at
+		         FROM keychain_secrets WHERE user_id = $1 AND name = $2 AND repo_id = $3`
+		args = []any{userID, name, *repoID}
+	} else {
+		query = `SELECT id, user_id, repo_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at
+		         FROM keychain_secrets WHERE user_id = $1 AND name = $2 AND repo_id IS NULL`
+		args = []any{userID, name}
+	}
+
+	err := s.pool.QueryRow(ctx, query, args...).Scan(
+		&e.ID, &e.UserID, &e.RepoID, &e.Name, &e.Ciphertext, &e.WrappedDEK,
 		&e.Version, &e.Category, &e.Metadata, &e.CreatedAt, &e.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -169,13 +178,11 @@ func (s *Store) GetSecret(ctx context.Context, userID uuid.UUID, name string) (*
 	return &e, nil
 }
 
-// ListSecrets returns all encrypted secrets for a user. Only metadata is
-// returned in the listing; ciphertext and wrapped DEK are included for
-// bulk sync operations.
+// ListSecrets returns all encrypted secrets for a user (global scope, repo_id IS NULL).
 func (s *Store) ListSecrets(ctx context.Context, userID uuid.UUID) ([]SecretEntry, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, user_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at
-		 FROM keychain_secrets WHERE user_id = $1 ORDER BY name`,
+		`SELECT id, user_id, repo_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at
+		 FROM keychain_secrets WHERE user_id = $1 AND repo_id IS NULL ORDER BY name`,
 		userID,
 	)
 	if err != nil {
@@ -184,17 +191,17 @@ func (s *Store) ListSecrets(ctx context.Context, userID uuid.UUID) ([]SecretEntr
 	defer rows.Close()
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (SecretEntry, error) {
 		var e SecretEntry
-		err := row.Scan(&e.ID, &e.UserID, &e.Name, &e.Ciphertext, &e.WrappedDEK,
+		err := row.Scan(&e.ID, &e.UserID, &e.RepoID, &e.Name, &e.Ciphertext, &e.WrappedDEK,
 			&e.Version, &e.Category, &e.Metadata, &e.CreatedAt, &e.UpdatedAt)
 		return e, err
 	})
 }
 
-// ListSecretsByCategory returns encrypted secrets filtered by category.
+// ListSecretsByCategory returns encrypted secrets filtered by category (global scope only).
 func (s *Store) ListSecretsByCategory(ctx context.Context, userID uuid.UUID, category string) ([]SecretEntry, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT id, user_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at
-		 FROM keychain_secrets WHERE user_id = $1 AND category = $2 ORDER BY name`,
+		`SELECT id, user_id, repo_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at
+		 FROM keychain_secrets WHERE user_id = $1 AND category = $2 AND repo_id IS NULL ORDER BY name`,
 		userID, category,
 	)
 	if err != nil {
@@ -203,17 +210,26 @@ func (s *Store) ListSecretsByCategory(ctx context.Context, userID uuid.UUID, cat
 	defer rows.Close()
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (SecretEntry, error) {
 		var e SecretEntry
-		err := row.Scan(&e.ID, &e.UserID, &e.Name, &e.Ciphertext, &e.WrappedDEK,
+		err := row.Scan(&e.ID, &e.UserID, &e.RepoID, &e.Name, &e.Ciphertext, &e.WrappedDEK,
 			&e.Version, &e.Category, &e.Metadata, &e.CreatedAt, &e.UpdatedAt)
 		return e, err
 	})
 }
 
-// DeleteSecret removes a single secret.
+// DeleteSecret removes a single secret (global scope, repo_id IS NULL).
 func (s *Store) DeleteSecret(ctx context.Context, userID uuid.UUID, name string) error {
 	_, err := s.pool.Exec(ctx,
-		`DELETE FROM keychain_secrets WHERE user_id = $1 AND name = $2`,
+		`DELETE FROM keychain_secrets WHERE user_id = $1 AND name = $2 AND repo_id IS NULL`,
 		userID, name,
+	)
+	return err
+}
+
+// DeleteRepoSecret removes a repo-scoped secret.
+func (s *Store) DeleteRepoSecret(ctx context.Context, userID uuid.UUID, repoID uuid.UUID, name string) error {
+	_, err := s.pool.Exec(ctx,
+		`DELETE FROM keychain_secrets WHERE user_id = $1 AND name = $2 AND repo_id = $3`,
+		userID, name, repoID,
 	)
 	return err
 }
@@ -232,15 +248,14 @@ type SecretVersionEntry struct {
 	Name      string
 	Version   int64
 	Category  string
+	RepoID    *uuid.UUID
 	UpdatedAt time.Time
 }
 
-// ListVersions returns name + version + category for all of a user's secrets.
-// Used for efficient sync: the client compares versions and only pulls
-// secrets with newer versions.
+// ListVersions returns name + version + category for all of a user's global secrets.
 func (s *Store) ListVersions(ctx context.Context, userID uuid.UUID) ([]SecretVersionEntry, error) {
 	rows, err := s.pool.Query(ctx,
-		`SELECT name, version, category, updated_at FROM keychain_secrets WHERE user_id = $1 ORDER BY name`,
+		`SELECT name, version, category, repo_id, updated_at FROM keychain_secrets WHERE user_id = $1 AND repo_id IS NULL ORDER BY name`,
 		userID,
 	)
 	if err != nil {
@@ -249,13 +264,29 @@ func (s *Store) ListVersions(ctx context.Context, userID uuid.UUID) ([]SecretVer
 	defer rows.Close()
 	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (SecretVersionEntry, error) {
 		var e SecretVersionEntry
-		err := row.Scan(&e.Name, &e.Version, &e.Category, &e.UpdatedAt)
+		err := row.Scan(&e.Name, &e.Version, &e.Category, &e.RepoID, &e.UpdatedAt)
 		return e, err
 	})
 }
 
-// MergeSecrets performs a CRDT-style merge of multiple secrets. For each
-// secret, the highest version wins. This is the core sync operation.
+// ListRepoSecretVersions returns name + version for secrets scoped to a specific repo.
+func (s *Store) ListRepoSecretVersions(ctx context.Context, userID, repoID uuid.UUID) ([]SecretVersionEntry, error) {
+	rows, err := s.pool.Query(ctx,
+		`SELECT name, version, category, repo_id, updated_at FROM keychain_secrets WHERE user_id = $1 AND repo_id = $2 ORDER BY name`,
+		userID, repoID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return pgx.CollectRows(rows, func(row pgx.CollectableRow) (SecretVersionEntry, error) {
+		var e SecretVersionEntry
+		err := row.Scan(&e.Name, &e.Version, &e.Category, &e.RepoID, &e.UpdatedAt)
+		return e, err
+	})
+}
+
+// MergeSecrets performs a CRDT-style merge of multiple secrets.
 func (s *Store) MergeSecrets(ctx context.Context, entries []SecretEntry) error {
 	if len(entries) == 0 {
 		return nil
@@ -276,9 +307,9 @@ func (s *Store) MergeSecrets(ctx context.Context, entries []SecretEntry) error {
 
 		_, err := tx.Exec(ctx,
 			`INSERT INTO keychain_secrets
-				(id, user_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-			 ON CONFLICT (user_id, name) DO UPDATE SET
+				(id, user_id, repo_id, name, ciphertext, wrapped_dek, version, category, metadata, created_at, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			 ON CONFLICT (user_id, name, COALESCE(repo_id, '00000000-0000-0000-0000-000000000000'::uuid)) DO UPDATE SET
 			     ciphertext  = EXCLUDED.ciphertext,
 			     wrapped_dek = EXCLUDED.wrapped_dek,
 			     version     = EXCLUDED.version,
@@ -286,7 +317,7 @@ func (s *Store) MergeSecrets(ctx context.Context, entries []SecretEntry) error {
 			     metadata    = EXCLUDED.metadata,
 			     updated_at  = EXCLUDED.updated_at
 			 WHERE keychain_secrets.version < EXCLUDED.version`,
-			entry.ID, entry.UserID, entry.Name, entry.Ciphertext,
+			entry.ID, entry.UserID, entry.RepoID, entry.Name, entry.Ciphertext,
 			entry.WrappedDEK, entry.Version, entry.Category, entry.Metadata,
 			entry.CreatedAt, entry.UpdatedAt,
 		)
@@ -342,6 +373,10 @@ const (
 	AuditRotateKey       AuditAction = "key_rotate"
 	AuditRecover         AuditAction = "recovery"
 	AuditRefreshRecovery AuditAction = "recovery_refresh"
+	AuditBuildSecretPut  AuditAction = "build_secret_put"
+	AuditBuildSecretGet  AuditAction = "build_secret_get"
+	AuditBuildSecretDel  AuditAction = "build_secret_delete"
+	AuditBuildSecretList AuditAction = "build_secret_list"
 )
 
 // LogAccess records an auditable event in the keychain_audit_log table.

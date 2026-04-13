@@ -201,7 +201,7 @@ func (svc *Service) LoadKeys(ctx context.Context, userID uuid.UUID) (*DerivedKey
 	}
 
 	// Load wrapped master key.
-	masterEntry, err := svc.store.GetSecret(ctx, userID, "__master_key__")
+	masterEntry, err := svc.store.GetSecret(ctx, userID, "__master_key__", nil)
 	if err != nil {
 		return nil, fmt.Errorf("keychain: master key not found for user %s", userID)
 	}
@@ -241,40 +241,46 @@ func (svc *Service) EvictKeys(userID uuid.UUID) {
 
 // ── Secret Operations ───────────────────────────────────────────────────────
 
-// PutSecret encrypts and stores a secret for a user.
+// PutSecret encrypts and stores a global (user-scoped) secret.
 func (svc *Service) PutSecret(ctx context.Context, userID uuid.UUID, name, category string, plaintext []byte, metadata string) error {
+	return svc.putSecretInternal(ctx, userID, nil, name, category, plaintext, metadata)
+}
+
+// PutBuildSecret encrypts and stores a repo-scoped build secret.
+func (svc *Service) PutBuildSecret(ctx context.Context, userID uuid.UUID, repoID uuid.UUID, name string, plaintext []byte, metadata string) error {
+	return svc.putSecretInternal(ctx, userID, &repoID, name, "build", plaintext, metadata)
+}
+
+func (svc *Service) putSecretInternal(ctx context.Context, userID uuid.UUID, repoID *uuid.UUID, name, category string, plaintext []byte, metadata string) error {
 	dk, err := svc.LoadKeys(ctx, userID)
 	if err != nil {
 		return err
 	}
 
-	// Generate a fresh DEK for this secret.
 	dek, err := GenerateDEK()
 	if err != nil {
 		return err
 	}
 
-	// Encrypt the plaintext with the DEK.
 	ciphertext, err := EncryptSecret(dek, plaintext)
 	if err != nil {
 		return err
 	}
 
-	// Wrap the DEK with the user's encryption key.
 	wrappedDEK, err := WrapDEK(dk.EncryptionKey, dek)
 	if err != nil {
 		return err
 	}
 
-	// Determine next version.
 	var nextVersion int64 = 1
-	existing, err := svc.store.GetSecret(ctx, userID, name)
+	existing, err := svc.store.GetSecret(ctx, userID, name, repoID)
 	if err == nil {
 		nextVersion = existing.Version + 1
 	}
 
 	entry := &SecretEntry{
 		UserID:     userID,
+		RepoID:     repoID,
 		Name:       name,
 		Ciphertext: ciphertext,
 		WrappedDEK: wrappedDEK,
@@ -291,39 +297,54 @@ func (svc *Service) PutSecret(ctx context.Context, userID uuid.UUID, name, categ
 		return err
 	}
 
-	svc.store.LogAccess(ctx, userID, AuditPutSecret, name, "", "")
+	action := AuditPutSecret
+	if repoID != nil {
+		action = AuditBuildSecretPut
+	}
+	svc.store.LogAccess(ctx, userID, action, name, "", "")
 	return nil
 }
 
-// GetSecret decrypts and returns a secret for a user.
+// GetSecret decrypts and returns a global secret for a user.
 func (svc *Service) GetSecret(ctx context.Context, userID uuid.UUID, name string) ([]byte, error) {
+	return svc.getSecretInternal(ctx, userID, name, nil)
+}
+
+// GetBuildSecret decrypts and returns a repo-scoped build secret.
+func (svc *Service) GetBuildSecret(ctx context.Context, userID uuid.UUID, repoID uuid.UUID, name string) ([]byte, error) {
+	return svc.getSecretInternal(ctx, userID, name, &repoID)
+}
+
+func (svc *Service) getSecretInternal(ctx context.Context, userID uuid.UUID, name string, repoID *uuid.UUID) ([]byte, error) {
 	dk, err := svc.LoadKeys(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
 
-	entry, err := svc.store.GetSecret(ctx, userID, name)
+	entry, err := svc.store.GetSecret(ctx, userID, name, repoID)
 	if err != nil {
 		return nil, fmt.Errorf("keychain: secret %q not found", name)
 	}
 
-	// Unwrap the DEK.
 	dek, err := UnwrapDEK(dk.EncryptionKey, entry.WrappedDEK)
 	if err != nil {
 		return nil, fmt.Errorf("keychain: unwrap DEK for %q: %w", name, err)
 	}
 
-	// Decrypt the secret.
 	plaintext, err := DecryptSecret(dek, entry.Ciphertext)
 	if err != nil {
 		return nil, fmt.Errorf("keychain: decrypt %q: %w", name, err)
 	}
 
-	svc.store.LogAccess(ctx, userID, AuditGetSecret, name, "", "")
+	action := AuditGetSecret
+	if repoID != nil {
+		action = AuditBuildSecretGet
+	}
+	svc.store.LogAccess(ctx, userID, action, name, "", "")
 	return plaintext, nil
 }
 
-// DeleteSecret removes a secret.
+// DeleteSecret removes a global secret.
 func (svc *Service) DeleteSecret(ctx context.Context, userID uuid.UUID, name string) error {
 	if err := svc.store.DeleteSecret(ctx, userID, name); err != nil {
 		return err
@@ -332,10 +353,24 @@ func (svc *Service) DeleteSecret(ctx context.Context, userID uuid.UUID, name str
 	return nil
 }
 
-// ListSecretNames returns the names and versions of all secrets for a user
-// (no plaintext or ciphertext — metadata only).
+// DeleteBuildSecret removes a repo-scoped build secret.
+func (svc *Service) DeleteBuildSecret(ctx context.Context, userID uuid.UUID, repoID uuid.UUID, name string) error {
+	if err := svc.store.DeleteRepoSecret(ctx, userID, repoID, name); err != nil {
+		return err
+	}
+	svc.store.LogAccess(ctx, userID, AuditBuildSecretDel, name, "", "")
+	return nil
+}
+
+// ListSecretNames returns the names and versions of all global secrets for a user.
 func (svc *Service) ListSecretNames(ctx context.Context, userID uuid.UUID) ([]SecretVersionEntry, error) {
 	return svc.store.ListVersions(ctx, userID)
+}
+
+// ListBuildSecretNames returns names and versions of repo-scoped build secrets.
+func (svc *Service) ListBuildSecretNames(ctx context.Context, userID, repoID uuid.UUID) ([]SecretVersionEntry, error) {
+	svc.store.LogAccess(ctx, userID, AuditBuildSecretList, "", "", "")
+	return svc.store.ListRepoSecretVersions(ctx, userID, repoID)
 }
 
 // ListAuditLog returns recent audit log entries for a user.
@@ -541,7 +576,7 @@ func (svc *Service) RefreshRecovery(ctx context.Context, userID uuid.UUID, phras
 	}
 
 	// Load the current master key via server KEK.
-	masterEntry, err := svc.store.GetSecret(ctx, userID, "__master_key__")
+	masterEntry, err := svc.store.GetSecret(ctx, userID, "__master_key__", nil)
 	if err != nil {
 		return fmt.Errorf("keychain: master key not found for user %s", userID)
 	}

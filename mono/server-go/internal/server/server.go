@@ -28,6 +28,7 @@ import (
 	"github.com/AuralithAI/rtvortex-server/internal/prsync"
 	"github.com/AuralithAI/rtvortex-server/internal/quota"
 	"github.com/AuralithAI/rtvortex-server/internal/review"
+	"github.com/AuralithAI/rtvortex-server/internal/sandbox"
 	"github.com/AuralithAI/rtvortex-server/internal/session"
 	"github.com/AuralithAI/rtvortex-server/internal/store"
 	"github.com/AuralithAI/rtvortex-server/internal/swarm"
@@ -287,6 +288,13 @@ func (s *Server) setupRouter() {
 					r.Get("/members", h.ListRepoMembers)
 					r.Post("/members", h.AddRepoMember)
 					r.Delete("/members/{userID}", h.RemoveRepoMember)
+
+					// Repo-scoped build secrets (stored in user keychain with repo_id)
+					r.Route("/build-secrets", func(r chi.Router) {
+						r.Put("/", h.PutBuildSecret)
+						r.Get("/", h.ListBuildSecrets)
+						r.Delete("/{name}", h.DeleteBuildSecret)
+					})
 
 					// Pull Request discovery & management
 					r.Route("/pull-requests", func(r chi.Router) {
@@ -575,6 +583,44 @@ func (s *Server) setupRouter() {
 				r.Post("/vcs/read-file", sh.VCSReadFile)
 				r.Post("/vcs/list-dir", sh.VCSListDir)
 
+				// Sandbox builder (ephemeral container builds).
+				if s.deps.Config != nil && s.deps.Config.Sandbox.Enabled {
+					var buildStore *sandbox.BuildStore
+					if s.deps.DB != nil {
+						buildStore = sandbox.NewBuildStore(s.deps.DB.Pool)
+					}
+					sandboxHandler := sandbox.NewHandler(
+						sandbox.NewDockerRuntime(nil),
+						s.deps.KeychainService,
+						buildStore,
+						nil,
+					)
+					sandboxHandler.Limits = &sandbox.SandboxLimits{
+						MaxTimeoutSec:  s.deps.Config.Sandbox.MaxTimeoutSec,
+						MaxMemoryMB:    s.deps.Config.Sandbox.MaxMemoryMB,
+						MaxCPU:         s.deps.Config.Sandbox.MaxCPU,
+						MaxRetries:     s.deps.Config.Sandbox.MaxRetries,
+						DefaultSandbox: s.deps.Config.Sandbox.DefaultSandbox,
+					}
+					if s.deps.DB != nil {
+						sandboxHandler.Audit = sandbox.NewAuditLogger(nil, s.deps.DB.Pool)
+					} else {
+						sandboxHandler.Audit = sandbox.NewAuditLogger(nil, nil)
+					}
+					r.Post("/sandbox/plan", sandboxHandler.HandleGeneratePlan)
+					r.Post("/sandbox/probe", sandboxHandler.HandleProbeEnv)
+					r.Post("/sandbox/execute", sandboxHandler.HandleExecute)
+					r.Post("/sandbox/resolve-execute", sandboxHandler.HandleResolveAndExecute)
+					r.Post("/sandbox/retry", sandboxHandler.HandleRetry)
+					r.Get("/sandbox/status/{id}", sandboxHandler.HandleStatus)
+					r.Get("/sandbox/logs/{id}", sandboxHandler.HandleLogs)
+					r.Get("/sandbox/secrets", sandboxHandler.HandleListBuildSecrets)
+					r.Get("/sandbox/artifacts/{id}", sandboxHandler.HandleListArtifacts)
+					r.Get("/sandbox/complexity/{repo_id}", sandboxHandler.HandleBuildComplexity)
+					r.Get("/sandbox/audit", sandboxHandler.HandleAuditEvents)
+					r.Get("/sandbox/health", sandboxHandler.HandleHealth)
+				}
+
 				// LLM proxy.
 				if s.deps.SwarmLLMProxy != nil {
 					r.Post("/llm/complete", s.deps.SwarmLLMProxy.HandleComplete)
@@ -607,6 +653,12 @@ func (s *Server) setupRouter() {
 			r.Get("/agents", sh.ListAgentsUser)
 			r.Get("/teams", sh.ListTeamsUser)
 			r.Get("/overview", sh.SwarmOverview)
+
+			if s.deps.DB != nil && s.deps.Config != nil && s.deps.Config.Sandbox.Enabled {
+				userBuildHandler := sandbox.NewHandler(nil, nil, sandbox.NewBuildStore(s.deps.DB.Pool), nil)
+				r.Get("/tasks/{id}/builds", userBuildHandler.HandleListTaskBuilds)
+				r.Get("/tasks/{id}/builds/{buildId}/logs", userBuildHandler.HandleGetBuildLogs)
+			}
 
 			// CI signal status (user JWT).
 			r.Get("/tasks/{id}/ci-signal", sh.HandleGetCISignal)

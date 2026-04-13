@@ -130,6 +130,13 @@ type CombinedStatus struct {
 	Statuses []CommitStatus    `json:"statuses"` // individual checks
 }
 
+// DirEntry represents a single entry in a directory listing.
+type DirEntry struct {
+	Name string `json:"name"`
+	Type string `json:"type"` // "file" or "dir"
+	Size int64  `json:"size,omitempty"`
+}
+
 // ── Platform Interface ──────────────────────────────────────────────────────
 
 // Platform defines the contract for interacting with a VCS provider.
@@ -155,6 +162,10 @@ type Platform interface {
 
 	// GetFileContent returns the content of a file at a specific commit SHA.
 	GetFileContent(ctx context.Context, owner, repo, path, ref string) ([]byte, error)
+
+	// ListDirectory returns the entries in a directory at the repository root
+	// or a sub-path.  The default branch is used when ref is empty.
+	ListDirectory(ctx context.Context, owner, repo, path, ref string) ([]DirEntry, error)
 
 	// ValidateWebhookSignature verifies the webhook payload is authentic.
 	ValidateWebhookSignature(payload []byte, signature string) bool

@@ -198,6 +198,229 @@ class GoClient:
 
     # ── VCS proxy methods ────────────────────────────────────────────────
 
+    # ── Sandbox builder methods ──────────────────────────────────────────
+
+    async def sandbox_probe(
+        self,
+        task_id: str,
+        repo_id: str,
+        user_id: str,
+        repo_files: list[str],
+        changed_files: list[str],
+        file_contents: dict[str, str] | None = None,
+    ) -> dict:
+        """Run the pre-build environment probe via the Go sandbox service.
+
+        Detects the build system, scans file contents for env-var references,
+        cross-references with the user's repo-scoped secrets, and returns a
+        readiness assessment.
+        """
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/sandbox/probe",
+                headers=self._headers(),
+                json={
+                    "task_id": task_id,
+                    "repo_id": repo_id,
+                    "user_id": user_id,
+                    "repo_files": repo_files,
+                    "changed_files": changed_files,
+                    "file_contents": file_contents or {},
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_generate_plan(
+        self,
+        task_id: str,
+        repo_id: str,
+        repo_files: list[str],
+        changed_files: list[str],
+        secret_names: list[str] | None = None,
+    ) -> dict:
+        """Generate a build plan via the Go sandbox service."""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/sandbox/plan",
+                headers=self._headers(),
+                json={
+                    "task_id": task_id,
+                    "repo_id": repo_id,
+                    "repo_files": repo_files,
+                    "changed_files": changed_files,
+                    "secret_names": secret_names or [],
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_list_secrets(
+        self,
+        repo_id: str,
+        user_id: str,
+    ) -> list[str]:
+        """List build secret names (never values) for a repo+user."""
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/secrets",
+                headers=self._headers(),
+                params={"repo_id": repo_id, "user_id": user_id},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("secrets", [])
+
+    async def sandbox_resolve_execute(
+        self,
+        task_id: str,
+        repo_id: str,
+        user_id: str,
+        build_system: str,
+        command: str,
+        base_image: str,
+        secret_refs: list[str] | None = None,
+        pre_commands: list[str] | None = None,
+        sandbox_mode: bool = True,
+        timeout_sec: int = 600,
+        memory_limit: str = "2g",
+        cpu_limit: str = "2",
+        changed_files: list[str] | None = None,
+        skip_cache: bool = False,
+        workspace_files: dict[str, str] | None = None,
+        artifact_paths: list[str] | None = None,
+        collect_artifacts: bool = False,
+    ) -> dict:
+        """Resolve secrets and execute a sandboxed build in one call.
+
+        The Go server resolves secret values from the keychain, injects
+        them as container env vars, runs the build, and zeroes memory.
+        Secret values never leave the Go process boundary.
+        """
+        async with httpx.AsyncClient(timeout=float(timeout_sec + 30)) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/sandbox/resolve-execute",
+                headers=self._headers(),
+                json={
+                    "task_id": task_id,
+                    "repo_id": repo_id,
+                    "user_id": user_id,
+                    "build_system": build_system,
+                    "command": command,
+                    "base_image": base_image,
+                    "secret_refs": secret_refs or [],
+                    "pre_commands": pre_commands or [],
+                    "sandbox_mode": sandbox_mode,
+                    "timeout_sec": timeout_sec,
+                    "memory_limit": memory_limit,
+                    "cpu_limit": cpu_limit,
+                    "changed_files": changed_files or [],
+                    "skip_cache": skip_cache,
+                    "workspace_files": workspace_files or {},
+                    "artifact_paths": artifact_paths or [],
+                    "collect_artifacts": collect_artifacts,
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_build_status(self, build_id: str) -> dict:
+        """Fetch the current status of a sandbox build."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/status/{build_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_build_logs(self, build_id: str) -> dict:
+        """Fetch the logs of a sandbox build."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/logs/{build_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_retry_build(self, build_id: str) -> dict:
+        """Retry a failed sandbox build."""
+        async with httpx.AsyncClient(timeout=660) as client:
+            resp = await client.post(
+                f"{self.base_url}/internal/swarm/sandbox/retry",
+                headers=self._headers(),
+                json={"build_id": build_id},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_list_artifacts(self, build_id: str) -> list[dict]:
+        """List build artifacts for a sandbox build (metadata only)."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/artifacts/{build_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("artifacts", [])
+
+    async def sandbox_build_complexity(self, repo_id: str) -> dict:
+        """Fetch historical build complexity stats for a repo.
+
+        Returns historical_stats (success_rate, avg_duration, p95_duration),
+        resource_hints (timeout, memory, cpu), and build_count.
+        """
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/complexity/{repo_id}",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_health(self) -> dict:
+        """Fetch sandbox runtime health and config limits."""
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/health",
+                headers=self._headers(),
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def sandbox_audit_events(
+        self,
+        build_id: str = "",
+        user_id: str = "",
+        action: str = "",
+        limit: int = 50,
+    ) -> list[dict]:
+        """Query audit events for sandbox operations.
+
+        Returns audit trail entries filtered by optional build_id, user_id,
+        or action type. Used for compliance reporting and incident review.
+        """
+        params: dict[str, Any] = {"limit": limit}
+        if build_id:
+            params["build_id"] = build_id
+        if user_id:
+            params["user_id"] = user_id
+        if action:
+            params["action"] = action
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self.base_url}/internal/swarm/sandbox/audit",
+                headers=self._headers(),
+                params=params,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("events", [])
+
+    # ── VCS proxy methods ────────────────────────────────────────────────
+
     async def vcs_read_file(self, repo_id: str, path: str, ref: str = "") -> str:
         """Read a file's content via the Go VCS proxy.
 

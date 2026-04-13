@@ -1368,14 +1368,10 @@ func (h *Handler) VCSListDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use GetFileContent on the directory path — GitHub API returns directory listings.
-	// For a more robust implementation, we'd add a ListDirectory method to the Platform interface.
-	// For now, we return a placeholder that works with GitHub's tree API.
-	_, err = platform.GetFileContent(r.Context(), owner, repoName, req.Path, "")
+	// Use the ListDirectory method to get proper directory listings.
+	entries, err := platform.ListDirectory(r.Context(), owner, repoName, req.Path, "")
 	if err != nil {
-		// If it fails, the path might genuinely be a directory.
-		// Return an empty list rather than an error.
-		slog.Debug("swarm vcs: list-dir fallback", "path", req.Path, "error", err)
+		slog.Debug("swarm vcs: list-dir failed, returning empty", "path", req.Path, "error", err)
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"entries": []interface{}{},
@@ -1383,12 +1379,18 @@ func (h *Handler) VCSListDir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If we got content back, this is a file not a directory.
+	// Convert to response format.
+	result := make([]map[string]string, 0, len(entries))
+	for _, e := range entries {
+		result = append(result, map[string]string{
+			"name": e.Name,
+			"type": e.Type,
+		})
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"entries": []map[string]string{
-			{"name": req.Path, "type": "file"},
-		},
+		"entries": result,
 	})
 }
 

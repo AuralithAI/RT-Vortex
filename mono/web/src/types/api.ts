@@ -303,6 +303,7 @@ export const AGENT_ROLES = [
   "docs",
   "ops",
   "ui_ux",
+  "builder",
 ] as const;
 
 export type AgentRoleId = (typeof AGENT_ROLES)[number];
@@ -318,6 +319,7 @@ export const AGENT_ROLE_META: Record<AgentRoleId, { label: string; description: 
   docs:         { label: "Docs",         description: "Documentation quality, comments, READMEs", icon: "📝" },
   ops:          { label: "Ops",          description: "CI/CD, deployment, infrastructure", icon: "⚙️" },
   ui_ux:        { label: "UI/UX",       description: "UI components, styling, accessibility, UX patterns", icon: "🎨" },
+  builder:      { label: "Builder",     description: "Build validation, Docker sandbox, compile & test", icon: "🔨" },
 };
 
 // ── Embeddings ──────────────────────────────────────────────────────────────
@@ -1120,4 +1122,20 @@ export interface RepoFileMap {
   total_edges: number;
   /** True when the server capped the response (more nodes exist in the KG). */
   truncated: boolean;
+}
+
+// ── Repo-Scoped Build Secrets ───────────────────────────────────────────────
+
+/** A repo-scoped build secret entry (name + metadata only, never the value). */
+export interface BuildSecretEntry {
+  name: string;
+  version: number;
+  updated_at: string;
+}
+
+/** Request body for PUT /repos/{repoID}/build-secrets. */
+export interface BuildSecretPutRequest {
+  name: string;
+  value: string;
+  metadata?: string;
 }

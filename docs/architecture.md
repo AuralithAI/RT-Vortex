@@ -16,12 +16,13 @@ External Clients (Webhooks, CLI, Web UI, SDKs)
 │  Auth         ◄── JWT + OAuth2 (6 providers) + AES-256-GCM          │
 │  Vault        ◄── Per-user keychain (BIP39 recovery, server KEK)    │
 │  Swarm        ◄── 9-agent teams, ELO scoring, task pipeline         │
+│  Sandbox      ◄── Ephemeral container builds, secret injection      │
 │  Cross-Repo   ◄── Repo links, federated search, dep graph           │
 │  RAG Chat     ◄── Codebase Q&A with citations (SSE streaming)       │
 │  PR Sync      ◄── Background PR discovery + pre-embedding           │
 │  MCP          ◄── Tool integrations (Jira, Slack, Linear, custom)   │
 │  Benchmarks   ◄── Automated review quality evaluation (ELO)         │
-│  Metrics      ◄── Prometheus (25+ counters/histograms/gauges)       │
+│  Metrics      ◄── Prometheus (50+ counters/histograms/gauges)       │
 │  Background   ◄── Scheduler (cleanup, health checks, indexing)      │
 │  DB Layer     ◄── pgx/v5 → PostgreSQL                               │
 │  Cache        ◄── go-redis/v9 → Redis                               │
@@ -58,9 +59,9 @@ External Clients (Webhooks, CLI, Web UI, SDKs)
 RTVortex is a multi-component system for automated code review powered by LLMs and multi-agent swarms.
 
 1. **C++ Engine (`rtvortex`)** — High-performance gRPC server for code indexing, retrieval, knowledge graph, and heuristic analysis
-2. **Go API Server (`RTVortexGo`)** — REST/WebSocket API for webhooks, authentication, orchestration, LLM integration, swarm coordination, cross-repo analysis, vault, and chat
-3. **Python Agent Swarm (optional)** — 9 specialized AI agents that collaborate on complex reviews via task pipelines
-4. **Next.js Dashboard** — Web UI for repo management, review history, knowledge graph visualization, swarm monitoring, and settings
+2. **Go API Server (`RTVortexGo`)** — REST/WebSocket API for webhooks, authentication, orchestration, LLM integration, swarm coordination, sandbox builds, cross-repo analysis, vault, and chat
+3. **Python Agent Swarm (optional)** — 9 specialized AI agents that collaborate on complex reviews via task pipelines, with an integrated builder agent for ephemeral container-based build validation
+4. **Next.js Dashboard** — Web UI for repo management, review history, knowledge graph visualization, swarm monitoring, build validation, and settings
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -157,7 +158,7 @@ Written in Go 1.24 using `chi/v5` for routing. Single statically-compiled binary
 - Benchmark runner for review quality evaluation
 - WebSocket real-time review + swarm progress streaming
 - SSE streaming for LLM completions
-- Prometheus metrics (25+ metrics across 10+ subsystems)
+- Prometheus metrics (50+ metrics across 10+ subsystems)
 - AES-256-GCM encryption for OAuth tokens at rest
 - Redis-backed sliding window rate limiting (per category)
 - Async audit logging for security events
@@ -205,6 +206,8 @@ See [Go Server Architecture](go-server-architecture.md) for detailed package lay
 | Swarm | `/api/v1/swarm/teams` | GET | List active swarm teams |
 | Swarm | `/api/v1/swarm/agents` | GET | List registered agents + ELO scores |
 | Swarm | `/api/v1/swarm/ws` | GET | WebSocket swarm activity feed |
+| Swarm | `/api/v1/swarm/tasks/{id}/builds` | GET | List sandbox builds for a task |
+| Swarm | `/api/v1/swarm/builds/{id}/logs` | GET | Fetch sandbox build logs |
 | Cross-Repo | `/api/v1/repos/{repoID}/links` | GET/POST | Manage cross-repo links |
 | Cross-Repo | `/api/v1/repos/{repoID}/links/{linkID}` | GET/PUT/DELETE | Single link CRUD |
 | Cross-Repo | `/api/v1/repos/{repoID}/cross-repo/manifest` | GET | Repo structural manifest |
@@ -380,6 +383,8 @@ The Go server manages 20+ tables:
 | `swarm_teams` | Active swarm team instances |
 | `swarm_agents` | Registered swarm agents (role, ELO, heartbeat) |
 | `swarm_tasks` | Swarm task queue and lifecycle |
+| `swarm_builds` | Sandbox build execution records (status, command, complexity, fingerprint) |
+| `swarm_audit_events` | Sandbox audit trail (action, user, repo, build, detail JSONB) |
 | `mcp_connections` | Active MCP provider connections |
 | `mcp_call_log` | MCP tool call audit trail |
 | `keychain_keys` | Per-user wrapped master keys (keychain) |
@@ -534,6 +539,11 @@ The agent swarm is an **optional** component that enables multi-agent collaborat
 │  │   QA    │ │ Security │ │ Docs │ │  Ops │ │UI/UX │               │
 │  └─────────┘ └──────────┘ └──────┘ └──────┘ └──────┘               │
 │                                                                    │
+│  Pipeline Stage (not a team member):                               │
+│  ┌──────────────────────────────────────────────────────────┐      │
+│  │ Builder — probe, HITL, container build, retry, artifacts │      │
+│  └──────────────────────────────────────────────────────────┘      │
+│                                                                    │
 │  Auth: X-Service-Secret → per-agent JWT                            │
 │  LLM: all calls proxied through Go (never direct)                  │
 │  Tools: MCP tool calls via Go endpoints                            │
@@ -544,7 +554,11 @@ The agent swarm is an **optional** component that enables multi-agent collaborat
 
 ```
 submitted → planning → plan_review (HITL gate) → implementing
-         → self_review → diff_review → pr_creating → completed
+         → self_review → diff_review → build_validating → pr_creating → completed
+                                             │
+                                        [on failure]
+                                             │
+                                        build_failed → retry (×2) → build_blocked
 ```
 
 - **ELO Scoring**: Agents receive 1-5 human ratings mapped to ELO (K=32, baseline 1200)
@@ -702,8 +716,69 @@ The Model Context Protocol (MCP) system provides tool integrations for agents an
 - **Audit Logging**: Async fire-and-forget security event logging to PostgreSQL (includes cross-repo link events)
 - **Webhook Verification**: HMAC signature verification for all 4 VCS platforms
 - **Swarm Auth**: Service secret (derived from JWT key) for agent registration; per-agent JWTs for all subsequent calls
+- **Sandbox Hardening**: Ephemeral containers with no-root, no-network, read-only FS, seccomp profiles, resource limits, and zero-before-delete workspace cleanup
+- **Log Redaction**: 11 regex patterns + exact-match replacement scrub secrets from build logs before persistence
+- **Build Audit**: 10 event types logged to slog + PostgreSQL for full secret access and container lifecycle traceability
 - **Cross-Repo Authorizer**: Share-profile-based access control for cross-repo data exposure
 - **Network Isolation**: Engine doesn't need public access
+
+## Sandbox Builder
+
+Ephemeral container-based build validation for code changes produced by
+swarm agents. Runs as a pipeline stage between diff production and PR
+creation, catching compilation failures before code reaches review.
+
+See [Sandbox Builder](sandbox-builder.md) for the full specification.
+
+### Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│  Swarm Task Pipeline                                                   │
+│                                                                        │
+│  ... → diff_review → build_validating → pr_creating → completed        │
+│                           │                                            │
+│                      [on failure]                                      │
+│                           │                                            │
+│                      build_failed → retry (×2) → build_blocked         │
+└────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────┐       ┌──────────────────────┐      ┌───────────┐
+│  Python BuilderAgent│──────▶│  Go Sandbox Handlers │─────▶│  Docker   │
+│                     │ HTTP  │                      │ CLI  │  Host     │
+│  1. Probe           │       │  Plan + Execute +    │      │           │
+│  2. HITL confirm    │       │  Redact + Audit +    │      │ Hardened  │
+│  3. Execute         │       │  Fingerprint +       │      │ Container │
+│  4. Analyse + Retry │       │  Complexity Score    │      │ (no root, │
+│                     │       │                      │      │  no net,  │
+│                     │       │  ┌─────────────────┐ │      │  r/o FS,  │
+│                     │       │  │ Keychain (vault)│ │      │  seccomp) │
+│                     │       │  │ AES-256-GCM     │ │      │           │
+│                     │       │  │ secret resolve  │ │      │ --env     │
+│                     │       │  └─────────────────┘ │      │ secrets   │
+└─────────────────────┘       └──────────────────────┘      └───────────┘
+         │                              │                         │
+         ▼                              ▼                         ▼
+  Agent messages              PostgreSQL (builds,          Artifacts
+  in task UI                  audit events)                collected
+```
+
+### Execution Summary
+
+1. **Probe** — detect build system, scan for env var references, cross-reference with keychain secrets
+2. **HITL Gate** — present build plan to user, wait for approval (auto-approve on timeout)
+3. **Execute** — resolve secrets, provision hardened container, run build command, capture output
+4. **Post-Process** — redact logs, collect artifacts, compute complexity score, persist results
+5. **Retry** — classify failures, retry retryable errors up to 2 times, block on 3rd failure
+
+### Key Properties
+
+- **12 internal API endpoints** under `/internal/swarm/sandbox/`
+- **2 user-facing endpoints** for the build validation dashboard tab
+- **22 Prometheus metrics** for build lifecycle, secrets, caching, complexity, and audit
+- **10 audit event types** with structured slog + optional PostgreSQL persistence
+- **7 builder images** (Go, JVM, Python, Node, C++, Rust, general)
+- **Config-driven limits** from the `<sandbox>` element in `rtserverprops.xml`
 
 ## Self-Healing Pipeline (Phase 11)
 
@@ -922,7 +997,7 @@ from swarm.observability import (
 
 ### Prometheus Metrics
 
-The Go server exports 25+ metrics at `GET /metrics`:
+The Go server exports 50+ metrics at `GET /metrics`:
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -950,6 +1025,11 @@ The Go server exports 25+ metrics at `GET /metrics`:
 | `rtvortex_mcp_calls_total` | Counter | MCP provider calls by provider/action/status |
 | `rtvortex_mcp_call_duration_seconds` | Histogram | MCP call latency |
 | `rtvortex_mcp_active_connections` | Gauge | Active MCP connections by provider |
+| `rtvortex_sandbox_build_total` | CounterVec | Sandbox builds by status |
+| `rtvortex_sandbox_build_duration_seconds` | Histogram | Sandbox build duration |
+| `rtvortex_sandbox_build_retries_total` | Counter | Sandbox retry attempts |
+| `rtvortex_sandbox_build_containers_active` | Gauge | Currently running build containers |
+| `rtvortex_sandbox_audit_events_total` | CounterVec | Sandbox audit events by action |
 
 ### Health Checks
 
