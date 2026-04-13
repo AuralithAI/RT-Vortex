@@ -271,6 +271,12 @@ func (c *Client) GetFileContent(ctx context.Context, owner, repo, path, ref stri
 	return io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 }
 
+// ListDirectory returns directory entries.  GitLab implementation is a stub
+// that returns an empty list — build system detection falls back to file cache.
+func (c *Client) ListDirectory(_ context.Context, _, _, _, _ string) ([]vcs.DirEntry, error) {
+	return []vcs.DirEntry{}, nil
+}
+
 // ── Webhook Validation ──────────────────────────────────────────────────────
 
 func (c *Client) ValidateWebhookSignature(_ []byte, signature string) bool {

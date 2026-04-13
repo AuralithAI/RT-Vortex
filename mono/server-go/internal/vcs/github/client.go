@@ -275,6 +275,77 @@ func (c *Client) GetFileContent(ctx context.Context, owner, repo, path, ref stri
 	return io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB limit
 }
 
+// ListDirectory returns the entries in a directory via the GitHub Contents API.
+// When the path points to a directory, the API returns a JSON array of entries.
+func (c *Client) ListDirectory(ctx context.Context, owner, repo, path, ref string) ([]vcs.DirEntry, error) {
+	u := fmt.Sprintf("%s/repos/%s/%s/contents/%s", c.baseURL, owner, repo, path)
+	if ref != "" {
+		u += "?ref=" + ref
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, vcs.ErrRepoNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("github list-dir returned %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB limit
+	if err != nil {
+		return nil, err
+	}
+
+	// GitHub Contents API returns a JSON array for directories.
+	var items []struct {
+		Name string `json:"name"`
+		Type string `json:"type"` // "file", "dir", "symlink", "submodule"
+		Size int64  `json:"size"`
+	}
+	if err := json.Unmarshal(body, &items); err != nil {
+		// Might be a single file object instead of an array — return it as one entry.
+		var single struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+			Size int64  `json:"size"`
+		}
+		if err2 := json.Unmarshal(body, &single); err2 == nil && single.Name != "" {
+			entryType := single.Type
+			if entryType != "file" && entryType != "dir" {
+				entryType = "file"
+			}
+			return []vcs.DirEntry{{Name: single.Name, Type: entryType, Size: single.Size}}, nil
+		}
+		return nil, fmt.Errorf("github list-dir: failed to parse response: %w", err)
+	}
+
+	entries := make([]vcs.DirEntry, 0, len(items))
+	for _, item := range items {
+		entryType := item.Type
+		if entryType != "file" && entryType != "dir" {
+			entryType = "file" // symlinks, submodules → treat as file
+		}
+		entries = append(entries, vcs.DirEntry{
+			Name: item.Name,
+			Type: entryType,
+			Size: item.Size,
+		})
+	}
+	return entries, nil
+}
+
 // ── Webhook Validation ──────────────────────────────────────────────────────
 
 func (c *Client) ValidateWebhookSignature(payload []byte, signature string) bool {

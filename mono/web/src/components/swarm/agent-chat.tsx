@@ -96,6 +96,13 @@ const roleStyles: Record<
     bg: "bg-pink-50 dark:bg-pink-950/40",
     border: "border-pink-200 dark:border-pink-800",
   },
+  builder: {
+    icon: Settings,
+    label: "Builder",
+    color: "text-yellow-700 dark:text-yellow-300",
+    bg: "bg-yellow-50 dark:bg-yellow-950/40",
+    border: "border-yellow-200 dark:border-yellow-800",
+  },
 };
 
 const defaultStyle = {

@@ -322,6 +322,34 @@ function DefaultAgentAvatar({ size, busy }: { size: number; busy: boolean }) {
   );
 }
 
+function BuilderAvatar({ size, busy }: { size: number; busy: boolean }) {
+  return (
+    <svg viewBox="0 0 32 32" width={size} height={size} className={busy ? "animate-bounce-gentle" : ""}>
+      {/* Hard hat */}
+      <ellipse cx="16" cy="11" rx="8" ry="3" fill="#ca8a04" />
+      <rect x="9" y="7" width="14" height="5" fill="#eab308" rx="2" />
+      <rect x="10" y="7" width="5" height="2" fill="#facc15" rx="0.5" />
+      {/* Hat stripe */}
+      <rect x="9" y="10" width="14" height="1.5" fill="#a16207" rx="0.5" />
+      {/* Face */}
+      <rect x="11" y="12" width="10" height="8" fill="#fde68a" rx="3" />
+      {/* Eyes */}
+      <circle cx="14" cy="15" r="1" fill="#1e1b4b" className="animate-blink" />
+      <circle cx="18" cy="15" r="1" fill="#1e1b4b" className="animate-blink" />
+      {/* Smile */}
+      <path d="M14 18 Q16 19.5 18 18" fill="none" stroke="#92400e" strokeWidth="0.7" />
+      {/* Body — hi-vis vest */}
+      <rect x="11" y="20" width="10" height="8" fill="#f97316" rx="2" />
+      <rect x="13" y="20" width="1" height="8" fill="#fbbf24" rx="0.3" />
+      <rect x="18" y="20" width="1" height="8" fill="#fbbf24" rx="0.3" />
+      {/* Hammer */}
+      <rect x="23" y="10" width="1.5" height="14" fill="#92400e" rx="0.5" className={busy ? "animate-hammer" : ""} />
+      <rect x="21" y="8" width="6" height="4" fill="#6b7280" rx="1" />
+      <rect x="21" y="8" width="6" height="2" fill="#9ca3af" rx="0.5" />
+    </svg>
+  );
+}
+
 // ── Size map ─────────────────────────────────────────────────────────────────
 
 const sizeMap = { sm: 28, md: 40, lg: 56 };
@@ -338,6 +366,7 @@ const avatarMap: Record<string, (props: { size: number; busy: boolean }) => Reac
   docs: DocsAvatar,
   ops: OpsAvatar,
   ui_ux: UIUXAvatar,
+  builder: BuilderAvatar,
 };
 
 export function AgentAvatar({ role, size = "md", busy = false, className }: AgentAvatarProps) {

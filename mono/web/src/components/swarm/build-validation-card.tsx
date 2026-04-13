@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Hammer,
   CheckCircle2,
@@ -18,6 +18,9 @@ import {
   Layers,
   Copy,
   Check,
+  Search,
+  KeyRound,
+  CircleDot,
 } from "lucide-react";
 import type {
   SandboxBuild,
@@ -26,10 +29,12 @@ import type {
   BuildLogResponse,
   BuildStatus,
 } from "@/types/swarm";
+import type { SwarmWsEvent } from "@/hooks/use-swarm-events";
 
 interface BuildValidationCardProps {
   taskId: string;
   refreshInterval?: number;
+  events?: SwarmWsEvent[];
 }
 
 function statusConfig(status: BuildStatus): {
@@ -115,6 +120,7 @@ function buildSystemLabel(sys: string): string {
 export function BuildValidationCard({
   taskId,
   refreshInterval = 0,
+  events = [],
 }: BuildValidationCardProps) {
   const [builds, setBuilds] = useState<SandboxBuild[]>([]);
   const [summary, setSummary] = useState<BuildsSummary | null>(null);
@@ -125,6 +131,19 @@ export function BuildValidationCard({
   const [loadingLogs, setLoadingLogs] = useState<Record<string, boolean>>({});
   const [copied, setCopied] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+
+  const probeEvent = useMemo(() => {
+    for (const evt of events) {
+      if (
+        evt.type === "swarm_agent" &&
+        evt.event === "build_plan" &&
+        evt.data
+      ) {
+        return evt;
+      }
+    }
+    return null;
+  }, [events]);
 
   const fetchBuilds = useCallback(async () => {
     try {
@@ -229,6 +248,135 @@ export function BuildValidationCard({
   }
 
   if (builds.length === 0) {
+    if (probeEvent) {
+      const meta = (probeEvent.data?.metadata ?? {}) as Record<string, unknown>;
+      const content = (probeEvent.data?.content as string) ?? "";
+      const buildSystem = (meta.build_system as string) ?? "unknown";
+      const ready = meta.ready === true;
+      const missingSecrets = (meta.missing_secrets as string[]) ?? [];
+      const matchedSecrets = (meta.matched_secrets as string[]) ?? [];
+
+      return (
+        <div className="rounded-xl border bg-card shadow-sm">
+          <div className="flex items-center gap-3 border-b px-5 py-4">
+            <div
+              className={`flex h-8 w-8 items-center justify-center rounded-lg ${
+                ready
+                  ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400"
+                  : missingSecrets.length > 0
+                    ? "bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400"
+                    : "bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400"
+              }`}
+            >
+              <Search className="h-4 w-4" />
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold">Build Probe Complete</h3>
+              <p className="text-xs text-muted-foreground">
+                {ready
+                  ? "Build environment is ready"
+                  : missingSecrets.length > 0
+                    ? `${missingSecrets.length} missing secret${missingSecrets.length !== 1 ? "s" : ""} detected`
+                    : "Build system detected"}
+              </p>
+            </div>
+          </div>
+
+          <div className="p-5 space-y-4">
+            {/* Build system info */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="rounded-lg border bg-background p-2.5">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Build System
+                </p>
+                <p className="mt-0.5 text-sm font-semibold">
+                  {buildSystemLabel(buildSystem)}
+                </p>
+              </div>
+              <div className="rounded-lg border bg-background p-2.5">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Status
+                </p>
+                <p className={`mt-0.5 text-sm font-semibold ${
+                  ready
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-amber-600 dark:text-amber-400"
+                }`}>
+                  {ready ? "Ready" : "Not Ready"}
+                </p>
+              </div>
+              <div className="rounded-lg border bg-background p-2.5">
+                <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Docker Build
+                </p>
+                <p className="mt-0.5 text-sm font-semibold text-muted-foreground">
+                  {ready ? "Pending approval" : "Blocked"}
+                </p>
+              </div>
+            </div>
+
+            {/* Missing secrets */}
+            {missingSecrets.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-800/50 dark:bg-amber-950/20">
+                <p className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                  <KeyRound className="h-3 w-3" />
+                  Missing Secrets
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {missingSecrets.map((name) => (
+                    <span
+                      key={name}
+                      className="flex items-center gap-1 rounded-md border border-amber-200 bg-white px-2 py-0.5 font-mono text-[11px] text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-300"
+                    >
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      {name}
+                    </span>
+                  ))}
+                </div>
+                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                  Add these secrets in the Build Secrets settings to enable the Docker build.
+                </p>
+              </div>
+            )}
+
+            {/* Matched secrets */}
+            {matchedSecrets.length > 0 && (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3 dark:border-emerald-800/50 dark:bg-emerald-950/20">
+                <p className="mb-2 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-emerald-700 dark:text-emerald-400">
+                  <CheckCircle2 className="h-3 w-3" />
+                  Available Secrets
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {matchedSecrets.map((name) => (
+                    <span
+                      key={name}
+                      className="flex items-center gap-1 rounded-md border border-emerald-200 bg-white px-2 py-0.5 font-mono text-[11px] text-emerald-800 dark:border-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                    >
+                      <Layers className="h-2.5 w-2.5" />
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Full probe summary (markdown-like content from the agent) */}
+            {content && (
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                  <CircleDot className="h-3 w-3" />
+                  Builder Agent Analysis
+                </p>
+                <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed text-foreground/80">
+                  {content}
+                </pre>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="rounded-xl border border-dashed bg-card">
         <div className="flex flex-col items-center justify-center py-12">

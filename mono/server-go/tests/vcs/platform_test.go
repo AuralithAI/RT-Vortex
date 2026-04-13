@@ -29,6 +29,9 @@ func (m *mockPlatform) PostReviewSummary(_ context.Context, _, _ string, _ int, 
 func (m *mockPlatform) GetFileContent(_ context.Context, _, _, _, _ string) ([]byte, error) {
 	return nil, nil
 }
+func (m *mockPlatform) ListDirectory(_ context.Context, _, _, _, _ string) ([]vcs.DirEntry, error) {
+	return nil, nil
+}
 func (m *mockPlatform) ValidateWebhookSignature(_ []byte, _ string) bool {
 	return true
 }

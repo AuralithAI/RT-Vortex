@@ -16,6 +16,7 @@ import {
   Zap,
   Clock,
   Palette,
+  Hammer,
 } from "lucide-react";
 import { useSwarmEvents, type SwarmWsEvent } from "@/hooks/use-swarm-events";
 
@@ -43,6 +44,7 @@ const roleColors: Record<string, string> = {
   docs: "text-amber-600 dark:text-amber-400",
   ops: "text-orange-600 dark:text-orange-400",
   ui_ux: "text-pink-600 dark:text-pink-400",
+  builder: "text-yellow-600 dark:text-yellow-400",
 };
 
 const roleIcons: Record<string, typeof Bot> = {
@@ -55,6 +57,7 @@ const roleIcons: Record<string, typeof Bot> = {
   docs: MessageSquare,
   ops: Clock,
   ui_ux: Palette,
+  builder: Hammer,
 };
 
 function formatRole(role: string): string {

@@ -18,6 +18,7 @@ import {
   Search,
   Loader2,
   Palette,
+  Hammer,
 } from "lucide-react";
 import { AgentAvatar } from "@/components/swarm/agent-avatar";
 import type { AgentRole, AgentSnapshot } from "@/types/swarm";
@@ -79,6 +80,12 @@ const roleConfig: Record<
     label: "UI/UX",
     color: "text-pink-600 dark:text-pink-400",
     bgColor: "bg-pink-100 dark:bg-pink-900/40",
+  },
+  builder: {
+    icon: Hammer,
+    label: "Builder",
+    color: "text-yellow-600 dark:text-yellow-400",
+    bgColor: "bg-yellow-100 dark:bg-yellow-900/40",
   },
 };
 

@@ -37,6 +37,7 @@ function roleColor(role: AgentRole): string {
     docs: "bg-cyan-500/10 text-cyan-500 border-cyan-500/20",
     ops: "bg-orange-500/10 text-orange-500 border-orange-500/20",
     ui_ux: "bg-pink-500/10 text-pink-500 border-pink-500/20",
+    builder: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
   };
   return colors[role] ?? "bg-muted text-muted-foreground border-border";
 }
@@ -77,6 +78,7 @@ function roleLabel(role: AgentRole): string {
     docs: "Docs",
     ops: "Ops",
     ui_ux: "UI/UX Designer",
+    builder: "Builder",
   };
   return labels[role] ?? role;
 }

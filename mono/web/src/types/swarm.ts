@@ -24,7 +24,8 @@ export type AgentRole =
   | "security"
   | "ops"
   | "docs"
-  | "ui_ux";
+  | "ui_ux"
+  | "builder";
 
 export type AgentStatus = "offline" | "idle" | "busy" | "errored";
 export type TeamStatus = "idle" | "busy" | "offline";

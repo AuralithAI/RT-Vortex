@@ -19,6 +19,7 @@ import {
   Activity,
   Brain,
   Hammer,
+  CircleDot,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/page-header";
 import { Button } from "@/components/ui/button";
@@ -389,6 +390,15 @@ export default function SwarmTaskDetailPage() {
               >
                 <Hammer className="h-4 w-4" />
                 Builds
+                {events.filter((e) => e.type === "swarm_agent" && e.event === "build_plan").length > 0 && (
+                  <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                    activeTab === "builds"
+                      ? "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/40 dark:text-yellow-300"
+                      : "bg-muted text-muted-foreground"
+                  }`}>
+                    <CircleDot className="inline h-2.5 w-2.5" />
+                  </span>
+                )}
               </button>
             </div>
 
@@ -473,6 +483,7 @@ export default function SwarmTaskDetailPage() {
                 <BuildValidationCard
                   taskId={params.id}
                   refreshInterval={10000}
+                  events={events}
                 />
               )}
             </div>
